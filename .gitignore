@@ -32,3 +32,4 @@ bookmarklet-full.txt
 # here so it stays version-controlled in THIS private repo. Do NOT push this
 # repo to a PUBLIC remote — only the separate datacloud-inspector Pages repo is
 # public, and it receives ONLY the stripped install.html (as index.html).
+.synccheck/
