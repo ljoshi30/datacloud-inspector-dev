@@ -77,21 +77,45 @@ GitHub Pages then serves the new `index.html` within a minute or two.
 
 ---
 
-## 4. The Chrome extension (auto-updating vehicle)
+## 4. The extensions (Chrome + Firefox — auto-updating vehicle)
 
-`chrome-extension/` is the only path that auto-updates without re-dragging.
+The extension is the only path that auto-updates without re-dragging. It carries the
+**FULL** build (includes in-dev Explorer + Segment) — it's the private dev/internal
+vehicle, unlike the stripped public `install.html`.
+
+`chrome-extension/` is the **source of truth** for the shared extension files.
+`firefox-extension/` is **GENERATED** from it by `build.js` (gitignored; regenerate any
+time with `node build.js`).
 
 | File | Role |
 |---|---|
-| `chrome-extension/inject.js` | **= the FULL source** (`console-decorate.js`), rewritten on every build. |
-| `chrome-extension/background.js` | Toolbar-click → inject into MAIN world; also auto-installs the bookmarklet on install/update. |
-| `chrome-extension/manifest.json` | MV3 manifest (targets `*.lightning.force.com`, `*.salesforce.com`, etc.). |
-| `chrome-extension/bookmarklet.txt` | Copy of the full bookmarklet (bundled resource). |
-| `chrome-extension/icons/` | 16/48/128 px icons. |
+| `chrome-extension/inject.js` | **= the FULL source** (`console-decorate.js`), rewritten every build. |
+| `chrome-extension/background.js` | **Cross-browser** (aliases `chrome`/`browser` → `api`). Toolbar-click → inject into MAIN world; auto-installs the bookmarklet on install/update (bookmarks-bar id discovered dynamically for FF). |
+| `chrome-extension/manifest.json` | Chrome MV3 (`background.service_worker`). Version auto-bumps (patch) on code change. |
+| `chrome-extension/.buildid` | Build-state stamp (hash of code) so the version bumps ONLY when code changed. Gitignored. |
+| `firefox-extension/manifest.json` | Generated Firefox MV3: `background.scripts` + `browser_specific_settings.gecko` (`strict_min_version 128.0`). Same version as Chrome. |
+| `firefox-extension/{inject,background,bookmarklet}.js/.txt + icons/` | Copied verbatim from chrome-extension each build. |
 
-**Dev loop:** `node build.js` → `chrome://extensions` → click ↻ reload on the card. No
-re-drag ever. Because the extension ships the code inside itself, it sidesteps the SF
-CSP wall that blocks loader-bookmarklets (see §6).
+**Why two manifests:** Firefox MV3 needs `background.scripts` (not `service_worker`), a
+gecko id, and — because the tool requires `world:"MAIN"` injection — **Firefox 128+**
+(`strict_min_version`). The shared `background.js` handles the `chrome`/`browser` API
+namespace difference at runtime.
+
+**Version bump:** `build.js` bumps the manifest patch version (both browsers stay in sync)
+ONLY when `inject.js` actually changed since last build — so Chrome Web Store / Firefox
+AMO see a new version to roll out to users, without churning the number on no-op rebuilds.
+
+**Dev loop (Chrome):** `node build.js` → `chrome://extensions` → click ↻ reload on the card.
+**Dev loop (Firefox):** `node build.js` → `about:debugging` → This Firefox → Reload (or Load
+Temporary Add-on → pick `firefox-extension/manifest.json`).
+
+Because the extension ships the code inside itself, it sidesteps the SF CSP wall that
+blocks loader-bookmarklets (see §6).
+
+> ⚠️ Not yet tested on a live browser in this environment. Known port risks to confirm on
+> first real load: (a) MAIN-world inject works only on Firefox **128+**; (b) Firefox may
+> block the auto-installed `javascript:` bookmark (degrades quietly — the toolbar-click
+> feature is unaffected); (c) AMO signing is required to distribute a Firefox build.
 
 ---
 

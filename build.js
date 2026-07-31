@@ -329,15 +329,72 @@ fs.writeFileSync(path.join(dir, "install-full.html"), fullHtml);
 // Same document as install-full.html; kept in sync so the bookmarklet is never stale.
 fs.writeFileSync(path.join(dir, "Data360-Inspector-FULL-internal.html"), fullHtml);
 
-// ---- chrome-extension: FULL source (local dev vehicle) ----
-const extDir = path.join(dir, "chrome-extension");
+// ---- extensions: FULL source, built for BOTH Chrome and Firefox ----
+// The extension is the FULL build (includes in-dev Explorer + Segment). We keep
+// ONE source of truth for the shared files (inject.js, background.js, icons,
+// bookmarklet.txt) and emit a browser-specific manifest for each target.
+const extDir = path.join(dir, "chrome-extension");     // Chrome (source of shared files)
+const ffDir  = path.join(dir, "firefox-extension");    // Firefox (generated)
+
+// Auto-bump the extension patch version, but ONLY when the injected code actually
+// changed since the last build — so Chrome Web Store / AMO see a new version to
+// roll out, without churning the number on no-op rebuilds. The build id (hash of
+// the full code) is stamped next to the manifest; if it matches, version holds.
+function bumpVersionIfCodeChanged(manifestPath, codeHash) {
+  const mf = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const stampPath = path.join(extDir, ".buildid");
+  let prevHash = "";
+  try { prevHash = fs.readFileSync(stampPath, "utf8").trim(); } catch (e) {}
+  if (prevHash !== codeHash) {
+    const parts = String(mf.version || "1.0.0").split(".").map((n) => parseInt(n, 10) || 0);
+    while (parts.length < 3) parts.push(0);
+    parts[2] += 1;                                     // bump patch
+    mf.version = parts.join(".");
+    fs.writeFileSync(manifestPath, JSON.stringify(mf, null, 2) + "\n");
+    fs.writeFileSync(stampPath, codeHash + "\n");
+    console.log("  extension version bumped -> " + mf.version + " (code changed)");
+  } else {
+    console.log("  extension version held at " + mf.version + " (no code change)");
+  }
+  return mf.version;
+}
+
+let extVersion = "";
 if (fs.existsSync(extDir)) {
+  // 1) sync shared files into the Chrome dir
   fs.writeFileSync(path.join(extDir, "inject.js"), fullCode);
   if (fs.readFileSync(path.join(extDir, "inject.js"), "utf8") !== fullCode) {
     console.error("ERROR: chrome-extension/inject.js did not match full source; aborting.");
     process.exit(1);
   }
   fs.copyFileSync(path.join(dir, "bookmarklet-full.txt"), path.join(extDir, "bookmarklet.txt"));
+
+  // 2) version bump (shared across both browser builds)
+  const chromeManifestPath = path.join(extDir, "manifest.json");
+  extVersion = bumpVersionIfCodeChanged(chromeManifestPath, buildIdOf(fullCode));
+
+  // 3) generate the Firefox variant from the SAME shared files
+  const chromeManifest = JSON.parse(fs.readFileSync(chromeManifestPath, "utf8"));
+  // Firefox MV3 differences vs Chrome:
+  //  - background uses `scripts`, not `service_worker`
+  //  - MAIN-world scripting.executeScript requires Firefox 128+
+  //  - needs a browser_specific_settings.gecko id + strict_min_version
+  const ffManifest = JSON.parse(JSON.stringify(chromeManifest));
+  ffManifest.background = { scripts: ["background.js"] };
+  ffManifest.browser_specific_settings = {
+    gecko: { id: "data360-inspector@ljoshi30", strict_min_version: "128.0" }
+  };
+  try { fs.mkdirSync(ffDir, { recursive: true }); } catch (e) {}
+  // copy shared files verbatim
+  for (const f of ["inject.js", "background.js", "bookmarklet.txt"]) {
+    fs.copyFileSync(path.join(extDir, f), path.join(ffDir, f));
+  }
+  // icons
+  const ffIcons = path.join(ffDir, "icons"); try { fs.mkdirSync(ffIcons, { recursive: true }); } catch (e) {}
+  const chIcons = path.join(extDir, "icons");
+  if (fs.existsSync(chIcons)) for (const ic of fs.readdirSync(chIcons)) fs.copyFileSync(path.join(chIcons, ic), path.join(ffIcons, ic));
+  // Firefox manifest
+  fs.writeFileSync(path.join(ffDir, "manifest.json"), JSON.stringify(ffManifest, null, 2) + "\n");
 }
 
 console.log("Built PUBLIC (stripped — mapping + Data Stream + DLO + DMO):");
@@ -349,6 +406,9 @@ console.log("Built FULL (local dev only — DO NOT push):");
 console.log("  install-full.html          (" + fullHtml.length + " bytes)");
 console.log("  Data360-Inspector-FULL-internal.html  (same doc — drag bookmarklet from here)");
 console.log("  console-decorate-full.min.js / bookmarklet-full.txt");
-if (fs.existsSync(extDir)) console.log("  chrome-extension/inject.js (" + fullCode.length + " chars, = FULL source)");
+if (fs.existsSync(extDir)) {
+  console.log("  chrome-extension/  (Chrome MV3, v" + extVersion + ", inject.js = FULL source)");
+  console.log("  firefox-extension/ (Firefox MV3, v" + extVersion + ", generated; needs FF 128+)");
+}
 console.log("Round-trip + browser-decode + syntax + strip-symbol checks all verified.");
 console.log("NOTE: obfuscation only DETERS copying; the @strip mechanism PHYSICALLY removes in-dev code from the public payload. Keep console-decorate.js private.");

@@ -28,6 +28,13 @@ bookmarklet-full.txt
 # Built zips
 *.zip
 
+# firefox-extension/ is fully GENERATED from chrome-extension/ + source on each
+# build (like install.html / the .min.js files) — regenerate with `node build.js`.
+firefox-extension/
+
+# Build-state stamp used to auto-bump the extension version only on code change.
+chrome-extension/.buildid
+
 # NOTE: console-decorate.js (the readable source) is intentionally NOT ignored
 # here so it stays version-controlled in THIS private repo. Do NOT push this
 # repo to a PUBLIC remote — only the separate datacloud-inspector Pages repo is
