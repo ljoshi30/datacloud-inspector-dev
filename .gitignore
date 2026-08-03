@@ -40,3 +40,4 @@ chrome-extension/.buildid
 # repo to a PUBLIC remote — only the separate datacloud-inspector Pages repo is
 # public, and it receives ONLY the stripped install.html (as index.html).
 .synccheck/
+probe-extension/

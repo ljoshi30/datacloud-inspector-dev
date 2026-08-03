@@ -367,7 +367,10 @@ if (fs.existsSync(extDir)) {
     console.error("ERROR: chrome-extension/inject.js did not match full source; aborting.");
     process.exit(1);
   }
-  fs.copyFileSync(path.join(dir, "bookmarklet-full.txt"), path.join(extDir, "bookmarklet.txt"));
+  // NOTE: bookmarklet.txt is intentionally NOT bundled into the extension anymore
+  // (the auto-install-bookmark feature was removed for store compliance — no
+  // bookmarks permission, no web_accessible_resources). Remove any stale copy.
+  try { fs.unlinkSync(path.join(extDir, "bookmarklet.txt")); } catch (e) {}
 
   // 2) version bump (shared across both browser builds)
   const chromeManifestPath = path.join(extDir, "manifest.json");
@@ -386,7 +389,7 @@ if (fs.existsSync(extDir)) {
   };
   try { fs.mkdirSync(ffDir, { recursive: true }); } catch (e) {}
   // copy shared files verbatim
-  for (const f of ["inject.js", "background.js", "bookmarklet.txt"]) {
+  for (const f of ["inject.js", "background.js", "bridge.js"]) {
     fs.copyFileSync(path.join(extDir, f), path.join(ffDir, f));
   }
   // icons

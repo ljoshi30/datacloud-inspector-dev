@@ -32,65 +32,65 @@ api.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// ── Auto-install bookmarklet on install or update ─────────────────────────
-// Adds "Data 360 Inspector" bookmark to position 0 on the bookmarks bar,
-// removing any previous version first (matched by name). Best-effort: some
-// browsers/policies block programmatic javascript: bookmarks — if so this
-// degrades quietly and the core toolbar-click feature is unaffected.
-
-const BOOKMARK_NAME = "Data 360 Inspector";
-
-// Find the bookmarks-toolbar node id in a browser-agnostic way.
-async function findBookmarksBarId() {
-  // Chrome: bar is id "1". Firefox: id "toolbar_____". Discover from the tree
-  // by locating a folder whose title looks like the bookmarks toolbar.
-  try {
-    const tree = await api.bookmarks.getTree();
-    let found = null;
-    const walk = (nodes) => {
-      for (const n of nodes || []) {
-        if (found) return;
-        const t = (n.title || "").toLowerCase();
-        if (!n.url && (n.id === "1" || n.id === "toolbar_____" || /bookmarks (bar|toolbar)|favorites bar/.test(t))) {
-          found = n.id; return;
-        }
-        if (n.children) walk(n.children);
-      }
-    };
-    walk(tree);
-    if (found) return found;
-    // Fallback: first child folder of the root (usually the bar).
-    const root = tree && tree[0];
-    const firstFolder = root && (root.children || []).find((c) => !c.url);
-    return firstFolder ? firstFolder.id : "1";
-  } catch (e) {
-    return "1";
-  }
+// ── Data Cloud SQL query relay (the documented, extension-only path) ──────────
+// The tool (MAIN world) can't read the HttpOnly sid or make cross-origin calls, so
+// bridge.js forwards a {sql,rowLimit,host} request here. We read the sid cookie from
+// the my.salesforce.com host (NOT lightning — different cookie; probe-proven) and POST
+// to the DOCUMENTED endpoint /services/data/v63.0/ssot/query-sql. READ-only (SELECT).
+// Returns { ok, data, metadata, returnedRows } or { ok:false, error }.
+function pget(fn, arg) {
+  return new Promise((res) => {
+    try { const m = fn(arg, (r) => res(r)); if (m && m.then) m.then(res, () => res(undefined)); }
+    catch (e) { res(undefined); }
+  });
 }
-
-async function installBookmarklet() {
+async function readSid(host) {
+  // Prefer the my.salesforce.com sid (valid for /services/data); fall back to the
+  // lightning-host sid only if the other isn't present.
+  const coreHost = host.replace(/\.lightning\.force\.com$/, ".my.salesforce.com");
+  const my = await pget((d, cb) => api.cookies.get(d, cb), { url: "https://" + coreHost, name: "sid" });
+  if (my && my.value) return { sid: my.value, coreHost };
+  const lt = await pget((d, cb) => api.cookies.get(d, cb), { url: "https://" + host, name: "sid" });
+  if (lt && lt.value) return { sid: lt.value, coreHost };
+  return null;
+}
+async function runDcSqlQuery(req) {
   try {
-    if (!api.bookmarks) return;                 // permission not granted on this browser
-    const url = api.runtime.getURL("bookmarklet.txt");
-    const resp = await fetch(url);
-    const bmUrl = (await resp.text()).trim();
-    if (!bmUrl.startsWith("javascript:")) return;
-
-    const barId = await findBookmarksBarId();
-    const existing = await api.bookmarks.getChildren(barId);
-
-    // Remove any old versions with the same name
-    for (const bm of existing) {
-      if (bm.title === BOOKMARK_NAME) {
-        try { await api.bookmarks.remove(bm.id); } catch (e) {}
-      }
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
+    const apiV = "v63.0";
+    const url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/query-sql";
+    const body = JSON.stringify({ sql: String(req.sql || ""), rowLimit: req.rowLimit || 2000 });
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + got.sid, "Content-Type": "application/json", "Accept": "application/json" },
+      body: body,
+    });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200 && r.status !== 201) {
+      let em = "HTTP " + r.status;
+      try { em = (j && (j[0] ? j[0].message : (j.error_description || j.message))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
     }
-
-    await api.bookmarks.create({ parentId: barId, index: 0, title: BOOKMARK_NAME, url: bmUrl });
-    console.log("[DC-MI] Bookmarklet installed on bookmarks bar (" + barId + ").");
+    // Response shape: { data:[[...]], metadata:[{name,type,nullable}], returnedRows }
+    return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0 };
   } catch (e) {
-    console.warn("[DC-MI] Could not auto-install bookmarklet:", e && e.message);
+    return { ok: false, error: String(e) };
   }
 }
+api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "dcSqlQuery") {
+    // prefer the sender tab's actual host when available (more reliable than page-reported)
+    const req = { sql: msg.sql, rowLimit: msg.rowLimit, host: (sender && sender.tab && sender.tab.url ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return msg.host; } })() : msg.host) };
+    runDcSqlQuery(req).then(sendResponse);
+    return true; // async
+  }
+});
 
-api.runtime.onInstalled.addListener(installBookmarklet);
+// (The auto-install-bookmark feature was removed for store compliance: the
+//  `bookmarks` permission is sensitive + the feature is redundant with the
+//  toolbar-icon click. Users add the bookmarklet manually from install.html if
+//  they want it. The extension needs no bookmarks/web_accessible_resources.)

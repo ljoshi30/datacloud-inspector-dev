@@ -3215,10 +3215,15 @@
           const bs = readBaseSegmentItem(found);
           if (!bs.name) continue;
           if (isWaterfall) {
+            // Per SF docs (Create a Waterfall Segment): waterfall members are
+            // SEGMENTS processed in PRIORITY order — NOT "nested segments" (docs
+            // state nested segments can't be in a waterfall). Mark them as
+            // priority segments so the renderer labels them SF's way.
             tierNum++;
-            items.push({ type: "nested-segment", objectLabel: bs.name,
-              fieldLabel: bs.publishBehavior, operator: "Tier " + tierNum, values: "", publishSchedule: bs.publishSchedule });
+            items.push({ type: "nested-segment", waterfallPriority: true, objectLabel: bs.name,
+              fieldLabel: bs.publishBehavior, operator: "Priority " + tierNum, values: "", publishSchedule: bs.publishSchedule });
           } else {
+            // A segment reused as a condition inside criteria = a true nested segment.
             items.push({ type: "nested-segment", objectLabel: bs.name, fieldLabel: bs.publishBehavior, operator: "", values: "", publishSchedule: bs.publishSchedule });
           }
         } else if (tag === "runtime_cdp-segment-builder-simple-condition") {
@@ -3895,17 +3900,21 @@
           blocks.push({ entity: node.entity, container: true, agg: "Rank & Limit", blockJoin, kind: "rank", note: node.note || "",
             groups: [{ grp: "", box: false, join: "AND", rows: rrows, descriptive: true }] });
         } else if (node.t === "nested") {
-          // Nested segment (or waterfall tier): header = segment name (+ tier).
-          // Publish Schedule / Nested Publish Behavior are SETTINGS of the nested
-          // segment — NOT queryable attributes with an operator/value. Mark them
-          // setting:true so renderSheet writes them as "Label: value" property lines
-          // (not in the Attribute/Operator/Value condition columns).
-          const label = (node.tier ? node.tier + " · " : "") + "Nested Segment";
+          // Two distinct SF concepts (per docs):
+          //  • Waterfall member = a Segment processed in PRIORITY order ("Priority N").
+          //  • Nested Segment    = a segment reused as a condition inside criteria.
+          // Publish Schedule / Publish Behavior are SETTINGS (not attr/op/value), so
+          // they're setting:true → written as "Label: value" property lines.
+          const label = node.waterfall
+            ? (node.tier ? node.tier + " · Segment" : "Segment")
+            : "Nested Segment";
           const nrows = [];
           if (node.sched) nrows.push({ label: "Publish Schedule", value: node.sched, setting: true, entity: node.entity });
-          if (node.pub)   nrows.push({ label: "Nested Publish Behavior", value: node.pub, setting: true, entity: node.entity });
-          if (!nrows.length) nrows.push({ label: "(nested segment — no extra settings shown)", value: "", setting: true, entity: node.entity });
-          blocks.push({ entity: node.entity, container: true, agg: label, blockJoin, kind: "nested", note: node.note || "",
+          if (node.pub)   nrows.push({ label: "Publish Behavior", value: node.pub, setting: true, entity: node.entity });
+          // If the nested segment exposes no publish settings, show ONLY the header
+          // bar — no redundant "(no extra settings shown)" filler row. The header
+          // already states it's a nested segment; the empty row was pure noise.
+          blocks.push({ entity: node.entity, container: true, agg: label, blockJoin, kind: node.waterfall ? "priority" : "nested", note: node.note || "",
             groups: [{ grp: "", box: false, join: "AND", rows: nrows, descriptive: true }] });
         } else if (node.t === "container") {
           blocks.push({ entity: node.entity, container: true, agg: node.agg, blockJoin, kind: node.kind || "related", note: node.note || "",
@@ -3979,7 +3988,7 @@
       let s = ws.getCell(2, 1);
       s.value = "How to read: each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
               + "The three right-hand columns show the AND/OR logic at each level — 'Join in group' joins rows inside one block, 'Join groups' joins a group-of-groups like (A OR B), 'Join all blocks' is the top-level join across everything. "
-              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = THEN (waterfall order).";
+              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order).";
       s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
       s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
       ws.getRow(2).height = 34;
@@ -4016,7 +4025,7 @@
       const records = [];
       // Inline TYPE tag shown on the block header (or the entity cell for bare direct
       // attributes) so it's obvious what to drag. Derived from the scraped kind.
-      const KIND_TAG = { direct: "DIRECT", related: "RELATED ATTR", ci: "CALC INSIGHT", nested: "NESTED SEG", rank: "RANK & LIMIT" };
+      const KIND_TAG = { direct: "DIRECT", related: "RELATED ATTR", ci: "CALC INSIGHT", nested: "NESTED SEG", priority: "SEGMENT", rank: "RANK & LIMIT" };
       for (const blk of blocks) {
         const [light, dark] = col(blk.entity);
         const blockStart = r; const groupsMeta = [];
@@ -4096,7 +4105,7 @@
         // GROUPED block we write PER-SUB-GROUP notes so each sub-container's type
         // (Direct / Related DLO|DMO / Calculated Insight / Nested) is documented —
         // otherwise a CI nested in an OR group would be lost from the Notes column.
-        const TYPE_LABEL = { direct: "DIRECT ATTRIBUTE", related: "RELATED ATTRIBUTE", ci: "CALCULATED INSIGHT", nested: "NESTED SEGMENT", rank: "RANK & LIMIT", group: "GROUPED (AND/OR)" };
+        const TYPE_LABEL = { direct: "DIRECT ATTRIBUTE", related: "RELATED ATTRIBUTE", ci: "CALCULATED INSIGHT", nested: "NESTED SEGMENT", priority: "SEGMENT (PRIORITY)", rank: "RANK & LIMIT", group: "GROUPED (AND/OR)" };
         const writeNote = (r0, r1, label, text) => {
           if (r1 > r0) ws.mergeCells(r0, NOTES, r1, NOTES);
           const nk = ws.getCell(r0, NOTES);
@@ -4132,7 +4141,10 @@
         const rc = op === "AND" ? AND : op === "THEN" ? THEN : OR;
         for (let rr = r0; rr <= r1; rr++) ws.getCell(rr, c).fill = fill(f);
         if (r0 !== r1) ws.mergeCells(r0, c, r1, c);
-        const cell = ws.getCell(r0, c); cell.value = op;
+        // SF's UI shows no "THEN" keyword — waterfall members are ranked by
+        // priority (the numbered tiers). Display "Priority" instead of the
+        // internal THEN token; AND/OR are shown verbatim as SF labels them.
+        const cell = ws.getCell(r0, c); cell.value = (op === "THEN" ? "Priority" : op);
         cell.font = { bold: true, size: outer ? 12 : 10, color: { argb: "FF" + rc } };
         cell.alignment = { horizontal: "center", vertical: "middle" };
         boxRange(r0, r1, c, c, style, rc);
@@ -4217,6 +4229,7 @@
       sub.value = "Create the segment with these settings first, then build the criteria on the tab sheets. See 'How to Rebuild'.";
       sub.font = { italic: true, size: 9, color: { argb: "FF333333" } }; sub.fill = fill("EAEFF7");
       sub.alignment = { wrapText: true, vertical: "middle" }; ws.getRow(r).height = 26; r += 2;
+      // Labels mirror the SF segment header fields; values are DOM-scraped, blanks omitted.
       const rows = [
         ["Segment Name", meta.segName],
         ["Segment Type", meta.segmentType],
@@ -4258,7 +4271,7 @@
         if (n.t === "group") { if (n.join) joins[n.join] = 1; (n.children || []).forEach(walk); return; }
         if (n.t === "cond") present[n.kind || "direct"] = 1;
         else if (n.t === "container") present[n.kind || "related"] = 1;
-        else if (n.t === "nested") { present.nested = 1; if (n.tier) isWaterfall = true; }
+        else if (n.t === "nested") { if (n.waterfall) { present.priority = 1; isWaterfall = true; } else present.nested = 1; }
         else if (n.t === "rank") present.rank = 1;
         if (n.children) n.children.forEach(walk);
       }
@@ -4287,7 +4300,7 @@
       const newLabel = /waterfall/i.test(segType) ? "New → Waterfall Segment" : "New";
       rows.push(["Step 1", "In Data Cloud → Segments, click " + newLabel + ". Set 'Segment On' to " + onObj + spaceTxt + "."]);
       if (isWaterfall) {
-        rows.push(["Step 2", "This is a WATERFALL segment: add each tier (segment) in the order shown on the Include sheet — order is the priority."]);
+        rows.push(["Step 2", "This is a waterfall segment: drag each segment onto the canvas in the priority order shown (Priority 1 first). An individual is placed only in the highest-priority segment they match (mutually exclusive audiences)."]);
       } else {
         const tabList = tabsWithData.length ? tabsWithData.join(", ") : "Include";
         rows.push(["Step 2", "Rebuild each numbered block (Blk#) top to bottom on the " + tabList + " sheet(s), using its Notes column for what to drag."]);
@@ -4303,7 +4316,8 @@
         direct: ["DIRECT ATTRIBUTE", "A field on " + (meta.segmentOn || "the segment object") + ". Drag the attribute, set its operator + value (see the row)."],
         related: ["RELATED ATTRIBUTE", "A related object shown as a container (Count At Least N). Drag the related object, set the aggregation, then add the member filter(s) inside."],
         ci: ["CALCULATED INSIGHT", "From 'Calculated Insights' in the left panel, drag the named insight, then set its dimension/measure filter."],
-        nested: ["NESTED SEGMENT", "Drag the named existing segment from 'Segments' in the left panel; keep its Publish Schedule + Nested Publish Behavior."],
+        nested: ["NESTED SEGMENT", "An existing segment reused as a condition. Drag it from 'Segments' in the left panel; set its publish behavior."],
+        priority: ["SEGMENT (PRIORITY)", "A waterfall member. Drag the named segment onto the canvas in priority order; the number is its priority (Priority 1 = highest)."],
         rank: ["RANK & LIMIT", "On the Rank and Limit tab, Group/Sort By the field shown, then Limit to N records."],
       };
       const usedTypes = Object.keys(TYPE_DESC).filter((k) => present[k]);
@@ -4320,7 +4334,7 @@
         rows.push(["LOGIC IN THIS SEGMENT", ""]);
         if (joins.AND) rows.push(["AND (green)", "All joined items must match."]);
         if (joins.OR)  rows.push(["OR (orange)", "Any one of the joined items may match."]);
-        if (joins.THEN) rows.push(["THEN (blue)", "Waterfall priority order — tiers are applied in sequence, not AND/OR'd."]);
+        if (joins.THEN) rows.push(["Priority (blue)", "Waterfall tier order — tiers are applied in priority sequence, not AND/OR'd."]);
         rows.push(["Join columns", "The three right-hand columns show the join at each level (inside a group, across groups, across all blocks). A join only appears when it connects 2+ items."]);
       }
 
@@ -4393,7 +4407,7 @@
       // Full words (not abbreviations) + a DLO/DMO/CI sub-badge derived ONLY from the
       // scraped API suffix (objectKindFromApi) — blank when the suffix is unknown.
       function kindChip(kind, objApi) {
-        const M = { direct: ["DIRECT ATTRIBUTE", "#0f766e"], related: ["RELATED ATTRIBUTE", "#0b5cab"], ci: ["CALCULATED INSIGHT", "#7c3aed"], nested: ["NESTED SEGMENT", "#0b5cab"], rank: ["RANK & LIMIT", "#c55a11"] };
+        const M = { direct: ["DIRECT ATTRIBUTE", "#0f766e"], related: ["RELATED ATTRIBUTE", "#0b5cab"], ci: ["CALCULATED INSIGHT", "#7c3aed"], nested: ["NESTED SEGMENT", "#0b5cab"], priority: ["SEGMENT", "#0b5cab"], rank: ["RANK & LIMIT", "#c55a11"] };
         const m = M[kind]; if (!m) return "";
         const ok = objectKindFromApi(objApi);
         const sub = (ok && ok !== "CI") ? `<span class="kchip-sub">${ok}</span>` : "";
@@ -4422,15 +4436,16 @@
         return `<div class="container rank" style="--bg:${light}">${head}${body}</div>`;
       }
 
-      // Nested segment (also a waterfall tier). Blue-accented card: segment name +
-      // optional tier badge + "Nested Publish Behavior".
+      // Waterfall member (a Segment in Priority order) or a true nested segment.
+      // Blue-accented card: segment name + optional priority badge + publish behavior.
       function renderNested(n) {
+        const kind = n.waterfall ? "priority" : "nested";
         const tier = n.tier ? `<span class="ns-badge">${esc(n.tier)}</span>` : "";
-        const head = `<div class="cont-head" style="background:#dbe7f6">${kindChip("nested")}${tier}<span class="ns-ico">&#9673;</span><b>${esc(n.entity || n.attr)}</b></div>`;
+        const head = `<div class="cont-head" style="background:#dbe7f6">${kindChip(kind)}${tier}<span class="ns-ico">&#9673;</span><b>${esc(n.entity || n.attr)}</b></div>`;
         let rows = "";
         if (n.sched) rows += `<div class="ns-pub"><b>Publish Schedule:</b> ${esc(n.sched)}</div>`;
-        if (n.pub)   rows += `<div class="ns-pub"><b>Nested Publish Behavior:</b> <i>${esc(n.pub)}</i></div>`;
-        if (!rows)   rows = `<div class="ns-pub">(nested segment)</div>`;
+        if (n.pub)   rows += `<div class="ns-pub"><b>Publish Behavior:</b> <i>${esc(n.pub)}</i></div>`;
+        // No publish settings → show only the header card, no filler row.
         return `<div class="container nested-seg" style="--bg:#dbe7f6">${head}${rows}</div>`;
       }
 
@@ -4446,6 +4461,9 @@
       // Map a join operator to its rail CSS modifier. AND=green, OR=orange,
       // THEN (waterfall hierarchy)=blue.
       function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : "and"; }
+      // SF shows no "THEN" — waterfall tiers are ranked by priority. Display label
+      // for the rail text (internal token stays THEN for color/plumbing).
+      function railText(op) { return op === "THEN" ? "Priority" : op; }
 
       // stack children; if >1, add a right-side bracket rail carrying the operator
       function renderJoin(children, op, boxed, member) {
@@ -4455,7 +4473,7 @@
         const railCls = "rail " + railMod(op);
         return `<div class="grp ${railMod(op)}">
           <div class="${cls}">${inner}</div>
-          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(op)}<span class="caret">&#9662;</span></span></div>
+          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op))}<span class="caret">&#9662;</span></span></div>
         </div>`;
       }
 
@@ -4468,7 +4486,7 @@
         const railCls = "rail " + railMod(op) + " outer";
         return `<div class="root grp ${railMod(op)}">
           <div class="root-body">${blocks}</div>
-          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(op)}<span class="caret">&#9662;</span></span></div>
+          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op))}<span class="caret">&#9662;</span></span></div>
         </div>`;
       }
 
@@ -4576,11 +4594,14 @@
                rankType: n.fieldLabel || "", rankField: n.operator || "", limit: limit,
                attr: [n.fieldLabel, n.operator, n.values].filter(Boolean).join(" ") };
     }
-    // Nested segment (incl. waterfall tier). operator carries "Tier N" for waterfalls.
+    // Waterfall member (a Segment in Priority order) OR a true nested segment.
+    // operator carries "Priority N" for waterfall members (SF's term).
     function nestedOf(n) {
-      return { t: "nested", entity: n.objectLabel || "(nested segment)",
+      var isWf = !!n.waterfallPriority || /^priority\b/i.test(n.operator || "");
+      return { t: "nested", entity: n.objectLabel || "(segment)",
                attr: n.objectLabel || "", pub: n.fieldLabel || "", sched: n.publishSchedule || "",
-               tier: /^tier\b/i.test(n.operator || "") ? n.operator : "" };
+               waterfall: isWf,
+               tier: /^(priority|tier)\b/i.test(n.operator || "") ? n.operator : "" };
     }
     // Human-readable "how to build this in Salesforce" note per block kind. This is
     // what makes the export self-sufficient for a migration: the person rebuilding
@@ -4612,12 +4633,18 @@
                  (node.objApi ? " [" + node.objApi + "]" : "") +
                  ". From the left panel open Calculated Insights, drag \"" + (node.entity || "") +
                  "\", then set its dimension/measure filter.";
+        case "priority":
+          // Waterfall member — SF term: a Segment processed in priority order.
+          return "Waterfall member segment \"" + (node.entity || "") + "\"" +
+                 (node.tier ? " (" + node.tier + ")" : "") +
+                 ". Drag this segment onto the waterfall canvas in priority order" +
+                 (node.sched ? ". Publish Schedule: " + node.sched : "") +
+                 (node.pub ? ". Publish Behavior: " + node.pub : "") + ".";
         case "nested":
           return "Nested segment: drag the segment \"" + (node.entity || "") +
                  "\" from Segments in the left panel" +
-                 (node.tier ? " (" + node.tier + " in the waterfall order)" : "") +
                  (node.sched ? ". Publish Schedule: " + node.sched : "") +
-                 (node.pub ? ". Nested Publish Behavior: " + node.pub : "") + ".";
+                 (node.pub ? ". Publish Behavior: " + node.pub : "") + ".";
         case "rank":
           return "Rank & Limit rule on " + (node.entity || "") + ": " +
                  [node.rankType, node.rankField].filter(Boolean).join(" ") +
@@ -4632,7 +4659,7 @@
                  children: (node.items || []).map(function (c) { return conv(c, isRank); }).filter(Boolean) };
       }
       if (isRank) { var rk = rankOf(node); rk.kind = "rank"; rk.note = buildNote("rank", rk); return rk; }
-      if (node.type === "nested-segment") { var ns = nestedOf(node); ns.kind = "nested"; ns.note = buildNote("nested", ns); return ns; }
+      if (node.type === "nested-segment") { var ns = nestedOf(node); ns.kind = ns.waterfall ? "priority" : "nested"; ns.note = buildNote(ns.kind, ns); return ns; }
       if (node.type === "aggregation" || node.type === "ci") {
         var isCi = node.type === "ci";
         var agg = isCi ? (node.fieldLabel || "Calculated Insight")
@@ -5522,19 +5549,73 @@
   // /aura request, and the page fires those constantly, so this almost always succeeds
   // fast. The dialog-drive below is a best-effort nudge to speed up a cold start.
   function haveCredsOnly() { return !!(_auraSniff.context && _auraSniff.token); }
+
+  // Read aura token + context DIRECTLY from the page's own Aura framework. This is the
+  // deterministic path — no sniffing, no waiting for a request. If it yields both, we
+  // populate _auraSniff so every query works on the FIRST click. Best-effort + guarded;
+  // if the framework shape differs we simply fall back to the sniffer (below).
+  function primeCredsFromAura() {
+    if (haveCredsOnly()) return true;
+    try {
+      var $A = window.$A;
+      if (!$A || !$A.getContext) return false;
+      var ctx = $A.getContext();
+      // token: several framework versions expose it differently
+      var token = (ctx.getCsrfToken && ctx.getCsrfToken())
+        || ($A.clientService && ($A.clientService._token || $A.clientService.token))
+        || (window.aura && window.aura.token) || "";
+      // context: the exact object aura posts as aura.context
+      var ctxForServer = ctx.getContextForServer && ctx.getContextForServer();
+      var ctxStr = ctxForServer ? (typeof ctxForServer === "string" ? ctxForServer : JSON.stringify(ctxForServer)) : "";
+      if (token && ctxStr) {
+        // store URL-encoded to match what absorbAuraForm captures (posted verbatim)
+        _auraSniff.token = encodeURIComponent(token);
+        _auraSniff.context = encodeURIComponent(ctxStr);
+        if (!_auraSniff.pageURI) { try { _auraSniff.pageURI = encodeURIComponent("/one/one.app"); } catch (e) {} }
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // Proactively warm up credentials on Explore-page load: try the direct framework
+  // read first; if that doesn't yield creds, trigger ONE real query (invisible column
+  // flip + restore) so the sniffer captures them BEFORE the user clicks anything. This
+  // is what removes the hit-and-trial: by the time the modal opens, creds are ready.
+  var _warmedUp = false;
+  function warmUpQueryContext() {
+    if (_warmedUp) return; _warmedUp = true;
+    if (primeCredsFromAura()) return;               // instant, deterministic
+    // else nudge a real query in the background (best-effort)
+    try {
+      const rl = findRecordListEl();
+      const current = rl ? getCurrentFields(rl) : [];
+      if (current.length >= 2 && typeof applyColumnViaSF === "function") {
+        const probeSet = current.slice(0, current.length - 1);
+        applyColumnViaSF(probeSet, function () {
+          setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
+        });
+      }
+    } catch (e) {}
+  }
+
   function ensureQueryContext(cb) {
+    // 0) EXTENSION mode: auth is handled in the background via the sid cookie — no
+    // sniffed creds needed. Always "ready". This is the reliable path (no hit-and-trial).
+    if (extBridgePresent()) { cb(true); return; }
+    // 1) direct framework read (deterministic, instant)
+    if (primeCredsFromAura()) { cb(true); return; }
     if (haveCredsOnly()) { cb(true); return; }
     const rl = findRecordListEl();
     const current = rl ? getCurrentFields(rl) : [];
     var polls = 0, done = false;
     function finish(ok) { if (done) return; done = true; cb(ok); }
     function poll() {
-      if (haveCredsOnly()) { finish(true); return; }
+      if (primeCredsFromAura() || haveCredsOnly()) { finish(true); return; }
       if (polls++ > 50) { finish(false); return; }   // ~10s max
       setTimeout(poll, 200);
     }
-    // Nudge SF into making an /aura call so we capture creds. Applying a CHANGED column
-    // set (drop last) forces a real re-query; then restore the original view.
+    // 2) fallback nudge: force a real /aura query by changing the column set, then restore
     if (current.length >= 2 && typeof applyColumnViaSF === "function") {
       var probeSet = current.slice(0, current.length - 1);
       try {
@@ -5628,13 +5709,68 @@
   // Requires the same aura creds the sniffer already captured. Reject with the SF
   // error verbatim so SQL-dialect edge cases are visible.
   function sqlQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+
+  // Are we running as the browser EXTENSION (bridge.js present)? It stamps this attr.
+  // Extension mode unlocks the DOCUMENTED /ssot/query-sql endpoint (via the bridge →
+  // background, which reads the sid cookie) — up to 49,999 rows, supported API. The
+  // bookmarklet has no bridge → we fall back to the internal /aura path (100-row cap).
+  function extBridgePresent() {
+    try { return document.documentElement.getAttribute("data-dc-ext") === "1"; } catch (e) { return false; }
+  }
+  var _dcBridgeSeq = 0;
+  // Run a SELECT via the extension bridge → background → documented /ssot/query-sql.
+  // Resolves rows as POSITIONAL arrays aligned to `metadata[]` (mapped to selectCols by
+  // the caller). Rejects with the server error. 20s timeout so a dead bridge can't hang.
+  function runDcSqlViaBridge(sql, rowLimit) {
+    return new Promise(function (resolve, reject) {
+      var id = "dcq-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-sql-query" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [] });
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "bridge query failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000 }, "*");
+      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout")); } }, 20000);
+    });
+  }
+
   // Fire ONE queryDCSql for an exact SELECT column list; resolve rows mapped positionally
   // back to {selectCol: value}. `idKey` (if any) is included in the SELECT and its column
   // renamed to "Id" in the output. Rejects with the SF error verbatim.
+  // EXTENSION mode → documented /ssot/query-sql via bridge; else → internal /aura action.
   function runDcSql(objectName, selectCols, ds, rowLimit) {
     return new Promise(function (resolve, reject) {
       var sql = "SELECT " + selectCols.map(sqlQuoteIdent).join(", ") + " FROM " + objectName +
                 " LIMIT " + (rowLimit || 2000);
+
+      // ── DOCUMENTED path (extension): /ssot/query-sql returns positional data[] aligned
+      //    to metadata[]. Map back to {selectCol:value} using metadata name order. ──
+      if (extBridgePresent()) {
+        runDcSqlViaBridge(sql, rowLimit).then(function (res) {
+          var meta = res.metadata || [], data = res.data || [];
+          var rows = data.map(function (arr) {
+            if (!Array.isArray(arr)) return null;
+            var obj = {};
+            // align by metadata order when available; else by selectCols order
+            var order = meta.length ? meta.map(function (m) { return m && m.name; }) : selectCols;
+            for (var i = 0; i < order.length; i++) {
+              // map the server column name back to the SELECT col at the same position
+              obj[selectCols[i] || order[i]] = arr[i];
+            }
+            return obj;
+          }).filter(Boolean);
+          resolve(rows);
+        }).catch(reject);
+        return;
+      }
+
+      // ── FALLBACK path (bookmarklet): internal /aura QueryWorkspace.queryDCSql ──
       _auraQid = (_auraQid || 0) + 1;
       var act = {
         id: "dcsql-" + _auraQid + ";a",
@@ -5680,18 +5816,28 @@
   // with a leading "<dataspace>_" stripped. Evidence-driven (matches the doubled prefix).
   function tableNameCandidates(objectName, ds) {
     var out = [objectName], seen = {}; seen[objectName] = 1;
-    if (ds) {
+    var add = function (name) { if (name && !seen[name]) { seen[name] = 1; out.push(name); } };
+    // 1) If we know the data space, strip a leading "<ds>_" (the documented doubling).
+    if (ds && ds !== "default") {
       var pre = ds + "_";
-      if (objectName.indexOf(pre) === 0) {
-        var stripped = objectName.slice(pre.length);
-        if (stripped && !seen[stripped]) { seen[stripped] = 1; out.push(stripped); }
-      }
+      if (objectName.indexOf(pre) === 0) add(objectName.slice(pre.length));
     }
+    // 2) dataSpace is often NOT captured (sniffer may miss it), so ALSO detect the
+    //    doubled prefix straight from the name: "<TOK>_<TOK>_rest" → strip one "<TOK>_".
+    //    e.g. "TDI_TDI_GI_Individual_Additional__dlm" → "TDI_GI_Individual_Additional__dlm".
+    var m = objectName.match(/^([A-Za-z0-9]+)_(\1_.*)$/);
+    if (m) add(m[2]);
+    // 3) Generic fallback: strip the FIRST underscore-delimited token (the space
+    //    prefix) once, in case the real table simply carries a space prefix.
+    var us = objectName.indexOf("_");
+    if (us > 0) add(objectName.slice(us + 1));
     return out;
   }
   function querySqlAllColumns(objectName, columns, dataSpace, rowLimit) {
     return new Promise(function (resolve, reject) {
-      if (!_auraSniff.context || !_auraSniff.token) {
+      // Extension mode auths via the sid cookie in the background (no sniffed creds
+      // needed). Bookmarklet mode needs the sniffed /aura creds for the fallback.
+      if (!extBridgePresent() && (!_auraSniff.context || !_auraSniff.token)) {
         reject(new Error("No live session captured yet — sort a column once, then retry.")); return;
       }
       var ds = (dataSpace != null) ? dataSpace : (_auraSniff.dataSpace != null ? _auraSniff.dataSpace : "default");
@@ -5714,7 +5860,7 @@
           }).catch(function (err) {
             var msg = String(err && err.message || err);
             // "table does not exist" → try the next table-name candidate.
-            if (/does not exist|not found|42P01/i.test(msg) && ti + 1 < tableNames.length) { tryTable(ti + 1); return; }
+            if (/does not exist|not found|42P01|INVALID_ARGUMENT/i.test(msg) && ti + 1 < tableNames.length) { tryTable(ti + 1); return; }
             // unknown id column → try next id-key / drop id.
             var idUnknown = idKey && /unknown column/i.test(msg) && msg.indexOf(idKey) >= 0;
             if (idUnknown) { attemptId(i + 1); return; }
@@ -5725,6 +5871,19 @@
       }
       tryTable(0);
     });
+  }
+
+  // Single router for "load column data". Picks the best path automatically:
+  //   • EXTENSION mode → documented /ssot/query-sql (via bridge) — supported, ≤49,999 rows,
+  //     reliable (sid cookie), no hit-and-trial. Used for ANY row count.
+  //   • BOOKMARKLET, ≤100 rows → internal /aura CdpDataView (fast, existing path).
+  //   • BOOKMARKLET, >100 rows → internal /aura queryDCSql (existing path).
+  // Returns rows as {fieldApi: value} objects. `want` is the desired row count.
+  function loadColumnsData(objectName, columns, want) {
+    var n = want || 100;
+    if (extBridgePresent()) return querySqlAllColumns(objectName, columns, null, n);
+    if (n > 100) return querySqlAllColumns(objectName, columns, null, n);
+    return queryAllColumns(objectName, columns, null, n);
   }
 
   // ── localStorage helpers ──────────────────────────────────────────────────
@@ -6248,15 +6407,17 @@
       const want = Math.max(1, parseInt(rowsInput.value, 10) || 100);
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       const sub = panel.querySelector(".dc-ac-sub"); if (sub) sub.textContent = "Loading " + want + " rows…";
-      // >100 → SQL-editor action (honors rowLimit); ≤100 → fast CdpDataView query.
-      const loader = want > 100
-        ? querySqlAllColumns(objectName, columns, null, want)
-        : queryAllColumns(objectName, columns, null, want);
-      loader.then((newRows) => {
-        showAllColumnsTable(objectName, columns, newRows, want);   // re-render with new data
-      }).catch((err) => {
+      const fail = (err) => {
         reloadBtn.disabled = false; reloadBtn.textContent = "Reload";
         const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
+      };
+      // Ensure credentials first (so >100 SQL path + the ≤100 path both always work),
+      // THEN load. >100 → SQL-editor action (honors rowLimit); ≤100 → fast CdpDataView.
+      ensureQueryContext(function (ready) {
+        if (!ready) { fail(new Error("Couldn't reach the query service — reopen the tool and retry.")); return; }
+        loadColumnsData(objectName, columns, want).then((newRows) => {
+          showAllColumnsTable(objectName, columns, newRows, want);   // re-render with new data
+        }).catch(fail);
       });
     };
     rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn);
@@ -7249,7 +7410,7 @@
           savedNote.textContent = "Couldn't reach the query service — sort a column once, then retry.";
           return;
         }
-        queryAllColumns(objectName, cols, null).then((rows) => {
+        loadColumnsData(objectName, cols, 100).then((rows) => {
           hideSpinner(); viewAllBtn.disabled = false;
           savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns.";
           showAllColumnsTable(objectName, cols, rows);
@@ -7292,7 +7453,7 @@
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
-        queryAllColumns(objectName, fns, null).then((rows) => {
+        loadColumnsData(objectName, fns, 100).then((rows) => {
           hideSpinner();
           savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded.";
           showAllColumnsTable(objectName, fns, rows);
@@ -7314,7 +7475,7 @@
       // Export via the SAME one-shot query as the full-table view, so ALL selected
       // columns land in the CSV with real data — not just SF's 10.
       ensureQueryContext(function () {
-        queryAllColumns(objectName, ordered, null).then((rows) => {
+        loadColumnsData(objectName, ordered, 100).then((rows) => {
           exportBtn.disabled = false;
           downloadRowsCsv(objectName, ordered, rows);
           savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns.";
@@ -7423,8 +7584,11 @@
   // ── Data Explore launcher (FAB) ───────────────────────────────────────────
   function ensureExploreLauncher() {
     // Begin passively capturing the page's own Data Cloud query credentials so the
-    // "Load all columns" one-shot query can reuse them (no dialog, no re-auth).
+    // "Show selected columns' data" query can reuse them (no dialog, no re-auth).
     try { installAuraSniffer(); } catch (e) {}
+    // Proactively warm up credentials NOW (direct framework read, or one background
+    // query) so the first click always works — no "sort a column first" hit-and-trial.
+    try { warmUpQueryContext(); } catch (e) {}
     if (document.getElementById("dc-bar")) return;
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
