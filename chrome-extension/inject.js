@@ -874,6 +874,7 @@
       t.style.setProperty("background", on ? "#0d6efd" : "#111827", "important");
       t.style.setProperty("color", on ? "#fff" : "#fff", "important");
       t.style.setProperty("box-shadow", on ? "0 2px 10px rgba(13,110,253,.35)" : "none", "important");
+      t.style.setProperty("opacity", "1", "important");   // clear any "busy" dim
     }
     const i = document.getElementById("dc-inline-btn");
     if (i) {
@@ -884,25 +885,62 @@
       i.style.setProperty("background", on ? "#0d6efd" : "#111827", "important");
       i.style.setProperty("color", on ? "#fff" : "#fff", "important");
       i.style.setProperty("box-shadow", on ? "0 2px 10px rgba(13,110,253,.35)" : "none", "important");
+      i.style.setProperty("opacity", "1", "important");   // clear any "busy" dim
     }
+  }
+
+  // Busy guard: the heavy work is redraw() (walks shadow DOM + decorates many rows),
+  // which blocks the main thread. Without this, a user who doesn't see instant feedback
+  // clicks AGAIN — and the second click toggles the mode back OFF (the reported bug).
+  // While busy we ignore re-clicks and show a "working…" label; the button reflects the
+  // new state BEFORE the heavy work by deferring redraw to the next frame (so it paints).
+  let _busyToggle = false;
+  function afterPaint(fn) {
+    // double-rAF (or timeout fallback) guarantees the label repaint lands first.
+    try { requestAnimationFrame(function () { requestAnimationFrame(fn); }); }
+    catch (e) { setTimeout(fn, 16); }
+  }
+  function setBtnBusy(id, msg) {
+    const b = document.getElementById(id); if (!b) return;
+    const lbl = b.querySelector(".dc-lbl"); if (lbl) lbl.textContent = msg;
+    b.style.setProperty("opacity", "0.75", "important");
   }
 
   // The two modes are MUTUALLY EXCLUSIVE — only one active at a time.
   function toggle() {  // hover mode
+    if (_busyToggle) return;                       // ignore rapid re-clicks while working
     state.on = !state.on;
+    updateBadge();                                 // reflect new state immediately
     if (state.on) {
-      if (state.inline) { state.inline = false; clearInline(); } // turn inline off
-      bindHover(); redraw(); observe();
+      if (state.inline) { state.inline = false; clearInline(); }
+      _busyToggle = true; setBtnBusy("dc-toggle-btn", "Working…");
+      afterPaint(function () {
+        try { bindHover(); redraw(); observe(); } catch (e) {}
+        _busyToggle = false; updateBadge();
+      });
     } else { clearTags(); unobserve(); }
-    updateBadge();
   }
-  function toggleInline() {  // visible + searchable inline mode (fields only)
+  function toggleInline() {  // visible + searchable inline "Pin API names" mode
+    if (_busyToggle) return;                       // ignore rapid re-clicks while working
     state.inline = !state.inline;
+    updateBadge();                                 // button flips to "Unpin names" NOW
     if (state.inline) {
-      if (state.on) { state.on = false; clearTags(); }           // turn hover off
-      redraw(); observe();
+      if (state.on) { state.on = false; clearTags(); }
+      _busyToggle = true; setBtnBusy("dc-inline-btn", "Pinning…");
+      // Defer the heavy pin pass so the button visibly changes first (no "did it work?"
+      // confusion), then re-label with a brief count so the user knows it finished.
+      afterPaint(function () {
+        try { redraw(); observe(); } catch (e) {}
+        _busyToggle = false; updateBadge();
+        const b = document.getElementById("dc-inline-btn");
+        const lbl = b && b.querySelector(".dc-lbl");
+        if (lbl) {
+          const n = (state.srcDone || 0) + (state.tgtDone || 0);
+          lbl.textContent = n > 0 ? ("Pinned " + n) : "Unpin names";
+          if (n > 0) setTimeout(function () { if (state.inline && lbl) lbl.textContent = "Unpin names"; }, 1400);
+        }
+      });
     } else { clearInline(); unobserve(); }
-    updateBadge();
   }
 
   // ---------- report target-side diagnosis to an on-page box ----------
@@ -5447,6 +5485,40 @@
     return el;
   }
 
+  // Resolve the DATA SPACE for a given object — using ONLY authoritative sources, never
+  // guessing from the object name (that was the "RH_Profile__dll → RH → denied" bug:
+  // the name prefix is NOT the data space). Priority:
+  //   1) the exact space the PAGE used for THIS object (captured from its own query)
+  //   2) LWC/object-selector props, if exposed
+  //   3) the most-recent sniffed space (same page session)
+  // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
+  function resolveDataSpace(objectName) {
+    // 1) authoritative: the space the page itself queried THIS object with
+    if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
+    // 2) LWC props (usually undefined, but authoritative when present)
+    var rl = findRecordListEl();
+    var cand = ["dataSpace", "dataspace", "selectedDataSpaceName", "dataSpaceName", "space"];
+    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string") return v; } catch (e) {} } }
+    var sel = null;
+    eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
+    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string") return v2; } catch (e) {} } }
+    // 3) last sniffed space this session (the object currently open usually matches)
+    if (_auraSniff.dataSpace != null) return _auraSniff.dataSpace;
+    return "";   // unknown → caller tries candidate spaces (incl. "default")
+  }
+  // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
+  // data space the page has used this session (from _dsByObject) plus "" and "default",
+  // so a query works even when we haven't captured THIS object's space yet.
+  function dataSpaceCandidates(objectName) {
+    var out = [], seen = {};
+    var add = function (s) { if (s != null && !seen[s]) { seen[s] = 1; out.push(s); } };
+    add(resolveDataSpace(objectName));                 // best guess first (may be "")
+    Object.keys(_dsByObject).forEach(function (k) { add(_dsByObject[k]); });  // any seen space
+    if (_auraSniff.dataSpace != null) add(_auraSniff.dataSpace);
+    add(""); add("default");
+    return out;
+  }
+
   // Module-level store for state that must survive SF re-rendering the DOM element.
   // Keys are objectApiName strings. Values: { allColumns, lastApplied }.
   const _exploreCache = {};
@@ -5465,6 +5537,16 @@
     return !!findRecordListEl();
   }
 
+  // ── Safety limits for the Data Explorer query/render (prevents browser freeze) ──
+  // The documented /ssot/query-sql endpoint allows up to 49,999 rows, but rendering
+  // 50k×60 = 3M DOM nodes would hang the tab. So: allow FETCHING a lot (CSV can hold
+  // it), but only RENDER a bounded number of rows into the table (the rest stay in the
+  // data set for CSV export). Conservative, tunable ceilings; defined here (module top)
+  // so every function below can rely on them.
+  var DC_MAX_FETCH_ROWS  = 49999;  // hard ceiling accepted by the endpoint
+  var DC_WARN_ROWS       = 5000;   // above this we warn it may be slow
+  var DC_MAX_RENDER_ROWS = 2000;   // cap DOM rows; extras remain exportable via CSV
+
   // ── Aura query harvesting ───────────────────────────────────────────────────
   // Data Explorer fetches rows via an Aura server action (proven by probes 1–5):
   //   POST /aura?...ui-cdp-components-controllers.CdpDataView.query=1
@@ -5476,6 +5558,11 @@
   // call. So we passively capture a live request's aura.context/token/pageURI, then
   // replay the SAME read-only query with EVERY selected column. No dialog, no batching.
   var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false };
+  // REAL data space per object, captured from the page's own queries. The data space is
+  // NOT derivable from the object name (e.g. DLO "RH_Profile__dll" is NOT in space "RH").
+  // The ONLY reliable source is the {objectName, selectedDataSpaceName} pair the page
+  // itself sends — so we remember it here, keyed by objectName.
+  var _dsByObject = {};
 
   function decodeFormField(v) { try { return decodeURIComponent((v || "").replace(/\+/g, " ")); } catch (e) { return v || ""; } }
 
@@ -5502,6 +5589,8 @@
           _auraSniff.template = act;                       // full action to clone
           if (q.objectName) _auraSniff.objectName = q.objectName;
           if (q.selectedDataSpaceName != null) _auraSniff.dataSpace = q.selectedDataSpaceName;
+          // Remember the EXACT data space this object was queried with (authoritative).
+          if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
         }
       } catch (e) {}
     }
@@ -5681,12 +5770,18 @@
         headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
         body: form, credentials: "include"
       }).then(function (r) { return r.text(); }).then(function (txt) {
+        // SESSION EXPIRED: SF's /aura returns a login redirect / invalidSession marker
+        // instead of JSON when the session dies. Detect and give a clear message.
+        if (/aura:invalidSession|window\.location|\/secur\/login|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) {
+          reject(new Error("Your Salesforce session has expired — reload this page (log in again), then click the bookmark and retry.")); return;
+        }
         var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Query response was not JSON.")); return; }
         var a2 = json && json.actions && json.actions[0];
         if (!a2) { reject(new Error("Query response had no actions.")); return; }
         if (a2.state !== "SUCCESS") {
           var em = "";
           try { em = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; } catch (e) { em = a2.state; }
+          if (/invalidSession|INVALID_SESSION|session expired/i.test(em)) { reject(new Error("Your Salesforce session has expired — reload this page and retry.")); return; }
           reject(new Error("Query failed: " + em)); return;
         }
         var rv = a2.returnValue || [];
@@ -5721,7 +5816,7 @@
   // Run a SELECT via the extension bridge → background → documented /ssot/query-sql.
   // Resolves rows as POSITIONAL arrays aligned to `metadata[]` (mapped to selectCols by
   // the caller). Rejects with the server error. 20s timeout so a dead bridge can't hang.
-  function runDcSqlViaBridge(sql, rowLimit) {
+  function runDcSqlViaBridge(sql, rowLimit, dataspace) {
     return new Promise(function (resolve, reject) {
       var id = "dcq-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
       var done = false;
@@ -5731,12 +5826,203 @@
         if (!d || d.__dcRes !== "dc-sql-query" || d.id !== id) return;
         window.removeEventListener("message", onMsg, false);
         if (done) return; done = true;
-        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [] });
+        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [], queryId: d.resp.queryId || "", rowCount: d.resp.rowCount || 0 });
         else reject(new Error(d.error || (d.resp && d.resp.error) || "bridge query failed"));
       }
       window.addEventListener("message", onMsg, false);
-      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000 }, "*");
+      // dataspace is REQUIRED by /ssot/query-sql (probe: no ds → 400, ds="TDI" → 201).
+      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000, dataspace: dataspace || "" }, "*");
+      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout")); } }, 30000);
+    });
+  }
+
+  // Fetch one page of a paginated query result via the extension bridge.
+  function fetchPageViaBridge(queryId, offset, rowLimit, dataspace) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) { reject(new Error("Pagination requires the extension.")); return; }
+      var id = "dcp-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-fetch-page" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [] });
+        else reject(new Error(d.error || "page fetch failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-fetch-page", id: id, queryId: queryId, offset: offset, rowLimit: rowLimit, dataspace: dataspace || "" }, "*");
+      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("page fetch timeout")); } }, 60000);
+    });
+  }
+
+  // Paginated CSV export: runs a query (rowLimit=CHUNK_SIZE), then loops GET /rows until
+  // all rows fetched (or cap hit). Builds CSV incrementally so memory stays bounded (we
+  // hold the CSV string, not parsed objects). Returns a Blob URL to download.
+  // `onProgress(fetched, total)` is called after each chunk for a UI progress bar.
+  // Extension-only (pagination requires the sid-cookie background).
+  var DC_PAGE_SIZE = 49999;
+  var DC_MAX_TOTAL_EXPORT = 500000;   // hard cap (memory + credit safety)
+  // Paginated CSV export: runs a query, then pages through all results building CSV
+  // incrementally. Extension-only (pagination needs the sid-cookie background).
+  // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
+  // Resolves { blobUrl, totalRows, columns } — the caller triggers the download.
+  function exportPaginatedCsv(sql, dataspace, onProgress) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) { reject(new Error("Large export (>49,999 rows) requires the browser extension.")); return; }
+      var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
+      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      function appendRows(data, metadata) {
+        if (!cols.length && metadata && metadata.length) {
+          cols = metadata.map(function (m) { return m.name; });
+          csvParts.push(cols.map(esc).join(",") + "\n");   // header
+        }
+        data.forEach(function (row) {
+          if (!Array.isArray(row)) return;
+          csvParts.push(cols.map(function (c, i) { return esc(row[i]); }).join(",") + "\n");
+          fetched++;
+        });
+      }
+      // 1) initial query
+      runDcSqlViaBridge(sql, DC_PAGE_SIZE, dataspace).then(function (first) {
+        appendRows(first.data, first.metadata);
+        totalRows = first.rowCount || fetched;
+        if (onProgress) onProgress(fetched, totalRows);
+        if (!first.queryId || fetched >= totalRows || fetched >= DC_MAX_TOTAL_EXPORT) {
+          // done in one shot
+          var blob = new Blob(csvParts, { type: "text/csv" });
+          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+          return;
+        }
+        // 2) paginate remaining chunks
+        var queryId = first.queryId;
+        function nextPage() {
+          if (fetched >= totalRows || fetched >= DC_MAX_TOTAL_EXPORT) {
+            var blob = new Blob(csvParts, { type: "text/csv" });
+            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+            return;
+          }
+          fetchPageViaBridge(queryId, fetched, DC_PAGE_SIZE, dataspace).then(function (page) {
+            appendRows(page.data, page.metadata);
+            if (onProgress) onProgress(fetched, totalRows);
+            if (!page.data || page.data.length === 0) {
+              // no more data (done)
+              var blob = new Blob(csvParts, { type: "text/csv" });
+              resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+            } else { nextPage(); }
+          }).catch(reject);
+        }
+        nextPage();
+      }).catch(reject);
+    });
+  }
+
+  // Read a Data Transform's full definition via the extension bridge → background
+  // (documented GET /ssot/data-transforms/{nameOrId}, sid-cookie auth). Extension-only:
+  // the page can't fetch my.salesforce.com (CORS). Resolves the parsed definition JSON.
+  function fetchTransformViaBridge(nameOrId) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) { reject(new Error("Reading a transform needs the browser extension (the page can't reach the API directly).")); return; }
+      var id = "dct-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-transform" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve(d.resp);
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "transform read failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-transform", id: id, nameOrId: nameOrId }, "*");
       setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout")); } }, 20000);
+    });
+  }
+
+  // Read the transform id + devName from the editor URL (standalone Aura app):
+  //   .../transformEditor/transformEditor.app?transformId=<id>&definitionDevName=<devName>
+  function transformIdsFromUrl() {
+    var out = { transformId: "", devName: "" };
+    try {
+      var qs = (location.href.split("?")[1] || "").replace(/#.*/, "");
+      qs.split("&").forEach(function (kv) {
+        var i = kv.indexOf("="); if (i < 0) return;
+        var k = kv.slice(0, i), v = decodeURIComponent(kv.slice(i + 1));
+        if (/transformId/i.test(k)) out.transformId = v;
+        if (/definitionDevName|devName/i.test(k)) out.devName = v;
+      });
+    } catch (e) {}
+    return out;
+  }
+  function isTransformPage() { var t = transformIdsFromUrl(); return !!(t.transformId || t.devName); }
+
+  // Detect the Data Cloud QUERY EDITOR page (the SQL workspace tab).
+  // It contains a runtime_cdp-query-workspace or similar component, or the URL matches.
+  function isQueryEditorPage() {
+    // URL-based detection (most reliable for the standalone tab)
+    if (/queryEditor|query-editor|queryWorkspace/i.test(location.href)) return true;
+    // Component-based fallback: look for the query workspace tag
+    var found = false;
+    eachElement(document, function (el) {
+      if (found) return;
+      var t = tagOf(el);
+      if (/cdp-query-workspace|query-workspace|queryWorkspace/i.test(t)) found = true;
+    });
+    return found;
+  }
+
+  // Read the SQL from the Query Editor's textarea/input (DOM scrape).
+  function readQueryEditorSql() {
+    var sql = "";
+    eachElement(document, function (el) {
+      if (sql) return;
+      var t = tagOf(el);
+      // The editor is typically a textarea or a contenteditable div or a code-mirror element.
+      if (t === "textarea" && el.value && el.value.trim().length > 8 && /select|from/i.test(el.value)) { sql = el.value.trim(); return; }
+      if (el.getAttribute && el.getAttribute("contenteditable") === "true" && el.textContent && /select|from/i.test(el.textContent)) { sql = el.textContent.trim(); return; }
+    });
+    return sql;
+  }
+
+  // Run RAW user SQL (from the SQL editor / filter) through the documented endpoint
+  // (extension) or the /aura action (bookmarklet). Unlike runDcSql we DON'T know the
+  // column order in advance, so we key rows by the server's metadata[] names. Resolves
+  // { columns:[names in result order], rows:[{name:value}] }.
+  function runRawSql(sql, dataSpace, rowLimit) {
+    return new Promise(function (resolve, reject) {
+      var ds = (dataSpace != null) ? dataSpace : (_auraSniff.dataSpace != null ? _auraSniff.dataSpace : "");
+      var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
+      function mapByMeta(data, metadata) {
+        var cols = (metadata || []).map(function (m) { return m && m.name; });
+        var rows = (data || []).map(function (arr) {
+          if (!Array.isArray(arr)) return null;
+          var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
+        }).filter(Boolean);
+        return { columns: cols, rows: rows };
+      }
+      if (extBridgePresent()) {
+        runDcSqlViaBridge(sql, n, ds).then(function (res) {
+          resolve(mapByMeta(res.data, res.metadata));
+        }).catch(reject);
+        return;
+      }
+      // Bookmarklet fallback: /aura QueryWorkspace.queryDCSql (positional dataRows[].row).
+      if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No live session — sort a column once, then retry.")); return; }
+      _auraQid = (_auraQid || 0) + 1;
+      var act = { id: "dcraw-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: sql, rowLimit: n, dataspace: ds } };
+      var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+      fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+        .then(function (r) { return r.text(); }).then(function (txt) {
+          if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Your Salesforce session has expired — reload the page and retry.")); return; }
+          var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("SQL response was not JSON.")); return; }
+          var a = j && j.actions && j.actions[0];
+          if (!a || a.state !== "SUCCESS") { var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {} reject(new Error("SQL query failed: " + (em || "unknown"))); return; }
+          var rv = a.returnValue || {}; var dr = rv.dataRows || rv.rows || []; var meta = rv.metadata || [];
+          var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
+          resolve(mapByMeta(arrData, meta));
+        }).catch(function (err) { reject(new Error("SQL request failed: " + err)); });
     });
   }
 
@@ -5752,17 +6038,17 @@
       // ── DOCUMENTED path (extension): /ssot/query-sql returns positional data[] aligned
       //    to metadata[]. Map back to {selectCol:value} using metadata name order. ──
       if (extBridgePresent()) {
-        runDcSqlViaBridge(sql, rowLimit).then(function (res) {
-          var meta = res.metadata || [], data = res.data || [];
+        runDcSqlViaBridge(sql, rowLimit, ds).then(function (res) {
+          var data = res.data || [];
+          // The response `data` is row-major: each element is one ROW = an array of
+          // values in EXACTLY our SELECT order (selectCols). We built the SELECT, so we
+          // key strictly BY POSITION → selectCols[i]. (Don't trust metadata names — the
+          // server may rename/recase them, which previously collapsed everything into
+          // one column.)
           var rows = data.map(function (arr) {
             if (!Array.isArray(arr)) return null;
             var obj = {};
-            // align by metadata order when available; else by selectCols order
-            var order = meta.length ? meta.map(function (m) { return m && m.name; }) : selectCols;
-            for (var i = 0; i < order.length; i++) {
-              // map the server column name back to the SELECT col at the same position
-              obj[selectCols[i] || order[i]] = arr[i];
-            }
+            for (var i = 0; i < selectCols.length; i++) obj[selectCols[i]] = arr[i];
             return obj;
           }).filter(Boolean);
           resolve(rows);
@@ -5807,8 +6093,6 @@
       }).catch(function (err) { reject(new Error("SQL request failed: " + err)); });
     });
   }
-  // Candidate id-column names to try (varies by object; some DMOs have none of these).
-  var _idKeyCandidates = ["Id", "Id__c", "ssot__Id__c"];
   // The Data Explorer's objectName PREPENDS the data-space name, e.g. data space "TDI" +
   // table "TDI_GI_Individual_Additional__dlm" → "TDI_TDI_GI_Individual_Additional__dlm".
   // The CdpDataView query accepts that (space is implicit) but the SQL engine wants the
@@ -5840,36 +6124,47 @@
       if (!extBridgePresent() && (!_auraSniff.context || !_auraSniff.token)) {
         reject(new Error("No live session captured yet — sort a column once, then retry.")); return;
       }
-      var ds = (dataSpace != null) ? dataSpace : (_auraSniff.dataSpace != null ? _auraSniff.dataSpace : "default");
       // De-dupe the user's (already-valid) selected columns, preserving order.
+      // NOTE: we no longer append an Id column — the table doesn't show it, and many
+      // objects (DLO/DMO/CI) have no "Id" field (that caused "unknown column" retries).
       var base = [], seen = {};
       columns.forEach(function (c) { if (c && !seen[c]) { seen[c] = 1; base.push(c); } });
-      function mapId(rows, idKey) {
-        if (!idKey) return rows;
-        return rows.map(function (r) { var o = {}; Object.keys(r).forEach(function (k) { o[k === idKey ? "Id" : k] = r[k]; }); return o; });
+
+      // Build (table, dataspace) combos to try. Probe 9 PROVED the winner is the FULL
+      // object name (e.g. "TDI_TDI_GI_..._dlm") + the REAL data space (e.g. "TDI").
+      // So try that FIRST, then variants only as fallbacks. The wrong data space — not
+      // the name — is the usual "table does not exist" cause.
+      // Data space: use ALL authoritative candidates (captured per-object spaces, then
+      // "", "default") — never derived from the name. If the caller passed one, try it first.
+      var spaces = [];
+      var addSp = function (s) { if (s != null && spaces.indexOf(s) < 0) spaces.push(s); };
+      if (dataSpace != null) addSp(dataSpace);
+      dataSpaceCandidates(objectName).forEach(addSp);
+      if (!spaces.length) spaces.push("");
+      // Table name: use the object name AS-IS first (what the page uses), then the
+      // prefix-stripped variants only as fallbacks (some orgs differ).
+      var names = tableNameCandidates(objectName, resolveDataSpace(objectName) || "");
+      // combos: for each data space, try each table name (as-is name first).
+      var combos = [];
+      spaces.forEach(function (sp) { names.forEach(function (nm) { combos.push({ tbl: nm, ds: sp }); }); });
+
+      var _firstErr = null;   // remember the FIRST combo's error (the most meaningful)
+      function tryCombo(ci) {
+        var c = combos[ci];
+        runDcSql(c.tbl, base.slice(), c.ds, rowLimit).then(function (rows) {
+          resolve(rows);
+        }).catch(function (err) {
+          var msg = String(err && err.message || err);
+          if (ci === 0 && !_firstErr) _firstErr = "[tried table=\"" + c.tbl + "\" dataspace=" + JSON.stringify(c.ds) + "] " + msg;
+          // Wrong table OR wrong data space (incl. "denied authorization", which means
+          // the object isn't in that space / no access there) → try the next combo.
+          if (/does not exist|not found|42P01|INVALID_ARGUMENT|invalid|denied authorization|not authorized|no access/i.test(msg) && ci + 1 < combos.length) { tryCombo(ci + 1); return; }
+          // Surface the FIRST combo's error (the proven-good combo) — trailing combos
+          // are just fallbacks and their errors are noise.
+          reject(new Error("SQL query failed: " + (_firstErr || msg)));
+        });
       }
-      var tableNames = tableNameCandidates(objectName, ds);
-      // Outer loop = table-name candidate; inner loop = id-key candidate.
-      function tryTable(ti) {
-        var tbl = tableNames[ti];
-        function attemptId(i) {
-          var idKey = _idKeyCandidates[i] || null;
-          var sel = idKey ? base.concat([idKey]) : base.slice();
-          runDcSql(tbl, sel, ds, rowLimit).then(function (rows) {
-            resolve(mapId(rows, idKey));
-          }).catch(function (err) {
-            var msg = String(err && err.message || err);
-            // "table does not exist" → try the next table-name candidate.
-            if (/does not exist|not found|42P01|INVALID_ARGUMENT/i.test(msg) && ti + 1 < tableNames.length) { tryTable(ti + 1); return; }
-            // unknown id column → try next id-key / drop id.
-            var idUnknown = idKey && /unknown column/i.test(msg) && msg.indexOf(idKey) >= 0;
-            if (idUnknown) { attemptId(i + 1); return; }
-            reject(new Error("SQL query failed: " + msg));
-          });
-        }
-        attemptId(0);
-      }
-      tryTable(0);
+      tryCombo(0);
     });
   }
 
@@ -5880,7 +6175,9 @@
   //   • BOOKMARKLET, >100 rows → internal /aura queryDCSql (existing path).
   // Returns rows as {fieldApi: value} objects. `want` is the desired row count.
   function loadColumnsData(objectName, columns, want) {
-    var n = want || 100;
+    // Single choke point: clamp to the endpoint's hard ceiling so no caller can ask for
+    // an abusive/oversized row count (guards the browser + is polite to the server).
+    var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 100));
     if (extBridgePresent()) return querySqlAllColumns(objectName, columns, null, n);
     if (n > 100) return querySqlAllColumns(objectName, columns, null, n);
     return queryAllColumns(objectName, columns, null, n);
@@ -6170,17 +6467,19 @@
 
     const fixAll = () => {
       try {
-        // Walk ALL shadow roots inside every lightning-datatable
+        // Walk each lightning-datatable ONCE, handling both style injection and td
+        // clamping in a single pass (was three separate walks → 3× the work).
         eachElement(document, el => {
           if (tagOf(el) !== "lightning-datatable") return;
-          // Inject into every nested shadow root
+          injectStyle(el.shadowRoot);
           eachElement(el, inner => {
             if (inner.shadowRoot) injectStyle(inner.shadowRoot);
-          });
-          injectStyle(el.shadowRoot);
-          // Also directly clamp every td
-          eachElement(el, inner => {
-            if (tagOf(inner) === "td" || tagOf(inner) === "th") {
+            var t = tagOf(inner);
+            if (t === "td" || t === "th") {
+              // stamp so we never re-touch a cell we've already clamped (avoids
+              // re-processing the same nodes on every scroll mutation).
+              if (inner.__dcClamped) return;
+              inner.__dcClamped = 1;
               inner.style.overflow = "hidden";
               inner.style.maxWidth = "200px";
             }
@@ -6191,9 +6490,17 @@
 
     fixAll();
 
-    // Watch for row additions and re-apply (SF renders rows lazily)
+    // Watch for row additions and re-apply (SF renders rows lazily) — but DEBOUNCE:
+    // scrolling a datatable fires MANY childList mutations; without debouncing, fixAll
+    // (a full shadow-DOM walk) would run on each one → jank. Coalesce bursts into one
+    // run ~150ms after activity settles.
     if (!_dtObserver) {
-      _dtObserver = new MutationObserver(fixAll);
+      var _dtDebounce = null;
+      var schedule = function () {
+        if (_dtDebounce) return;
+        _dtDebounce = setTimeout(function () { _dtDebounce = null; fixAll(); }, 150);
+      };
+      _dtObserver = new MutationObserver(schedule);
       try {
         eachElement(document, el => {
           if (tagOf(el) === "lightning-datatable" && el.shadowRoot) {
@@ -6362,13 +6669,129 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
+  // ── "Understand this transform" — plain-language view of a Data Transform ──────
+  // Reads the definition (batch node-graph or streaming SQL) and renders sources →
+  // steps/joins → output, so you don't have to read raw JSON. Extension-only (the read
+  // goes through the cookie bridge). Draggable modal; nothing is written.
+  let _xformEl = null;
+  function closeTransformView() { if (_xformEl) { _xformEl.remove(); _xformEl = null; } }
+  function showTransformSummary(rep) {
+    closeTransformView();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+    // The batch graph is at definitions[0].definition (or .definition); streaming has sql.
+    var d0 = rep.definition || (rep.definitions && rep.definitions[0]) || {};
+    var def = (d0 && d0.definition && (d0.definition.nodes || d0.definition.sql)) ? d0.definition : d0;
+    var nodes = def.nodes || {};
+    var keys = Object.keys(nodes);
+    var isSql = !!(def.sql || def.query || def.dcSql || def.stlSql);
+
+    // Build readable sections from the node graph.
+    var sources = [], steps = [];
+    keys.forEach(function (k) {
+      var n = nodes[k] || {}, p = n.parameters || {};
+      var act = (n.action || n.type || "").toLowerCase();
+      if (act === "load") {
+        var ds = p.dataset || {};
+        sources.push({ id: k, obj: ds.name || "(unknown)", objType: ds.type || "", fields: p.fields || [] });
+      } else if (act === "join") {
+        steps.push({ id: k, kind: "JOIN", detail: (p.joinType || "") + " join  on  " + ([].concat(p.leftKeys || []).join(",")) + "  =  " + ([].concat(p.rightKeys || []).join(",")) + (p.rightQualifier ? "   (right: " + p.rightQualifier + ")" : "") });
+      } else if (act) {
+        steps.push({ id: k, kind: act.toUpperCase(), detail: JSON.stringify(p).slice(0, 120) });
+      }
+    });
+    var outs = (def.outputDataObjects || []).map(function (o) {
+      return { name: o.name || o.label || "(output)", category: o.category || "", fields: (o.fields || []).map(function (f) { return { label: f.label, name: f.name, type: f.type, pk: !!f.isPrimaryKey }; }) };
+    });
+
+    var m = document.createElement("div");
+    _xformEl = m;
+    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+    var hdr = "<div style='display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move' class='dc-xf-hdr'>" +
+      "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
+      "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(rep.type || "") + " &bull; data space: " + esc(rep.dataSpaceName || "—") +
+      " &bull; last run: " + esc(rep.lastRunStatus || "—") + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : "") + "</div></div>" +
+      "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
+      "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
+
+    var body = "<div style='flex:1;overflow:auto;padding:14px 16px'>";
+    if (isSql) {
+      body += "<div style='font-weight:700;margin-bottom:6px'>SQL</div><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:10px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
+    } else {
+      // SOURCES
+      body += "<div style='font-weight:700;margin:2px 0 6px'>Sources (" + sources.length + ")</div>";
+      sources.forEach(function (s) {
+        body += "<div style='padding:6px 10px;border:1px solid #e6ebf3;border-radius:6px;margin-bottom:5px'>" +
+          "<b>" + esc(s.obj) + "</b> <span style='color:#8a94a6'>" + esc(s.objType) + "</span>" +
+          (s.fields.length ? "<div style='font:11px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + esc(s.fields.join(", ")) + "</div>" : "") + "</div>";
+      });
+      // STEPS
+      body += "<div style='font-weight:700;margin:12px 0 6px'>Steps (" + steps.length + ")</div>";
+      steps.forEach(function (st) {
+        body += "<div style='padding:5px 10px;border-left:3px solid #0d6efd;background:#f7f9fc;margin-bottom:4px'>" +
+          "<b>" + esc(st.kind) + "</b> <span style='color:#5c6b8a'>" + esc(st.detail) + "</span></div>";
+      });
+      // OUTPUT
+      body += "<div style='font-weight:700;margin:12px 0 6px'>Output (" + outs.length + ")</div>";
+      outs.forEach(function (o) {
+        body += "<div style='padding:6px 10px;border:1px solid #cfe0d3;border-radius:6px;margin-bottom:5px;background:#f4faf5'>" +
+          "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category) + "</span>" +
+          (o.fields.length ? "<div style='font:11px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.name) + (f.pk ? " 🔑" : ""); }).join(", ") + "</div>" : "") + "</div>";
+      });
+    }
+    body += "</div>";
+    m.innerHTML = hdr + body;
+    document.body.appendChild(m);
+    m.querySelector(".dc-xf-x").onclick = closeTransformView;
+    m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
+    if (typeof makeDraggable === "function") try { makeDraggable(m, m.querySelector(".dc-xf-hdr")); } catch (e) {}
+  }
+
   // Render the tool's OWN full-width, scrollable results table showing EVERY selected
   // column with real data (from one queryAllColumns call). This is what removes the
   // 10-column ceiling for the user — no SF datatable involved. Draggable + resizable,
   // sticky header + sticky Id column, with a "Download CSV (all columns)" action.
   let allColsTableEl = null;
   function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } }
-  function showAllColumnsTable(objectName, columns, rows, wantRows) {
+  // Popup showing one cell's FULL value (for long text / JSON / blob fields), with a
+  // Copy button and pretty-print for JSON. Salesforce-like "view field value" behavior.
+  var _cellViewEl = null;
+  function showCellValue(fieldApi, fieldLabel, value) {
+    if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+    // pretty-print JSON if it parses (common for blob/graph fields)
+    var pretty = value;
+    try { var p = JSON.parse(value); if (p && typeof p === "object") pretty = JSON.stringify(p, null, 2); } catch (e) {}
+    var m = document.createElement("div");
+    _cellViewEl = m;
+    m.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,92vw);max-height:80vh;z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+    m.innerHTML =
+      "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb'>" +
+        "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc(fieldLabel) + "</div>" +
+        "<div style='font:600 10px SF Mono,Consolas,monospace;color:#5c6b8a'>" + esc(fieldApi) + " &bull; " + value.length + " chars</div></div>" +
+        "<button class='dc-cv-copy' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy</button>" +
+        "<button class='dc-cv-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button>" +
+      "</div>" +
+      "<pre style='margin:0;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc(pretty) + "</pre>";
+    document.body.appendChild(m);
+    m.querySelector(".dc-cv-copy").onclick = function () {
+      try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
+    };
+    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } };
+    m.querySelector(".dc-cv-x").onclick = close;
+    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
+  }
+
+  // Persisted filter state per object so conditions SURVIVE re-renders (Apply re-renders
+  // the table; without this the filter bar would reset and the user loses what they typed).
+  // Shape: { conds:[{col,op,val}], join:"AND"|"OR", active:bool }.
+  var _filterState = {};
+  // Module-level handle to the SQL editor opener (it's defined inside _buildExploreModal,
+  // out of scope for the results table). Assigned when the modal builds; used by the
+  // results table's "Edit SQL" button to relaunch the editor.
+  var _openSoqlEditor = null;
+  // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
+  // view is filtered to non-empty columns. Defaults to `columns` when not passed.
+  function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     closeAllColumnsTable();
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     // Field label lookup from whatever we discovered (falls back to the api name).
@@ -6397,16 +6820,21 @@
     rowsWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;";
     rowsWrap.innerHTML = "<span>Rows:</span>";
     const rowsInput = document.createElement("input");
-    rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.value = String(rows.length || 100);
-    rowsInput.style.cssText = "width:72px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Up to 100 uses the fast path; more than 100 runs a SQL query behind the scenes.";
+    rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
+    rowsInput.value = String(rows.length || 100);
+    rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
+    rowsInput.title = "Up to " + DC_MAX_FETCH_ROWS + " rows. The table shows the first " + DC_MAX_RENDER_ROWS + " for speed; use Download CSV for the rest.";
     const reloadBtn = document.createElement("button");
     reloadBtn.textContent = "Reload";
     reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     reloadBtn.onclick = () => {
-      const want = Math.max(1, parseInt(rowsInput.value, 10) || 100);
+      // CLAMP to the endpoint's hard ceiling so we never send an abusive/oversized ask.
+      var raw = parseInt(rowsInput.value, 10) || 100;
+      var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
+      if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);   // reflect the clamp in the UI
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
-      const sub = panel.querySelector(".dc-ac-sub"); if (sub) sub.textContent = "Loading " + want + " rows…";
+      const sub = panel.querySelector(".dc-ac-sub");
+      if (sub) sub.textContent = "Loading " + want + " rows…" + (want > DC_WARN_ROWS ? " (large query — this can take a while)" : "");
       const fail = (err) => {
         reloadBtn.disabled = false; reloadBtn.textContent = "Reload";
         const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
@@ -6423,30 +6851,226 @@
     rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn);
     hdr.appendChild(rowsWrap);
 
+    // "Hide empty columns" — data is often sparse (many all-null columns), so this
+    // trims the table to only columns that have data in the loaded rows. Pure VIEW
+    // filter: CSV still exports the FULL set. Empties are computed from the FULL column
+    // set (fullCols) against the fetched rows, so the toggle is stable across re-renders.
+    const fullCols = allColumns || columns;
+    const emptyCols = {}; fullCols.forEach(fn => { emptyCols[fn] = true; });
+    rows.forEach(r => { fullCols.forEach(fn => { var v = r[fn]; if (v !== null && v !== undefined && v !== "") emptyCols[fn] = false; }); });
+    const nonEmptyColumns = fullCols.filter(fn => !emptyCols[fn]);
+    const emptyCount = fullCols.length - nonEmptyColumns.length;
+    const hideWrap = document.createElement("label");
+    hideWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;cursor:pointer;white-space:nowrap;";
+    const hideCb = document.createElement("input"); hideCb.type = "checkbox";
+    hideCb.checked = !!(window.__dcHideEmpty);           // remember choice across re-renders
+    hideWrap.appendChild(hideCb);
+    hideWrap.appendChild(document.createTextNode("Hide empty (" + emptyCount + ")"));
+    hideWrap.title = "Show only columns that have data in the loaded rows. CSV still exports all columns.";
+    hideCb.onchange = () => {
+      window.__dcHideEmpty = hideCb.checked;
+      // re-render with the visible column set; always pass the FULL set for CSV + stable recompute.
+      const shown = hideCb.checked ? nonEmptyColumns : fullCols;
+      showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
+    };
+    if (emptyCount > 0) hdr.appendChild(hideWrap);
+
+    // Relaunch the SQL editor from the results table (the editor closes on a
+    // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
+    const sqlBtn = document.createElement("button");
+    sqlBtn.textContent = "Edit SQL";
+    sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+    sqlBtn.onclick = () => { try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {} };
+
     const csvBtn = document.createElement("button");
     csvBtn.textContent = "Download CSV (all columns)";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
-    csvBtn.onclick = () => downloadRowsCsv(objectName, columns, rows);
+    // CSV always exports the FULL column set, even when the view hides some.
+    csvBtn.onclick = () => downloadRowsCsv(objectName, fullCols, rows);
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&#x2715;";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
     closeBtn.onclick = closeAllColumnsTable;
-    hdr.appendChild(csvBtn); hdr.appendChild(closeBtn);
+    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
+
+    // ── Type-aware FILTER row ───────────────────────────────────────────────────
+    // Pick a column → the value control adapts to the column's inferred type:
+    //   boolean → true/false dropdown; number → operator + number; date → operator +
+    //   date; text → operator (=, contains, starts) + text. Builds a WHERE and re-runs
+    //   the query server-side via runRawSql. Type is inferred from the loaded values.
+    function inferType(fn) {
+      var seen = 0;
+      for (var i = 0; i < rows.length && seen < 20; i++) {
+        var v = rows[i][fn]; if (v === null || v === undefined || v === "") continue; seen++;
+        if (typeof v === "boolean") return "bool";
+        var s = String(v);
+        if (v === "true" || v === "false") return "bool";
+        if (/^-?\d+(\.\d+)?$/.test(s)) return "number";
+        if (/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/.test(s)) return "date";
+        return "text";
+      }
+      return "text";
+    }
+    const fullColsForFilter = allColumns || columns;
+    // Build one WHERE fragment from a {colSel, opSel, valCtl} condition row.
+    function fragOf(cond) {
+      var fn = cond.colSel.value, op = cond.opSel.value, t = inferType(fn);
+      var raw = (cond.valCtl && cond.valCtl.value != null) ? String(cond.valCtl.value).trim() : "";
+      if (raw === "" && t !== "bool") return null;
+      var q = '"' + fn.replace(/"/g, '""') + '"';
+      var litStr = "'" + raw.replace(/'/g, "''") + "'";
+      if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
+      if (t === "number") return q + " " + op + " " + raw;
+      if (t === "date") return q + " " + op + " '" + raw + "'";
+      if (op === "contains") return q + " LIKE '%" + raw.replace(/'/g, "''") + "%'";
+      if (op === "starts with") return q + " LIKE '" + raw.replace(/'/g, "''") + "%'";
+      if (op === "!=") return q + " != " + litStr;
+      return q + " = " + litStr;
+    }
+
+    // ── multi-condition filter bar ──────────────────────────────────────────────
+    const fbar = document.createElement("div");
+    fbar.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:7px 14px;border-bottom:1px solid #e0e5ee;background:#fafbfd;flex-shrink:0;font-size:11px;color:#5c6b8a;";
+    const condsWrap = document.createElement("div");
+    condsWrap.style.cssText = "display:flex;flex-direction:column;gap:5px;";
+    const conditions = [];   // list of {row, colSel, opSel, valCtl}
+
+    // AND/OR joiner between conditions (applies to all — simple & predictable)
+    const joinSel = document.createElement("select");
+    joinSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:3px 5px;font:600 11px -apple-system,sans-serif;color:#16325c;";
+    ["AND", "OR"].forEach(function (j) { var o = document.createElement("option"); o.value = j; o.textContent = j; joinSel.appendChild(o); });
+
+    function addCondition(preset) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+      // leading joiner label (AND/OR) for rows after the first
+      const joinCell = document.createElement("span");
+      joinCell.style.cssText = "min-width:38px;text-align:right;font-weight:600;color:#8a94a6;";
+      const colSel = document.createElement("select");
+      colSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;max-width:220px;";
+      fullColsForFilter.forEach(function (fn) { var o = document.createElement("option"); o.value = fn; o.textContent = (meta[fn] || fn); colSel.appendChild(o); });
+      if (preset && preset.col) colSel.value = preset.col;   // restore saved column
+      const opSel = document.createElement("select");
+      opSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
+      const valWrap = document.createElement("span");
+      const cond = { row: row, colSel: colSel, opSel: opSel, valCtl: null };
+      function rebuild() {
+        const t = inferType(colSel.value);
+        opSel.innerHTML = "";
+        const ops = t === "bool" ? ["="] :
+                    t === "number" ? ["=", "!=", ">", ">=", "<", "<="] :
+                    t === "date" ? ["=", ">", ">=", "<", "<="] :
+                    ["=", "!=", "contains", "starts with"];
+        ops.forEach(function (op) { var o = document.createElement("option"); o.value = op; o.textContent = op; opSel.appendChild(o); });
+        if (preset && preset.op && ops.indexOf(preset.op) >= 0) opSel.value = preset.op;
+        valWrap.innerHTML = "";
+        if (t === "bool") {
+          cond.valCtl = document.createElement("select");
+          ["true", "false"].forEach(function (b) { var o = document.createElement("option"); o.value = b; o.textContent = b; cond.valCtl.appendChild(o); });
+        } else {
+          cond.valCtl = document.createElement("input");
+          cond.valCtl.type = t === "number" ? "number" : "text";
+          cond.valCtl.placeholder = t === "date" ? "YYYY-MM-DD" : "value";
+        }
+        cond.valCtl.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;min-width:120px;";
+        if (preset && preset.val != null) cond.valCtl.value = preset.val;   // restore saved value
+        valWrap.appendChild(cond.valCtl);
+      }
+      colSel.onchange = rebuild; rebuild();
+      // once the preset is consumed for this row, clear it so onchange doesn't re-apply
+      var _presetUsed = preset; preset = null;
+      const rm = document.createElement("button");
+      rm.textContent = "×"; rm.title = "Remove this condition";
+      rm.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:2px 8px;cursor:pointer;color:#c0392b;font:700 12px system-ui;";
+      rm.onclick = function () {
+        var idx = conditions.indexOf(cond);
+        if (idx >= 0) conditions.splice(idx, 1);
+        row.remove(); relabelJoiners();
+      };
+      row.appendChild(joinCell); row.appendChild(colSel); row.appendChild(opSel); row.appendChild(valWrap); row.appendChild(rm);
+      cond.joinCell = joinCell;
+      conditions.push(cond);
+      condsWrap.appendChild(row);
+      relabelJoiners();
+    }
+    function relabelJoiners() {
+      conditions.forEach(function (c, i) {
+        if (i === 0) { c.joinCell.textContent = "Where"; }
+        else { c.joinCell.innerHTML = ""; c.joinCell.appendChild(joinSel); }
+      });
+    }
+    // combine all conditions into one WHERE (joined by AND/OR)
+    function buildWhere() {
+      var frags = conditions.map(fragOf).filter(Boolean);
+      if (!frags.length) return null;
+      return frags.join(" " + joinSel.value + " ");
+    }
+
+    // controls row: + Add filter | Apply | Clear | status
+    const ctrlRow = document.createElement("div");
+    ctrlRow.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;";
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add condition";
+    addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    addBtn.onclick = function () { addCondition(); };
+    const applyF = document.createElement("button");
+    applyF.textContent = "Apply filter";
+    applyF.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    const clearF = document.createElement("button");
+    clearF.textContent = "Clear";
+    clearF.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    const fStatus = document.createElement("span"); fStatus.style.cssText = "color:#8a94a6;";
+    // Snapshot the current condition rows into plain data (for persistence across re-render).
+    function snapshotConds() {
+      return conditions.map(function (c) {
+        return { col: c.colSel.value, op: c.opSel.value, val: (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value) : "" };
+      });
+    }
+    function runFilter(whereClause) {
+      const cols = (allColumns || columns);
+      const sql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
+                  " FROM " + objectName + (whereClause ? " WHERE " + whereClause : "") + " LIMIT " + DC_MAX_FETCH_ROWS;
+      applyF.disabled = true; fStatus.textContent = "Filtering…";
+      // PERSIST the filter so it survives the re-render below (the bug: filter vanished).
+      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true } : null;
+      const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      ensureQueryContext(function (ready) {
+        if (!ready) { applyF.disabled = false; fStatus.textContent = "query service unavailable"; return; }
+        runRawSql(sql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
+          applyF.disabled = false; fStatus.textContent = "";
+          showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
+        }).catch(function (err) {
+          applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
+          _filterState[objectName] = null;   // failed filter → don't leave stale state
+        });
+      });
+    }
+    applyF.onclick = function () { const w = buildWhere(); if (!w) { fStatus.textContent = "add at least one condition with a value"; return; } runFilter(w); };
+    clearF.onclick = function () { _filterState[objectName] = null; runFilter(null); };
+    ctrlRow.appendChild(addBtn); ctrlRow.appendChild(applyF); ctrlRow.appendChild(clearF); ctrlRow.appendChild(fStatus);
+    fbar.appendChild(condsWrap); fbar.appendChild(ctrlRow);
+    // RESTORE persisted conditions (so an applied filter stays visible after re-render).
+    const saved = _filterState[objectName];
+    if (saved && saved.conds && saved.conds.length) {
+      saved.conds.forEach(function (c) { addCondition(c); });
+      joinSel.value = saved.join || "AND"; relabelJoiners();
+      if (saved.active) fStatus.textContent = "✓ filter active (" + saved.conds.length + " condition" + (saved.conds.length > 1 ? "s" : "") + ")";
+    } else {
+      addCondition();   // start with one empty condition row
+    }
+    panel.appendChild(fbar);
 
     // scroll area + table
     const scroll = document.createElement("div");
     scroll.style.cssText = "flex:1;overflow:auto;position:relative;";
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;";
-    // header row: Id (sticky-left) + each column
+    // header row: one <th> per selected column (no internal Id column — it's the
+    // opaque record key and is empty/meaningless for many objects).
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
     const thStyle = "position:sticky;top:0;z-index:2;background:#1f3864;color:#fff;font-weight:700;text-align:left;padding:7px 10px;border-right:1px solid #33507f;border-bottom:1px solid #33507f;";
-    const idTh = document.createElement("th");
-    idTh.textContent = "Id";
-    idTh.style.cssText = thStyle + "left:0;z-index:3;min-width:150px;";
-    htr.appendChild(idTh);
     columns.forEach(fn => {
       const th = document.createElement("th");
       th.title = fn;
@@ -6455,22 +7079,42 @@
       htr.appendChild(th);
     });
     thead.appendChild(htr); table.appendChild(thead);
-    // body
+    // body — RENDER CAP: only build DOM for the first DC_MAX_RENDER_ROWS rows so a huge
+    // result (e.g. 50k) can't freeze the tab. ALL rows stay in `rows` for CSV export.
     const tbody = document.createElement("tbody");
     const fmt = (v) => v == null ? "" : (typeof v === "boolean" ? (v ? "true" : "false") : String(v));
-    rows.forEach((r, ri) => {
+    const renderRows = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
+    renderRows.forEach((r, ri) => {
       const tr = document.createElement("tr");
       tr.style.background = ri % 2 ? "#f7f9fc" : "#fff";
-      const idTd = document.createElement("td");
-      idTd.textContent = fmt(r.Id);
-      idTd.style.cssText = "position:sticky;left:0;z-index:1;background:inherit;padding:6px 10px;border-right:1px solid #e0e5ee;border-bottom:1px solid #eef1f6;font-family:SF Mono,Consolas,monospace;font-size:11px;color:#5c6b8a;min-width:150px;";
-      tr.appendChild(idTd);
       columns.forEach(fn => {
         const td = document.createElement("td");
         const val = fmt(r[fn]);
-        td.textContent = val;
+        td.style.cssText = "position:relative;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        const span = document.createElement("span");
+        span.textContent = val; span.style.cssText = "user-select:text;";
+        td.appendChild(span);
         td.title = val;
-        td.style.cssText = "padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;";
+        if (val !== "") {
+          // Salesforce-like cell affordances: hover shows Copy + View (View opens a
+          // modal with the FULL value — essential for long text / JSON / blob fields).
+          const tools = document.createElement("span");
+          tools.style.cssText = "position:absolute;right:2px;top:2px;display:none;gap:2px;background:rgba(255,255,255,.95);border-radius:4px;padding:1px;";
+          const mkT = (label, title, onclick) => {
+            const b = document.createElement("button");
+            b.textContent = label; b.title = title;
+            b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
+            b.onclick = (e) => { e.stopPropagation(); onclick(); };
+            return b;
+          };
+          tools.appendChild(mkT("Copy", "Copy value", () => {
+            try { navigator.clipboard.writeText(val); } catch (e) {}
+          }));
+          if (val.length > 40) tools.appendChild(mkT("View", "View full value", () => showCellValue(fn, meta[fn] || fn, val)));
+          td.appendChild(tools);
+          td.onmouseenter = () => { tools.style.display = "flex"; };
+          td.onmouseleave = () => { tools.style.display = "none"; };
+        }
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
@@ -6479,9 +7123,16 @@
     scroll.appendChild(table);
     panel.appendChild(scroll);
     document.body.appendChild(panel);
-    // If the user asked for more rows than actually came back, say so honestly — this
-    // just means the data set has fewer records than requested (not a silent cap).
-    if (wantRows && rows.length < wantRows) {
+    // Render-cap notice: if we only drew part of a large result, say so clearly and
+    // point to CSV for the full set (nothing is lost — all rows are in the export).
+    if (rows.length > DC_MAX_RENDER_ROWS) {
+      const sub = panel.querySelector(".dc-ac-sub");
+      if (sub) sub.innerHTML = "Showing first " + DC_MAX_RENDER_ROWS + " of " + rows.length +
+        " rows &times; " + columns.length + " cols &bull; " +
+        "<span style='color:#b8860b'>table caps at " + DC_MAX_RENDER_ROWS + " for speed — use “Download CSV” for all " + rows.length + " rows.</span>";
+    } else if (wantRows && rows.length < wantRows) {
+      // If the user asked for more rows than actually came back, say so honestly — this
+      // just means the data set has fewer records than requested (not a silent cap).
       const sub = panel.querySelector(".dc-ac-sub");
       if (sub) sub.innerHTML = rows.length + " rows &times; " + columns.length + " columns &bull; " +
         "<span style='color:#b8860b'>requested " + wantRows + ", but only " + rows.length + " records exist (or the source capped it).</span>";
@@ -6491,11 +7142,6 @@
   }
 
   // ── Build SOQL from current selection ─────────────────────────────────────
-  function buildSoql(recList, limitVal) {
-    const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
-    const fields = cols.map(c => c.fieldName).join(", ");
-    return "SELECT " + fields + " FROM " + recList.objectName + " LIMIT " + limitVal;
-  }
 
   // ── Column picker modal ───────────────────────────────────────────────────
   let exploreModalEl = null;
@@ -6643,12 +7289,6 @@
 
     // Checked set — priority: last applied by us > savedColObjs (below) > SF's current columns.
     // exploreCache survives SF re-rendering the DOM element (unlike storing on recList directly).
-    // NOTE (verified): Salesforce's Data Explorer only QUERIES ≤10 fields from the
-    // backend and the table renders only from that query. We still let the user
-    // select ANY number of fields; internally we send the first SF_DATA_LIMIT to
-    // SF's query path (those get real data) and add any extras as headers. Columns
-    // beyond the limit therefore appear but render blank — a known SF constraint.
-    const SF_DATA_LIMIT = 10;
     const _cache = exploreCache(objectName);
     // DEFAULT selection priority: the columns CURRENTLY in the SF table (what the user
     // sees) win. Only if we somehow can't read those do we fall back to our last-applied
@@ -6904,6 +7544,7 @@
       soqlAcDropEl = null; // acDrop lives inside soqlPanelEl, removed with it
       if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
     }
+    _openSoqlEditor = openSoqlEditor;   // expose to the results-table "Edit SQL" button
     function openSoqlEditor() {
       if (soqlPanelEl) { closeSoqlEditor(); return; }
 
@@ -7075,114 +7716,33 @@
         statusSpan.textContent = msg;
       }
 
-      // ── Simple client-side WHERE evaluator ──────────────────────────────────
-      // Supports: field = 'val', field != 'val', field LIKE '%val%',
-      //           field > n, field < n, field >= n, field <= n,
-      //           field = TRUE/FALSE/NULL, AND, OR  (left-to-right, no parens)
-      function applyWhereFilter(rows, whereClause) {
-        if (!whereClause || !rows || !rows.length) return rows;
-        // Split on AND/OR keeping the operator, then evaluate each condition
-        const tokens = whereClause.trim().split(/\b(AND|OR)\b/i);
-        const conditions = [];
-        let logicOps = [];
-        tokens.forEach((t, i) => {
-          const upper = t.trim().toUpperCase();
-          if (upper === "AND" || upper === "OR") { logicOps.push(upper); }
-          else if (t.trim()) { conditions.push(t.trim()); }
-        });
-        function evalCond(row, cond) {
-          // field LIKE 'pattern'
-          let m = cond.match(/^(\w+)\s+LIKE\s+'([^']*)'/i);
-          if (m) {
-            const val = String(row[m[1]] == null ? "" : row[m[1]]).toLowerCase();
-            const pat = m[2].toLowerCase().replace(/%/g, ".*").replace(/_/g, ".");
-            return new RegExp("^" + pat + "$").test(val);
-          }
-          // field op 'string'
-          m = cond.match(/^(\w+)\s*(=|!=|<>)\s*'([^']*)'/i);
-          if (m) {
-            const val = String(row[m[1]] == null ? "" : row[m[1]]);
-            return m[2] === "=" ? val === m[3] : val !== m[3];
-          }
-          // field = TRUE/FALSE/NULL
-          m = cond.match(/^(\w+)\s*(=|!=|<>)\s*(TRUE|FALSE|NULL)\b/i);
-          if (m) {
-            const rv = row[m[1]]; const upper3 = m[3].toUpperCase();
-            const match = upper3 === "NULL" ? rv == null : upper3 === "TRUE" ? rv === true || rv === "true" : rv === false || rv === "false";
-            return m[2] === "=" ? match : !match;
-          }
-          // field op number
-          m = cond.match(/^(\w+)\s*(>=|<=|!=|<>|>|<|=)\s*(-?[\d.]+)/);
-          if (m) {
-            const rv = parseFloat(row[m[1]]); const cv = parseFloat(m[3]);
-            if (isNaN(rv)) return false;
-            if (m[2]===">=") return rv>=cv; if (m[2]==="<=") return rv<=cv;
-            if (m[2]===">"  ) return rv>cv;  if (m[2]==="<"  ) return rv<cv;
-            if (m[2]==="="  ) return rv===cv; return rv!==cv;
-          }
-          return true; // unparseable condition — don't filter out
-        }
-        return rows.filter(row => {
-          let result = evalCond(row, conditions[0]);
-          for (let i = 0; i < logicOps.length; i++) {
-            const next = evalCond(row, conditions[i + 1]);
-            result = logicOps[i] === "AND" ? result && next : result || next;
-          }
-          return result;
-        });
-      }
-
       runBtn.onclick = () => {
         hideAc();
-        const soql = textarea.value.trim();
+        var soql = textarea.value.trim();
         if (!soql) { setStatus("Query is empty", "err"); return; }
-        const selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
+        var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
         if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
-        const parsedFields = selMatch[1].split(",").map(f=>f.trim().replace(/\s+/g,"")).filter(f=>f&&f!=="*");
-        if (!parsedFields.length) { setStatus("No fields in SELECT", "err"); return; }
-        const limitMatch = soql.match(/\bLIMIT\s+(\d+)/i);
-        const userLimit  = limitMatch ? Math.max(1, Math.min(100, parseInt(limitMatch[1],10))) : 100;
-        // Parse WHERE clause — everything between WHERE and LIMIT/ORDER BY/end
-        const whereMatch = soql.match(/\bWHERE\s+([\s\S]+?)(?:\bLIMIT\b|\bORDER\s+BY\b|\bGROUP\s+BY\b|$)/i);
-        const whereClause = whereMatch ? whereMatch[1].trim() : null;
-        const unknown = parsedFields.filter(fn => !allFieldNames.includes(fn));
-        if (unknown.length) setStatus("⚠  Unknown field: " + unknown.slice(0,2).join(", "), "warn");
-        // Show ALL selected fields as columns; SF only queries data for the first
-        // SF_DATA_LIMIT, so columns beyond that render blank (known SF constraint).
-        const capped = parsedFields.length > SF_DATA_LIMIT;
-        const dataFields = capped ? parsedFields.slice(0, SF_DATA_LIMIT) : parsedFields;
-        if (!unknown.length) setStatus("Applying " + parsedFields.length + " fields…", "");
+        var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
+        var objName = (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
+        // Run the user's REAL SQL server-side (WHERE / ORDER BY / LIMIT all honored) via
+        // the documented endpoint (extension) or /aura (bookmarklet), then render the
+        // result in OUR own table — the same table with View/Copy/hide-empty features.
+        setStatus("Running query…", "");
         runBtn.disabled = true; runBtn.style.opacity = ".55";
-        exploreCache(recList.objectName || "").lastApplied = parsedFields.slice();
-        applyColumnsDirect(recList, parsedFields);
-        const afterApply = (ok) => {
-          runBtn.disabled = false; runBtn.style.opacity = "1";
-          if (ok) {
-            setTimeout(() => {
-              try {
-                const rl = findRecordListEl() || recList;
-                if (Array.isArray(rl.data)) {
-                  let rows = rl.data.slice();
-                  if (whereClause) rows = applyWhereFilter(rows, whereClause);
-                  if (rows.length > userLimit) rows = rows.slice(0, userLimit);
-                  rl.data = rows;
-                }
-              } catch(e) {}
-            }, 600);
-            const parts = [parsedFields.length + " columns"];
-            if (whereClause) parts.push("WHERE filtered");
-            if (userLimit < 100) parts.push("LIMIT " + userLimit);
-            setStatus(capped
-              ? "✓  " + parsedFields.length + " cols — SF loads data for first " + SF_DATA_LIMIT
-              : "✓  " + parts.join(" · "), capped ? "warn" : "ok");
-          }
-        };
-        applyColumnViaSF(dataFields, (msg) => {
-          afterApply(msg.startsWith("Applied"));
-          if (!msg.startsWith("Applied")) {
-            if (/error|fail/i.test(msg)) setStatus(msg, "err");
-            else setStatus(msg||"Done","");
-          }
+        var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objName) : "";
+        ensureQueryContext(function (ready) {
+          if (!ready) { runBtn.disabled = false; runBtn.style.opacity = "1"; setStatus("Couldn't reach the query service — sort a column once, then retry.", "err"); return; }
+          runRawSql(soql, ds, 2000).then(function (res) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+            // Success → CLOSE the SQL editor so it doesn't cover the results, and show
+            // the rows in our full table. The table has an "Edit SQL" button to reopen.
+            try { closeSoqlEditor(); } catch (e) {}
+            showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+          }).catch(function (err) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            setStatus(String(err && err.message || err), "err");
+          });
         });
       };
       copyBtn.onclick = () => {
@@ -7548,37 +8108,104 @@
     setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
   }
 
-  function buildSoqlFromSet(recList, fieldSet, limitVal) {
-    // fieldSet is a Set of fieldName strings; order comes from the set iteration order
-    const fields = [...fieldSet].filter(fn => fn !== "recordPageUrl");
-    if (fields.length === 0) {
-      // fallback: use current columns
-      const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
-      fields.push(...cols.map(c => c.fieldName));
-    }
-    return "SELECT " + fields.join(", ") + " FROM " + (recList.objectName || "Unknown__c") + " LIMIT " + (limitVal || 2000);
-  }
 
   // ── Object-change watcher ─────────────────────────────────────────────────
-  // Watches for object changes in the Data Explorer dropdown.
-  // When a new object is detected: invalidates the column cache so the next
-  // "Show columns" open discovers fresh fields for that object.
-  // Does NOT silently call applyColumnViaSF — that opens SF's hidden dialog
-  // and would fire unexpectedly on every page load / object switch.
-  // The user can open "Show columns" and click "Restore saved" explicitly.
-  function watchExploreObjectChange() {
-    let lastObjectName = "";
-    const check = () => {
-      const recList = findRecordListEl();
-      if (!recList) return;
-      const name = recList.objectName || "";
-      if (name === lastObjectName) return;
-      lastObjectName = name;
-      if (!name) return;
-      // New object — don't clear its cache (it may have been visited before).
-      // The old object's cache stays valid. Nothing to do here.
+  // PERF: this used to run findRecordListEl() (a full recursive shadow-DOM walk of the
+  // whole page) on a 1200ms setInterval FOREVER — pure wasted work that caused lag,
+  // and its body did nothing (it only tracked a name it never used). Removed the timer.
+  // The cache is read fresh each time the Column Selector opens (keyed by objectName),
+  // so no background watcher is needed — object changes are handled on demand.
+  function watchExploreObjectChange() { /* no-op: was a costly idle poll; removed for perf */ }
+
+  // ── Data Transform launcher (FAB) ─────────────────────────────────────────
+  // The transform editor is a standalone Aura app; we add a minimal launcher with a
+  // single "Understand this transform" action that reads the definition (extension
+  // cookie path) and renders the plain-language summary.
+  function ensureTransformLauncher() {
+    if (document.getElementById("dc-bar")) return;
+    const wrap = document.createElement("div");
+    wrap.id = "dc-bar";
+    wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+    const btn = document.createElement("button");
+    btn.textContent = "🔎 Understand this transform";
+    btn.style.cssText = "border:none;border-radius:22px;padding:11px 18px;cursor:pointer;font:600 13px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#1e3a5f,#0d6efd);box-shadow:0 3px 12px rgba(13,110,253,.4);";
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:11px;color:#5c6b8a;background:#fff;border:1px solid #e0e5ee;border-radius:6px;padding:4px 8px;display:none;max-width:280px;";
+    btn.onclick = () => {
+      const ids = transformIdsFromUrl();
+      const nameOrId = ids.devName || ids.transformId;
+      if (!nameOrId) { note.textContent = "Couldn't find the transform id in the URL."; note.style.display = "block"; return; }
+      if (typeof extBridgePresent === "function" && !extBridgePresent()) {
+        note.textContent = "Reading a transform needs the browser extension (the page can't reach the API directly). Use the extension, not the bookmarklet, here.";
+        note.style.display = "block"; return;
+      }
+      btn.disabled = true; btn.textContent = "Reading…"; note.style.display = "none";
+      fetchTransformViaBridge(nameOrId).then((rep) => {
+        btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+        showTransformSummary(rep);
+      }).catch((err) => {
+        btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+        note.textContent = String(err && err.message || err); note.style.display = "block";
+      });
     };
-    setInterval(check, 1200);
+    wrap.appendChild(note); wrap.appendChild(btn);
+    document.body.appendChild(wrap);
+  }
+
+  // ── Query Editor launcher (FAB) — "Export results to CSV" ─────────────────
+  // SF's Query Editor shows results but can't export them. This button reads the user's
+  // SQL, re-runs it via our proven query path (up to 49,999 rows), and downloads the
+  // full result as CSV. Reuses the same runRawSql mechanism already built.
+  function ensureQueryEditorLauncher() {
+    if (document.getElementById("dc-bar")) return;
+    try { installAuraSniffer(); } catch (e) {}   // credentials for the bookmarklet path
+    const wrap = document.createElement("div");
+    wrap.id = "dc-bar";
+    wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+    const btn = document.createElement("button");
+    btn.textContent = "⬇ Export query results to CSV";
+    btn.style.cssText = "border:none;border-radius:22px;padding:11px 18px;cursor:pointer;font:600 13px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.4);";
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:11px;color:#5c6b8a;background:#fff;border:1px solid #e0e5ee;border-radius:6px;padding:4px 8px;display:none;max-width:300px;";
+    btn.onclick = () => {
+      const sql = readQueryEditorSql();
+      if (!sql) { note.textContent = "Couldn't read SQL from the editor — type a SELECT query first."; note.style.display = "block"; return; }
+      // Resolve the data space. On the Query Editor page there's no record-list LWC,
+      // so resolveDataSpace("") may return "". Use dataSpaceCandidates to try known
+      // spaces; the paginated exporter will use the FIRST one. If the user's org has a
+      // non-default space (like "TDI"), it'll be in the candidates from any prior
+      // Data Explorer session. If truly unknown, we try "" (which works for default-space).
+      // Try to derive the data space from the SQL's FROM clause table name (if it has
+      // the doubled-prefix pattern TDI_TDI_..., the space is "TDI"). This works even on
+      // a cold start where no prior Data Explorer session captured it.
+      var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_]+)/i);
+      var tableInSql = fromMatch ? fromMatch[1] : "";
+      var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
+      var ds = dsCandidates[0] || "";  // best candidate (most authoritative)
+      // Use the paginated exporter — it automatically pages if the result exceeds one
+      // chunk (49,999 rows), up to the 500K safety cap. Progress shows live row count.
+      btn.disabled = true; note.style.display = "block";
+      note.textContent = "Starting query… (dataspace: " + (ds || "(default)") + ")";
+      ensureQueryContext(function (ready) {
+        if (!ready) { btn.disabled = false; btn.textContent = "⬇ Export query results to CSV"; note.textContent = "Couldn't reach the query service — run a query first, then retry."; return; }
+        exportPaginatedCsv(sql, ds, function (fetched, total) {
+          // progress callback — show live count while paginating
+          btn.textContent = "Fetching " + fetched + " / " + total + " rows…";
+          note.textContent = "Exporting — " + fetched + " of " + total + " rows fetched" + (total > DC_MAX_TOTAL_EXPORT ? " (capped at " + DC_MAX_TOTAL_EXPORT + ")" : "") + "…";
+        }).then(function (res) {
+          btn.disabled = false; btn.textContent = "⬇ Export query results to CSV";
+          // trigger download
+          var a = document.createElement("a"); a.href = res.blobUrl; a.download = "query-results.csv"; a.click();
+          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 10000);
+          note.textContent = "✓ Downloaded " + res.totalRows + " rows × " + res.columns.length + " columns.";
+        }).catch(function (err) {
+          btn.disabled = false; btn.textContent = "⬇ Export query results to CSV";
+          note.textContent = String(err && err.message || err);
+        });
+      });
+    };
+    wrap.appendChild(note); wrap.appendChild(btn);
+    document.body.appendChild(wrap);
   }
 
   // ── Data Explore launcher (FAB) ───────────────────────────────────────────
@@ -7686,9 +8313,16 @@
 
   // In the public build the Data Explorer / Segment code is stripped, so guard the
   // calls with typeof. detectDetailPageType() never returns "Segment" there either.
-  const detailPageType = (typeof isDataExplorePage === "function" && isDataExplorePage())
-    ? "DataExplore" : detectDetailPageType();
-  if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
+  const onTransformPage = (typeof isTransformPage === "function") && isTransformPage();
+  const onQueryEditorPage = (typeof isQueryEditorPage === "function") && isQueryEditorPage();
+  const detailPageType = onTransformPage ? "Transform"
+    : onQueryEditorPage ? "QueryEditor"
+    : ((typeof isDataExplorePage === "function" && isDataExplorePage()) ? "DataExplore" : detectDetailPageType());
+  if (detailPageType === "Transform" && typeof ensureTransformLauncher === "function") {
+    ensureTransformLauncher();
+  } else if (detailPageType === "QueryEditor" && typeof ensureQueryEditorLauncher === "function") {
+    ensureQueryEditorLauncher();
+  } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
   } else if (detailPageType && detailPageType !== "DataExplore") {

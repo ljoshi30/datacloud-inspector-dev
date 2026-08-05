@@ -61,8 +61,13 @@ async function runDcSqlQuery(req) {
     const got = await readSid(host);
     if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
     const apiV = "v63.0";
-    const url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/query-sql";
+    // dataspace is REQUIRED as a query param (probe-proven: none → 400, "TDI" → 201).
+    let url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/query-sql";
+    if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
     const body = JSON.stringify({ sql: String(req.sql || ""), rowLimit: req.rowLimit || 2000 });
+    // DIAGNOSTIC: log exactly what we send so a failure is debuggable (open the
+    // extension's background console via about:debugging → Inspect).
+    console.log("[DC-MI] query-sql →", url, "| dataspace:", JSON.stringify(req.dataspace), "| sql:", String(req.sql || "").slice(0, 160));
     const r = await fetch(url, {
       method: "POST",
       headers: { "Authorization": "Bearer " + got.sid, "Content-Type": "application/json", "Accept": "application/json" },
@@ -72,21 +77,83 @@ async function runDcSqlQuery(req) {
     let j = null; try { j = JSON.parse(txt); } catch (e) {}
     if (r.status !== 200 && r.status !== 201) {
       let em = "HTTP " + r.status;
-      try { em = (j && (j[0] ? j[0].message : (j.error_description || j.message))) || em; } catch (e) {}
-      return { ok: false, error: em, status: r.status };
+      try { em = (j && (j[0] ? j[0].message : (j.errorMessage || j.error_description || j.message))) || em; } catch (e) {}
+      // SESSION EXPIRED: 401 or INVALID_SESSION_ID → tell the user plainly to refresh
+      // the Salesforce tab and log back in (their session cookie is no longer valid).
+      var sessionDead = r.status === 401 || /INVALID_SESSION_ID|session expired|Session expired/i.test(txt);
+      if (sessionDead) {
+        return { ok: false, sessionExpired: true, status: r.status,
+                 error: "Your Salesforce session has expired — refresh the Salesforce tab (log in again), then retry." };
+      }
+      // Include the dataspace we actually sent, so a wrong/missing value is visible in the UI.
+      return { ok: false, error: em + "  [sent dataspace=" + JSON.stringify(req.dataspace) + "]", status: r.status };
     }
-    // Response shape: { data:[[...]], metadata:[{name,type,nullable}], returnedRows }
-    return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0 };
+    // Response shape: { data, metadata, returnedRows, status:{queryId, rowCount, ...} }
+    const st = (j && j.status) || {};
+    return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0,
+             queryId: st.queryId || "", rowCount: st.rowCount || 0 };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
 }
+
+// Fetch a SINGLE page of rows from a previously-executed query (the pagination endpoint).
+// GET /ssot/query-sql/{queryId}/rows?dataspace=X&offset=N&rowLimit=N
+async function fetchQueryPage(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No session cookie" };
+    const apiV = "v63.0";
+    let url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/query-sql/" + encodeURIComponent(req.queryId) + "/rows";
+    const params = ["offset=" + (req.offset || 0), "rowLimit=" + (req.rowLimit || 49999)];
+    if (req.dataspace) params.push("dataspace=" + encodeURIComponent(req.dataspace));
+    url += "?" + params.join("&");
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text(); let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.errorMessage || j.message))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
+    }
+    return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0 };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+// Read a Data Transform definition (documented GET, sid-cookie auth). READ-only.
+async function runDcTransform(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
+    const url = "https://" + got.coreHost + "/services/data/v63.0/ssot/data-transforms/" + encodeURIComponent(req.nameOrId || "");
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
+        return { ok: false, sessionExpired: true, error: "Your Salesforce session has expired — refresh the Salesforce tab, then retry." };
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
+    }
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const tabHost = (sender && sender.tab && sender.tab.url) ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return null; } })() : null;
   if (msg && msg.type === "dcSqlQuery") {
-    // prefer the sender tab's actual host when available (more reliable than page-reported)
-    const req = { sql: msg.sql, rowLimit: msg.rowLimit, host: (sender && sender.tab && sender.tab.url ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return msg.host; } })() : msg.host) };
+    const req = { sql: msg.sql, rowLimit: msg.rowLimit, dataspace: msg.dataspace, host: tabHost || msg.host };
     runDcSqlQuery(req).then(sendResponse);
     return true; // async
+  }
+  if (msg && msg.type === "dcTransform") {
+    runDcTransform({ nameOrId: msg.nameOrId, host: tabHost || msg.host }).then(sendResponse);
+    return true; // async
+  }
+  if (msg && msg.type === "dcFetchPage") {
+    fetchQueryPage({ queryId: msg.queryId, offset: msg.offset, rowLimit: msg.rowLimit, dataspace: msg.dataspace, host: tabHost || msg.host }).then(sendResponse);
+    return true;
   }
 });
 

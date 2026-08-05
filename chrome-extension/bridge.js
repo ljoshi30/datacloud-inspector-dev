@@ -19,18 +19,42 @@
   window.addEventListener("message", function (ev) {
     try {
       if (ev.source !== window) return;
-      var d = ev.data;
-      if (!d || d.__dcReq !== "dc-sql-query" || !d.id) return;
-      // forward to background; it reads the sid cookie for THIS tab and runs the query
-      api.runtime.sendMessage(
-        { type: "dcSqlQuery", sql: d.sql, rowLimit: d.rowLimit, host: location.host },
-        function (resp) {
-          var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-          window.postMessage({ __dcRes: "dc-sql-query", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, "*");
-        }
-      );
+      var d = ev.data; if (!d || !d.id) return;
+      // (a) SQL query relay — passes the FULL response (incl. queryId/rowCount for pagination)
+      if (d.__dcReq === "dc-sql-query") {
+        api.runtime.sendMessage(
+          { type: "dcSqlQuery", sql: d.sql, rowLimit: d.rowLimit, dataspace: d.dataspace, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-sql-query", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
+      // (b) Paginated-query page fetch relay (GET /ssot/query-sql/{queryId}/rows)
+      if (d.__dcReq === "dc-fetch-page") {
+        api.runtime.sendMessage(
+          { type: "dcFetchPage", queryId: d.queryId, offset: d.offset, rowLimit: d.rowLimit, dataspace: d.dataspace, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-fetch-page", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
+      // (c) Data Transform read relay (GET /ssot/data-transforms/{nameOrId})
+      if (d.__dcReq === "dc-transform") {
+        api.runtime.sendMessage(
+          { type: "dcTransform", nameOrId: d.nameOrId, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-transform", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
     } catch (e) {
-      try { window.postMessage({ __dcRes: "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, "*"); } catch (_) {}
+      try { window.postMessage({ __dcRes: (ev.data && ev.data.__dcReq === "dc-transform") ? "dc-transform" : "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, "*"); } catch (_) {}
     }
   }, false);
 })();
