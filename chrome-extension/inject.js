@@ -7238,11 +7238,11 @@
     var serverTotal = rows.__serverRowCount || 0;
     var rowsSubInfo = "";
     if (serverTotal > rows.length) {
-      rowsSubInfo = "Showing " + Math.min(DC_MAX_RENDER_ROWS, rows.length).toLocaleString() + " of <b>" + rows.length.toLocaleString() + "</b> loaded rows &times; " + columns.length + " cols &bull; <span style='color:#2563eb'>Total in table: <b>" + serverTotal.toLocaleString() + "</b> rows &mdash; use &ldquo;Export All&rdquo; for full data</span>";
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#7c3aed;font-weight:700'>Total records: " + serverTotal.toLocaleString() + "</span> &mdash; click <b>Export All</b> to download full CSV, or change Rows &amp; Reload";
     } else if (rows.length > DC_MAX_RENDER_ROWS) {
-      rowsSubInfo = "Showing first " + DC_MAX_RENDER_ROWS.toLocaleString() + " of " + rows.length.toLocaleString() + " rows &times; " + columns.length + " cols &bull; <span style='color:#d97706'>&ldquo;Download CSV&rdquo; for all " + rows.length.toLocaleString() + " rows</span>";
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#d97706'>Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + " for speed &mdash; Download CSV has all " + rows.length.toLocaleString() + "</span>";
     } else {
-      rowsSubInfo = rows.length.toLocaleString() + " rows &times; " + columns.length + " cols &bull; <span style='color:#059669'>all records fetched" + (serverTotal > 0 ? " (" + serverTotal.toLocaleString() + " total)" : "") + "</span>";
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows &times; " + columns.length + " cols &bull; <span style='color:#059669'>all loaded</span> &mdash; click <b>Count</b> to check total records in object";
     }
     titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
       "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>";
@@ -7258,15 +7258,14 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(rows.length || 100);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Load up to " + DC_MAX_FETCH_ROWS.toLocaleString() + " rows into the table (shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + " in UI). Use \"Export All\" button for the complete dataset.";
+    rowsInput.title = "Enter how many rows to load into the table view (max " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Use Count to check total first.";
     const reloadBtn = document.createElement("button");
     reloadBtn.textContent = "Reload";
     reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     reloadBtn.onclick = () => {
-      // CLAMP to the endpoint's hard ceiling so we never send an abusive/oversized ask.
       var raw = parseInt(rowsInput.value, 10) || 100;
       var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
-      if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);   // reflect the clamp in the UI
+      if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       showTableSpinner(panel, "Loading " + want + " rows…");
       const sub = panel.querySelector(".dc-ac-sub");
@@ -7276,8 +7275,6 @@
         hideTableSpinner(panel);
         const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
       };
-      // Ensure credentials first (so >100 SQL path + the ≤100 path both always work),
-      // THEN load. >100 → SQL-editor action (honors rowLimit); ≤100 → fast CdpDataView.
       ensureQueryContext(function (ready) {
         if (!ready) {
           reloadBtn.disabled = false; reloadBtn.textContent = "Reload";
@@ -7288,11 +7285,54 @@
           return;
         }
         loadColumnsData(objectName, columns, want).then((newRows) => {
-          showAllColumnsTable(objectName, columns, newRows, want);   // re-render with new data
+          showAllColumnsTable(objectName, columns, newRows, want);
         }).catch(fail);
       });
     };
-    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn);
+
+    // "Count" button — runs COUNT(*) to show the true total records in the DMO/DLO
+    const countBtn = document.createElement("button");
+    countBtn.textContent = "Count";
+    countBtn.style.cssText = "border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    countBtn.title = "Query the total number of records in this object (runs SELECT COUNT(*))";
+    countBtn.onclick = () => {
+      countBtn.disabled = true; countBtn.textContent = "Counting…";
+      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      var cSql = "SELECT COUNT(*) FROM " + objectName;
+      ensureQueryContext(function (ready) {
+        if (!ready) { countBtn.disabled = false; countBtn.textContent = "Count"; return; }
+        runRawSql(cSql, ds, 1).then(function (res) {
+          var cnt = 0;
+          if (res.rows.length > 0) {
+            var firstCol = res.columns[0] || "count";
+            cnt = parseInt(res.rows[0][firstCol], 10) || 0;
+          }
+          countBtn.disabled = false;
+          countBtn.textContent = "Total: " + cnt.toLocaleString();
+          countBtn.style.background = "#059669"; countBtn.style.borderColor = "#059669";
+          // Update the subtitle with count info
+          var sub = panel.querySelector(".dc-ac-sub");
+          if (sub) {
+            var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
+            info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
+            if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
+            sub.innerHTML = info;
+          }
+          // Show Export All button if it was hidden (now we know the total)
+          var eab = panel.querySelector("#dc-export-all-btn");
+          if (eab && cnt > rows.length) {
+            eab.style.display = "";
+            eab.textContent = "⬇ Export All (" + cnt.toLocaleString() + " rows)";
+            eab.setAttribute("data-total", cnt);
+          }
+        }).catch(function (err) {
+          countBtn.disabled = false; countBtn.textContent = "Count";
+          countBtn.title = "Error: " + (err && err.message || err);
+        });
+      });
+    };
+
+    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
     hdr.appendChild(rowsWrap);
 
     // "Hide empty columns" — data is often sparse (many all-null columns), so this
@@ -7331,44 +7371,43 @@
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => downloadRowsCsv(objectName, fullCols, rows);
 
-    // "Export All" — fetches ALL rows from the server (up to 500k) via paginated query,
-    // even beyond what's currently loaded in the table. Shows progress.
+    // "Export All" — fetches ALL rows from the server (up to 500k) via paginated query.
+    // Visible when we know total > loaded rows, or after user clicks Count.
     const exportAllBtn = document.createElement("button");
-    if (serverTotal > rows.length) {
-      exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-      exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
-      exportAllBtn.onclick = function () {
-        exportAllBtn.disabled = true;
-        exportAllBtn.textContent = "Preparing…";
-        var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-        var allCols = fullCols.map(sqlQuoteIdent).join(", ");
-        var exportSql = "SELECT " + allCols + " FROM " + objectName;
-        ensureQueryContext(function (ready) {
-          if (!ready) {
-            exportAllBtn.disabled = false;
-            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-            alert("Session not ready — scroll the Data Explorer table first, then retry.");
-            return;
-          }
-          exportPaginatedCsv(exportSql, ds, function (fetched, total) {
-            exportAllBtn.textContent = fetched.toLocaleString() + " / " + total.toLocaleString() + " rows…";
-          }).then(function (res) {
-            exportAllBtn.disabled = false;
-            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-            if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
-            var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
-            var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
-            setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
-          }).catch(function (err) {
-            exportAllBtn.disabled = false;
-            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-            alert("Export failed: " + (err && err.message || err));
-          });
+    exportAllBtn.id = "dc-export-all-btn";
+    var knownTotal = serverTotal > rows.length ? serverTotal : 0;
+    exportAllBtn.textContent = knownTotal ? ("⬇ Export All (" + knownTotal.toLocaleString() + " rows)") : "⬇ Export All";
+    exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;" + (knownTotal ? "" : "display:none;");
+    exportAllBtn.onclick = function () {
+      exportAllBtn.disabled = true;
+      exportAllBtn.textContent = "Preparing…";
+      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      var allCols = fullCols.map(sqlQuoteIdent).join(", ");
+      var exportSql = "SELECT " + allCols + " FROM " + objectName;
+      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
+      ensureQueryContext(function (ready) {
+        if (!ready) {
+          exportAllBtn.disabled = false;
+          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+          alert("Session not ready — scroll the Data Explorer table first, then retry.");
+          return;
+        }
+        exportPaginatedCsv(exportSql, ds, function (fetched, total) {
+          exportAllBtn.textContent = fetched.toLocaleString() + " / " + (total > fetched ? total.toLocaleString() : "?") + " rows…";
+        }).then(function (res) {
+          exportAllBtn.disabled = false;
+          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : " (" + res.totalRows.toLocaleString() + " rows)");
+          if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
+          var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
+          var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+        }).catch(function (err) {
+          exportAllBtn.disabled = false;
+          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+          alert("Export failed: " + (err && err.message || err));
         });
-      };
-    } else {
-      exportAllBtn.style.display = "none";
-    }
+      });
+    };
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&#x2715;";
