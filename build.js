@@ -324,17 +324,18 @@ ${roadmapSection}
   var seen;
   try { seen = localStorage.getItem(KEY); } catch(e) { seen = null; }
   if (!seen) {
+    // First time — show banner
     statusEl.innerHTML = "&#128308; <strong>Not installed yet</strong> &mdash; drag the button below to add it.";
     statusEl.style.background = "#fef2f2"; statusEl.style.color = "#991b1b";
-    if (banner) { banner.style.borderColor = "#f59e0b"; banner.style.background = "#fffbeb"; }
   } else if (seen !== BUILD_ID) {
+    // Outdated — show banner with urgency
     statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Your bookmark is outdated. Delete it and re-drag below.";
     statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
     if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
   } else {
-    statusEl.innerHTML = "&#9989; <strong>You have the latest</strong> (build " + BUILD_ID.slice(0,8) + "). No action needed.";
-    statusEl.style.background = "#f0fdf4"; statusEl.style.color = "#166534";
-    if (banner) { banner.style.borderColor = "#22c55e"; banner.style.background = "#f0fdf4"; }
+    // Already up to date — HIDE banner completely
+    if (banner) banner.style.display = "none";
+    return;
   }
   // Mark as installed when they drag the bookmarklet link — hide the banner
   var bmLink = document.querySelector("a.bm");
