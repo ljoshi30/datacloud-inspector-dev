@@ -26,6 +26,8 @@ const crypto = require("crypto");
 
 const dir = __dirname;
 const fullCode = fs.readFileSync(path.join(dir, "console-decorate.js"), "utf8");
+// Read current version from manifest (used in install page display)
+const _mfVer = (function() { try { return JSON.parse(fs.readFileSync(path.join(dir, "chrome-extension/manifest.json"), "utf8")).version; } catch(e) { return "dev"; } })();
 
 // Short build id = hash of a payload string. Embedded in install pages so the page
 // can tell the user (via localStorage) when the code actually changed → re-drag needed.
@@ -208,19 +210,24 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 <body>
 <div class="wrap">
 
-  <!-- Update banner: this page remembers (in localStorage) the build you last added.
-       When the embedded build id changes, it shows a "re-drag needed" notice. This
-       page opens in a normal tab (NOT Salesforce), so localStorage is unrestricted. -->
-  <div id="dc-update-banner" style="display:none;border-radius:12px;padding:14px 18px;margin-bottom:18px;font-size:14px;line-height:1.5;border:1px solid #f0c36d;background:#fff8e6;color:#5c4a00">
+  <!-- Version bar: always visible so the user knows what build they're on -->
+  <div id="dc-version-bar" style="display:flex;align-items:center;justify-content:space-between;border-radius:10px;padding:10px 16px;margin-bottom:14px;font-size:13px;background:#eef6ff;border:1px solid #bfdbfe;color:#1e40af">
+    <span><strong>Build:</strong> <code id="dc-build-id">${buildId || "dev"}</code> &nbsp;&middot;&nbsp; <strong>v${_mfVer}</strong></span>
+    <span id="dc-version-status" style="font-weight:600;color:#059669">&#10003; You have the latest</span>
+  </div>
+
+  <!-- Update banner: shown when the build changed since last drag -->
+  <div id="dc-update-banner" style="display:none;border-radius:12px;padding:16px 20px;margin-bottom:18px;font-size:14px;line-height:1.5;border:2px solid #22c55e;background:#f0fdf4;color:#14532d;animation:dcpulse 2s infinite">
     <div style="display:flex;align-items:flex-start;gap:12px">
-      <span style="font-size:18px;line-height:1.2">&#128260;</span>
+      <span style="font-size:22px;line-height:1.2">&#127381;</span>
       <div style="flex:1">
-        <strong id="dc-update-title">The bookmarklet was updated since you last added it.</strong>
-        <div id="dc-update-sub" style="margin-top:3px;color:#7a6410">Delete your old <em>Data 360 Inspector</em> bookmark, then drag the button below again to get the latest version.</div>
+        <strong id="dc-update-title" style="font-size:15px">New version available!</strong>
+        <div id="dc-update-sub" style="margin-top:4px;color:#166534;font-size:13px">Delete your old <em>Data 360 Inspector</em> bookmark and drag the button below again to get the updated code.</div>
       </div>
-      <button id="dc-update-ok" style="flex-shrink:0;border:1px solid #d9a520;background:#fff;color:#5c4a00;border-radius:8px;padding:7px 14px;font-weight:700;font-size:13px;cursor:pointer">I re-added it</button>
+      <button id="dc-update-ok" style="flex-shrink:0;border:1px solid #16a34a;background:#22c55e;color:#fff;border-radius:8px;padding:8px 16px;font-weight:700;font-size:13px;cursor:pointer">&#10003; I re-added it</button>
     </div>
   </div>
+  <style>@keyframes dcpulse{0%,100%{border-color:#22c55e}50%{border-color:#86efac}}</style>
 
   <div class="hero">
     <div class="badge rec">&#9679; Read-only &nbsp;&middot;&nbsp; Nothing leaves your browser</div>
@@ -312,28 +319,36 @@ ${roadmapSection}
 </div>
 <script>
 (function(){
-  // Build id embedded at build time = hash of the actual bookmarklet payload, so it
-  // changes ONLY when the code really changed (not on a no-op rebuild).
   var BUILD_ID = ${JSON.stringify(buildId || "")};
   var KEY = "dc-inspector-installed-build";
   var banner = document.getElementById("dc-update-banner");
   var okBtn  = document.getElementById("dc-update-ok");
   var title  = document.getElementById("dc-update-title");
   var sub    = document.getElementById("dc-update-sub");
+  var status = document.getElementById("dc-version-status");
   if (!banner || !BUILD_ID) return;
   var seen;
   try { seen = localStorage.getItem(KEY); } catch(e) { seen = null; }
-  if (seen === BUILD_ID) return;                    // already on the latest — no nag
-  if (seen) {                                       // had an older build → re-drag needed
+  if (seen === BUILD_ID) {
+    // Already on latest
+    if (status) { status.innerHTML = "&#10003; You have the latest"; status.style.color = "#059669"; }
+    return;
+  }
+  if (seen) {
+    // Had an older build — UPDATE AVAILABLE
     banner.style.display = "block";
-  } else {                                          // first visit — gentle first-time hint
-    title.textContent = "First time here? Add the bookmarklet below.";
-    sub.textContent   = "Drag the button to your bookmarks bar. This page will let you know whenever a newer version is available.";
+    if (status) { status.innerHTML = "&#9888; Update available &mdash; re-drag the bookmarklet below"; status.style.color = "#dc2626"; }
+  } else {
+    // First visit
+    title.textContent = "Welcome! Add the bookmarklet to get started.";
+    sub.textContent = "Drag the button below to your bookmarks bar. Reload this page anytime — it will notify you when a new version is available.";
     banner.style.display = "block";
+    if (status) { status.innerHTML = "&#128308; Not installed yet"; status.style.color = "#d97706"; }
   }
   if (okBtn) okBtn.onclick = function(){
     try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
     banner.style.display = "none";
+    if (status) { status.innerHTML = "&#10003; You have the latest"; status.style.color = "#059669"; }
   };
 })();
 </script>
