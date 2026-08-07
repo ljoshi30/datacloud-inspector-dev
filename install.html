@@ -33,6 +33,7 @@
   .feat strong{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);margin-right:4px}
+  .pill.new{background:var(--greenbg);color:var(--green)}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -74,10 +75,25 @@
           Data 360 Inspector
         </a>
       </li>
-      <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A blue circle with a magnifying-glass icon appears in the bottom-right corner &mdash; click it to open the action menu.</li>
+      <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A purple circle button appears in the bottom-right corner &mdash; click it to open the action menu.</li>
       <li>Click the bookmark again at any time to remove the tool.</li>
     </ol>
     <div class="note">The launcher sits in the bottom-right corner and never overlaps the Salesforce navigation. Click the purple circle button to expand the menu; click outside or click it again to collapse.</div>
+  </div>
+
+  <div class="card">
+    <h2>&#127919; Supported pages</h2>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">The tool auto-detects the current page and shows only the relevant launcher. On unsupported pages you will see a brief toast message.</p>
+    <div class="feat-grid">
+      <div class="feat"><div class="icon">&#128257;</div><strong>Mapping Canvas</strong><span>DLO &rarr; DMO field mapping page</span></div>
+      <div class="feat"><div class="icon">&#127760;</div><strong>Data Stream</strong><span>Data Stream detail page (with record ID in URL)</span></div>
+      <div class="feat"><div class="icon">&#128451;</div><strong>DLO Detail</strong><span>Data Lake Object detail page</span></div>
+      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>
+      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
+      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
+      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
+      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>
+    </div>
   </div>
 
   <div class="card">
@@ -133,10 +149,11 @@
   <div class="card">
     <h2>Privacy &amp; safety</h2>
     <ul>
-      <li>Runs entirely in your browser tab using data the page has already loaded.</li>
-      <li>No API calls, no network requests, no data sent anywhere.</li>
-      <li>Nothing is stored &mdash; the tool disappears when you close or reload the tab.</li>
-      <li>Read-only: it never modifies your Salesforce data.</li>
+      <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
+      <li><strong>Bookmarklet:</strong> uses only data the page has already loaded + Salesforce&rsquo;s own internal APIs (same-origin).</li>
+      <li><strong>Extension:</strong> calls Salesforce&rsquo;s <em>documented</em> <code>/ssot/query-sql</code> API (read-only SELECT queries) using your existing session cookie. No data leaves your browser or your org.</li>
+      <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
+      <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
     </ul>
   </div>
 

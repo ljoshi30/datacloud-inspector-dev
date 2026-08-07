@@ -92,7 +92,7 @@ function makePayload(code, label) {
 // ---- install.html builder (feature list gated by includeDev) ----
 function makeHtml(hrefSafe, includeDev, buildId) {
   const heroBlurb = includeDev
-    ? `Floating toolkit for Salesforce Data Cloud &mdash; reveals API names on the mapping canvas, exports DLO/DMO/Data&nbsp;Stream fields, and exports segment rules to Sheets or Excel. Works on every Data 360 page type.`
+    ? `All-in-one toolkit for Salesforce Data Cloud &mdash; mapping canvas API names, field exports, Data Explorer with unlimited row export, Query Editor with full pagination, segment rule extraction, and data transform viewer. Page-aware: only activates on supported pages.`
     : `Floating toolkit for Salesforce Data Cloud &mdash; reveals API names on the DLO&rarr;DMO mapping canvas and exports Data&nbsp;Stream, DLO, and DMO fields to Sheets, CSV, or Excel.`;
 
   // In-development feature sections — only rendered in the FULL build.
@@ -104,18 +104,38 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       <li><strong>Download HTML</strong> &mdash; saves a self-contained file that opens in Excel or Sheets with colours, groups, and a metadata footer</li>
     </ul>
 
-    <h3>&#128202; Data Explorer (DLO / DMO query view)</h3>
+    <h3>&#128202; Data Explorer (DLO / DMO / any Data Cloud object)</h3>
     <ul>
       <li><span class="pill">Columns</span> &mdash; opens the Column Selector showing <strong>all available fields</strong> for the object, not just the handful SF shows by default</li>
       <li><strong>Available tab</strong> &mdash; search fields by name or label, sort A&rarr;Z / Z&rarr;A, select all / deselect all</li>
       <li><strong>Column Order tab</strong> &mdash; drag rows to reorder your selected columns before applying</li>
-      <li><strong>Apply columns</strong> &mdash; applies your selection; SF re-fetches data for those columns (max 10 shown &mdash; Data Cloud limit)</li>
+      <li><strong>Apply columns</strong> &mdash; applies your selection and loads data with a live query</li>
       <li><strong>Save / Restore / Clear set</strong> &mdash; persists your selection per object per org (90-day TTL)</li>
-      <li><strong>Export CSV</strong> &mdash; downloads all visible rows as a CSV with the current column set</li>
-      <li><span class="pill">Edit SOQL</span> &mdash; dark SOQL editor with syntax highlighting and inline field autocomplete; copy the query to run in Developer Console</li>
+      <li><strong>True row count</strong> &mdash; shows the real total rows in the table (e.g. &ldquo;Total: 117,204 rows&rdquo;) regardless of how many are loaded in the view</li>
+      <li><span class="pill new">Export All</span> &mdash; fetches <strong>ALL rows</strong> from the server (up to 500k) as a paginated CSV download, with live progress. No row-count cap.</li>
+      <li><strong>Download CSV (loaded rows)</strong> &mdash; instantly downloads the currently loaded rows as CSV</li>
+      <li><strong>Filter bar</strong> &mdash; multi-condition filter (AND/OR) with type-aware controls (text/number/date/boolean). Runs server-side WHERE clause.</li>
+      <li><strong>Hide empty columns</strong> &mdash; toggle to hide columns that have no data in the loaded rows</li>
+      <li><span class="pill">Edit SQL</span> &mdash; opens SQL editor prepopulated with the current query; edit and re-run directly</li>
     </ul>
+
+    <h3>&#128270; Query Editor (SQL workspace)</h3>
+    <ul>
+      <li><span class="pill new">Run &amp; Export</span> &mdash; run <strong>any</strong> highlighted SQL query and export the full result as CSV &mdash; bypasses Salesforce&rsquo;s 2,000-row UI limit</li>
+      <li><strong>Full pagination</strong> &mdash; automatically fetches all result pages (up to 500k rows) with a live progress bar</li>
+      <li><strong>Smart selection</strong> &mdash; select with mouse OR Cmd+A / Ctrl+A; falls back to the full editor content when nothing is highlighted</li>
+      <li><strong>Auto-retry dataspace</strong> &mdash; if the detected dataspace is wrong, automatically tries candidate dataspaces until one works</li>
+      <li><strong>Meaningful errors</strong> &mdash; actionable messages for &ldquo;denied authorization&rdquo;, session expired, timeout, and connection issues</li>
+    </ul>
+
+    <h3>&#9881;&#65039; Data Transform pages</h3>
+    <ul>
+      <li><span class="pill">View Definition</span> &mdash; reads the full transform definition (batch = node graph, streaming = SQL) and renders it in a collapsible tree view</li>
+      <li><strong>Copy JSON</strong> &mdash; copies the raw API response to clipboard for documentation or comparison</li>
+    </ul>
+
     <div class="note">
-      <strong>Note:</strong> Data Cloud's Data Explorer displays at most 10 columns at once. The SOQL editor can list every field for copying into Developer Console / Workbench, but only 10 apply to the live table.
+      <strong>Extension vs Bookmarklet:</strong> The browser extension enables full pagination (fetches ALL rows via the documented <code>/ssot/query-sql</code> API). The bookmarklet uses Salesforce&rsquo;s internal API and may be limited by session or internal caps. For large exports, the extension is recommended.
     </div>`;
 
   // Roadmap — shown only in the PUBLIC build, since these are the in-dev features
@@ -137,7 +157,10 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   // Launcher-menu rows that belong to in-dev features.
   const devMenuRows = !includeDev ? "" : `
         <tr><td><strong>Export Rules</strong></td><td>Segment pages</td><td>Opens the segment rules export with Include / Exclude / Rank &amp; Limit tabs</td></tr>
-        <tr><td><strong>Columns</strong></td><td>Data Explorer</td><td>Opens Column Selector &mdash; pick &amp; reorder fields, apply, save/restore, export CSV, open SOQL Editor</td></tr>`;
+        <tr><td><strong>Columns</strong></td><td>Data Explorer</td><td>Opens Column Selector &mdash; pick, reorder, apply, save/restore, export CSV, filter, Export All</td></tr>
+        <tr><td><strong>Export CSV</strong></td><td>Data Explorer</td><td>Exports currently visible rows as CSV</td></tr>
+        <tr><td><strong>Run &amp; Export</strong></td><td>Query Editor</td><td>Runs highlighted SQL and exports full result as CSV with pagination</td></tr>
+        <tr><td><strong>View Definition</strong></td><td>Data Transform</td><td>Reads and displays the transform definition (batch graph or streaming SQL)</td></tr>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -174,6 +197,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .feat strong{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);margin-right:4px}
+  .pill.new{background:var(--greenbg);color:var(--green)}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -215,10 +239,25 @@ function makeHtml(hrefSafe, includeDev, buildId) {
           Data 360 Inspector
         </a>
       </li>
-      <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A blue circle with a magnifying-glass icon appears in the bottom-right corner &mdash; click it to open the action menu.</li>
+      <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A purple circle button appears in the bottom-right corner &mdash; click it to open the action menu.</li>
       <li>Click the bookmark again at any time to remove the tool.</li>
     </ol>
     <div class="note">The launcher sits in the bottom-right corner and never overlaps the Salesforce navigation. Click the purple circle button to expand the menu; click outside or click it again to collapse.</div>
+  </div>
+
+  <div class="card">
+    <h2>&#127919; Supported pages</h2>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">The tool auto-detects the current page and shows only the relevant launcher. On unsupported pages you will see a brief toast message.</p>
+    <div class="feat-grid">
+      <div class="feat"><div class="icon">&#128257;</div><strong>Mapping Canvas</strong><span>DLO &rarr; DMO field mapping page</span></div>
+      <div class="feat"><div class="icon">&#127760;</div><strong>Data Stream</strong><span>Data Stream detail page (with record ID in URL)</span></div>
+      <div class="feat"><div class="icon">&#128451;</div><strong>DLO Detail</strong><span>Data Lake Object detail page</span></div>
+      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>
+      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
+      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
+      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
+      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>
+    </div>
   </div>
 
   <div class="card">
@@ -262,10 +301,11 @@ ${roadmapSection}
   <div class="card">
     <h2>Privacy &amp; safety</h2>
     <ul>
-      <li>Runs entirely in your browser tab using data the page has already loaded.</li>
-      <li>No API calls, no network requests, no data sent anywhere.</li>
-      <li>Nothing is stored &mdash; the tool disappears when you close or reload the tab.</li>
-      <li>Read-only: it never modifies your Salesforce data.</li>
+      <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
+      <li><strong>Bookmarklet:</strong> uses only data the page has already loaded + Salesforce&rsquo;s own internal APIs (same-origin).</li>
+      <li><strong>Extension:</strong> calls Salesforce&rsquo;s <em>documented</em> <code>/ssot/query-sql</code> API (read-only SELECT queries) using your existing session cookie. No data leaves your browser or your org.</li>
+      <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
+      <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
     </ul>
   </div>
 
