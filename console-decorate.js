@@ -5793,11 +5793,26 @@
           }).catch(function () {});
         } catch (e) {}
       }
-      // Also try clicking a sortable column header in the page to trigger a real query
+      // Try multiple UI interactions that fire aura calls
       if (!triggered) {
         try {
+          // Try sort header
           var sortBtn = document.querySelector("th[aria-sort] button, th button[title*='Sort'], [data-aura-rendered-by] th");
-          if (sortBtn) { sortBtn.click(); setTimeout(function () { sortBtn.click(); }, 500); }
+          if (sortBtn) { sortBtn.click(); setTimeout(function () { sortBtn.click(); }, 500); triggered = true; }
+        } catch (e) {}
+      }
+      if (!triggered) {
+        try {
+          // Try clicking a column checkbox toggle (select/deselect a column = fires aura)
+          var colToggle = document.querySelector("[data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
+          if (colToggle) { colToggle.click(); setTimeout(function () { colToggle.click(); }, 500); triggered = true; }
+        } catch (e) {}
+      }
+      if (!triggered) {
+        try {
+          // Try page navigation (next/prev page button in the table)
+          var pageBtn = document.querySelector("button[title*='Next'], button[title*='next'], [data-aura-rendered-by] button[title*='Page']");
+          if (pageBtn && !pageBtn.disabled) { pageBtn.click(); triggered = true; }
         } catch (e) {}
       }
       // Poll for credentials (longer timeout since we're trying multiple approaches)
@@ -5812,7 +5827,7 @@
         }
         if (attempts++ > 60) {
           btn.disabled = false; btn.textContent = "Retry";
-          msg.innerHTML = "Sort any column in the table above, then click <b>Retry</b>.";
+          msg.innerHTML = "Interact with the Data Explorer table above (sort a column, toggle a checkbox, or change page) then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Any interaction that refreshes data will establish the session.</span>";
           return;
         }
         setTimeout(check, 250);
