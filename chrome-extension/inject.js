@@ -7330,11 +7330,14 @@
       var fsC = _filterState[objectName];
       if (fsC && fsC.active && fsC.conds) {
         var fragsC = fsC.conds.map(function (c) {
-          if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+          if (!c.col) return null;
+          var val = (c.val != null) ? String(c.val) : "";
+          // Allow empty string as valid value for != and = operators
+          if (val === "" && c.op !== "!=" && c.op !== "=") return null;
           var q = '"' + c.col.replace(/"/g, '""') + '"';
-          if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
-          if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
-          return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+          if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
+          if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
+          return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
         }).filter(Boolean);
         if (fragsC.length) countWhere = " WHERE " + fragsC.join(" " + (fsC.join || "AND") + " ");
       }
@@ -7431,11 +7434,13 @@
           var fs2 = _filterState[objectName];
           if (fs2 && fs2.active && fs2.conds) {
             var frags2 = fs2.conds.map(function (c) {
-              if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+              if (!c.col) return null;
+              var val = (c.val != null) ? String(c.val) : "";
+              if (val === "" && c.op !== "!=" && c.op !== "=") return null;
               var q = '"' + c.col.replace(/"/g, '""') + '"';
-              if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
-              if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
-              return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+              if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
+              if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
+              return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
             }).filter(Boolean);
             if (frags2.length) activeWhere = " WHERE " + frags2.join(" " + (fs2.join || "AND") + " ");
           }
@@ -8267,11 +8272,13 @@
         var fs = _filterState[from];
         if (fs && fs.active && fs.conds && fs.conds.length) {
           var frags = fs.conds.map(function (c) {
-            if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+            if (!c.col) return null;
+            var val = (c.val != null) ? String(c.val) : "";
+            if (val === "" && c.op !== "!=" && c.op !== "=") return null;
             var q = '"' + c.col.replace(/"/g, '""') + '"';
-            if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
-            if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
-            return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+            if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
+            if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
+            return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
           }).filter(Boolean);
           if (frags.length) whereClause = " WHERE " + frags.join(" " + (fs.join || "AND") + " ");
         }
