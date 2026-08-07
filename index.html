@@ -44,24 +44,21 @@
 <body>
 <div class="wrap">
 
-  <!-- Version bar: always visible so the user knows what build they're on -->
-  <div id="dc-version-bar" style="display:flex;align-items:center;justify-content:space-between;border-radius:10px;padding:10px 16px;margin-bottom:14px;font-size:13px;background:#eef6ff;border:1px solid #bfdbfe;color:#1e40af">
-    <span><strong>Build:</strong> <code id="dc-build-id">7cee46ff36da</code> &nbsp;&middot;&nbsp; <strong>v1.2.70</strong></span>
-    <span id="dc-version-status" style="font-weight:600;color:#059669">&#10003; You have the latest</span>
-  </div>
-
-  <!-- Update banner: shown when the build changed since last drag -->
-  <div id="dc-update-banner" style="display:none;border-radius:12px;padding:16px 20px;margin-bottom:18px;font-size:14px;line-height:1.5;border:2px solid #22c55e;background:#f0fdf4;color:#14532d;animation:dcpulse 2s infinite">
+  <!-- Always-visible update banner: tells user to delete old + re-drag on every visit -->
+  <div id="dc-update-banner" style="border-radius:12px;padding:16px 20px;margin-bottom:18px;font-size:14px;line-height:1.6;border:2px solid #f59e0b;background:#fffbeb;color:#78350f">
     <div style="display:flex;align-items:flex-start;gap:12px">
-      <span style="font-size:22px;line-height:1.2">&#127381;</span>
+      <span style="font-size:22px;line-height:1.2">&#128260;</span>
       <div style="flex:1">
-        <strong id="dc-update-title" style="font-size:15px">New version available!</strong>
-        <div id="dc-update-sub" style="margin-top:4px;color:#166534;font-size:13px">Delete your old <em>Data 360 Inspector</em> bookmark and drag the button below again to get the updated code.</div>
+        <strong id="dc-update-title" style="font-size:15px;color:#92400e;">Always grab the latest version</strong>
+        <div id="dc-update-sub" style="margin-top:4px;font-size:13px;color:#92400e;">
+          <strong>1.</strong> Delete your old <em>Data 360 Inspector</em> bookmark &nbsp;&rarr;&nbsp;
+          <strong>2.</strong> Drag the button below to your bookmarks bar &nbsp;&rarr;&nbsp;
+          <strong>3.</strong> Done! You now have the latest build.
+        </div>
+        <div id="dc-update-status" style="margin-top:8px;font-size:12px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.05);display:inline-block;"></div>
       </div>
-      <button id="dc-update-ok" style="flex-shrink:0;border:1px solid #16a34a;background:#22c55e;color:#fff;border-radius:8px;padding:8px 16px;font-weight:700;font-size:13px;cursor:pointer">&#10003; I re-added it</button>
     </div>
   </div>
-  <style>@keyframes dcpulse{0%,100%{border-color:#22c55e}50%{border-color:#86efac}}</style>
 
   <div class="hero">
     <div class="badge rec">&#9679; Read-only &nbsp;&middot;&nbsp; Nothing leaves your browser</div>
@@ -200,36 +197,36 @@
 (function(){
   var BUILD_ID = "7cee46ff36da";
   var KEY = "dc-inspector-installed-build";
+  var statusEl = document.getElementById("dc-update-status");
   var banner = document.getElementById("dc-update-banner");
-  var okBtn  = document.getElementById("dc-update-ok");
-  var title  = document.getElementById("dc-update-title");
-  var sub    = document.getElementById("dc-update-sub");
-  var status = document.getElementById("dc-version-status");
-  if (!banner || !BUILD_ID) return;
+  if (!statusEl || !BUILD_ID) return;
   var seen;
   try { seen = localStorage.getItem(KEY); } catch(e) { seen = null; }
-  if (seen === BUILD_ID) {
-    // Already on latest
-    if (status) { status.innerHTML = "&#10003; You have the latest"; status.style.color = "#059669"; }
-    return;
-  }
-  if (seen) {
-    // Had an older build — UPDATE AVAILABLE
-    banner.style.display = "block";
-    if (status) { status.innerHTML = "&#9888; Update available &mdash; re-drag the bookmarklet below"; status.style.color = "#dc2626"; }
+  if (!seen) {
+    statusEl.innerHTML = "&#128308; <strong>Not installed yet</strong> &mdash; drag the button below to add it.";
+    statusEl.style.background = "#fef2f2"; statusEl.style.color = "#991b1b";
+    if (banner) { banner.style.borderColor = "#f59e0b"; banner.style.background = "#fffbeb"; }
+  } else if (seen !== BUILD_ID) {
+    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Your bookmark is outdated. Delete it and re-drag below.";
+    statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
+    if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
   } else {
-    // First visit
-    title.textContent = "Welcome! Add the bookmarklet to get started.";
-    sub.textContent = "Drag the button below to your bookmarks bar. Reload this page anytime — it will notify you when a new version is available.";
-    banner.style.display = "block";
-    if (status) { status.innerHTML = "&#128308; Not installed yet"; status.style.color = "#d97706"; }
+    statusEl.innerHTML = "&#9989; <strong>You have the latest</strong> (build " + BUILD_ID.slice(0,8) + "). No action needed.";
+    statusEl.style.background = "#f0fdf4"; statusEl.style.color = "#166534";
+    if (banner) { banner.style.borderColor = "#22c55e"; banner.style.background = "#f0fdf4"; }
   }
-  if (okBtn) okBtn.onclick = function(){
-    try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
-    banner.style.display = "none";
-    if (status) { status.innerHTML = "&#10003; You have the latest"; status.style.color = "#059669"; }
-  };
+  // Mark as installed when they interact with the bookmarklet link
+  var bmLink = document.querySelector("a.bm");
+  if (bmLink) {
+    bmLink.addEventListener("mousedown", function() {
+      try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
+      statusEl.innerHTML = "&#9989; <strong>You have the latest</strong> (build " + BUILD_ID.slice(0,8) + "). No action needed.";
+      statusEl.style.background = "#f0fdf4"; statusEl.style.color = "#166534";
+      if (banner) { banner.style.borderColor = "#22c55e"; banner.style.background = "#f0fdf4"; banner.style.animation = "none"; }
+    });
+  }
 })();
 </script>
+<style>@keyframes dcpulse{0%,100%{border-color:#dc2626}50%{border-color:#fca5a5}}</style>
 </body>
 </html>
