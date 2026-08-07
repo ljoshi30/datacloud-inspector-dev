@@ -145,6 +145,8 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Data 360 Inspector — Install</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="icon" type="image/x-icon" href="favicon.ico">
 <style>
   :root{--blue:#0d6efd;--dark:#1e3a5f;--ink:#16325c;--muted:#5c6b8a;--line:#e0e5ee;--bg:#f3f6fb;--green:#0a6b2d;--greenbg:#d4f0db}
   *{box-sizing:border-box}
@@ -209,14 +211,14 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       <li>Show your <strong>bookmarks bar</strong>: <kbd>&#8984;&#8679;B</kbd> on Mac &nbsp;/&nbsp; <kbd>Ctrl&#8679;B</kbd> on Windows.</li>
       <li><strong>Drag</strong> this button to your bookmarks bar:&nbsp;&nbsp;
         <a class="bm" href="${hrefSafe}">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1v9M4 6l4 4 4-4"/><rect x="2" y="13" width="12" height="2" rx="1"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="1.2" fill="currentColor"/><circle cx="17.7" cy="6.3" r="1.2" fill="currentColor"/><circle cx="20" cy="12" r="1.2" fill="currentColor"/><circle cx="17.7" cy="17.7" r="1.2" fill="currentColor"/><circle cx="12" cy="20" r="1.2" fill="currentColor"/><circle cx="6.3" cy="17.7" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="6.3" cy="6.3" r="1.2" fill="currentColor"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/><path d="M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           Data 360 Inspector
         </a>
       </li>
       <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A blue circle with a magnifying-glass icon appears in the bottom-right corner &mdash; click it to open the action menu.</li>
       <li>Click the bookmark again at any time to remove the tool.</li>
     </ol>
-    <div class="note">The launcher sits in the bottom-right corner and never overlaps the Salesforce navigation. Click the <strong>&#x1F50D;</strong> button to expand the menu; click outside or click it again to collapse.</div>
+    <div class="note">The launcher sits in the bottom-right corner and never overlaps the Salesforce navigation. Click the purple circle button to expand the menu; click outside or click it again to collapse.</div>
   </div>
 
   <div class="card">

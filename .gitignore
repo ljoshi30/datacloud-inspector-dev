@@ -1,43 +1,23 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Data 360 Inspector — .gitignore
-#
-# This local folder is the PRIVATE build workshop. If/when this repo is pushed,
-# we must NOT leak either (a) the readable source, or (b) the FULL build that
-# contains in-development Data Explorer + Segment code. The PUBLIC GitHub Pages
-# repo (ljoshi30/datacloud-inspector) only ever gets the STRIPPED install.html
-# renamed to index.html — nothing else.
-#
-# See STRUCTURE.md for the full picture.
-# ─────────────────────────────────────────────────────────────────────────────
+# Data 360 Inspector — Development Repo
+# This is the FULL internal build + source for testing via VDI.
+# The PUBLIC release repo is: ljoshi30/datacloud-inspector (GitHub Pages, stripped build only)
 
 # OS / editor junk
 .DS_Store
 *.swp
+node_modules/
 
-# Local archive of one-off probes / tests / abandoned v0 approach (not product)
+# Local archive of one-off probes / tests
 _archive/
 
-# ── DO NOT PUBLISH: FULL build artifacts (contain in-dev Explorer + Segment) ──
-# These are local-only. Keeping them out of git prevents accidental leaks of
-# features that are still in development.
-install-full.html
-Data360-Inspector-FULL-internal.html
-console-decorate-full.min.js
-bookmarklet-full.txt
-
-# Built zips
+# Built zips (regenerate anytime)
 *.zip
 
-# firefox-extension/ is fully GENERATED from chrome-extension/ + source on each
-# build (like install.html / the .min.js files) — regenerate with `node build.js`.
-firefox-extension/
-
-# Build-state stamp used to auto-bump the extension version only on code change.
+# Build-state stamp (local only, auto-created by build.js)
 chrome-extension/.buildid
 
-# NOTE: console-decorate.js (the readable source) is intentionally NOT ignored
-# here so it stays version-controlled in THIS private repo. Do NOT push this
-# repo to a PUBLIC remote — only the separate datacloud-inspector Pages repo is
-# public, and it receives ONLY the stripped install.html (as index.html).
+# Local-only scratch
 .synccheck/
 probe-extension/
+impl-doc-prototype/
+preflight-research/

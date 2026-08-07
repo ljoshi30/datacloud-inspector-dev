@@ -43,6 +43,14 @@
     }
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "data360-inspector@ljoshi30",
+      "strict_min_version": "128.0"
+    }
   }
 }
