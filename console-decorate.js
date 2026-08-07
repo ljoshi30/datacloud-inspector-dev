@@ -7646,19 +7646,20 @@
     }
     function runFilter(whereClause) {
       const cols = (allColumns || columns);
-      var limitVal = parseInt((panel.querySelector("input[type=number]") || {}).value, 10) || DC_MAX_FETCH_ROWS;
-      limitVal = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, limitVal));
+      // Always fetch max rows for filter — show full filtered count, UI caps display at 2000
       const sql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
-                  " FROM " + objectName + (whereClause ? " WHERE " + whereClause : "") + " LIMIT " + limitVal;
+                  " FROM " + objectName + (whereClause ? " WHERE " + whereClause : "") + " LIMIT " + DC_MAX_FETCH_ROWS;
       applyF.disabled = true; fStatus.textContent = "Filtering…";
       showTableSpinner(panel, "Filtering…");
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true } : null;
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
-        runRawSql(sql, ds, limitVal).then(function (res) {
+        runRawSql(sql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
           applyF.disabled = false;
-          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + res.rows.length.toLocaleString() + " rows returned</span>";
+          var countMsg = res.rows.length.toLocaleString() + " rows";
+          if (res.rows.length >= DC_MAX_FETCH_ROWS) countMsg += "+ (cap reached — click Count for exact total)";
+          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + countMsg + "</span>";
           showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
         }).catch(function (err) {
           applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
@@ -8159,8 +8160,14 @@
     // ── SOQL Editor panel ─────────────────────────────────────────────────────
     let soqlPanelEl = null;
     let soqlAcDropEl = null;
+    var _savedSoqlText = "";
     function closeSoqlEditor() {
-      soqlAcDropEl = null; // acDrop lives inside soqlPanelEl, removed with it
+      // Save the current SQL text so reopening preserves it
+      if (soqlPanelEl) {
+        var ta = soqlPanelEl.querySelector("textarea");
+        if (ta && ta.value.trim()) _savedSoqlText = ta.value;
+      }
+      soqlAcDropEl = null;
       if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
     }
     _openSoqlEditor = openSoqlEditor;   // expose to the results-table "Edit SQL" button
@@ -8298,7 +8305,7 @@
       hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:hidden;pointer-events:none;z-index:1;box-sizing:border-box;";
 
       const textarea = document.createElement("textarea");
-      textarea.value = buildInitialSoql();
+      textarea.value = _savedSoqlText || buildInitialSoql();
       textarea.spellcheck = false;
       textarea.autocomplete = "off";
       textarea.autocorrect = "off";
