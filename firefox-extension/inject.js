@@ -7669,7 +7669,11 @@
           showAllColumnsTable(objectName, cols, dataResult.rows, dataResult.rows.length, cols);
         }
         runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
-          dataResult = res; finish();
+          dataResult = res;
+          // If COUNT already finished and shows more than data returned,
+          // update __serverRowCount so UI/Download knows there's more
+          if (countResult > res.rows.length) res.rows.__serverRowCount = countResult;
+          finish();
         }).catch(function (err) {
           applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
           hideTableSpinner(panel);
