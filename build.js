@@ -385,8 +385,7 @@ fs.writeFileSync(path.join(dir, "install-full.html"), fullHtml);
 // Also write the internal-named copy people actually drag the bookmarklet from.
 // Same document as install-full.html; kept in sync so the bookmarklet is never stale.
 fs.writeFileSync(path.join(dir, "Data360-Inspector-FULL-internal.html"), fullHtml);
-// index.html = GitHub Pages entry point for the dev repo (ljoshi30.github.io/datacloud-inspector-dev)
-fs.writeFileSync(path.join(dir, "index.html"), fullHtml);
+// index.html is written AFTER version bump (below) so it shows the correct version.
 
 // ---- extensions: FULL source, built for BOTH Chrome and Firefox ----
 // The extension is the FULL build (includes in-dev Explorer + Segment). We keep
@@ -458,6 +457,11 @@ if (fs.existsSync(extDir)) {
   // Firefox manifest
   fs.writeFileSync(path.join(ffDir, "manifest.json"), JSON.stringify(ffManifest, null, 2) + "\n");
 }
+
+// index.html for GitHub Pages — written AFTER version bump so the displayed version is correct.
+const finalVersion = extVersion || _mfVer;
+const indexHtml = fullHtml.replace("<strong>v" + _mfVer + "</strong>", "<strong>v" + finalVersion + "</strong>");
+fs.writeFileSync(path.join(dir, "index.html"), indexHtml);
 
 console.log("Built PUBLIC (stripped — mapping + Data Stream + DLO + DMO):");
 console.log("  install.html               (" + pubHtml.length + " bytes)  ← push this as index.html");
