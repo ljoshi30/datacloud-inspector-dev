@@ -7364,7 +7364,15 @@
     const sqlBtn = document.createElement("button");
     sqlBtn.textContent = "Edit SQL";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
-    sqlBtn.onclick = () => { try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {} };
+    sqlBtn.onclick = () => {
+      // If a UI filter is active, warn user — editing SQL will reset it
+      var activeFilter = _filterState[objectName] && _filterState[objectName].active;
+      if (activeFilter) {
+        if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
+        _filterState[objectName] = null;
+      }
+      try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {}
+    };
 
     const csvBtn = document.createElement("button");
     csvBtn.textContent = "Download CSV (" + rows.length.toLocaleString() + " rows)";
@@ -7379,12 +7387,16 @@
     exportAllBtn.textContent = knownTotal ? ("⬇ Export All (" + knownTotal.toLocaleString() + " rows)") : "⬇ Export All";
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;" + (knownTotal ? "" : "display:none;");
     exportAllBtn.onclick = function () {
+      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
+      var confirmMsg = btnTotal
+        ? "Are you sure you want to download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets."
+        : "Are you sure you want to download ALL records from this object? This may take a while.";
+      if (!confirm(confirmMsg)) return;
       exportAllBtn.disabled = true;
       exportAllBtn.textContent = "Preparing…";
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       var allCols = fullCols.map(sqlQuoteIdent).join(", ");
       var exportSql = "SELECT " + allCols + " FROM " + objectName;
-      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
       ensureQueryContext(function (ready) {
         if (!ready) {
           exportAllBtn.disabled = false;
@@ -8167,12 +8179,26 @@
 
       // ── Editor: highlight layer + transparent textarea ────────────────────
       const buildInitialSoql = () => {
-        // Use only the currently checked columns — same set user sees in the picker
         const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
         const from = recList.objectName || "Unknown__c";
-        // Inline — all fields on one line (comma-separated), clean and compact
         const fieldStr = fields.length ? fields.join(", ") : "Id";
-        return "SELECT " + fieldStr + " FROM " + from + " LIMIT 100";
+        // Include WHERE from active UI filter (so user sees what filter is doing)
+        var whereClause = "";
+        var fs = _filterState[from];
+        if (fs && fs.active && fs.conds && fs.conds.length) {
+          var frags = fs.conds.map(function (c) {
+            if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+            var q = '"' + c.col.replace(/"/g, '""') + '"';
+            if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
+            if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
+            return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+          }).filter(Boolean);
+          if (frags.length) whereClause = " WHERE " + frags.join(" " + (fs.join || "AND") + " ");
+        }
+        // Use current rowsInput value as the LIMIT (editable by user)
+        var lim = DC_MAX_FETCH_ROWS;
+        try { var ri = panel.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
+        return "SELECT " + fieldStr + "\nFROM " + from + whereClause + "\nLIMIT " + lim;
       };
 
       const editorWrap = document.createElement("div");
@@ -8263,11 +8289,14 @@
             renderConnectButton(connectWrap, function () { runBtn.click(); });
             return;
           }
-          runRawSql(soql, ds, 2000).then(function (res) {
+          // Parse user's LIMIT to request that many rows (default 49999 if no LIMIT)
+          var userLim = soql.match(/\bLIMIT\s+(\d+)/i);
+          var askRows = userLim ? Math.min(parseInt(userLim[1], 10), DC_MAX_FETCH_ROWS) : DC_MAX_FETCH_ROWS;
+          // Reset UI filter since user is running custom SQL
+          _filterState[objName] = null;
+          runRawSql(soql, ds, askRows).then(function (res) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
             if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-            // Success → CLOSE the SQL editor so it doesn't cover the results, and show
-            // the rows in our full table. The table has an "Edit SQL" button to reopen.
             try { closeSoqlEditor(); } catch (e) {}
             showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
           }).catch(function (err) {
