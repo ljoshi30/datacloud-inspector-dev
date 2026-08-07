@@ -5937,7 +5937,8 @@
       window.addEventListener("message", onMsg, false);
       // dataspace is REQUIRED by /ssot/query-sql (probe: no ds → 400, ds="TDI" → 201).
       window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000, dataspace: dataspace || "" }, "*");
-      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout — the query may still be running on the server. Try again or use a smaller row limit.")); } }, 120000);
+      // No fixed timeout — let the query run as long as it needs. The background
+      // polls async queries until finished, large tables can take minutes.
     });
   }
 
@@ -5958,7 +5959,7 @@
       }
       window.addEventListener("message", onMsg, false);
       window.postMessage({ __dcReq: "dc-fetch-page", id: id, queryId: queryId, offset: offset, rowLimit: rowLimit, dataspace: dataspace || "" }, "*");
-      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("page fetch timeout")); } }, 60000);
+      // No fixed timeout for page fetches — large pagination can take time.
     });
   }
 
