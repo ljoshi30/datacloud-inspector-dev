@@ -216,17 +216,24 @@
     if (banner) banner.style.display = "none";
     return;
   }
-  // Mark as installed when they drag the bookmarklet link — hide the banner
+  // Mark as installed when they interact with the bookmarklet link.
+  // Uses every possible event (mousedown, dragstart, click, pointerdown)
+  // and verifies localStorage actually persisted.
   var bmLink = document.querySelector("a.bm");
   if (bmLink) {
-    bmLink.addEventListener("mousedown", function() {
-      try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
+    function markInstalled() {
+      try {
+        localStorage.setItem(KEY, BUILD_ID);
+      } catch(e){ console.warn("localStorage write failed:", e); }
       if (banner) {
         banner.style.transition = "opacity .4s, transform .4s";
         banner.style.opacity = "0";
         banner.style.transform = "translateY(-10px)";
         setTimeout(function(){ banner.style.display = "none"; }, 400);
       }
+    }
+    ["mousedown","pointerdown","dragstart","click"].forEach(function(evt) {
+      bmLink.addEventListener(evt, markInstalled);
     });
   }
 })();
