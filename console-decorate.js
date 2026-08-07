@@ -5975,26 +5975,16 @@
   // Resolves { blobUrl, totalRows, columns } — the caller triggers the download.
   function exportPaginatedCsv(sql, dataspace, onProgress) {
     return new Promise(function (resolve, reject) {
-      // Bookmarklet: paginate via LIMIT/OFFSET batches through /aura
+      // Bookmarklet: paginate via LIMIT/OFFSET batches through /aura.
+      // First attempt COUNT(*) to show accurate progress, then fetch data in pages.
       if (!extBridgePresent()) {
         var BM_PAGE = 49999;
         var BM_MAX = DC_MAX_TOTAL_EXPORT;
         var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-        var csvOut = []; var cols2 = []; var totalFetched = 0;
-        // First batch: send user SQL as-is (preserve original semantics — JOINs/GROUP BY
-        // may behave differently when LIMIT/OFFSET is appended). Only paginate with
-        // LIMIT/OFFSET for simple queries that return more rows than one batch.
+        var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
         var baseSql = sql.replace(/\bLIMIT\s+\d+/gi, "").replace(/\bOFFSET\s+\d+/gi, "").trim();
-        var isFirstBatch = true;
         function fetchBatch(offset) {
-          var batchSql;
-          if (isFirstBatch) {
-            // First batch: use user SQL unchanged (may have no LIMIT = return all rows)
-            batchSql = baseSql;
-            isFirstBatch = false;
-          } else {
-            batchSql = baseSql + " LIMIT " + BM_PAGE + " OFFSET " + offset;
-          }
+          var batchSql = baseSql + " LIMIT " + BM_PAGE + " OFFSET " + offset;
           runRawSql(batchSql, dataspace, BM_PAGE).then(function (res) {
             if (!cols2.length && res.columns.length) {
               cols2 = res.columns;
@@ -6004,7 +5994,7 @@
               csvOut.push(cols2.map(function (c) { return esc2(row[c]); }).join(",") + "\n");
               totalFetched++;
             });
-            if (onProgress) onProgress(totalFetched, totalFetched + (res.rows.length >= BM_PAGE ? BM_PAGE : 0));
+            if (onProgress) onProgress(totalFetched, bmTotal || totalFetched);
             if (res.rows.length < BM_PAGE || totalFetched >= BM_MAX) {
               var blob = new Blob(csvOut, { type: "text/csv" });
               resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
@@ -6013,7 +6003,21 @@
             }
           }).catch(reject);
         }
-        fetchBatch(0);
+        // Try COUNT(*) first for progress display, then start fetching data
+        var countMatch = baseSql.match(/\bFROM\s+(.+?)(?:\s+WHERE|\s+GROUP|\s+ORDER|\s*$)/i);
+        var countSql = countMatch ? "SELECT COUNT(*) FROM " + countMatch[1] : "";
+        if (countSql) {
+          runRawSql(countSql, dataspace, 1).then(function (cr) {
+            if (cr.rows.length > 0) {
+              var firstCol = cr.columns[0] || "count";
+              bmTotal = parseInt(cr.rows[0][firstCol], 10) || 0;
+            }
+            if (onProgress && bmTotal) onProgress(0, bmTotal);
+            fetchBatch(0);
+          }).catch(function () { fetchBatch(0); });
+        } else {
+          fetchBatch(0);
+        }
         return;
       }
       var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
@@ -6426,20 +6430,21 @@
       }
 
       // ── FALLBACK path (bookmarklet): internal /aura QueryWorkspace.queryDCSql ──
-      // Paginate via LIMIT/OFFSET batches since the /aura endpoint caps per-call rows.
+      // Paginate via LIMIT/OFFSET batches. First run COUNT(*) to get true total,
+      // then fetch data rows in batches up to `bmWant`.
       var BM_BATCH = 49999;
       var bmWant = rowLimit || 2000;
       var allRows = [];
       var baseSql = "SELECT " + selectCols.map(sqlQuoteIdent).join(", ") + " FROM " + objectName;
+      var bmServerTotal = 0;
 
-      function fetchBmBatch(offset) {
-        var batchSql = baseSql + " LIMIT " + Math.min(BM_BATCH, bmWant - offset) + (offset > 0 ? " OFFSET " + offset : "");
+      function bmAuraQuery(sql2, rl, cb) {
         _auraQid = (_auraQid || 0) + 1;
         var act = {
           id: "dcsql-" + _auraQid + ";a",
           descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql",
           callingDescriptor: "UNKNOWN",
-          params: { sql: batchSql, rowLimit: Math.min(BM_BATCH, bmWant - offset), dataspace: ds }
+          params: { sql: sql2, rowLimit: rl, dataspace: ds }
         };
         var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) +
           "&aura.context=" + _auraSniff.context +
@@ -6450,14 +6455,20 @@
           headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
           body: form, credentials: "include"
         }).then(function (r) { return r.text(); }).then(function (txt) {
-          var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("SQL response was not JSON.")); return; }
+          var json; try { json = JSON.parse(txt); } catch (e) { cb(new Error("SQL response was not JSON."), null); return; }
           var a = json && json.actions && json.actions[0];
-          if (!a) { reject(new Error("SQL response had no actions.")); return; }
-          if (a.state !== "SUCCESS") {
-            var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || a.state; } catch (e) { em = a.state; }
-            reject(new Error(em)); return;
+          if (!a || a.state !== "SUCCESS") {
+            var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+            cb(new Error(em || "query failed"), null); return;
           }
-          var rv = a.returnValue || {};
+          cb(null, a.returnValue || {});
+        }).catch(function (err) { cb(new Error("SQL request failed: " + err), null); });
+      }
+
+      function fetchBmBatch(offset) {
+        var batchSql = baseSql + " LIMIT " + Math.min(BM_BATCH, bmWant - offset) + (offset > 0 ? " OFFSET " + offset : "");
+        bmAuraQuery(batchSql, Math.min(BM_BATCH, bmWant - offset), function (err, rv) {
+          if (err) { reject(err); return; }
           var dataRows = rv.dataRows || rv.rows || [];
           var batchRows = dataRows.map(function (dr) {
             var arr = dr && dr.row ? dr.row : dr;
@@ -6468,13 +6479,26 @@
           }).filter(Boolean);
           allRows = allRows.concat(batchRows);
           if (batchRows.length < Math.min(BM_BATCH, bmWant - offset) || allRows.length >= bmWant) {
+            allRows.__serverRowCount = bmServerTotal || allRows.length;
             resolve(allRows);
           } else {
             fetchBmBatch(allRows.length);
           }
-        }).catch(function (err) { reject(new Error("SQL request failed: " + err)); });
+        });
       }
-      fetchBmBatch(0);
+
+      // Get true row count first, then fetch data
+      var countSql = "SELECT COUNT(*) FROM " + objectName;
+      bmAuraQuery(countSql, 1, function (err, rv) {
+        if (!err && rv) {
+          var dr = rv.dataRows || rv.rows || [];
+          if (dr.length > 0) {
+            var row = dr[0] && dr[0].row ? dr[0].row : dr[0];
+            if (Array.isArray(row) && row.length > 0) bmServerTotal = parseInt(row[0], 10) || 0;
+          }
+        }
+        fetchBmBatch(0);
+      });
     });
   }
   // The Data Explorer's objectName PREPENDS the data-space name, e.g. data space "TDI" +
@@ -7316,19 +7340,27 @@
         var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
         var allCols = fullCols.map(sqlQuoteIdent).join(", ");
         var exportSql = "SELECT " + allCols + " FROM " + objectName;
-        exportPaginatedCsv(exportSql, ds, function (fetched, total) {
-          exportAllBtn.textContent = fetched.toLocaleString() + " / " + total.toLocaleString() + " rows…";
-        }).then(function (res) {
-          exportAllBtn.disabled = false;
-          exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-          if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
-          var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
-          var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
-          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
-        }).catch(function (err) {
-          exportAllBtn.disabled = false;
-          exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
-          alert("Export failed: " + (err && err.message || err));
+        ensureQueryContext(function (ready) {
+          if (!ready) {
+            exportAllBtn.disabled = false;
+            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
+            alert("Session not ready — scroll the Data Explorer table first, then retry.");
+            return;
+          }
+          exportPaginatedCsv(exportSql, ds, function (fetched, total) {
+            exportAllBtn.textContent = fetched.toLocaleString() + " / " + total.toLocaleString() + " rows…";
+          }).then(function (res) {
+            exportAllBtn.disabled = false;
+            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
+            if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
+            var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
+            var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+            setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+          }).catch(function (err) {
+            exportAllBtn.disabled = false;
+            exportAllBtn.textContent = "⬇ Export All (" + serverTotal.toLocaleString() + " rows)";
+            alert("Export failed: " + (err && err.message || err));
+          });
         });
       };
     } else {
