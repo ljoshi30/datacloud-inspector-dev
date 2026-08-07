@@ -7309,7 +7309,20 @@
     countBtn.onclick = () => {
       countBtn.disabled = true; countBtn.textContent = "Counting…";
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-      var cSql = "SELECT COUNT(*) FROM " + objectName;
+      // If filter is active, count WITH the filter's WHERE clause
+      var countWhere = "";
+      var fsC = _filterState[objectName];
+      if (fsC && fsC.active && fsC.conds) {
+        var fragsC = fsC.conds.map(function (c) {
+          if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+          var q = '"' + c.col.replace(/"/g, '""') + '"';
+          if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
+          if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
+          return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+        }).filter(Boolean);
+        if (fragsC.length) countWhere = " WHERE " + fragsC.join(" " + (fsC.join || "AND") + " ");
+      }
+      var cSql = "SELECT COUNT(*) FROM " + objectName + countWhere;
       ensureQueryContext(function (ready) {
         if (!ready) { countBtn.disabled = false; countBtn.textContent = "Count"; return; }
         runRawSql(cSql, ds, 1).then(function (res) {
@@ -7386,9 +7399,47 @@
     };
 
     const csvBtn = document.createElement("button");
-    csvBtn.textContent = "Download CSV (" + rows.length.toLocaleString() + " rows)";
+    csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
-    csvBtn.onclick = () => downloadRowsCsv(objectName, fullCols, rows);
+    csvBtn.onclick = () => {
+      // If rows are fewer than what was requested AND fewer than DC_MAX_FETCH_ROWS,
+      // we already have all data — just download. Otherwise offer paginated export.
+      if (rows.length >= DC_MAX_FETCH_ROWS) {
+        // Might be more data — ask if they want ALL via pagination
+        var doAll = confirm("You have " + rows.length.toLocaleString() + " rows loaded (the per-query cap). There may be more records.\n\nClick OK to download ALL rows (paginated export), or Cancel to download just the " + rows.length.toLocaleString() + " loaded rows.");
+        if (doAll) {
+          csvBtn.disabled = true; csvBtn.textContent = "Exporting…";
+          var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+          var exportCols = fullCols.map(sqlQuoteIdent).join(", ");
+          var activeWhere = "";
+          var fs2 = _filterState[objectName];
+          if (fs2 && fs2.active && fs2.conds) {
+            var frags2 = fs2.conds.map(function (c) {
+              if (!c.col || (!c.val && c.val !== "false" && c.val !== "true")) return null;
+              var q = '"' + c.col.replace(/"/g, '""') + '"';
+              if (c.op === "contains") return q + " LIKE '%" + c.val.replace(/'/g, "''") + "%'";
+              if (c.op === "starts with") return q + " LIKE '" + c.val.replace(/'/g, "''") + "%'";
+              return q + " " + c.op + " '" + c.val.replace(/'/g, "''") + "'";
+            }).filter(Boolean);
+            if (frags2.length) activeWhere = " WHERE " + frags2.join(" " + (fs2.join || "AND") + " ");
+          }
+          var allSql = "SELECT " + exportCols + " FROM " + objectName + activeWhere;
+          exportPaginatedCsv(allSql, ds2, function (fetched, total) {
+            csvBtn.textContent = fetched.toLocaleString() + " rows…";
+          }).then(function (res) {
+            csvBtn.disabled = false; csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
+            var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_" + new Date().toISOString().slice(0, 10) + ".csv";
+            var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+            setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+          }).catch(function (err) {
+            csvBtn.disabled = false; csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
+            alert("Export failed: " + (err && err.message || err));
+          });
+          return;
+        }
+      }
+      downloadRowsCsv(objectName, fullCols, rows);
+    };
 
     // "Export All" — fetches ALL rows from the server (up to 500k) via paginated query.
     // Visible when we know total > loaded rows, or after user clicks Count.
