@@ -5976,16 +5976,30 @@
   function exportPaginatedCsv(sql, dataspace, onProgress) {
     return new Promise(function (resolve, reject) {
       // Bookmarklet: paginate via LIMIT/OFFSET batches through /aura.
-      // First attempt COUNT(*) to show accurate progress, then fetch data in pages.
       if (!extBridgePresent()) {
         var BM_PAGE = 49999;
         var BM_MAX = DC_MAX_TOTAL_EXPORT;
         var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
-        var baseSql = sql.replace(/\bLIMIT\s+\d+/gi, "").replace(/\bOFFSET\s+\d+/gi, "").trim();
+
+        // Detect if user's SQL already has a LIMIT (respect it as a cap)
+        var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
+        var userLimit = userLimitMatch ? parseInt(userLimitMatch[1], 10) : 0;
+        var effectiveMax = userLimit > 0 ? Math.min(userLimit, BM_MAX) : BM_MAX;
+
+        // Strip trailing LIMIT/OFFSET to build our own pagination
+        var baseSql = sql.replace(/\s+LIMIT\s+\d+\s*/gi, " ").replace(/\s+OFFSET\s+\d+\s*/gi, " ").trim();
+
         function fetchBatch(offset) {
-          var batchSql = baseSql + " LIMIT " + BM_PAGE + " OFFSET " + offset;
-          runRawSql(batchSql, dataspace, BM_PAGE).then(function (res) {
+          var remaining = effectiveMax - offset;
+          if (remaining <= 0) {
+            var blob = new Blob(csvOut, { type: "text/csv" });
+            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
+            return;
+          }
+          var pageSize = Math.min(BM_PAGE, remaining);
+          var batchSql = baseSql + " LIMIT " + pageSize + (offset > 0 ? " OFFSET " + offset : "");
+          runRawSql(batchSql, dataspace, pageSize).then(function (res) {
             if (!cols2.length && res.columns.length) {
               cols2 = res.columns;
               csvOut.push(cols2.map(esc2).join(",") + "\n");
@@ -5994,30 +6008,19 @@
               csvOut.push(cols2.map(function (c) { return esc2(row[c]); }).join(",") + "\n");
               totalFetched++;
             });
-            if (onProgress) onProgress(totalFetched, bmTotal || totalFetched);
-            if (res.rows.length < BM_PAGE || totalFetched >= BM_MAX) {
+            if (onProgress) onProgress(totalFetched, bmTotal || (userLimit || totalFetched));
+            if (res.rows.length < pageSize || totalFetched >= effectiveMax) {
               var blob = new Blob(csvOut, { type: "text/csv" });
               resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
             } else {
-              fetchBatch(offset + BM_PAGE);
+              fetchBatch(offset + pageSize);
             }
           }).catch(reject);
         }
-        // Try COUNT(*) first for progress display, then start fetching data
-        var countMatch = baseSql.match(/\bFROM\s+(.+?)(?:\s+WHERE|\s+GROUP|\s+ORDER|\s*$)/i);
-        var countSql = countMatch ? "SELECT COUNT(*) FROM " + countMatch[1] : "";
-        if (countSql) {
-          runRawSql(countSql, dataspace, 1).then(function (cr) {
-            if (cr.rows.length > 0) {
-              var firstCol = cr.columns[0] || "count";
-              bmTotal = parseInt(cr.rows[0][firstCol], 10) || 0;
-            }
-            if (onProgress && bmTotal) onProgress(0, bmTotal);
-            fetchBatch(0);
-          }).catch(function () { fetchBatch(0); });
-        } else {
-          fetchBatch(0);
-        }
+
+        // Run first batch directly — no COUNT(*) (it can fail on complex queries
+        // and adds latency). Progress shows fetched so far; total updates as we go.
+        fetchBatch(0);
         return;
       }
       var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
@@ -8861,14 +8864,22 @@
         }
         var startTime = Date.now();
         exportPaginatedCsv(sql, ds, function (fetched, total) {
-          runBtn.textContent = fetched + " / " + total + " rows…";
+          var pctKnown = total > fetched;
+          runBtn.textContent = pctKnown ? (fetched.toLocaleString() + " / " + total.toLocaleString() + " rows…") : (fetched.toLocaleString() + " rows fetched…");
+          var pct = pctKnown ? Math.round(fetched / total * 100) : 0;
+          var barHtml = pctKnown
+            ? "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#10b981,#059669);width:" + pct + "%;transition:width .3s;'></div></div>"
+            : "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#10b981,#059669);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>";
+          var countHtml = pctKnown
+            ? "<b>" + fetched.toLocaleString() + "</b> of <b>" + total.toLocaleString() + "</b> rows fetched"
+            : "<b>" + fetched.toLocaleString() + "</b> rows fetched so far…";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:dcpulse 1s infinite;'></div>"
             + "<span style='font:600 13px -apple-system,sans-serif;'>Fetching data…</span></div>"
-            + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#10b981,#059669);width:" + Math.round(fetched/total*100) + "%;transition:width .3s;'></div></div>"
-            + "<div style='color:#64748b;font-size:11px;'><b>" + fetched.toLocaleString() + "</b> of <b>" + total.toLocaleString() + "</b> rows fetched</div>"
-            + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+            + barHtml
+            + "<div style='color:#64748b;font-size:11px;'>" + countHtml + "</div>"
+            + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
         }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
