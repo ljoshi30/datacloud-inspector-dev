@@ -347,10 +347,12 @@ ${roadmapSection}
   }
   // else: first visit — show default banner (amber, instructions already in HTML)
 
-  // On any interaction with the bookmarklet link → mark installed + hide banner
+  // Mark installed only when the drag completes OUTSIDE the page (= dropped on
+  // bookmarks bar) or when user clicks the link. A simple mousedown/dragstart is
+  // NOT enough — user may just move the mouse without actually adding the bookmark.
   var bmLink = document.querySelector("a.bm");
   if (bmLink) {
-    function markInstalled() {
+    function hideBanner() {
       writeMark();
       if (banner) {
         banner.style.transition = "opacity .3s";
@@ -358,8 +360,19 @@ ${roadmapSection}
         setTimeout(function(){ banner.style.display = "none"; }, 300);
       }
     }
-    ["mousedown","pointerdown","dragstart","click"].forEach(function(evt) {
-      bmLink.addEventListener(evt, markInstalled);
+    // dragend fires after the drag is released. If dropped outside the page
+    // (bookmarks bar), dropEffect is "copy"/"link"/"move". If cancelled (dropped
+    // back on page or ESC), dropEffect is "none".
+    bmLink.addEventListener("dragend", function(e) {
+      if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") {
+        hideBanner();
+      }
+    });
+    // Fallback: if user clicks the link (some browsers navigate to javascript:),
+    // also treat it as installed.
+    bmLink.addEventListener("click", function(e) {
+      e.preventDefault();
+      hideBanner();
     });
   }
 })();
