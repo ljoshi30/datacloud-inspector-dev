@@ -7236,11 +7236,16 @@
     const titleWrap = document.createElement("div");
     titleWrap.style.cssText = "flex:1;user-select:text;cursor:text;";
     var serverTotal = rows.__serverRowCount || 0;
+    var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var rowsSubInfo = "";
-    if (serverTotal > rows.length) {
-      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#7c3aed;font-weight:700'>Total records: " + serverTotal.toLocaleString() + "</span> &mdash; click <b>Export All</b> to download full CSV, or change Rows &amp; Reload";
+    if (isFiltered && serverTotal > rows.length) {
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#7c3aed;font-weight:700'>Filter matched: " + serverTotal.toLocaleString() + " rows</span> &mdash; <b>Download CSV</b> has loaded rows, <b>Export All</b> for complete filtered set";
+    } else if (isFiltered) {
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> filtered rows &times; " + columns.length + " cols &bull; <span style='color:#059669'>all matching rows loaded</span> &mdash; <b>Download CSV</b> to export, or add more filters to narrow down";
+    } else if (serverTotal > rows.length) {
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#7c3aed;font-weight:700'>Total records: " + serverTotal.toLocaleString() + "</span> &mdash; click <b>Export All</b> for full CSV, or change Rows &amp; Reload";
     } else if (rows.length > DC_MAX_RENDER_ROWS) {
-      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#d97706'>Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + " for speed &mdash; Download CSV has all " + rows.length.toLocaleString() + "</span>";
+      rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols &bull; <span style='color:#d97706'>Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + " for speed &mdash; <b>Download CSV</b> has all " + rows.length.toLocaleString() + "</span>";
     } else {
       rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows &times; " + columns.length + " cols &bull; <span style='color:#059669'>all loaded</span> &mdash; click <b>Count</b> to check total records in object";
     }
@@ -7258,7 +7263,18 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(rows.length || 100);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Enter how many rows to load into the table view (max " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Use Count to check total first.";
+    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + "; Download CSV has all loaded rows.";
+    rowsInput.addEventListener("input", function () {
+      var v = parseInt(rowsInput.value, 10);
+      if (!v || v < 1) {
+        rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Minimum is 1";
+      } else if (v > DC_MAX_FETCH_ROWS) {
+        rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
+        rowsInput.value = String(DC_MAX_FETCH_ROWS);
+      } else {
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "";
+      }
+    });
     const reloadBtn = document.createElement("button");
     reloadBtn.textContent = "Reload";
     reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
@@ -7567,18 +7583,29 @@
                   " FROM " + objectName + (whereClause ? " WHERE " + whereClause : "") + " LIMIT " + DC_MAX_FETCH_ROWS;
       applyF.disabled = true; fStatus.textContent = "Filtering…";
       showTableSpinner(panel, "Filtering…");
-      // PERSIST the filter so it survives the re-render below (the bug: filter vanished).
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true } : null;
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
+        // Run the filtered query AND a COUNT to show how many match the filter
+        var countSql = "SELECT COUNT(*) FROM " + objectName + (whereClause ? " WHERE " + whereClause : "");
         runRawSql(sql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
-          applyF.disabled = false; fStatus.textContent = "";
-          showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
+          applyF.disabled = false;
+          // Also run count to show total matching the filter
+          runRawSql(countSql, ds, 1).then(function (cr) {
+            var cnt = 0;
+            if (cr.rows.length > 0) { var fc = cr.columns[0] || "count"; cnt = parseInt(cr.rows[0][fc], 10) || 0; }
+            if (cnt > 0) res.rows.__serverRowCount = cnt;
+            fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + res.rows.length.toLocaleString() + " rows loaded" + (cnt > res.rows.length ? " of " + cnt.toLocaleString() + " matching" : "") + "</span>";
+            showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
+          }).catch(function () {
+            fStatus.textContent = res.rows.length + " rows loaded";
+            showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
+          });
         }).catch(function (err) {
           applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
           hideTableSpinner(panel);
-          _filterState[objectName] = null;   // failed filter → don't leave stale state
+          _filterState[objectName] = null;
         });
       });
     }
