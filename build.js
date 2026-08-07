@@ -330,6 +330,8 @@ fs.writeFileSync(path.join(dir, "install-full.html"), fullHtml);
 // Also write the internal-named copy people actually drag the bookmarklet from.
 // Same document as install-full.html; kept in sync so the bookmarklet is never stale.
 fs.writeFileSync(path.join(dir, "Data360-Inspector-FULL-internal.html"), fullHtml);
+// index.html = GitHub Pages entry point for the dev repo (ljoshi30.github.io/datacloud-inspector-dev)
+fs.writeFileSync(path.join(dir, "index.html"), fullHtml);
 
 // ---- extensions: FULL source, built for BOTH Chrome and Firefox ----
 // The extension is the FULL build (includes in-dev Explorer + Segment). We keep
