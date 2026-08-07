@@ -7212,6 +7212,8 @@
   // the table; without this the filter bar would reset and the user loses what they typed).
   // Shape: { conds:[{col,op,val}], join:"AND"|"OR", active:bool }.
   var _filterState = {};
+  var _filterCount = {};
+  var _countCache = {};
   function showTableSpinner(panel, msg) {
     var existing = panel.querySelector(".dc-table-spinner");
     if (existing) { existing.querySelector("span").textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
@@ -7253,8 +7255,11 @@
     titleWrap.style.cssText = "flex:1;user-select:text;cursor:text;";
     var serverTotal = rows.__serverRowCount || 0;
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
+    var filteredTotal = _filterCount[objectName] || 0;
     var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? " (filtered)" : "") + " &times; " + columns.length + " cols";
-    if (serverTotal > rows.length) {
+    if (isFiltered && filteredTotal > rows.length) {
+      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span> — Download CSV will fetch all";
+    } else if (serverTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
     if (rows.length > DC_MAX_RENDER_ROWS) {
@@ -7418,47 +7423,37 @@
     };
 
     const csvBtn = document.createElement("button");
-    csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
+    var filterTotal = _filterCount[objectName] || 0;
+    var csvLabel = filterTotal > rows.length
+      ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
+      : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
+    csvBtn.textContent = csvLabel;
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
-      // If rows are fewer than what was requested AND fewer than DC_MAX_FETCH_ROWS,
-      // we already have all data — just download. Otherwise offer paginated export.
-      if (rows.length >= DC_MAX_FETCH_ROWS) {
-        // Might be more data — ask if they want ALL via pagination
-        var doAll = confirm("You have " + rows.length.toLocaleString() + " rows loaded (the per-query cap). There may be more records.\n\nClick OK to download ALL rows (paginated export), or Cancel to download just the " + rows.length.toLocaleString() + " loaded rows.");
-        if (doAll) {
-          csvBtn.disabled = true; csvBtn.textContent = "Exporting…";
-          var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-          var exportCols = fullCols.map(sqlQuoteIdent).join(", ");
-          var activeWhere = "";
-          var fs2 = _filterState[objectName];
-          if (fs2 && fs2.active && fs2.conds) {
-            var frags2 = fs2.conds.map(function (c) {
-              if (!c.col) return null;
-              var val = (c.val != null) ? String(c.val) : "";
-              if (val === "" && c.op !== "!=" && c.op !== "=") return null;
-              var q = '"' + c.col.replace(/"/g, '""') + '"';
-              if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
-              if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
-              return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
-            }).filter(Boolean);
-            if (frags2.length) activeWhere = " WHERE " + frags2.join(" " + (fs2.join || "AND") + " ");
-          }
-          var allSql = "SELECT " + exportCols + " FROM " + objectName + activeWhere;
-          exportPaginatedCsv(allSql, ds2, function (fetched, total) {
-            csvBtn.textContent = fetched.toLocaleString() + " rows…";
-          }).then(function (res) {
-            csvBtn.disabled = false; csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
-            var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_" + new Date().toISOString().slice(0, 10) + ".csv";
-            var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
-            setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
-          }).catch(function (err) {
-            csvBtn.disabled = false; csvBtn.textContent = "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
-            alert("Export failed: " + (err && err.message || err));
-          });
-          return;
-        }
+      var fc = _filterCount[objectName] || 0;
+      var fs2 = _filterState[objectName];
+      // If filter active and more rows exist than loaded → paginate to get all
+      if (fs2 && fs2.active && fc > rows.length) {
+        if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nThis will fetch all matching rows in batches.")) return;
+        csvBtn.disabled = true; csvBtn.textContent = "Exporting…";
+        var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+        var exportCols = fullCols.map(sqlQuoteIdent).join(", ");
+        var wherePart = fs2.where ? " WHERE " + fs2.where : "";
+        var allSql = "SELECT " + exportCols + " FROM " + objectName + wherePart;
+        exportPaginatedCsv(allSql, ds2, function (fetched) {
+          csvBtn.textContent = fetched.toLocaleString() + " rows…";
+        }).then(function (res) {
+          csvBtn.disabled = false; csvBtn.textContent = csvLabel;
+          var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
+          var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+        }).catch(function (err) {
+          csvBtn.disabled = false; csvBtn.textContent = csvLabel;
+          alert("Export failed: " + (err && err.message || err));
+        });
+        return;
       }
+      // Otherwise download from memory (already have all data)
       downloadRowsCsv(objectName, fullCols, rows);
     };
 
@@ -7646,26 +7641,44 @@
     }
     function runFilter(whereClause) {
       const cols = (allColumns || columns);
-      // Always fetch max rows for filter — show full filtered count, UI caps display at 2000
-      const sql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
-                  " FROM " + objectName + (whereClause ? " WHERE " + whereClause : "") + " LIMIT " + DC_MAX_FETCH_ROWS;
+      const wherePart = whereClause ? " WHERE " + whereClause : "";
+      const dataSql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
+                  " FROM " + objectName + wherePart + " LIMIT " + DC_MAX_FETCH_ROWS;
+      const countSql = "SELECT COUNT(*) FROM " + objectName + wherePart;
       applyF.disabled = true; fStatus.textContent = "Filtering…";
       showTableSpinner(panel, "Filtering…");
-      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true } : null;
+      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause } : null;
+      _filterCount[objectName] = 0;
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
-        runRawSql(sql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
+        var dataResult = null; var countResult = 0; var done = 0;
+        function finish() {
+          if (++done < 2) return;
           applyF.disabled = false;
-          var countMsg = res.rows.length.toLocaleString() + " rows";
-          if (res.rows.length >= DC_MAX_FETCH_ROWS) countMsg += "+ (cap reached — click Count for exact total)";
-          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + countMsg + "</span>";
-          showAllColumnsTable(objectName, cols, res.rows, res.rows.length, cols);
+          if (!dataResult) return;
+          _filterCount[objectName] = countResult;
+          var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
+          if (countResult > dataResult.rows.length) {
+            msg += " of <b>" + countResult.toLocaleString() + "</b> matching";
+            msg += " — Download CSV will fetch all";
+          } else if (countResult > 0) {
+            msg = "<b>" + countResult.toLocaleString() + "</b> rows match";
+          }
+          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
+          showAllColumnsTable(objectName, cols, dataResult.rows, dataResult.rows.length, cols);
+        }
+        runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
+          dataResult = res; finish();
         }).catch(function (err) {
           applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
           hideTableSpinner(panel);
           _filterState[objectName] = null;
         });
+        runRawSql(countSql, ds, 1).then(function (cr) {
+          if (cr.rows.length > 0) { var fc = cr.columns[0] || "count"; countResult = parseInt(cr.rows[0][fc], 10) || 0; }
+          finish();
+        }).catch(function () { finish(); });
       });
     }
     applyF.onclick = function () { const w = buildWhere(); if (!w) { fStatus.textContent = "add at least one condition with a value"; return; } runFilter(w); };
