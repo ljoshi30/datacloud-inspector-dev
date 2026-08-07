@@ -321,36 +321,41 @@ ${roadmapSection}
   var statusEl = document.getElementById("dc-update-status");
   var banner = document.getElementById("dc-update-banner");
   if (!statusEl || !BUILD_ID) return;
-  var seen;
-  try { seen = localStorage.getItem(KEY); } catch(e) { seen = null; }
-  if (!seen) {
-    // First time — show banner
-    statusEl.innerHTML = "&#128308; <strong>Not installed yet</strong> &mdash; drag the button below to add it.";
-    statusEl.style.background = "#fef2f2"; statusEl.style.color = "#991b1b";
-  } else if (seen !== BUILD_ID) {
-    // Outdated — show banner with urgency
-    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Your bookmark is outdated. Delete it and re-drag below.";
-    statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
-    if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
-  } else {
-    // Already up to date — HIDE banner completely
+
+  // Read from localStorage OR cookie (whichever works in this env)
+  function readMark() {
+    try { var v = localStorage.getItem(KEY); if (v) return v; } catch(e){}
+    var m = document.cookie.match(new RegExp("(?:^|; )" + KEY + "=([^;]+)"));
+    return m ? m[1] : null;
+  }
+  function writeMark() {
+    try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
+    document.cookie = KEY + "=" + BUILD_ID + ";path=/;max-age=31536000;SameSite=Lax";
+  }
+
+  var seen = readMark();
+  if (seen === BUILD_ID) {
+    // Up to date — hide banner, show nothing
     if (banner) banner.style.display = "none";
     return;
   }
-  // Mark as installed when they interact with the bookmarklet link.
-  // Uses every possible event (mousedown, dragstart, click, pointerdown)
-  // and verifies localStorage actually persisted.
+  if (seen) {
+    // Outdated — red urgent banner
+    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Delete your old bookmark and re-drag below.";
+    statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
+    if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
+  }
+  // else: first visit — show default banner (amber, instructions already in HTML)
+
+  // On any interaction with the bookmarklet link → mark installed + hide banner
   var bmLink = document.querySelector("a.bm");
   if (bmLink) {
     function markInstalled() {
-      try {
-        localStorage.setItem(KEY, BUILD_ID);
-      } catch(e){ console.warn("localStorage write failed:", e); }
+      writeMark();
       if (banner) {
-        banner.style.transition = "opacity .4s, transform .4s";
+        banner.style.transition = "opacity .3s";
         banner.style.opacity = "0";
-        banner.style.transform = "translateY(-10px)";
-        setTimeout(function(){ banner.style.display = "none"; }, 400);
+        setTimeout(function(){ banner.style.display = "none"; }, 300);
       }
     }
     ["mousedown","pointerdown","dragstart","click"].forEach(function(evt) {
