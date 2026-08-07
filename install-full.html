@@ -215,14 +215,17 @@
     statusEl.style.background = "#f0fdf4"; statusEl.style.color = "#166534";
     if (banner) { banner.style.borderColor = "#22c55e"; banner.style.background = "#f0fdf4"; }
   }
-  // Mark as installed when they interact with the bookmarklet link
+  // Mark as installed when they drag the bookmarklet link — hide the banner
   var bmLink = document.querySelector("a.bm");
   if (bmLink) {
     bmLink.addEventListener("mousedown", function() {
       try { localStorage.setItem(KEY, BUILD_ID); } catch(e){}
-      statusEl.innerHTML = "&#9989; <strong>You have the latest</strong> (build " + BUILD_ID.slice(0,8) + "). No action needed.";
-      statusEl.style.background = "#f0fdf4"; statusEl.style.color = "#166534";
-      if (banner) { banner.style.borderColor = "#22c55e"; banner.style.background = "#f0fdf4"; banner.style.animation = "none"; }
+      if (banner) {
+        banner.style.transition = "opacity .4s, transform .4s";
+        banner.style.opacity = "0";
+        banner.style.transform = "translateY(-10px)";
+        setTimeout(function(){ banner.style.display = "none"; }, 400);
+      }
     });
   }
 })();
