@@ -44,13 +44,24 @@
       }
       // (c) AI Explain relay — sends transform JSON to Anthropic via background
       if (d.__dcReq === "dc-ai-explain") {
-        api.runtime.sendMessage(
-          { type: "dcAiExplain", transformJson: d.transformJson },
-          function (resp) {
-            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-ai-explain", id: d.id, ok: !err && resp && resp.ok, explanation: resp && resp.explanation, error: err || (resp && resp.error) }, "*");
+        var aiId = d.id;
+        var aiJson = d.transformJson;
+        try {
+          var p = api.runtime.sendMessage({ type: "dcAiExplain", transformJson: aiJson });
+          if (p && p.then) {
+            p.then(function (resp) {
+              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: resp && resp.ok, explanation: resp && resp.explanation, error: resp && resp.error }, "*");
+            }).catch(function (e) {
+              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, "*");
+            });
+          } else {
+            // Chrome callback style
+            var err2 = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: !err2 && p && p.ok, explanation: p && p.explanation, error: err2 || (p && p.error) }, "*");
           }
-        );
+        } catch (e) {
+          window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, "*");
+        }
         return;
       }
       // (d) Save/Get AI settings relay
