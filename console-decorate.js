@@ -5714,10 +5714,7 @@
   }
 
   function ensureQueryContext(cb) {
-    // 0) EXTENSION mode: auth is handled in the background via the sid cookie — no
-    // sniffed creds needed. Always "ready". This is the reliable path (no hit-and-trial).
     if (extBridgePresent()) { cb(true); return; }
-    // 1) direct framework read (deterministic, instant)
     if (primeCredsFromAura()) { cb(true); return; }
     if (haveCredsOnly()) { cb(true); return; }
     const rl = findRecordListEl();
@@ -5726,20 +5723,32 @@
     function finish(ok) { if (done) return; done = true; cb(ok); }
     function poll() {
       if (primeCredsFromAura() || haveCredsOnly()) { finish(true); return; }
-      if (polls++ > 50) { finish(false); return; }   // ~10s max
+      if (polls++ > 80) { finish(false); return; }   // ~16s max
       setTimeout(poll, 200);
     }
-    // 2) fallback nudge: force a real /aura query by changing the column set, then restore
+    // Try ALL connection methods at once — don't wait for one to fail
+    // 1) Column toggle nudge
     if (current.length >= 2 && typeof applyColumnViaSF === "function") {
       var probeSet = current.slice(0, current.length - 1);
-      try {
-        applyColumnViaSF(probeSet, function () {
-          setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
-        });
-      } catch (e) {}
+      try { applyColumnViaSF(probeSet, function () {
+        setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
+      }); } catch (e) {}
     } else if (current.length && typeof applyColumnViaSF === "function") {
       try { applyColumnViaSF(current, function () {}); } catch (e) {}
     }
+    // 2) Row checkbox click (toggles on then off)
+    try {
+      var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
+      if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 600); }
+    } catch (e) {}
+    // 3) Dummy /aura POST
+    try {
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
+    } catch (e) {}
     poll();
   }
 
