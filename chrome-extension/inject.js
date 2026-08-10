@@ -6048,8 +6048,8 @@
         var baseSql = sql.replace(/\s+LIMIT\s+\d+\s*/gi, " ").replace(/\s+OFFSET\s+\d+\s*/gi, " ").trim();
 
         function fetchBatch(offset) {
-          // FIX 4: Check cancel flag before each batch
-          if (typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) {
+          // Check cancel flags before each batch (Explorer Export All + Query Editor)
+          if ((typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) || window.__dcQueryExportCancelled) {
             reject(new Error("Export cancelled by user"));
             return;
           }
@@ -9543,6 +9543,12 @@
       runBtn.disabled = true; runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       downloadBtn.style.display = "none";
+      // Cancel button for long-running exports
+      window.__dcQueryExportCancelled = false;
+      var cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.style.cssText = "border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;margin-left:8px;";
+      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
       card.style.display = "block";
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
@@ -9550,6 +9556,7 @@
         + "<span style='font:600 13px -apple-system,sans-serif;'>Running query…</span></div>"
         + "<div style='color:#64748b;font-size:11px;background:#f8fafc;border-radius:6px;padding:8px;font-family:monospace;word-break:break-all;max-height:60px;overflow:hidden;'>" + preview.replace(/</g,"&lt;") + "</div>"
         + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+      cardBody.appendChild(cancelBtn);
 
       ensureQueryContext(function (ready) {
         if (!ready) {
@@ -9619,6 +9626,15 @@
           runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
           card.style.display = "block";
           var errMsg = String(err && err.message || err);
+          // Handle cancel gracefully
+          if (/cancelled by user/i.test(errMsg)) {
+            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
+              + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
+              + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Export cancelled</span></div>"
+              + "<div style='font-size:12px;color:#475569;'>The export was stopped. No file was downloaded.</div>";
+            downloadBtn.style.display = "none";
+            return;
+          }
           var hint = "";
           if (/denied authorization/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Likely cause:</b> Wrong dataspace detected. Run a query in SF's editor first so we can capture the correct dataspace from your session.</div>";
           else if (/session.*expired|INVALID_SESSION|invalidSession/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Fix:</b> Your Salesforce session expired. Refresh the page, log back in, then retry.</div>";
