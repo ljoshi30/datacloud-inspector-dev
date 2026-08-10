@@ -7951,7 +7951,8 @@
           if (++done < 2) return;
           applyF.disabled = false;
           if (!dataResult) return;
-          _filterCount[objectName] = countResult;
+          // Only store count for filtered queries — not for unfiltered (clear)
+          _filterCount[objectName] = whereClause ? countResult : 0;
           var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
           if (countResult > dataResult.rows.length) {
             msg += " of <b>" + countResult.toLocaleString() + "</b> matching";
