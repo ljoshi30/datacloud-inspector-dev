@@ -9606,6 +9606,7 @@
             + barHtml
             + "<div style='color:#64748b;font-size:11px;'>" + countHtml + "</div>"
             + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
+          cardBody.appendChild(cancelBtn);
         }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
