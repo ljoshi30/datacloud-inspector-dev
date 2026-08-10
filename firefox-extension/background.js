@@ -178,14 +178,20 @@ var AI_PROMPT = "You are a Salesforce Data Cloud expert. Analyze this Data Trans
 
 async function aiExplainTransform(req) {
   try {
-    var settings = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key"]);
-    var provider = (settings && settings.dc_ai_provider) || "anthropic";
+    var rawSettings = {};
+    try { rawSettings = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key"]) || {}; } catch (e) {}
+    var settings = {
+      dc_ai_provider: rawSettings.dc_ai_provider || _aiSettingsCache.dc_ai_provider,
+      dc_anthropic_key: rawSettings.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key,
+      dc_openai_key: rawSettings.dc_openai_key || _aiSettingsCache.dc_openai_key
+    };
+    var provider = settings.dc_ai_provider || "anthropic";
     var transformJson = req.transformJson || "";
     if (!transformJson) return { ok: false, error: "No transform data to explain." };
     var prompt = AI_PROMPT + transformJson;
 
     if (provider === "openai") {
-      var oKey = settings && settings.dc_openai_key;
+      var oKey = settings.dc_openai_key;
       if (!oKey) return { ok: false, error: "NO_KEY" };
       var r = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -204,7 +210,7 @@ async function aiExplainTransform(req) {
     }
 
     // Default: Anthropic
-    var aKey = settings && settings.dc_anthropic_key;
+    var aKey = settings.dc_anthropic_key;
     if (!aKey) return { ok: false, error: "NO_KEY" };
     var r2 = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -230,23 +236,24 @@ async function aiExplainTransform(req) {
   }
 }
 
-// ── Save/get AI settings ────────────────────────────────────────────────────
+// ── Save/get AI settings (with fallback for temporary extensions) ────────────
+var _aiSettingsCache = {};
 async function saveAiSettings(settings) {
   var toSave = {};
   if (settings.provider) toSave.dc_ai_provider = settings.provider;
   if (settings.anthropicKey) toSave.dc_anthropic_key = settings.anthropicKey;
   if (settings.openaiKey) toSave.dc_openai_key = settings.openaiKey;
-  await api.storage.local.set(toSave);
+  Object.assign(_aiSettingsCache, toSave);
+  try { await api.storage.local.set(toSave); } catch (e) { console.warn("[DC-MI] storage.local.set failed, using in-memory cache:", e); }
   return { ok: true };
 }
 async function getAiSettings() {
-  var data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key"]);
-  return {
-    ok: true,
-    provider: (data && data.dc_ai_provider) || "anthropic",
-    hasAnthropicKey: !!(data && data.dc_anthropic_key),
-    hasOpenaiKey: !!(data && data.dc_openai_key)
-  };
+  var data = {};
+  try { data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key"]) || {}; } catch (e) {}
+  var provider = (data.dc_ai_provider || _aiSettingsCache.dc_ai_provider || "anthropic");
+  var aKey = data.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key || "";
+  var oKey = data.dc_openai_key || _aiSettingsCache.dc_openai_key || "";
+  return { ok: true, provider: provider, hasAnthropicKey: !!aKey, hasOpenaiKey: !!oKey };
 }
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
