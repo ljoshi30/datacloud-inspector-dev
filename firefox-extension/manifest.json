@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Data 360 Inspector",
-  "version": "1.2.89",
+  "version": "1.2.90",
   "description": "Inspects Data Cloud / Data 360 mappings and segment rules. Shows API names on the mapping canvas, exports segment conditions to HTML or Sheets. Read-only; nothing leaves your browser.",
   "icons": {
     "16": "icons/icon16.png",
@@ -29,7 +29,9 @@
     "https://*.force.com/*",
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://*.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl/*",
+    "https://*.sfdc.cl/*"
   ],
   "content_scripts": [
     {

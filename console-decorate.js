@@ -7318,16 +7318,17 @@
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
-                var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = Anthropic (Claude Sonnet)\n3 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, or 3:");
+                var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = SF LLM Gateway (Salesforce internal)\n3 = Anthropic (Claude Sonnet)\n4 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, 3, or 4:");
                 var pChoice = (provider && provider.trim()) || "1";
-                var prov = pChoice === "3" ? "openai" : pChoice === "2" ? "anthropic" : "gemini";
-                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : prov === "anthropic" ? "Anthropic API key (starts with sk-ant-...)" : "Google Gemini API key";
-                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : prov === "anthropic" ? "https://console.anthropic.com/settings/keys" : "https://aistudio.google.com/apikey";
+                var prov = pChoice === "4" ? "openai" : pChoice === "3" ? "anthropic" : pChoice === "2" ? "sf-gateway" : "gemini";
+                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : prov === "anthropic" ? "Anthropic API key (starts with sk-ant-...)" : prov === "sf-gateway" ? "SF LLM Gateway key" : "Google Gemini API key";
+                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : prov === "anthropic" ? "https://console.anthropic.com/settings/keys" : prov === "sf-gateway" ? "LLM Express Gateway" : "https://aistudio.google.com/apikey";
                 var key = prompt("Enter your " + keyLabel + ":\n\nGet one at: " + keyUrl + "\n\nStored locally — never shared.");
                 if (key && key.trim()) {
                   var settings = { provider: prov };
                   if (prov === "openai") settings.openaiKey = key.trim();
                   else if (prov === "gemini") settings.geminiKey = key.trim();
+                  else if (prov === "sf-gateway") settings.sfGatewayKey = key.trim();
                   else settings.anthropicKey = key.trim();
                   window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
                   setTimeout(doExplain, 500);

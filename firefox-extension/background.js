@@ -184,7 +184,9 @@ async function aiExplainTransform(req) {
       dc_ai_provider: rawSettings.dc_ai_provider || _aiSettingsCache.dc_ai_provider,
       dc_anthropic_key: rawSettings.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key,
       dc_openai_key: rawSettings.dc_openai_key || _aiSettingsCache.dc_openai_key,
-      dc_gemini_key: rawSettings.dc_gemini_key || _aiSettingsCache.dc_gemini_key
+      dc_gemini_key: rawSettings.dc_gemini_key || _aiSettingsCache.dc_gemini_key,
+      dc_sfgateway_key: rawSettings.dc_sfgateway_key || _aiSettingsCache.dc_sfgateway_key,
+      dc_sfgateway_url: rawSettings.dc_sfgateway_url || _aiSettingsCache.dc_sfgateway_url
     };
     var provider = settings.dc_ai_provider || "anthropic";
     var transformJson = req.transformJson || "";
@@ -209,6 +211,25 @@ async function aiExplainTransform(req) {
       }
       var content = (j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts && j.candidates[0].content.parts[0] && j.candidates[0].content.parts[0].text) || "";
       return { ok: true, explanation: content, provider: "gemini" };
+    }
+
+    if (provider === "sf-gateway") {
+      var sfKey = settings.dc_sfgateway_key;
+      if (!sfKey) return { ok: false, error: "NO_KEY" };
+      var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway-oidc.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
+      var r = await fetch(sfUrl, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + sfKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+      });
+      var txt = await r.text();
+      var j = null; try { j = JSON.parse(txt); } catch (e) {}
+      if (r.status !== 200) {
+        var em = (j && j.error && j.error.message) || "HTTP " + r.status;
+        return { ok: false, error: em };
+      }
+      var content = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+      return { ok: true, explanation: content, provider: "sf-gateway" };
     }
 
     if (provider === "openai") {
@@ -265,18 +286,21 @@ async function saveAiSettings(settings) {
   if (settings.anthropicKey) toSave.dc_anthropic_key = settings.anthropicKey;
   if (settings.openaiKey) toSave.dc_openai_key = settings.openaiKey;
   if (settings.geminiKey) toSave.dc_gemini_key = settings.geminiKey;
+  if (settings.sfGatewayKey) toSave.dc_sfgateway_key = settings.sfGatewayKey;
+  if (settings.sfGatewayUrl) toSave.dc_sfgateway_url = settings.sfGatewayUrl;
   Object.assign(_aiSettingsCache, toSave);
   try { await api.storage.local.set(toSave); } catch (e) { console.warn("[DC-MI] storage.local.set failed, using in-memory cache:", e); }
   return { ok: true };
 }
 async function getAiSettings() {
   var data = {};
-  try { data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key", "dc_gemini_key"]) || {}; } catch (e) {}
+  try { data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key", "dc_gemini_key", "dc_sfgateway_key", "dc_sfgateway_url"]) || {}; } catch (e) {}
   var provider = (data.dc_ai_provider || _aiSettingsCache.dc_ai_provider || "gemini");
   var aKey = data.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key || "";
   var oKey = data.dc_openai_key || _aiSettingsCache.dc_openai_key || "";
   var gKey = data.dc_gemini_key || _aiSettingsCache.dc_gemini_key || "";
-  return { ok: true, provider: provider, hasAnthropicKey: !!aKey, hasOpenaiKey: !!oKey, hasGeminiKey: !!gKey };
+  var sfKey = data.dc_sfgateway_key || _aiSettingsCache.dc_sfgateway_key || "";
+  return { ok: true, provider: provider, hasAnthropicKey: !!aKey, hasOpenaiKey: !!oKey, hasGeminiKey: !!gKey, hasSfGatewayKey: !!sfKey };
 }
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
