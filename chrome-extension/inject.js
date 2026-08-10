@@ -6071,11 +6071,11 @@
               totalFetched++;
             });
             if (onProgress) onProgress(totalFetched, bmTotal || (userLimit || totalFetched));
-            if (res.rows.length < pageSize || totalFetched >= effectiveMax) {
+            if (res.rows.length === 0 || totalFetched >= effectiveMax) {
               var blob = new Blob(csvOut, { type: "text/csv" });
               resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
             } else {
-              fetchBatch(offset + pageSize);
+              fetchBatch(offset + res.rows.length);
             }
           }).catch(reject);
         }
@@ -7717,9 +7717,11 @@
     // Visible when we know total > loaded rows, or after user clicks Count.
     const exportAllBtn = document.createElement("button");
     exportAllBtn.id = "dc-export-all-btn";
-    var knownTotal = serverTotal > rows.length ? serverTotal : 0;
-    exportAllBtn.textContent = knownTotal ? ("⬇ Export All (" + knownTotal.toLocaleString() + " rows)") : "⬇ Export All";
-    exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;" + (knownTotal ? "" : "display:none;");
+    // Export All always shows full object count (not filtered). Use Count button result if available.
+    var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
+    var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
+    exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
+    exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     // FIX 4: Export All with cancel button
     var _exportAllCancelled = false;
     exportAllBtn.onclick = function () {
@@ -8804,24 +8806,28 @@
           runRawSql(soql, ds, askRows).then(function (res) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
             if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-            // FIX 7: If SQL had WHERE, store it as filter state and run COUNT
+            // FIX 7: If SQL had WHERE, store it as filter state and run COUNT before rendering
             if (whereMatch && whereMatch[1]) {
-              var whereClause = whereMatch[1].trim();
-              _filterState[objName] = { active: true, where: whereClause, conds: null, fromSql: true };
-              // Run COUNT(*) with the WHERE clause
-              var countSql = "SELECT COUNT(*) FROM " + objName + " WHERE " + whereClause;
-              runRawSql(countSql, ds, 1).then(function (cntRes) {
-                if (cntRes.rows.length > 0) {
-                  var firstCol = cntRes.columns[0] || "count";
-                  var cnt = parseInt(cntRes.rows[0][firstCol], 10) || 0;
-                  _filterCount[objName] = cnt;
-                }
+              var whereClause2 = whereMatch[1].trim();
+              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
+              var countSql2 = "SELECT COUNT(*) FROM " + objName + " WHERE " + whereClause2;
+              runRawSql(countSql2, ds, 1).then(function (cntRes) {
+                var cnt = 0;
+                if (cntRes.rows.length > 0) { var fc = cntRes.columns[0] || "count"; cnt = parseInt(cntRes.rows[0][fc], 10) || 0; }
+                _filterCount[objName] = cnt;
+                if (cnt > res.rows.length) res.rows.__serverRowCount = cnt;
+                try { closeSoqlEditor(); } catch (e) {}
+                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
               }).catch(function () {
-                // COUNT failed, not critical — just means we won't show total
+                try { closeSoqlEditor(); } catch (e) {}
+                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
               });
+            } else {
+              _filterState[objName] = null;
+              _filterCount[objName] = 0;
+              try { closeSoqlEditor(); } catch (e) {}
+              showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
             }
-            try { closeSoqlEditor(); } catch (e) {}
-            showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
           }).catch(function (err) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
             setStatus(String(err && err.message || err), "err");
