@@ -5717,8 +5717,17 @@
     if (_warmedUp) return; _warmedUp = true;
     if (extBridgePresent()) return;
     if (primeCredsFromAura()) return;
-    // Strategy: fire a real /aura call by triggering SF's own page logic.
-    // Most reliable: applyColumnViaSF (toggles a column, fires a query).
+    // Strategy: auto-click a sortable column header — proven to fire /aura on this org.
+    // Click it twice (sort asc then desc) to restore original order.
+    try {
+      var sortBtn = document.querySelector("th[aria-sort] button, th button[title*='Sort'], [role='columnheader'] button, lightning-datatable th a, th a[role='button']");
+      if (sortBtn) {
+        sortBtn.click();
+        setTimeout(function () { try { sortBtn.click(); } catch (e) {} }, 800);
+        return;
+      }
+    } catch (e) {}
+    // Fallback: column toggle
     try {
       var rl = findRecordListEl();
       var current = rl ? getCurrentFields(rl) : [];
@@ -5727,14 +5736,6 @@
         applyColumnViaSF(probeSet, function () {
           setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
         });
-        return;
-      }
-    } catch (e) {}
-    // Fallback: fire a page-sort by dispatching a CustomEvent on the table
-    try {
-      var tbl = document.querySelector("lightning-datatable, [data-aura-rendered-by] table");
-      if (tbl) {
-        tbl.dispatchEvent(new CustomEvent("sort", { bubbles: true, detail: { fieldName: "Name", sortDirection: "asc" } }));
       }
     } catch (e) {}
   }
@@ -8841,7 +8842,7 @@
       // Show instruction above the button
       _connHint = document.createElement("div");
       _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
-      _connHint.innerHTML = "<b>One-time setup:</b> On the SF table behind this modal, <b>click any column header dropdown (▾)</b> and select a different sort or <b>uncheck then re-check a column</b> in the column picker. This triggers a data refresh that establishes the session. The button will enable automatically.";
+      _connHint.innerHTML = "<b>One-time setup:</b> <b>Sort any column</b> on the SF table behind this modal (click a column header). This establishes the session and the button will enable automatically.";
       // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
