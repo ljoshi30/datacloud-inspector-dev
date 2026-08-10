@@ -7279,10 +7279,17 @@
                 "<div style='font-size:12px;line-height:1.8;color:#334155;white-space:pre-wrap'>" + d.explanation.replace(/</g,"&lt;").replace(/\n/g,"<br>") + "</div>";
             } else {
               var errMsg = d.error || "Unknown error";
-              if (/No API key/i.test(errMsg)) {
-                var key = prompt("Enter your Anthropic API key (starts with sk-ant-...):\n\nGet one at: https://console.anthropic.com/settings/keys\n\nThe key is stored locally in your browser — never sent anywhere except Anthropic's API.");
+              if (/NO_KEY/i.test(errMsg)) {
+                var provider = prompt("Choose AI provider:\n\n1 = Anthropic (Claude Sonnet — recommended)\n2 = OpenAI (GPT-4o mini)\n\nEnter 1 or 2:");
+                var prov = (provider && provider.trim() === "2") ? "openai" : "anthropic";
+                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : "Anthropic API key (starts with sk-ant-...)";
+                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : "https://console.anthropic.com/settings/keys";
+                var key = prompt("Enter your " + keyLabel + ":\n\nGet one at: " + keyUrl + "\n\nStored locally — never shared.");
                 if (key && key.trim()) {
-                  window.postMessage({ __dcReq: "dc-save-api-key", id: "save-" + Date.now(), key: key.trim() }, "*");
+                  var settings = { provider: prov };
+                  if (prov === "openai") settings.openaiKey = key.trim();
+                  else settings.anthropicKey = key.trim();
+                  window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
                   setTimeout(doExplain, 500);
                   return;
                 }

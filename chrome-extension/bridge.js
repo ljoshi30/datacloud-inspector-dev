@@ -53,18 +53,18 @@
         );
         return;
       }
-      // (d) Save/Get API key relay
-      if (d.__dcReq === "dc-save-api-key") {
-        api.runtime.sendMessage({ type: "dcSaveApiKey", key: d.key }, function (resp) {
+      // (d) Save/Get AI settings relay
+      if (d.__dcReq === "dc-save-ai-settings") {
+        api.runtime.sendMessage({ type: "dcSaveAiSettings", settings: d.settings }, function (resp) {
           var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-          window.postMessage({ __dcRes: "dc-save-api-key", id: d.id, ok: !err && resp && resp.ok, error: err }, "*");
+          window.postMessage({ __dcRes: "dc-save-ai-settings", id: d.id, ok: !err && resp && resp.ok, error: err }, "*");
         });
         return;
       }
-      if (d.__dcReq === "dc-get-api-key") {
-        api.runtime.sendMessage({ type: "dcGetApiKey" }, function (resp) {
+      if (d.__dcReq === "dc-get-ai-settings") {
+        api.runtime.sendMessage({ type: "dcGetAiSettings" }, function (resp) {
           var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-          window.postMessage({ __dcRes: "dc-get-api-key", id: d.id, ok: !err, hasKey: resp && resp.hasKey, error: err }, "*");
+          window.postMessage({ __dcRes: "dc-get-ai-settings", id: d.id, ok: !err, provider: resp && resp.provider, hasAnthropicKey: resp && resp.hasAnthropicKey, hasOpenaiKey: resp && resp.hasOpenaiKey, error: err }, "*");
         });
         return;
       }
