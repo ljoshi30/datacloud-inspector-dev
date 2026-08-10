@@ -217,19 +217,31 @@ async function aiExplainTransform(req) {
       var sfKey = settings.dc_sfgateway_key;
       if (!sfKey) return { ok: false, error: "NO_KEY" };
       var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
+      console.log("[DC-MI] AI: calling sf-gateway →", sfUrl);
       var r = await fetch(sfUrl, {
         method: "POST",
         headers: { "Authorization": "Bearer " + sfKey, "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
       });
       var txt = await r.text();
+      console.log("[DC-MI] AI: response status:", r.status, "body length:", txt.length, "first 200:", txt.slice(0, 200));
       var j = null; try { j = JSON.parse(txt); } catch (e) {}
       if (r.status !== 200) {
-        var em = (j && j.error && j.error.message) || "HTTP " + r.status;
+        var em = (j && j.error && j.error.message) || (j && j.message) || "HTTP " + r.status + " - " + txt.slice(0, 200);
         return { ok: false, error: em };
       }
-      var content = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
-      return { ok: true, explanation: content, provider: "sf-gateway" };
+      // Try OpenAI format first, then Anthropic format
+      var content = "";
+      if (j && j.choices && j.choices[0] && j.choices[0].message) {
+        content = j.choices[0].message.content || "";
+      } else if (j && j.content && j.content[0]) {
+        content = j.content[0].text || "";
+      } else if (j && j.completion) {
+        content = j.completion;
+      }
+      if (!content && j) content = "Response received but could not extract text. Raw keys: " + Object.keys(j).join(", ");
+      console.log("[DC-MI] AI: extracted content length:", content.length);
+      return { ok: true, explanation: content || "Empty response from gateway", provider: "sf-gateway" };
     }
 
     if (provider === "openai") {
