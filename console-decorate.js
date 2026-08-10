@@ -7140,7 +7140,37 @@
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
+    // ── Build plain-English summary ──
+    var summaryLines = [];
+    if (isSql) {
+      summaryLines.push("This is a <b>streaming transform</b> that runs a SQL query to produce output.");
+    } else {
+      summaryLines.push("This is a <b>batch transform</b> with " + sources.length + " source" + (sources.length !== 1 ? "s" : "") + ", " + steps.length + " step" + (steps.length !== 1 ? "s" : "") + ", and " + outs.length + " output" + (outs.length !== 1 ? "s" : "") + ".");
+      if (sources.length) {
+        summaryLines.push("<b>Reads from:</b> " + sources.map(function (s) { return esc(s.obj); }).join(", "));
+      }
+      var joins = steps.filter(function (s) { return s.kind === "JOIN"; });
+      var filters = steps.filter(function (s) { return s.kind === "FILTER" || s.kind === "WHERE"; });
+      var aggregates = steps.filter(function (s) { return s.kind === "AGGREGATE" || s.kind === "GROUP"; });
+      var dedup = steps.filter(function (s) { return s.kind === "DEDUPLICATE" || s.kind === "DEDUP"; });
+      if (joins.length) summaryLines.push("<b>Joins:</b> " + joins.length + " join operation" + (joins.length > 1 ? "s" : "") + " — " + joins.map(function (j) { return esc(j.detail); }).join("; "));
+      if (filters.length) summaryLines.push("<b>Filters:</b> " + filters.length + " filter condition" + (filters.length > 1 ? "s" : ""));
+      if (aggregates.length) summaryLines.push("<b>Aggregation:</b> groups and aggregates data");
+      if (dedup.length) summaryLines.push("<b>Deduplication:</b> removes duplicate records");
+      var others = steps.filter(function (s) { return s.kind !== "JOIN" && s.kind !== "FILTER" && s.kind !== "WHERE" && s.kind !== "AGGREGATE" && s.kind !== "GROUP" && s.kind !== "DEDUPLICATE" && s.kind !== "DEDUP"; });
+      if (others.length) summaryLines.push("<b>Other steps:</b> " + others.map(function (s) { return esc(s.kind); }).join(", "));
+      if (outs.length) {
+        summaryLines.push("<b>Writes to:</b> " + outs.map(function (o) { return esc(o.name) + (o.fields.length ? " (" + o.fields.length + " fields)" : ""); }).join(", "));
+      }
+    }
+
     var body = "<div style='flex:1;overflow:auto;padding:14px 16px'>";
+    // SUMMARY section
+    body += "<div style='background:linear-gradient(135deg,#eff6ff,#f0fdf4);border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:16px'>";
+    body += "<div style='font-weight:700;font-size:13px;color:#1e3a5f;margin-bottom:8px'>Summary</div>";
+    body += "<div style='font-size:12px;line-height:1.8;color:#334155'>" + summaryLines.join("<br>") + "</div>";
+    body += "</div>";
+
     if (isSql) {
       body += "<div style='font-weight:700;margin-bottom:6px'>SQL</div><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:10px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
     } else {
