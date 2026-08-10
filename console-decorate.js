@@ -7112,48 +7112,84 @@
     var keys = Object.keys(nodes);
     var isSql = !!(def.sql || def.query || def.dcSql || def.stlSql);
 
-    // Build readable sections from the node graph.
-    var sources = [], steps = [];
+    // Parse each node into a structured object
+    var parsedNodes = {};
+    var outputNodes = [], inputNodes = [];
     keys.forEach(function (k) {
       var n = nodes[k] || {}, p = n.parameters || {};
       var act = (n.action || n.type || "").toLowerCase();
+      var info = { id: k, action: act, sources: n.sources || [], params: p };
       if (act === "load" || act === "input") {
         var ds = p.dataset || p.source || {};
-        sources.push({ id: k, obj: ds.name || p.objectName || "(unknown)", objType: ds.type || ds.category || "", fields: p.fields || p.columns || [] });
+        info.summary = (ds.name || p.objectName || "unknown");
+        info.fields = p.fields || p.columns || [];
+        inputNodes.push(info);
+      } else if (act === "outputd360" || act === "output" || act === "save" || act === "write") {
+        info.target = (p.name || p.objectName || "output");
+        info.writeMode = p.writeMode || "";
+        info.mappings = p.fieldsMappings || [];
+        outputNodes.push(info);
       } else if (act === "join" || act === "lookup") {
-        var jType = (p.joinType || p.type || act).replace(/([a-z])([A-Z])/g, "$1 $2");
-        var lk = [].concat(p.leftKeys || p.leftKey || p.leftFields || []).join(", ");
-        var rk = [].concat(p.rightKeys || p.rightKey || p.rightFields || []).join(", ");
-        steps.push({ id: k, kind: act.toUpperCase(), detail: jType + " on " + lk + " = " + rk });
-      } else if (act === "filter" || act === "where") {
-        var cond = p.condition || p.expression || p.filter || "";
-        if (typeof cond === "object") cond = JSON.stringify(cond).slice(0, 100);
-        steps.push({ id: k, kind: "FILTER", detail: String(cond).slice(0, 150) || "(condition)" });
+        var jType = (p.joinType || act).replace(/_/g, " ");
+        var lk = [].concat(p.leftKeys || p.leftKey || []).join(", ");
+        var rk = [].concat(p.rightKeys || p.rightKey || []).join(", ");
+        info.summary = jType + " on " + lk + " = " + rk;
+      } else if (act === "filter") {
+        var exprs = p.filterExpressions || [];
+        if (exprs.length) {
+          info.summary = exprs.map(function (e) { return (e.field || "") + " " + (e.operator || "").replace(/_/g, " ").toLowerCase() + (e.operands && e.operands.length ? " " + e.operands.map(function (o) { return typeof o === "object" ? (o.argument || "") + " " + (o.type || "") : String(o); }).join(", ") : ""); }).join(" AND ");
+        } else {
+          var cond = p.condition || p.expression || p.filter || "";
+          info.summary = typeof cond === "object" ? JSON.stringify(cond).slice(0, 80) : String(cond).slice(0, 80);
+        }
       } else if (act === "aggregate" || act === "group" || act === "rollup") {
         var aggs = [].concat(p.aggregations || p.aggregates || []);
         var grps = [].concat(p.groupings || p.groupBy || []);
-        var aggDesc = aggs.map(function (a) { return (a.function || a.type || "AGG") + "(" + (a.field || a.column || "") + ")"; }).join(", ");
-        var grpDesc = grps.length ? " grouped by " + grps.join(", ") : "";
-        steps.push({ id: k, kind: "AGGREGATE", detail: (aggDesc || "roll-up") + grpDesc });
-      } else if (act === "transform" || act === "formula" || act === "compute" || act === "expression") {
-        var xforms = [].concat(p.transformations || p.formulas || p.expressions || []);
-        var xDesc = xforms.length ? xforms.length + " operation" + (xforms.length > 1 ? "s" : "") : "";
-        if (!xDesc && p.formula) xDesc = String(p.formula).slice(0, 80);
-        steps.push({ id: k, kind: "TRANSFORM", detail: xDesc || "calculated fields" });
+        info.summary = aggs.map(function (a) { return (a.function || "AGG") + "(" + (a.field || "") + ")"; }).join(", ") + (grps.length ? " by " + grps.join(", ") : "");
+      } else if (act === "formula" || act === "computerelative" || act === "transform" || act === "compute" || act === "expression") {
+        var fields = p.fields || p.formulas || p.expressions || [];
+        if (fields.length) {
+          info.summary = fields.map(function (f) { return (f.name || f.label || "") + (f.formulaExpression ? " = " + f.formulaExpression.replace(/\n/g, " ").slice(0, 60) : ""); }).join("; ");
+          if (p.partitionBy) info.summary += " PARTITION BY " + [].concat(p.partitionBy).join(", ");
+          if (p.orderBy) info.summary += " ORDER BY " + [].concat(p.orderBy).map(function (o) { return (o.fieldName || o) + (o.direction ? " " + o.direction : ""); }).join(", ");
+        } else { info.summary = "calculated fields"; }
+      } else if (act === "schema") {
+        var sl = p.slice || {};
+        var flds = sl.fields || [];
+        info.summary = (sl.mode === "SELECT" ? "Keep " : "Drop ") + flds.length + " columns";
+        info.action = "schema";
       } else if (act === "append" || act === "union") {
-        steps.push({ id: k, kind: "APPEND", detail: "combines rows from multiple branches" });
+        info.summary = "combines rows from multiple branches";
       } else if (act === "update" || act === "swap") {
-        var updCol = p.column || p.field || "";
-        steps.push({ id: k, kind: "UPDATE", detail: updCol ? "updates " + updCol + " from lookup" : "swaps values from lookup source" });
-      } else if (act === "output" || act === "save" || act === "write") {
-        // handled by outputDataObjects
-      } else if (act) {
-        steps.push({ id: k, kind: act.toUpperCase(), detail: JSON.stringify(p).slice(0, 120) });
+        info.summary = "updates " + (p.column || p.field || "columns") + " from lookup";
+      } else {
+        info.summary = act ? JSON.stringify(p).slice(0, 80) : "";
       }
+      parsedNodes[k] = info;
     });
-    var outs = (def.outputDataObjects || []).map(function (o) {
-      return { name: o.name || o.label || "(output)", category: o.category || "", fields: (o.fields || []).map(function (f) { return { label: f.label, name: f.name, type: f.type, pk: !!f.isPrimaryKey }; }) };
+
+    // Trace flow path backwards from each output to build per-branch view
+    function traceBranch(outputNode) {
+      var path = []; var visited = {};
+      function walk(nodeId) {
+        if (!nodeId || visited[nodeId]) return;
+        visited[nodeId] = true;
+        var n = parsedNodes[nodeId];
+        if (!n) return;
+        path.unshift(n);
+        (n.sources || []).forEach(walk);
+      }
+      (outputNode.sources || []).forEach(walk);
+      return path;
+    }
+    var branches = outputNodes.map(function (out) {
+      return { output: out, path: traceBranch(out) };
     });
+
+    // Legacy flat lists for the detailed view below
+    var sources = inputNodes;
+    var steps = keys.map(function (k) { return parsedNodes[k]; }).filter(function (n) { return n && n.action !== "load" && n.action !== "input" && n.action !== "outputd360" && n.action !== "output"; });
+    var outs = outputNodes.map(function (o) { return { name: o.target, category: o.writeMode, fields: o.mappings.map(function (m) { return { name: m.targetField || m.sourceField, label: m.sourceField }; }) }; });
 
     var m = document.createElement("div");
     _xformEl = m;
@@ -7166,56 +7202,39 @@
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
-    // ── Build plain-English summary from all node types ──
-    // SF Data Cloud batch transforms have: Input, Output, Join, Append, Filter,
-    // Aggregate, Transform (formula/compute), Update
+    // ── Build summary: overview + per-branch flow ──
     var summaryLines = [];
     if (isSql) {
-      summaryLines.push("This is a <b>streaming transform</b> that runs a SQL query to produce output.");
+      summaryLines.push("<b>Streaming transform</b> — runs a SQL query to produce output.");
     } else {
-      // Categorize ALL steps by type
-      var joins = [], filters = [], aggregates = [], transforms = [], appends = [], updates = [], others = [];
-      steps.forEach(function (s) {
-        var k = s.kind.toUpperCase();
-        if (k === "JOIN" || k === "LOOKUP") joins.push(s);
-        else if (k === "FILTER" || k === "WHERE") filters.push(s);
-        else if (k === "AGGREGATE" || k === "GROUP" || k === "ROLLUP") aggregates.push(s);
-        else if (k === "TRANSFORM" || k === "FORMULA" || k === "COMPUTE" || k === "EXPRESSION") transforms.push(s);
-        else if (k === "APPEND" || k === "UNION") appends.push(s);
-        else if (k === "UPDATE" || k === "SWAP") updates.push(s);
-        else others.push(s);
+      // Overview line
+      summaryLines.push("<b>Batch transform</b> — " + inputNodes.length + " source" + (inputNodes.length !== 1 ? "s" : "") + " → " + keys.length + " nodes → " + outputNodes.length + " output" + (outputNodes.length !== 1 ? "s" : ""));
+      summaryLines.push("<b>Source:</b> " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", "));
+
+      // Per-branch flow
+      branches.forEach(function (br, idx) {
+        var flowSteps = [];
+        br.path.forEach(function (n) {
+          var act = n.action || "";
+          var label = "";
+          if (act === "filter") label = "Filter: " + esc(n.summary || "");
+          else if (act === "formula" || act === "computerelative" || act === "compute" || act === "expression" || act === "transform") label = "Calculate: " + esc(n.summary || "");
+          else if (act === "schema") label = esc(n.summary || "Select columns");
+          else if (act === "join" || act === "lookup") label = "Join: " + esc(n.summary || "");
+          else if (act === "aggregate" || act === "group") label = "Aggregate: " + esc(n.summary || "");
+          else if (act === "append" || act === "union") label = "Append branches";
+          else if (act === "update" || act === "swap") label = "Update: " + esc(n.summary || "");
+          else if (act && act !== "load" && act !== "input") label = esc(act) + ": " + esc(n.summary || "");
+          if (label) flowSteps.push(label);
+        });
+        var outLabel = esc(br.output.target) + " (" + br.output.mappings.length + " fields" + (br.output.writeMode ? ", " + br.output.writeMode : "") + ")";
+        summaryLines.push("");
+        summaryLines.push("<b style='color:#0d6efd'>Branch " + (idx + 1) + " → " + esc(br.output.target) + "</b>");
+        flowSteps.forEach(function (s, i) {
+          summaryLines.push("<span style='color:#64748b'>" + (i + 1) + ".</span> " + s);
+        });
+        summaryLines.push("<span style='color:#059669'>→ Output:</span> " + outLabel);
       });
-
-      var parts = [];
-      if (sources.length) parts.push(sources.length + " input" + (sources.length > 1 ? "s" : ""));
-      if (joins.length) parts.push(joins.length + " join" + (joins.length > 1 ? "s" : ""));
-      if (appends.length) parts.push(appends.length + " append");
-      if (filters.length) parts.push(filters.length + " filter" + (filters.length > 1 ? "s" : ""));
-      if (aggregates.length) parts.push(aggregates.length + " aggregate" + (aggregates.length > 1 ? "s" : ""));
-      if (transforms.length) parts.push(transforms.length + " transform" + (transforms.length > 1 ? "s" : ""));
-      if (updates.length) parts.push(updates.length + " update" + (updates.length > 1 ? "s" : ""));
-      if (outs.length) parts.push(outs.length + " output" + (outs.length > 1 ? "s" : ""));
-      summaryLines.push("<b>Batch transform</b> — " + parts.join(", "));
-
-      if (sources.length) {
-        summaryLines.push("<b>Reads from:</b> " + sources.map(function (s) { return esc(s.obj) + (s.fields.length ? " (" + s.fields.length + " fields)" : ""); }).join(", "));
-      }
-      if (joins.length) {
-        joins.forEach(function (j) { summaryLines.push("<b>Join:</b> " + esc(j.detail)); });
-      }
-      if (appends.length) summaryLines.push("<b>Append:</b> combines rows from " + appends.length + " branch" + (appends.length > 1 ? "es" : ""));
-      if (filters.length) {
-        filters.forEach(function (f) { summaryLines.push("<b>Filter:</b> " + esc(f.detail)); });
-      }
-      if (aggregates.length) {
-        aggregates.forEach(function (a) { summaryLines.push("<b>Aggregate:</b> " + esc(a.detail)); });
-      }
-      if (transforms.length) summaryLines.push("<b>Transform:</b> " + transforms.length + " calculated/modified field" + (transforms.length > 1 ? "s" : ""));
-      if (updates.length) summaryLines.push("<b>Update:</b> swaps column values from lookup source");
-      if (others.length) summaryLines.push("<b>Other:</b> " + others.map(function (s) { return esc(s.kind); }).join(", "));
-      if (outs.length) {
-        summaryLines.push("<b>Writes to:</b> " + outs.map(function (o) { return esc(o.name) + (o.fields.length ? " (" + o.fields.length + " fields)" : ""); }).join(", "));
-      }
     }
 
     var body = "<div style='flex:1;overflow:auto;padding:14px 16px'>";
@@ -7232,21 +7251,24 @@
       body += "<div style='font-weight:700;margin:2px 0 6px'>Sources (" + sources.length + ")</div>";
       sources.forEach(function (s) {
         body += "<div style='padding:6px 10px;border:1px solid #e6ebf3;border-radius:6px;margin-bottom:5px'>" +
-          "<b>" + esc(s.obj) + "</b> <span style='color:#8a94a6'>" + esc(s.objType) + "</span>" +
-          (s.fields.length ? "<div style='font:11px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + esc(s.fields.join(", ")) + "</div>" : "") + "</div>";
+          "<b>" + esc(s.summary) + "</b> <span style='color:#8a94a6'>" + esc(s.fields.length + " fields") + "</span>" +
+          (s.fields.length ? "<details style='margin-top:4px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show fields</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px;max-height:80px;overflow:auto'>" + s.fields.map(esc).join(", ") + "</div></details>" : "") + "</div>";
       });
-      // STEPS
-      body += "<div style='font-weight:700;margin:12px 0 6px'>Steps (" + steps.length + ")</div>";
-      steps.forEach(function (st) {
-        body += "<div style='padding:5px 10px;border-left:3px solid #0d6efd;background:#f7f9fc;margin-bottom:4px'>" +
-          "<b>" + esc(st.kind) + "</b> <span style='color:#5c6b8a'>" + esc(st.detail) + "</span></div>";
+      // ALL NODES as flow
+      body += "<div style='font-weight:700;margin:12px 0 6px'>All Nodes (" + keys.length + ")</div>";
+      keys.forEach(function (k) {
+        var n = parsedNodes[k];
+        if (!n) return;
+        var color = n.action === "filter" ? "#dc2626" : n.action === "join" || n.action === "lookup" ? "#2563eb" : n.action === "formula" || n.action === "computerelative" ? "#7c3aed" : n.action === "schema" ? "#d97706" : n.action === "outputd360" || n.action === "output" ? "#059669" : "#334155";
+        body += "<div style='padding:4px 10px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:3px;font-size:11px'>" +
+          "<b style='color:" + color + "'>" + esc(n.action || k) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span></div>";
       });
-      // OUTPUT
-      body += "<div style='font-weight:700;margin:12px 0 6px'>Output (" + outs.length + ")</div>";
+      // OUTPUTS
+      body += "<div style='font-weight:700;margin:12px 0 6px'>Outputs (" + outs.length + ")</div>";
       outs.forEach(function (o) {
         body += "<div style='padding:6px 10px;border:1px solid #cfe0d3;border-radius:6px;margin-bottom:5px;background:#f4faf5'>" +
-          "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category) + "</span>" +
-          (o.fields.length ? "<div style='font:11px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.name) + (f.pk ? " 🔑" : ""); }).join(", ") + "</div>" : "") + "</div>";
+          "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields mapped</span>" +
+          (o.fields.length ? "<details style='margin-top:4px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
       });
     }
     body += "</div>";
