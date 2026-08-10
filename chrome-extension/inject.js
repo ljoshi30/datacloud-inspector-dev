@@ -7332,8 +7332,13 @@
             if (done) return; done = true;
             window.removeEventListener("message", onMsg, false);
             aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
-            alert("AI Explain: No response from extension.\n\nPlease remove and re-add the extension in about:debugging (Firefox) or chrome://extensions (Chrome) to pick up the latest bridge.js.");
-          }, 10000);
+            var aiErrDiv = m.querySelector(".dc-xf-ai-result") || document.createElement("div");
+            aiErrDiv.className = "dc-xf-ai-result";
+            aiErrDiv.style.cssText = "background:#fffbeb;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:16px;";
+            aiErrDiv.innerHTML = "<div style='font-size:12px;color:#92400e'>AI request timed out. The gateway may be slow — try again.</div>";
+            var body = m.querySelector("[style*='overflow:auto']");
+            if (body && !body.querySelector(".dc-xf-ai-result")) body.insertBefore(aiErrDiv, body.firstChild);
+          }, 120000);
           function onMsg(ev) {
             if (ev.source !== window) return;
             var d = ev.data;
