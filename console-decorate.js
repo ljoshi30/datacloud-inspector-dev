@@ -5673,15 +5673,20 @@
       var $A = window.$A;
       if (!$A || !$A.getContext) return false;
       var ctx = $A.getContext();
-      // token: several framework versions expose it differently
-      var token = (ctx.getCsrfToken && ctx.getCsrfToken())
-        || ($A.clientService && ($A.clientService._token || $A.clientService.token))
-        || (window.aura && window.aura.token) || "";
+      // token: try every known location across SF framework versions
+      var token = "";
+      if (ctx.getCsrfToken) try { token = ctx.getCsrfToken() || ""; } catch (e) {}
+      if (!token && $A.clientService) token = $A.clientService._token || $A.clientService.token || "";
+      if (!token && window.aura) token = window.aura.token || "";
+      // Some orgs expose token in hidden input or meta tag
+      if (!token) try { var el = document.querySelector("input[name='aura.token'], meta[name='_csrf']"); if (el) token = el.value || el.content || ""; } catch (e) {}
+      // Without a real token, we CANNOT make aura calls — return false
+      // so the warmup triggers a real network call to capture it via sniffer
+      if (!token) return false;
       // context: the exact object aura posts as aura.context
       var ctxForServer = ctx.getContextForServer && ctx.getContextForServer();
       var ctxStr = ctxForServer ? (typeof ctxForServer === "string" ? ctxForServer : JSON.stringify(ctxForServer)) : "";
       if (token && ctxStr) {
-        // store URL-encoded to match what absorbAuraForm captures (posted verbatim)
         _auraSniff.token = encodeURIComponent(token);
         _auraSniff.context = encodeURIComponent(ctxStr);
         if (!_auraSniff.pageURI) { try { _auraSniff.pageURI = encodeURIComponent("/one/one.app"); } catch (e) {} }
