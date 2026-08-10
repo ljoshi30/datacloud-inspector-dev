@@ -7281,6 +7281,22 @@
     var aiBtn = m.querySelector(".dc-xf-ai");
     if (aiBtn && extBridgePresent()) {
       aiBtn.style.display = "";
+      aiBtn.title = "Click: AI Explain | Right-click: Change API key";
+      aiBtn.oncontextmenu = function (e) {
+        e.preventDefault();
+        var provider = prompt("Choose AI provider:\n\n1 = Anthropic (Claude Sonnet)\n2 = OpenAI (GPT-4o mini)\n\nEnter 1 or 2:");
+        if (!provider) return;
+        var prov = (provider.trim() === "2") ? "openai" : "anthropic";
+        var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : "Anthropic API key (starts with sk-ant-...)";
+        var key = prompt("Enter your new " + keyLabel + ":");
+        if (key && key.trim()) {
+          var settings = { provider: prov };
+          if (prov === "openai") settings.openaiKey = key.trim();
+          else settings.anthropicKey = key.trim();
+          window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
+          alert("API key updated!");
+        }
+      };
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
         function doExplain() {
