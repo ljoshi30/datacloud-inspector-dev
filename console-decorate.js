@@ -5745,6 +5745,7 @@
 
   // "Connect to Data Cloud" — renders a button that triggers credential capture, then
   // calls `onConnected()`. Use wherever ensureQueryContext fails in bookmarklet mode.
+  var _connectingInProgress = false;
   function renderConnectButton(container, onConnected) {
     if (extBridgePresent()) { onConnected(); return; }
     container.innerHTML = "";
@@ -5760,9 +5761,11 @@
     btn.onmouseleave = function () { btn.style.transform = "scale(1)"; };
     btn.onclick = function () {
       btn.disabled = true; btn.textContent = "Connecting…";
-      msg.textContent = "Establishing session…";
+      msg.textContent = "Establishing session… (this may take a few seconds)";
+      _connectingInProgress = true;
       // Try direct framework read first (instant if available)
       if (primeCredsFromAura() || haveCredsOnly()) {
+        _connectingInProgress = false;
         btn.textContent = "Connected ✓";
         btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
         msg.textContent = "Ready — you can query now.";
@@ -5819,6 +5822,7 @@
       var attempts = 0;
       var check = function () {
         if (primeCredsFromAura() || haveCredsOnly()) {
+          _connectingInProgress = false;
           btn.textContent = "Connected ✓";
           btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
           msg.textContent = "Ready — you can query now.";
@@ -5826,8 +5830,9 @@
           return;
         }
         if (attempts++ > 60) {
+          _connectingInProgress = false;
           btn.disabled = false; btn.textContent = "Retry";
-          msg.innerHTML = "Interact with the Data Explorer table above (sort a column, toggle a checkbox, or change page) then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Any interaction that refreshes data will establish the session.</span>";
+          msg.innerHTML = "Could not auto-connect. Please <b>select a different column</b> in SF's column picker (the checkbox columns on the table), then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Toggling a column checkbox triggers a data refresh that establishes the session.</span>";
           return;
         }
         setTimeout(check, 250);
@@ -8977,6 +8982,7 @@
     const onOut = (e) => {
       if (!exploreModalEl) return;
       if (applyInProgress) return;
+      if (_connectingInProgress) return;
       const inModal  = exploreModalEl.contains(e.target);
       const inSoql   = soqlPanelEl && soqlPanelEl.contains(e.target);
       const inAcDrop = soqlAcDropEl && soqlAcDropEl.contains(e.target);
