@@ -8801,10 +8801,6 @@
 
     const savedNote = document.createElement("div");
     savedNote.style.cssText = "font-size:11px;color:#5c6b8a;min-height:14px;";
-    var hintDiv = document.createElement("div");
-    hintDiv.style.cssText = "font-size:11px;color:#475569;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
-    hintDiv.innerHTML = "<b>How to use:</b> Select columns using checkboxes above → click <b>Show selected columns' data</b> to load and view the data.";
-    footer.appendChild(hintDiv);
     const savedColObjs = lsLoad(objectName);
     const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
@@ -8819,6 +8815,35 @@
       return b;
     };
     const viewAllBtn = mkFootBtn("Show selected columns' data", true);
+    // Start disabled — enable once connection is ready
+    var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
+    if (!_connectionReady) {
+      viewAllBtn.disabled = true;
+      viewAllBtn.style.opacity = "0.6";
+      viewAllBtn.style.cursor = "wait";
+      viewAllBtn.textContent = "Connecting…";
+      // Poll until connection is ready, then enable
+      var _connPoll = setInterval(function () {
+        if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
+          _connectionReady = true;
+          clearInterval(_connPoll);
+          viewAllBtn.disabled = false;
+          viewAllBtn.style.opacity = "1";
+          viewAllBtn.style.cursor = "pointer";
+          viewAllBtn.textContent = "Show selected columns' data";
+        }
+      }, 300);
+      // Give up after 20s — enable anyway and let ensureQueryContext handle it
+      setTimeout(function () {
+        clearInterval(_connPoll);
+        if (!_connectionReady) {
+          viewAllBtn.disabled = false;
+          viewAllBtn.style.opacity = "1";
+          viewAllBtn.style.cursor = "pointer";
+          viewAllBtn.textContent = "Show selected columns' data";
+        }
+      }, 20000);
+    }
     const saveBtn    = mkFootBtn("Save set", false);
     const restoreBtn = mkFootBtn("Restore saved", false);
     const clearBtn   = mkFootBtn("Clear saved", false);
@@ -8862,7 +8887,7 @@
     // Auto-persists the selection so a tab close never loses the setup.
     viewAllBtn.onclick = () => {
       const cols = orderedSelected.filter(fn => checked.has(fn));
-      if (!cols.length) { savedNote.innerHTML = "<span style='color:#dc2626;font-weight:600'>↑ Select at least one column checkbox above, then click this button.</span>"; return; }
+      if (!cols.length) { savedNote.innerHTML = "<span style='color:#dc2626;font-weight:600'>Select at least one column above first.</span>"; return; }
       // Persist immediately so the work survives a tab close, even before viewing.
       try { lsSave(objectName, cols.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn })); } catch (e) {}
       exploreCache(objectName).lastApplied = cols.slice();
