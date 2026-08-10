@@ -5698,18 +5698,31 @@
   var _warmedUp = false;
   function warmUpQueryContext() {
     if (_warmedUp) return; _warmedUp = true;
-    if (extBridgePresent()) return;                  // extension handles auth via sid cookie — no nudge needed
-    if (primeCredsFromAura()) return;               // instant, deterministic
-    // else nudge a real query in the background (best-effort, bookmarklet only)
+    if (extBridgePresent()) return;
+    if (primeCredsFromAura()) return;
+    // Fire ALL connection methods immediately on load — don't wait for user action
     try {
-      const rl = findRecordListEl();
-      const current = rl ? getCurrentFields(rl) : [];
+      var rl = findRecordListEl();
+      var current = rl ? getCurrentFields(rl) : [];
       if (current.length >= 2 && typeof applyColumnViaSF === "function") {
-        const probeSet = current.slice(0, current.length - 1);
+        var probeSet = current.slice(0, current.length - 1);
         applyColumnViaSF(probeSet, function () {
           setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
         });
       }
+    } catch (e) {}
+    // Row checkbox toggle
+    try {
+      var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
+      if (rowCb) { rowCb.click(); setTimeout(function () { try { rowCb.click(); } catch (e) {} }, 600); }
+    } catch (e) {}
+    // Dummy aura POST
+    try {
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
     } catch (e) {}
   }
 
