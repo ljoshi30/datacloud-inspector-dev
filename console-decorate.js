@@ -8809,6 +8809,7 @@
     const savedColObjs = lsLoad(objectName);
     const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
+    if (_connHint) footer.appendChild(_connHint);
     footer.appendChild(savedNote);
 
     const mkFootBtn = (label, primary, icon) => {
@@ -8820,34 +8821,44 @@
       return b;
     };
     const viewAllBtn = mkFootBtn("Show selected columns' data", true);
-    // Start disabled — enable once connection is ready
+    // Check if connection is ready — if not, show instruction and poll
     var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
+    var _connHint = null;
     if (!_connectionReady) {
       viewAllBtn.disabled = true;
       viewAllBtn.style.opacity = "0.6";
-      viewAllBtn.style.cursor = "wait";
-      viewAllBtn.textContent = "Connecting…";
-      // Poll until connection is ready, then enable
+      viewAllBtn.style.cursor = "not-allowed";
+      viewAllBtn.textContent = "Waiting for session…";
+      _connectingInProgress = true;
+      // Show instruction above the button
+      _connHint = document.createElement("div");
+      _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
+      _connHint.innerHTML = "<b>One-time setup:</b> Click any <b>row checkbox</b> on the Data Explorer table behind this modal (select then deselect a row). This establishes the session. The button will enable automatically.";
+      // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
           _connectionReady = true;
+          _connectingInProgress = false;
           clearInterval(_connPoll);
           viewAllBtn.disabled = false;
           viewAllBtn.style.opacity = "1";
           viewAllBtn.style.cursor = "pointer";
           viewAllBtn.textContent = "Show selected columns' data";
+          if (_connHint) { _connHint.style.background = "#f0fdf4"; _connHint.style.borderColor = "#86efac"; _connHint.style.color = "#166534"; _connHint.innerHTML = "<b>✓ Connected!</b> Select columns above and click the button."; setTimeout(function () { if (_connHint) _connHint.remove(); _connHint = null; }, 3000); }
         }
       }, 300);
-      // Give up after 20s — enable anyway and let ensureQueryContext handle it
+      // Give up after 30s
       setTimeout(function () {
         clearInterval(_connPoll);
         if (!_connectionReady) {
+          _connectingInProgress = false;
           viewAllBtn.disabled = false;
           viewAllBtn.style.opacity = "1";
           viewAllBtn.style.cursor = "pointer";
           viewAllBtn.textContent = "Show selected columns' data";
+          if (_connHint) _connHint.innerHTML = "<b>Tip:</b> If data doesn't load, click a row checkbox on the SF table first, then try again.";
         }
-      }, 20000);
+      }, 30000);
     }
     const saveBtn    = mkFootBtn("Save set", false);
     const restoreBtn = mkFootBtn("Restore saved", false);
