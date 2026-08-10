@@ -221,7 +221,7 @@ async function aiExplainTransform(req) {
       var r = await fetch(sfUrl, {
         method: "POST",
         headers: { "Authorization": "Bearer " + sfKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: [{ role: "user", content: prompt }] })
       });
       var txt = await r.text();
       console.log("[DC-MI] AI: response status:", r.status, "body length:", txt.length, "first 200:", txt.slice(0, 200));
