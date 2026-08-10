@@ -7286,21 +7286,38 @@
       if (aiSettingsBtn) aiSettingsBtn.style.display = "";
       aiBtn.title = "AI-powered explanation of this transform";
       function showAiSettings() {
-        var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = SF LLM Gateway (Salesforce internal)\n3 = Anthropic (Claude Sonnet)\n4 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, 3, or 4:");
-        if (!provider) return;
-        var pChoice = (provider.trim()) || "1";
-        var prov = pChoice === "4" ? "openai" : pChoice === "3" ? "anthropic" : pChoice === "2" ? "sf-gateway" : "gemini";
-        var keyLabel = prov === "openai" ? "OpenAI key (sk-...)" : prov === "anthropic" ? "Anthropic key (sk-ant-...)" : prov === "sf-gateway" ? "SF Gateway key" : "Gemini key (AIza...)";
-        var key = prompt("Enter your " + keyLabel + ":");
-        if (key && key.trim()) {
+        var existing = document.getElementById("dc-ai-settings-dialog");
+        if (existing) { existing.remove(); return; }
+        var dlg = document.createElement("div");
+        dlg.id = "dc-ai-settings-dialog";
+        dlg.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.4);padding:20px 24px;width:340px;font:13px -apple-system,sans-serif;color:#1e293b;";
+        dlg.innerHTML = "<div style='font-weight:700;font-size:14px;margin-bottom:12px'>AI Settings</div>" +
+          "<label style='display:block;font-size:12px;font-weight:600;margin-bottom:4px'>Provider:</label>" +
+          "<select id='dc-ai-prov-sel' style='width:100%;padding:6px 8px;border:1px solid #c9d0da;border-radius:6px;font-size:12px;margin-bottom:12px'>" +
+          "<option value='gemini'>Google Gemini (free)</option>" +
+          "<option value='sf-gateway'>SF LLM Gateway (internal)</option>" +
+          "<option value='anthropic'>Anthropic (Claude Sonnet)</option>" +
+          "<option value='openai'>OpenAI (GPT-4o mini)</option></select>" +
+          "<label style='display:block;font-size:12px;font-weight:600;margin-bottom:4px'>API Key:</label>" +
+          "<input id='dc-ai-key-input' type='text' placeholder='Paste your API key here' style='width:100%;padding:6px 8px;border:1px solid #c9d0da;border-radius:6px;font:12px monospace;margin-bottom:14px;box-sizing:border-box'>" +
+          "<div style='display:flex;gap:8px;justify-content:flex-end'>" +
+          "<button id='dc-ai-cancel' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 12px system-ui;color:#475569'>Cancel</button>" +
+          "<button id='dc-ai-save' style='border:none;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 12px system-ui'>Save</button></div>";
+        document.body.appendChild(dlg);
+        dlg.querySelector("#dc-ai-cancel").onclick = function () { dlg.remove(); };
+        dlg.querySelector("#dc-ai-save").onclick = function () {
+          var prov = dlg.querySelector("#dc-ai-prov-sel").value;
+          var key = dlg.querySelector("#dc-ai-key-input").value.trim();
+          if (!key) { dlg.querySelector("#dc-ai-key-input").style.borderColor = "#ef4444"; return; }
           var s = { provider: prov };
-          if (prov === "openai") s.openaiKey = key.trim();
-          else if (prov === "gemini") s.geminiKey = key.trim();
-          else if (prov === "sf-gateway") s.sfGatewayKey = key.trim();
-          else s.anthropicKey = key.trim();
+          if (prov === "openai") s.openaiKey = key;
+          else if (prov === "gemini") s.geminiKey = key;
+          else if (prov === "sf-gateway") s.sfGatewayKey = key;
+          else s.anthropicKey = key;
           window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: s }, "*");
-          alert("Saved! Provider: " + prov);
-        }
+          dlg.innerHTML = "<div style='text-align:center;padding:20px;font:600 14px system-ui;color:#059669'>✓ Saved!</div>";
+          setTimeout(function () { dlg.remove(); }, 1000);
+        };
       }
       aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
       try {
@@ -7334,24 +7351,13 @@
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
-                var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = SF LLM Gateway (Salesforce internal)\n3 = Anthropic (Claude Sonnet)\n4 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, 3, or 4:");
-                var pChoice = (provider && provider.trim()) || "1";
-                var prov = pChoice === "4" ? "openai" : pChoice === "3" ? "anthropic" : pChoice === "2" ? "sf-gateway" : "gemini";
-                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : prov === "anthropic" ? "Anthropic API key (starts with sk-ant-...)" : prov === "sf-gateway" ? "SF LLM Gateway key" : "Google Gemini API key";
-                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : prov === "anthropic" ? "https://console.anthropic.com/settings/keys" : prov === "sf-gateway" ? "LLM Express Gateway" : "https://aistudio.google.com/apikey";
-                var key = prompt("Enter your " + keyLabel + ":\n\nGet one at: " + keyUrl + "\n\nStored locally — never shared.");
-                if (key && key.trim()) {
-                  var settings = { provider: prov };
-                  if (prov === "openai") settings.openaiKey = key.trim();
-                  else if (prov === "gemini") settings.geminiKey = key.trim();
-                  else if (prov === "sf-gateway") settings.sfGatewayKey = key.trim();
-                  else settings.anthropicKey = key.trim();
-                  window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
-                  setTimeout(doExplain, 500);
-                  return;
-                }
+                showAiSettings();
+                return;
               }
-              alert("AI Explain failed: " + errMsg);
+              var aiErrDiv = m.querySelector(".dc-xf-ai-result");
+              if (!aiErrDiv) { aiErrDiv = document.createElement("div"); aiErrDiv.className = "dc-xf-ai-result"; m.querySelector("[style*='overflow:auto']").insertBefore(aiErrDiv, m.querySelector("[style*='overflow:auto']").firstChild); }
+              aiErrDiv.style.cssText = "background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;padding:12px 16px;margin-bottom:16px;";
+              aiErrDiv.innerHTML = "<div style='font-weight:700;font-size:12px;color:#dc2626;margin-bottom:4px'>AI Explain failed</div><div style='font-size:11px;color:#7f1d1d'>" + errMsg.replace(/</g,"&lt;") + "</div>";
             }
           }
           window.addEventListener("message", onMsg, false);
