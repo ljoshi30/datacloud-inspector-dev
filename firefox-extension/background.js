@@ -216,11 +216,11 @@ async function aiExplainTransform(req) {
     if (provider === "sf-gateway") {
       var sfKey = settings.dc_sfgateway_key;
       if (!sfKey) return { ok: false, error: "NO_KEY" };
-      var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway-oidc.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
+      var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
       var r = await fetch(sfUrl, {
         method: "POST",
         headers: { "Authorization": "Bearer " + sfKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2000, messages: [{ role: "user", content: prompt }] })
       });
       var txt = await r.text();
       var j = null; try { j = JSON.parse(txt); } catch (e) {}
