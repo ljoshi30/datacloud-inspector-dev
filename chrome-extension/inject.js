@@ -7303,7 +7303,10 @@
         }
       }
       aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
-      if (aiSettingsBtn) aiSettingsBtn.onclick = showAiSettings;
+      if (aiSettingsBtn) {
+        aiSettingsBtn.onclick = function (e) { e.stopPropagation(); e.preventDefault(); showAiSettings(); };
+        aiSettingsBtn.onpointerdown = function (e) { e.stopPropagation(); };
+      }
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
         function doExplain() {
