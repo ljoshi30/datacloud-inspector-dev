@@ -8818,7 +8818,6 @@
     const savedColObjs = lsLoad(objectName);
     const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
-    if (_connHint) footer.appendChild(_connHint);
     footer.appendChild(savedNote);
 
     const mkFootBtn = (label, primary, icon) => {
@@ -8843,6 +8842,7 @@
       _connHint = document.createElement("div");
       _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
       _connHint.innerHTML = "<b>One-time setup:</b> <b>Sort any column</b> on the SF table behind this modal (click a column header). This establishes the session and the button will enable automatically.";
+      footer.insertBefore(_connHint, footer.firstChild);
       // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
