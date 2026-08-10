@@ -5673,15 +5673,32 @@
       var $A = window.$A;
       if (!$A || !$A.getContext) return false;
       var ctx = $A.getContext();
-      // token: several framework versions expose it differently
-      var token = (ctx.getCsrfToken && ctx.getCsrfToken())
-        || ($A.clientService && ($A.clientService._token || $A.clientService.token))
-        || (window.aura && window.aura.token) || "";
+      // token: try every known location across SF framework versions
+      var token = "";
+      if (ctx.getCsrfToken) try { token = ctx.getCsrfToken() || ""; } catch (e) {}
+      if (!token && $A.clientService) token = $A.clientService._token || $A.clientService.token || "";
+      if (!token && window.aura) token = window.aura.token || "";
+      if (!token) try { var el = document.querySelector("input[name='aura.token'], meta[name='_csrf']"); if (el) token = el.value || el.content || ""; } catch (e) {}
+      // Scan inline scripts for aura token pattern (SF embeds it during SSR)
+      if (!token) try {
+        var scripts = document.querySelectorAll("script:not([src])");
+        for (var si = 0; si < scripts.length && !token; si++) {
+          var stxt = scripts[si].textContent || "";
+          var tm = stxt.match(/["\']aura\.token["\'][\s]*[,:]\s*["']([^"']+)["']/);
+          if (tm && tm[1] && tm[1].length > 10) token = tm[1];
+          if (!token) { var tm2 = stxt.match(/token\s*[:=]\s*["']([A-Za-z0-9_\-+/=]{20,})["']/); if (tm2) token = tm2[1]; }
+        }
+      } catch (e) {}
+      // Try reading from Performance entries (past fetch calls to /aura)
+      if (!token) try {
+        var entries = performance.getEntriesByType("resource").filter(function (e) { return /\/aura/i.test(e.name); });
+        if (entries.length > 0 && window.__dcAuraTokenFromPerf) token = window.__dcAuraTokenFromPerf;
+      } catch (e) {}
+      if (!token) return false;
       // context: the exact object aura posts as aura.context
       var ctxForServer = ctx.getContextForServer && ctx.getContextForServer();
       var ctxStr = ctxForServer ? (typeof ctxForServer === "string" ? ctxForServer : JSON.stringify(ctxForServer)) : "";
       if (token && ctxStr) {
-        // store URL-encoded to match what absorbAuraForm captures (posted verbatim)
         _auraSniff.token = encodeURIComponent(token);
         _auraSniff.context = encodeURIComponent(ctxStr);
         if (!_auraSniff.pageURI) { try { _auraSniff.pageURI = encodeURIComponent("/one/one.app"); } catch (e) {} }
@@ -5698,14 +5715,24 @@
   var _warmedUp = false;
   function warmUpQueryContext() {
     if (_warmedUp) return; _warmedUp = true;
-    if (extBridgePresent()) return;                  // extension handles auth via sid cookie — no nudge needed
-    if (primeCredsFromAura()) return;               // instant, deterministic
-    // else nudge a real query in the background (best-effort, bookmarklet only)
+    if (extBridgePresent()) return;
+    if (primeCredsFromAura()) return;
+    // Strategy: auto-click a sortable column header — proven to fire /aura on this org.
+    // Click it twice (sort asc then desc) to restore original order.
     try {
-      const rl = findRecordListEl();
-      const current = rl ? getCurrentFields(rl) : [];
+      var sortBtn = document.querySelector("th[aria-sort] button, th button[title*='Sort'], [role='columnheader'] button, lightning-datatable th a, th a[role='button']");
+      if (sortBtn) {
+        sortBtn.click();
+        setTimeout(function () { try { sortBtn.click(); } catch (e) {} }, 800);
+        return;
+      }
+    } catch (e) {}
+    // Fallback: column toggle
+    try {
+      var rl = findRecordListEl();
+      var current = rl ? getCurrentFields(rl) : [];
       if (current.length >= 2 && typeof applyColumnViaSF === "function") {
-        const probeSet = current.slice(0, current.length - 1);
+        var probeSet = current.slice(0, current.length - 1);
         applyColumnViaSF(probeSet, function () {
           setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
         });
@@ -5714,10 +5741,7 @@
   }
 
   function ensureQueryContext(cb) {
-    // 0) EXTENSION mode: auth is handled in the background via the sid cookie — no
-    // sniffed creds needed. Always "ready". This is the reliable path (no hit-and-trial).
     if (extBridgePresent()) { cb(true); return; }
-    // 1) direct framework read (deterministic, instant)
     if (primeCredsFromAura()) { cb(true); return; }
     if (haveCredsOnly()) { cb(true); return; }
     const rl = findRecordListEl();
@@ -5726,25 +5750,38 @@
     function finish(ok) { if (done) return; done = true; cb(ok); }
     function poll() {
       if (primeCredsFromAura() || haveCredsOnly()) { finish(true); return; }
-      if (polls++ > 50) { finish(false); return; }   // ~10s max
+      if (polls++ > 80) { finish(false); return; }   // ~16s max
       setTimeout(poll, 200);
     }
-    // 2) fallback nudge: force a real /aura query by changing the column set, then restore
+    // Try ALL connection methods at once — don't wait for one to fail
+    // 1) Column toggle nudge
     if (current.length >= 2 && typeof applyColumnViaSF === "function") {
       var probeSet = current.slice(0, current.length - 1);
-      try {
-        applyColumnViaSF(probeSet, function () {
-          setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
-        });
-      } catch (e) {}
+      try { applyColumnViaSF(probeSet, function () {
+        setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
+      }); } catch (e) {}
     } else if (current.length && typeof applyColumnViaSF === "function") {
       try { applyColumnViaSF(current, function () {}); } catch (e) {}
     }
+    // 2) Row checkbox click (toggles on then off)
+    try {
+      var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
+      if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 600); }
+    } catch (e) {}
+    // 3) Dummy /aura POST
+    try {
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
+    } catch (e) {}
     poll();
   }
 
   // "Connect to Data Cloud" — renders a button that triggers credential capture, then
   // calls `onConnected()`. Use wherever ensureQueryContext fails in bookmarklet mode.
+  var _connectingInProgress = false;
   function renderConnectButton(container, onConnected) {
     if (extBridgePresent()) { onConnected(); return; }
     container.innerHTML = "";
@@ -5760,9 +5797,11 @@
     btn.onmouseleave = function () { btn.style.transform = "scale(1)"; };
     btn.onclick = function () {
       btn.disabled = true; btn.textContent = "Connecting…";
-      msg.textContent = "Establishing session…";
+      msg.textContent = "Establishing session… (this may take a few seconds)";
+      _connectingInProgress = true;
       // Try direct framework read first (instant if available)
       if (primeCredsFromAura() || haveCredsOnly()) {
+        _connectingInProgress = false;
         btn.textContent = "Connected ✓";
         btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
         msg.textContent = "Ready — you can query now.";
@@ -5803,9 +5842,9 @@
       }
       if (!triggered) {
         try {
-          // Try clicking a column checkbox toggle (select/deselect a column = fires aura)
-          var colToggle = document.querySelector("[data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
-          if (colToggle) { colToggle.click(); setTimeout(function () { colToggle.click(); }, 500); triggered = true; }
+          // Try clicking a row checkbox (select/deselect a row = fires aura)
+          var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
+          if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 500); triggered = true; }
         } catch (e) {}
       }
       if (!triggered) {
@@ -5819,6 +5858,7 @@
       var attempts = 0;
       var check = function () {
         if (primeCredsFromAura() || haveCredsOnly()) {
+          _connectingInProgress = false;
           btn.textContent = "Connected ✓";
           btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
           msg.textContent = "Ready — you can query now.";
@@ -5826,8 +5866,9 @@
           return;
         }
         if (attempts++ > 60) {
+          _connectingInProgress = false;
           btn.disabled = false; btn.textContent = "Retry";
-          msg.innerHTML = "Interact with the Data Explorer table above (sort a column, toggle a checkbox, or change page) then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Any interaction that refreshes data will establish the session.</span>";
+          msg.innerHTML = "Could not auto-connect. Please <b>click any row checkbox</b> in the table below, then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Selecting a row triggers a data call that establishes the session.</span>";
           return;
         }
         setTimeout(check, 250);
@@ -6007,6 +6048,11 @@
         var baseSql = sql.replace(/\s+LIMIT\s+\d+\s*/gi, " ").replace(/\s+OFFSET\s+\d+\s*/gi, " ").trim();
 
         function fetchBatch(offset) {
+          // FIX 4: Check cancel flag before each batch
+          if (typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) {
+            reject(new Error("Export cancelled by user"));
+            return;
+          }
           var remaining = effectiveMax - offset;
           if (remaining <= 0) {
             var blob = new Blob(csvOut, { type: "text/csv" });
@@ -6066,6 +6112,11 @@
         // 2) paginate remaining chunks
         var queryId = first.queryId;
         function nextPage() {
+          // FIX 4: Check cancel flag before each page (extension path)
+          if (typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) {
+            reject(new Error("Export cancelled by user"));
+            return;
+          }
           if (fetched >= totalRows || fetched >= DC_MAX_TOTAL_EXPORT) {
             var blob = new Blob(csvParts, { type: "text/csv" });
             resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
@@ -7617,9 +7668,9 @@
     sqlBtn.textContent = "Edit SQL";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
     sqlBtn.onclick = () => {
-      // If a UI filter is active, warn user — editing SQL will reset it
-      var activeFilter = _filterState[objectName] && _filterState[objectName].active;
-      if (activeFilter) {
+      // FIX 8: If a UI filter is active (not from SQL), warn user — editing SQL will reset it
+      var activeFilter = _filterState[objectName];
+      if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
         if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
         _filterState[objectName] = null;
       }
@@ -7627,6 +7678,7 @@
     };
 
     const csvBtn = document.createElement("button");
+    // FIX 5: Download CSV label shows loaded row count
     var filterTotal = _filterCount[objectName] || 0;
     var csvLabel = filterTotal > rows.length
       ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
@@ -7668,36 +7720,62 @@
     var knownTotal = serverTotal > rows.length ? serverTotal : 0;
     exportAllBtn.textContent = knownTotal ? ("⬇ Export All (" + knownTotal.toLocaleString() + " rows)") : "⬇ Export All";
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;" + (knownTotal ? "" : "display:none;");
+    // FIX 4: Export All with cancel button
+    var _exportAllCancelled = false;
     exportAllBtn.onclick = function () {
+      // If export is in progress, cancel it
+      if (exportAllBtn.dataset.exporting === "true") {
+        _exportAllCancelled = true;
+        exportAllBtn.textContent = "Cancelling...";
+        exportAllBtn.disabled = true;
+        return;
+      }
       var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
       var confirmMsg = btnTotal
         ? "Are you sure you want to download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets."
         : "Are you sure you want to download ALL records from this object? This may take a while.";
       if (!confirm(confirmMsg)) return;
-      exportAllBtn.disabled = true;
-      exportAllBtn.textContent = "Preparing…";
+      _exportAllCancelled = false;
+      exportAllBtn.dataset.exporting = "true";
+      exportAllBtn.textContent = "Cancel Export";
+      exportAllBtn.disabled = false; // Keep enabled so user can click to cancel
+      var originalText = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       var allCols = fullCols.map(sqlQuoteIdent).join(", ");
       var exportSql = "SELECT " + allCols + " FROM " + objectName;
       ensureQueryContext(function (ready) {
         if (!ready) {
           exportAllBtn.disabled = false;
-          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+          exportAllBtn.dataset.exporting = "false";
+          exportAllBtn.textContent = originalText;
           alert("Session not ready — scroll the Data Explorer table first, then retry.");
           return;
         }
         exportPaginatedCsv(exportSql, ds, function (fetched, total) {
-          exportAllBtn.textContent = fetched.toLocaleString() + " / " + (total > fetched ? total.toLocaleString() : "?") + " rows…";
+          if (_exportAllCancelled) return; // Don't update UI if cancelled
+          exportAllBtn.textContent = "Cancel (" + fetched.toLocaleString() + " / " + (total > fetched ? total.toLocaleString() : "?") + ")";
         }).then(function (res) {
+          exportAllBtn.dataset.exporting = "false";
+          if (_exportAllCancelled) {
+            exportAllBtn.disabled = false;
+            exportAllBtn.textContent = originalText;
+            _exportAllCancelled = false;
+            return;
+          }
           exportAllBtn.disabled = false;
-          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : " (" + res.totalRows.toLocaleString() + " rows)");
+          exportAllBtn.textContent = originalText + " (" + res.totalRows.toLocaleString() + " rows)";
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
         }).catch(function (err) {
+          exportAllBtn.dataset.exporting = "false";
           exportAllBtn.disabled = false;
-          exportAllBtn.textContent = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+          exportAllBtn.textContent = originalText;
+          if (_exportAllCancelled) {
+            _exportAllCancelled = false;
+            return;
+          }
           alert("Export failed: " + (err && err.message || err));
         });
       });
@@ -7791,6 +7869,9 @@
         }
         cond.valCtl.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;min-width:120px;";
         if (preset && preset.val != null) cond.valCtl.value = preset.val;   // restore saved value
+        // FIX 3: Update button states when value changes
+        cond.valCtl.oninput = function () { updateFilterBtnStates(); };
+        cond.valCtl.onchange = function () { updateFilterBtnStates(); };
         valWrap.appendChild(cond.valCtl);
       }
       colSel.onchange = rebuild; rebuild();
@@ -7803,6 +7884,7 @@
         var idx = conditions.indexOf(cond);
         if (idx >= 0) conditions.splice(idx, 1);
         row.remove(); relabelJoiners();
+        updateFilterBtnStates(); // FIX 3: Update button states after removing condition
       };
       row.appendChild(joinCell); row.appendChild(colSel); row.appendChild(opSel); row.appendChild(valWrap); row.appendChild(rm);
       cond.joinCell = joinCell;
@@ -7829,7 +7911,7 @@
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Add condition";
     addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
-    addBtn.onclick = function () { addCondition(); };
+    addBtn.onclick = function () { addCondition(); updateFilterBtnStates(); }; // FIX 3: Update button states after adding condition
     const applyF = document.createElement("button");
     applyF.textContent = "Apply filter";
     applyF.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
@@ -7851,7 +7933,8 @@
       const countSql = "SELECT COUNT(*) FROM " + objectName + wherePart;
       applyF.disabled = true; fStatus.textContent = "Filtering…";
       showTableSpinner(panel, "Filtering…");
-      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause } : null;
+      // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
+      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
@@ -7871,6 +7954,7 @@
           }
           fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
           showAllColumnsTable(objectName, cols, dataResult.rows, dataResult.rows.length, cols);
+          updateFilterBtnStates(); // FIX 3: Update button states after applying filter
         }
         runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
           dataResult = res;
@@ -7889,9 +7973,35 @@
         }).catch(function () { finish(); });
       });
     }
+    // FIX 2 & 3: Button state management
+    function updateFilterBtnStates() {
+      // Disable clearF if no filter is active
+      var isActive = _filterState[objectName] && _filterState[objectName].active;
+      clearF.disabled = !isActive;
+      clearF.style.opacity = isActive ? "1" : "0.5";
+      clearF.style.cursor = isActive ? "pointer" : "not-allowed";
+      // Disable applyF if no condition has a filled value
+      var hasFilledCondition = conditions.some(function (c) {
+        var val = (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value).trim() : "";
+        return val !== "" || inferType(c.colSel.value) === "bool";
+      });
+      applyF.disabled = !hasFilledCondition;
+      applyF.style.opacity = hasFilledCondition ? "1" : "0.5";
+      applyF.style.cursor = hasFilledCondition ? "pointer" : "not-allowed";
+    }
     applyF.onclick = function () { const w = buildWhere(); if (!w) { fStatus.textContent = "add at least one condition with a value"; return; } runFilter(w); };
-    clearF.onclick = function () { _filterState[objectName] = null; runFilter(null); };
+    clearF.onclick = function () {
+      // FIX 2: Early return if no filter is active
+      if (!_filterState[objectName] || !_filterState[objectName].active) return;
+      // FIX 2: Clear all condition DOM rows
+      while (condsWrap.firstChild) { condsWrap.removeChild(condsWrap.firstChild); }
+      conditions.length = 0; // empty the array
+      _filterState[objectName] = null;
+      runFilter(null);
+    };
     ctrlRow.appendChild(addBtn); ctrlRow.appendChild(applyF); ctrlRow.appendChild(clearF); ctrlRow.appendChild(fStatus);
+    // FIX 3: Initial button state
+    updateFilterBtnStates();
     fbar.appendChild(condsWrap); fbar.appendChild(ctrlRow);
     // RESTORE persisted conditions (so an applied filter stays visible after re-render).
     const saved = _filterState[objectName];
@@ -7912,11 +8022,80 @@
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
     const thStyle = "position:sticky;top:0;z-index:2;background:#1f3864;color:#fff;font-weight:700;text-align:left;padding:7px 10px;border-right:1px solid #33507f;border-bottom:1px solid #33507f;";
+    // FIX 1: Sort state tracking
+    var _currentSortCol = null;
+    var _currentSortDir = null; // "asc" or "desc"
     columns.forEach(fn => {
       const th = document.createElement("th");
       th.title = fn;
       th.innerHTML = esc(meta[fn] || fn) + "<div style='font-weight:400;font-size:9px;color:#b9c6de;font-family:SF Mono,Consolas,monospace'>" + esc(fn) + "</div>";
-      th.style.cssText = thStyle + "min-width:120px;max-width:320px;white-space:normal;";
+      th.style.cssText = thStyle + "min-width:120px;max-width:320px;white-space:normal;cursor:pointer;";
+      // FIX 1: Add click handler for sort
+      th.onclick = function () {
+        // Toggle sort direction
+        if (_currentSortCol === fn) {
+          _currentSortDir = _currentSortDir === "asc" ? "desc" : "asc";
+        } else {
+          _currentSortCol = fn;
+          _currentSortDir = "asc";
+        }
+        // Sort the rows array
+        rows.sort(function (a, b) {
+          var va = a[fn];
+          var vb = b[fn];
+          // Nulls to bottom
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          // Type-aware comparison
+          if (typeof va === "number" && typeof vb === "number") {
+            return _currentSortDir === "asc" ? va - vb : vb - va;
+          }
+          var sa = String(va), sb = String(vb);
+          var cmp = sa.localeCompare(sb);
+          return _currentSortDir === "asc" ? cmp : -cmp;
+        });
+        // Re-render tbody only
+        tbody.innerHTML = "";
+        var renderRows2 = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
+        renderRows2.forEach(function (r, ri) {
+          var tr = document.createElement("tr");
+          tr.style.background = ri % 2 ? "#f7f9fc" : "#fff";
+          columns.forEach(function (fn2) {
+            var td = document.createElement("td");
+            var val = fmt(r[fn2]);
+            td.style.cssText = "position:relative;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+            var span = document.createElement("span");
+            span.textContent = val; span.style.cssText = "user-select:text;";
+            td.appendChild(span);
+            td.title = val;
+            if (val !== "") {
+              var tools = document.createElement("span");
+              tools.style.cssText = "position:absolute;right:2px;top:2px;display:none;gap:2px;background:rgba(255,255,255,.95);border-radius:4px;padding:1px;";
+              var mkT = function (label, title, onclick) {
+                var b = document.createElement("button");
+                b.textContent = label; b.title = title;
+                b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
+                b.onclick = function (e) { e.stopPropagation(); onclick(); };
+                return b;
+              };
+              tools.appendChild(mkT("Copy", "Copy value", function () {
+                try { navigator.clipboard.writeText(val); } catch (e) {}
+              }));
+              if (val.length > 40) tools.appendChild(mkT("View", "View full value", function () { showCellValue(fn2, meta[fn2] || fn2, val); }));
+              td.appendChild(tools);
+              td.onmouseenter = function () { tools.style.display = "flex"; };
+              td.onmouseleave = function () { tools.style.display = "none"; };
+            }
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        // Update header indicators
+        var allTh = htr.querySelectorAll("th");
+        allTh.forEach(function (h) { h.innerHTML = h.innerHTML.replace(/ [▲▼]$/, ""); });
+        th.innerHTML = th.innerHTML + " " + (_currentSortDir === "asc" ? "▲" : "▼");
+      };
       htr.appendChild(th);
     });
     thead.appendChild(htr); table.appendChild(thead);
@@ -8495,11 +8674,16 @@
         const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
         const from = recList.objectName || "Unknown__c";
         const fieldStr = fields.length ? fields.join(", ") : "Id";
-        // Include WHERE from active UI filter (so user sees what filter is doing)
+        // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
         var fs = _filterState[from];
-        if (fs && fs.active && fs.conds && fs.conds.length) {
-          var frags = fs.conds.map(function (c) {
+        if (fs && fs.active) {
+          // If it's from SQL, use the stored WHERE directly
+          if (fs.fromSql && fs.where) {
+            whereClause = " WHERE " + fs.where;
+          } else if (fs.conds && fs.conds.length) {
+            // Otherwise build from UI conditions
+            var frags = fs.conds.map(function (c) {
             if (!c.col) return null;
             var val = (c.val != null) ? String(c.val) : "";
             if (val === "" && c.op !== "!=" && c.op !== "=") return null;
@@ -8509,6 +8693,7 @@
             return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
           }).filter(Boolean);
           if (frags.length) whereClause = " WHERE " + frags.join(" " + (fs.join || "AND") + " ");
+          }
         }
         // Use current rowsInput value as the LIMIT (editable by user)
         var lim = DC_MAX_FETCH_ROWS;
@@ -8552,7 +8737,8 @@
       statusDot.style.cssText = "width:6px;height:6px;border-radius:50%;background:#334155;flex-shrink:0;";
       const statusSpan = document.createElement("span");
       statusSpan.style.cssText = "flex:1;font-size:11px;color:#64748b;";
-      statusSpan.textContent = "⌘↵ to run  ·  type to autocomplete";
+      // FIX 6: Add note about simple queries only
+      statusSpan.textContent = "⌘↵ to run  ·  Simple queries only (single table, no JOIN/UNION)";
 
       const mkB = (label, accent) => {
         const b = document.createElement("button");
@@ -8583,6 +8769,11 @@
         hideAc();
         var soql = textarea.value.trim();
         if (!soql) { setStatus("Query is empty", "err"); return; }
+        // FIX 8: Validate no JOIN or UNION
+        if (/\bJOIN\b/i.test(soql) || /\bUNION\b/i.test(soql)) {
+          setStatus("Only simple queries (single table) are supported. JOIN and UNION are not supported.", "err");
+          return;
+        }
         var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
         if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
         var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
@@ -8607,11 +8798,28 @@
           // Parse user's LIMIT to request that many rows (default 49999 if no LIMIT)
           var userLim = soql.match(/\bLIMIT\s+(\d+)/i);
           var askRows = userLim ? Math.min(parseInt(userLim[1], 10), DC_MAX_FETCH_ROWS) : DC_MAX_FETCH_ROWS;
-          // Reset UI filter since user is running custom SQL
-          _filterState[objName] = null;
+          // FIX 7 & 8: Parse WHERE clause and store as filter state
+          var whereMatch = soql.match(/\bWHERE\s+([\s\S]+?)(?:\s+(?:GROUP|ORDER|LIMIT|OFFSET)\b|$)/i);
+          _filterState[objName] = null; // Reset first (FIX 8: clear any UI filter)
           runRawSql(soql, ds, askRows).then(function (res) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
             if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+            // FIX 7: If SQL had WHERE, store it as filter state and run COUNT
+            if (whereMatch && whereMatch[1]) {
+              var whereClause = whereMatch[1].trim();
+              _filterState[objName] = { active: true, where: whereClause, conds: null, fromSql: true };
+              // Run COUNT(*) with the WHERE clause
+              var countSql = "SELECT COUNT(*) FROM " + objName + " WHERE " + whereClause;
+              runRawSql(countSql, ds, 1).then(function (cntRes) {
+                if (cntRes.rows.length > 0) {
+                  var firstCol = cntRes.columns[0] || "count";
+                  var cnt = parseInt(cntRes.rows[0][firstCol], 10) || 0;
+                  _filterCount[objName] = cnt;
+                }
+              }).catch(function () {
+                // COUNT failed, not critical — just means we won't show total
+              });
+            }
             try { closeSoqlEditor(); } catch (e) {}
             showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
           }).catch(function (err) {
@@ -8788,6 +8996,46 @@
       return b;
     };
     const viewAllBtn = mkFootBtn("Show selected columns' data", true);
+    // Check if connection is ready — if not, show instruction and poll
+    var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
+    var _connHint = null;
+    if (!_connectionReady) {
+      viewAllBtn.disabled = true;
+      viewAllBtn.style.opacity = "0.6";
+      viewAllBtn.style.cursor = "not-allowed";
+      viewAllBtn.textContent = "Waiting for session…";
+      _connectingInProgress = true;
+      // Show instruction above the button
+      _connHint = document.createElement("div");
+      _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
+      _connHint.innerHTML = "<b>One-time setup:</b> <b>Sort any column</b> on the SF table behind this modal (click a column header). This establishes the session and the button will enable automatically.";
+      footer.insertBefore(_connHint, footer.firstChild);
+      // Poll until connection is ready
+      var _connPoll = setInterval(function () {
+        if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
+          _connectionReady = true;
+          _connectingInProgress = false;
+          clearInterval(_connPoll);
+          viewAllBtn.disabled = false;
+          viewAllBtn.style.opacity = "1";
+          viewAllBtn.style.cursor = "pointer";
+          viewAllBtn.textContent = "Show selected columns' data";
+          if (_connHint) { _connHint.style.background = "#f0fdf4"; _connHint.style.borderColor = "#86efac"; _connHint.style.color = "#166534"; _connHint.innerHTML = "<b>✓ Connected!</b> Select columns above and click the button."; setTimeout(function () { if (_connHint) _connHint.remove(); _connHint = null; }, 3000); }
+        }
+      }, 300);
+      // Give up after 30s
+      setTimeout(function () {
+        clearInterval(_connPoll);
+        if (!_connectionReady) {
+          _connectingInProgress = false;
+          viewAllBtn.disabled = false;
+          viewAllBtn.style.opacity = "1";
+          viewAllBtn.style.cursor = "pointer";
+          viewAllBtn.textContent = "Show selected columns' data";
+          if (_connHint) _connHint.innerHTML = "<b>Tip:</b> If data doesn't load, click a row checkbox on the SF table first, then try again.";
+        }
+      }, 30000);
+    }
     const saveBtn    = mkFootBtn("Save set", false);
     const restoreBtn = mkFootBtn("Restore saved", false);
     const clearBtn   = mkFootBtn("Clear saved", false);
@@ -8831,7 +9079,7 @@
     // Auto-persists the selection so a tab close never loses the setup.
     viewAllBtn.onclick = () => {
       const cols = orderedSelected.filter(fn => checked.has(fn));
-      if (!cols.length) { savedNote.textContent = "Select at least one field first."; return; }
+      if (!cols.length) { savedNote.innerHTML = "<span style='color:#dc2626;font-weight:600'>Select at least one column above first.</span>"; return; }
       // Persist immediately so the work survives a tab close, even before viewing.
       try { lsSave(objectName, cols.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn })); } catch (e) {}
       exploreCache(objectName).lastApplied = cols.slice();
@@ -8977,6 +9225,7 @@
     const onOut = (e) => {
       if (!exploreModalEl) return;
       if (applyInProgress) return;
+      if (_connectingInProgress) return;
       const inModal  = exploreModalEl.contains(e.target);
       const inSoql   = soqlPanelEl && soqlPanelEl.contains(e.target);
       const inAcDrop = soqlAcDropEl && soqlAcDropEl.contains(e.target);
