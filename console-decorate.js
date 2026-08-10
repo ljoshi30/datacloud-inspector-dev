@@ -5806,9 +5806,9 @@
       }
       if (!triggered) {
         try {
-          // Try clicking a column checkbox toggle (select/deselect a column = fires aura)
-          var colToggle = document.querySelector("[data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
-          if (colToggle) { colToggle.click(); setTimeout(function () { colToggle.click(); }, 500); triggered = true; }
+          // Try clicking a row checkbox (select/deselect a row = fires aura)
+          var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
+          if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 500); triggered = true; }
         } catch (e) {}
       }
       if (!triggered) {
@@ -5832,7 +5832,7 @@
         if (attempts++ > 60) {
           _connectingInProgress = false;
           btn.disabled = false; btn.textContent = "Retry";
-          msg.innerHTML = "Could not auto-connect. Please <b>select a different column</b> in SF's column picker (the checkbox columns on the table), then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Toggling a column checkbox triggers a data refresh that establishes the session.</span>";
+          msg.innerHTML = "Could not auto-connect. Please <b>click any row checkbox</b> in the table below, then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Selecting a row triggers a data call that establishes the session.</span>";
           return;
         }
         setTimeout(check, 250);
