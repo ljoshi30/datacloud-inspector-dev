@@ -8996,22 +8996,92 @@
     btn.style.cssText = "border:none;border-radius:22px;padding:11px 18px;cursor:pointer;font:600 13px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#1e3a5f,#0d6efd);box-shadow:0 3px 12px rgba(13,110,253,.4);";
     const note = document.createElement("div");
     note.style.cssText = "font-size:11px;color:#5c6b8a;background:#fff;border:1px solid #e0e5ee;border-radius:6px;padding:4px 8px;display:none;max-width:280px;";
+    // Try to read transform definition from the page DOM (for bookmarklet — no API needed)
+    function readTransformFromDom() {
+      try {
+        // SF's transform builder stores the definition in LWC component properties
+        var candidates = document.querySelectorAll("runtime_cdp-batch-data-transform, [data-aura-rendered-by]");
+        for (var i = 0; i < candidates.length; i++) {
+          var el = candidates[i];
+          // Check direct properties
+          if (el.definition && el.definition.nodes) return el.definition;
+          if (el.transformDefinition && el.transformDefinition.nodes) return el.transformDefinition;
+          if (el.recipe && el.recipe.nodes) return el.recipe;
+        }
+        // Try shadow DOM traversal for LWC
+        var allEls = document.querySelectorAll("*");
+        for (var j = 0; j < allEls.length; j++) {
+          var e = allEls[j];
+          if (e.shadowRoot) {
+            var inner = e.shadowRoot.querySelectorAll("*");
+            for (var k = 0; k < inner.length; k++) {
+              var ie = inner[k];
+              if (ie.definition && ie.definition.nodes) return ie.definition;
+              if (ie.transformDefinition && ie.transformDefinition.nodes) return ie.transformDefinition;
+            }
+          }
+          // Check JS properties on LWC host elements
+          if (e.__lwc_component_instance__) {
+            var inst = e.__lwc_component_instance__;
+            if (inst.definition && inst.definition.nodes) return inst.definition;
+            if (inst.state && inst.state.definition && inst.state.definition.nodes) return inst.state.definition;
+          }
+        }
+        // Try window-level recipe/transform objects
+        if (window.__recipe && window.__recipe.nodes) return window.__recipe;
+        if (window.__transformDef && window.__transformDef.nodes) return window.__transformDef;
+      } catch (e) {}
+      return null;
+    }
+
     btn.onclick = () => {
       const ids = transformIdsFromUrl();
       const nameOrId = ids.devName || ids.transformId;
       if (!nameOrId) { note.textContent = "Couldn't find the transform id in the URL."; note.style.display = "block"; return; }
-      if (typeof extBridgePresent === "function" && !extBridgePresent()) {
-        note.textContent = "Reading a transform needs the browser extension (the page can't reach the API directly). Use the extension, not the bookmarklet, here.";
-        note.style.display = "block"; return;
+
+      // Extension path — use API
+      if (typeof extBridgePresent === "function" && extBridgePresent()) {
+        btn.disabled = true; btn.textContent = "Reading…"; note.style.display = "none";
+        fetchTransformViaBridge(nameOrId).then((rep) => {
+          btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+          showTransformSummary(rep);
+        }).catch((err) => {
+          btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+          note.textContent = String(err && err.message || err); note.style.display = "block";
+        });
+        return;
       }
-      btn.disabled = true; btn.textContent = "Reading…"; note.style.display = "none";
-      fetchTransformViaBridge(nameOrId).then((rep) => {
+
+      // Bookmarklet path — try reading from DOM
+      btn.disabled = true; btn.textContent = "Scanning page…"; note.style.display = "none";
+      setTimeout(function () {
+        var domDef = readTransformFromDom();
+        if (domDef) {
+          btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+          showTransformSummary({ definition: domDef, name: nameOrId, label: nameOrId });
+          return;
+        }
         btn.disabled = false; btn.textContent = "🔎 Understand this transform";
-        showTransformSummary(rep);
-      }).catch((err) => {
-        btn.disabled = false; btn.textContent = "🔎 Understand this transform";
-        note.textContent = String(err && err.message || err); note.style.display = "block";
-      });
+        note.innerHTML = "Could not read the transform definition from this page.<br><br>" +
+          "<b>Options:</b><br>• Use the browser extension (recommended — reads via API)<br>" +
+          "• Or click SF's <b>Download JSON</b> button, then paste the JSON here:";
+        var ta = document.createElement("textarea");
+        ta.placeholder = "Paste transform JSON here…";
+        ta.style.cssText = "width:100%;height:80px;margin-top:6px;font:11px monospace;border:1px solid #c9d0da;border-radius:4px;padding:6px;";
+        var parseBtn = document.createElement("button");
+        parseBtn.textContent = "Parse & Show";
+        parseBtn.style.cssText = "margin-top:4px;border:none;background:#0d6efd;color:#fff;border-radius:4px;padding:5px 12px;cursor:pointer;font:600 11px system-ui;";
+        parseBtn.onclick = function () {
+          try {
+            var parsed = JSON.parse(ta.value);
+            var def = parsed.definition || parsed;
+            if (!def.nodes && parsed.definitions && parsed.definitions[0]) def = parsed.definitions[0].definition || parsed.definitions[0];
+            showTransformSummary({ definition: def, name: nameOrId, label: parsed.label || parsed.name || nameOrId });
+          } catch (e) { note.textContent = "Invalid JSON: " + e.message; }
+        };
+        note.appendChild(ta); note.appendChild(parseBtn);
+        note.style.display = "block";
+      }, 500);
     };
     wrap.appendChild(note); wrap.appendChild(btn);
     document.body.appendChild(wrap);
