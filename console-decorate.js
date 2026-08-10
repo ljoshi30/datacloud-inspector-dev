@@ -5678,10 +5678,22 @@
       if (ctx.getCsrfToken) try { token = ctx.getCsrfToken() || ""; } catch (e) {}
       if (!token && $A.clientService) token = $A.clientService._token || $A.clientService.token || "";
       if (!token && window.aura) token = window.aura.token || "";
-      // Some orgs expose token in hidden input or meta tag
       if (!token) try { var el = document.querySelector("input[name='aura.token'], meta[name='_csrf']"); if (el) token = el.value || el.content || ""; } catch (e) {}
-      // Without a real token, we CANNOT make aura calls — return false
-      // so the warmup triggers a real network call to capture it via sniffer
+      // Scan inline scripts for aura token pattern (SF embeds it during SSR)
+      if (!token) try {
+        var scripts = document.querySelectorAll("script:not([src])");
+        for (var si = 0; si < scripts.length && !token; si++) {
+          var stxt = scripts[si].textContent || "";
+          var tm = stxt.match(/["\']aura\.token["\'][\s]*[,:]\s*["']([^"']+)["']/);
+          if (tm && tm[1] && tm[1].length > 10) token = tm[1];
+          if (!token) { var tm2 = stxt.match(/token\s*[:=]\s*["']([A-Za-z0-9_\-+/=]{20,})["']/); if (tm2) token = tm2[1]; }
+        }
+      } catch (e) {}
+      // Try reading from Performance entries (past fetch calls to /aura)
+      if (!token) try {
+        var entries = performance.getEntriesByType("resource").filter(function (e) { return /\/aura/i.test(e.name); });
+        if (entries.length > 0 && window.__dcAuraTokenFromPerf) token = window.__dcAuraTokenFromPerf;
+      } catch (e) {}
       if (!token) return false;
       // context: the exact object aura posts as aura.context
       var ctxForServer = ctx.getContextForServer && ctx.getContextForServer();
@@ -5705,7 +5717,8 @@
     if (_warmedUp) return; _warmedUp = true;
     if (extBridgePresent()) return;
     if (primeCredsFromAura()) return;
-    // Try column toggle — this is the most reliable way to trigger a real aura call
+    // Strategy: fire a real /aura call by triggering SF's own page logic.
+    // Most reliable: applyColumnViaSF (toggles a column, fires a query).
     try {
       var rl = findRecordListEl();
       var current = rl ? getCurrentFields(rl) : [];
@@ -5714,12 +5727,15 @@
         applyColumnViaSF(probeSet, function () {
           setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
         });
+        return;
       }
     } catch (e) {}
-    // Try clicking a column header dropdown arrow (fires aura sort/refresh)
+    // Fallback: fire a page-sort by dispatching a CustomEvent on the table
     try {
-      var colHeaderBtn = document.querySelector("th button[title], lightning-datatable th button, [data-aura-rendered-by] th button");
-      if (colHeaderBtn) { colHeaderBtn.click(); setTimeout(function () { try { document.body.click(); } catch (e) {} }, 300); }
+      var tbl = document.querySelector("lightning-datatable, [data-aura-rendered-by] table");
+      if (tbl) {
+        tbl.dispatchEvent(new CustomEvent("sort", { bubbles: true, detail: { fieldName: "Name", sortDirection: "asc" } }));
+      }
     } catch (e) {}
   }
 
