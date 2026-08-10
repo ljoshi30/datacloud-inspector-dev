@@ -5705,7 +5705,7 @@
     if (_warmedUp) return; _warmedUp = true;
     if (extBridgePresent()) return;
     if (primeCredsFromAura()) return;
-    // Fire ALL connection methods immediately on load — don't wait for user action
+    // Try column toggle — this is the most reliable way to trigger a real aura call
     try {
       var rl = findRecordListEl();
       var current = rl ? getCurrentFields(rl) : [];
@@ -5716,18 +5716,10 @@
         });
       }
     } catch (e) {}
-    // Row checkbox toggle
+    // Try clicking a column header dropdown arrow (fires aura sort/refresh)
     try {
-      var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
-      if (rowCb) { rowCb.click(); setTimeout(function () { try { rowCb.click(); } catch (e) {} }, 600); }
-    } catch (e) {}
-    // Dummy aura POST
-    try {
-      fetch("/aura?r=99&aura.ApexAction.execute=1", {
-        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
-        credentials: "include"
-      }).catch(function () {});
+      var colHeaderBtn = document.querySelector("th button[title], lightning-datatable th button, [data-aura-rendered-by] th button");
+      if (colHeaderBtn) { colHeaderBtn.click(); setTimeout(function () { try { document.body.click(); } catch (e) {} }, 300); }
     } catch (e) {}
   }
 
@@ -8833,7 +8825,7 @@
       // Show instruction above the button
       _connHint = document.createElement("div");
       _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
-      _connHint.innerHTML = "<b>One-time setup:</b> Click any <b>row checkbox</b> on the Data Explorer table behind this modal (select then deselect a row). This establishes the session. The button will enable automatically.";
+      _connHint.innerHTML = "<b>One-time setup:</b> On the SF table behind this modal, <b>click any column header dropdown (▾)</b> and select a different sort or <b>uncheck then re-check a column</b> in the column picker. This triggers a data refresh that establishes the session. The button will enable automatically.";
       // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
