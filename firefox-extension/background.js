@@ -183,12 +183,33 @@ async function aiExplainTransform(req) {
     var settings = {
       dc_ai_provider: rawSettings.dc_ai_provider || _aiSettingsCache.dc_ai_provider,
       dc_anthropic_key: rawSettings.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key,
-      dc_openai_key: rawSettings.dc_openai_key || _aiSettingsCache.dc_openai_key
+      dc_openai_key: rawSettings.dc_openai_key || _aiSettingsCache.dc_openai_key,
+      dc_gemini_key: rawSettings.dc_gemini_key || _aiSettingsCache.dc_gemini_key
     };
     var provider = settings.dc_ai_provider || "anthropic";
     var transformJson = req.transformJson || "";
     if (!transformJson) return { ok: false, error: "No transform data to explain." };
     var prompt = AI_PROMPT + transformJson;
+
+    if (provider === "gemini") {
+      var gKey = settings.dc_gemini_key;
+      if (!gKey) return { ok: false, error: "NO_KEY" };
+      var gUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + gKey;
+      var r = await fetch(gUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 2000 } })
+      });
+      var txt = await r.text();
+      var j = null; try { j = JSON.parse(txt); } catch (e) {}
+      if (r.status !== 200) {
+        var em = (j && j.error && j.error.message) || "HTTP " + r.status;
+        if (r.status === 400 && /API_KEY/i.test(txt)) em = "Invalid Gemini API key.";
+        return { ok: false, error: em };
+      }
+      var content = (j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts && j.candidates[0].content.parts[0] && j.candidates[0].content.parts[0].text) || "";
+      return { ok: true, explanation: content, provider: "gemini" };
+    }
 
     if (provider === "openai") {
       var oKey = settings.dc_openai_key;
@@ -243,17 +264,19 @@ async function saveAiSettings(settings) {
   if (settings.provider) toSave.dc_ai_provider = settings.provider;
   if (settings.anthropicKey) toSave.dc_anthropic_key = settings.anthropicKey;
   if (settings.openaiKey) toSave.dc_openai_key = settings.openaiKey;
+  if (settings.geminiKey) toSave.dc_gemini_key = settings.geminiKey;
   Object.assign(_aiSettingsCache, toSave);
   try { await api.storage.local.set(toSave); } catch (e) { console.warn("[DC-MI] storage.local.set failed, using in-memory cache:", e); }
   return { ok: true };
 }
 async function getAiSettings() {
   var data = {};
-  try { data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key"]) || {}; } catch (e) {}
-  var provider = (data.dc_ai_provider || _aiSettingsCache.dc_ai_provider || "anthropic");
+  try { data = await api.storage.local.get(["dc_ai_provider", "dc_anthropic_key", "dc_openai_key", "dc_gemini_key"]) || {}; } catch (e) {}
+  var provider = (data.dc_ai_provider || _aiSettingsCache.dc_ai_provider || "gemini");
   var aKey = data.dc_anthropic_key || _aiSettingsCache.dc_anthropic_key || "";
   var oKey = data.dc_openai_key || _aiSettingsCache.dc_openai_key || "";
-  return { ok: true, provider: provider, hasAnthropicKey: !!aKey, hasOpenaiKey: !!oKey };
+  var gKey = data.dc_gemini_key || _aiSettingsCache.dc_gemini_key || "";
+  return { ok: true, provider: provider, hasAnthropicKey: !!aKey, hasOpenaiKey: !!oKey, hasGeminiKey: !!gKey };
 }
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {

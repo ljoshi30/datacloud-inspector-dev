@@ -7318,14 +7318,16 @@
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
-                var provider = prompt("Choose AI provider:\n\n1 = Anthropic (Claude Sonnet — recommended)\n2 = OpenAI (GPT-4o mini)\n\nEnter 1 or 2:");
-                var prov = (provider && provider.trim() === "2") ? "openai" : "anthropic";
-                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : "Anthropic API key (starts with sk-ant-...)";
-                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : "https://console.anthropic.com/settings/keys";
+                var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = Anthropic (Claude Sonnet)\n3 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, or 3:");
+                var pChoice = (provider && provider.trim()) || "1";
+                var prov = pChoice === "3" ? "openai" : pChoice === "2" ? "anthropic" : "gemini";
+                var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : prov === "anthropic" ? "Anthropic API key (starts with sk-ant-...)" : "Google Gemini API key";
+                var keyUrl = prov === "openai" ? "https://platform.openai.com/api-keys" : prov === "anthropic" ? "https://console.anthropic.com/settings/keys" : "https://aistudio.google.com/apikey";
                 var key = prompt("Enter your " + keyLabel + ":\n\nGet one at: " + keyUrl + "\n\nStored locally — never shared.");
                 if (key && key.trim()) {
                   var settings = { provider: prov };
                   if (prov === "openai") settings.openaiKey = key.trim();
+                  else if (prov === "gemini") settings.geminiKey = key.trim();
                   else settings.anthropicKey = key.trim();
                   window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
                   setTimeout(doExplain, 500);
