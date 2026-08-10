@@ -8674,7 +8674,13 @@
       // ── Editor: highlight layer + transparent textarea ────────────────────
       const buildInitialSoql = () => {
         const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
-        const from = recList.objectName || "Unknown__c";
+        // Strip dataspace prefix from table name for SQL (dataspace passed separately)
+        var rawObjName = recList.objectName || "Unknown__c";
+        var ds0 = (typeof resolveDataSpace === "function") ? resolveDataSpace(rawObjName) : "";
+        var from = rawObjName;
+        if (ds0 && rawObjName.indexOf(ds0 + "_") === 0) {
+          from = rawObjName.slice(ds0.length + 1);
+        }
         const fieldStr = fields.length ? fields.join(", ") : "Id";
         // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
