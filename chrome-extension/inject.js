@@ -7199,6 +7199,7 @@
       "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(rep.type || "") + " &bull; data space: " + esc(rep.dataSpaceName || "—") +
       " &bull; last run: " + esc(rep.lastRunStatus || "—") + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : "") + "</div></div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
+      "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569' title='Change AI provider or API key'>⚙</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
@@ -7279,34 +7280,47 @@
 
     // ── AI Explain button (extension-only, needs Anthropic API key) ──
     var aiBtn = m.querySelector(".dc-xf-ai");
+    var aiSettingsBtn = m.querySelector(".dc-xf-ai-settings");
     if (aiBtn && extBridgePresent()) {
       aiBtn.style.display = "";
-      aiBtn.title = "Click: AI Explain | Right-click: Change API key";
-      aiBtn.oncontextmenu = function (e) {
-        e.preventDefault();
-        var provider = prompt("Choose AI provider:\n\n1 = Anthropic (Claude Sonnet)\n2 = OpenAI (GPT-4o mini)\n\nEnter 1 or 2:");
+      if (aiSettingsBtn) aiSettingsBtn.style.display = "";
+      aiBtn.title = "AI-powered explanation of this transform";
+      function showAiSettings() {
+        var provider = prompt("Choose AI provider:\n\n1 = Google Gemini (free, no credit card)\n2 = SF LLM Gateway (Salesforce internal)\n3 = Anthropic (Claude Sonnet)\n4 = OpenAI (GPT-4o mini)\n\nEnter 1, 2, 3, or 4:");
         if (!provider) return;
-        var prov = (provider.trim() === "2") ? "openai" : "anthropic";
-        var keyLabel = prov === "openai" ? "OpenAI API key (starts with sk-...)" : "Anthropic API key (starts with sk-ant-...)";
-        var key = prompt("Enter your new " + keyLabel + ":");
+        var pChoice = (provider.trim()) || "1";
+        var prov = pChoice === "4" ? "openai" : pChoice === "3" ? "anthropic" : pChoice === "2" ? "sf-gateway" : "gemini";
+        var keyLabel = prov === "openai" ? "OpenAI key (sk-...)" : prov === "anthropic" ? "Anthropic key (sk-ant-...)" : prov === "sf-gateway" ? "SF Gateway key" : "Gemini key (AIza...)";
+        var key = prompt("Enter your " + keyLabel + ":");
         if (key && key.trim()) {
-          var settings = { provider: prov };
-          if (prov === "openai") settings.openaiKey = key.trim();
-          else settings.anthropicKey = key.trim();
-          window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: settings }, "*");
-          alert("API key updated!");
+          var s = { provider: prov };
+          if (prov === "openai") s.openaiKey = key.trim();
+          else if (prov === "gemini") s.geminiKey = key.trim();
+          else if (prov === "sf-gateway") s.sfGatewayKey = key.trim();
+          else s.anthropicKey = key.trim();
+          window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: s }, "*");
+          alert("Saved! Provider: " + prov);
         }
-      };
+      }
+      aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
+      if (aiSettingsBtn) aiSettingsBtn.onclick = showAiSettings;
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
         function doExplain() {
           var id = "dcai-" + Date.now();
           var done = false;
+          var timeout = setTimeout(function () {
+            if (done) return; done = true;
+            window.removeEventListener("message", onMsg, false);
+            aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
+            alert("AI Explain: No response from extension.\n\nPlease remove and re-add the extension in about:debugging (Firefox) or chrome://extensions (Chrome) to pick up the latest bridge.js.");
+          }, 10000);
           function onMsg(ev) {
             if (ev.source !== window) return;
             var d = ev.data;
             if (!d || d.__dcRes !== "dc-ai-explain" || d.id !== id) return;
             window.removeEventListener("message", onMsg, false);
+            clearTimeout(timeout);
             if (done) return; done = true;
             aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
             if (d.ok && d.explanation) {
