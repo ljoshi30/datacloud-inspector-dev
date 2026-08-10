@@ -7117,11 +7117,36 @@
     keys.forEach(function (k) {
       var n = nodes[k] || {}, p = n.parameters || {};
       var act = (n.action || n.type || "").toLowerCase();
-      if (act === "load") {
-        var ds = p.dataset || {};
-        sources.push({ id: k, obj: ds.name || "(unknown)", objType: ds.type || "", fields: p.fields || [] });
-      } else if (act === "join") {
-        steps.push({ id: k, kind: "JOIN", detail: (p.joinType || "") + " join  on  " + ([].concat(p.leftKeys || []).join(",")) + "  =  " + ([].concat(p.rightKeys || []).join(",")) + (p.rightQualifier ? "   (right: " + p.rightQualifier + ")" : "") });
+      if (act === "load" || act === "input") {
+        var ds = p.dataset || p.source || {};
+        sources.push({ id: k, obj: ds.name || p.objectName || "(unknown)", objType: ds.type || ds.category || "", fields: p.fields || p.columns || [] });
+      } else if (act === "join" || act === "lookup") {
+        var jType = (p.joinType || p.type || act).replace(/([a-z])([A-Z])/g, "$1 $2");
+        var lk = [].concat(p.leftKeys || p.leftKey || p.leftFields || []).join(", ");
+        var rk = [].concat(p.rightKeys || p.rightKey || p.rightFields || []).join(", ");
+        steps.push({ id: k, kind: act.toUpperCase(), detail: jType + " on " + lk + " = " + rk });
+      } else if (act === "filter" || act === "where") {
+        var cond = p.condition || p.expression || p.filter || "";
+        if (typeof cond === "object") cond = JSON.stringify(cond).slice(0, 100);
+        steps.push({ id: k, kind: "FILTER", detail: String(cond).slice(0, 150) || "(condition)" });
+      } else if (act === "aggregate" || act === "group" || act === "rollup") {
+        var aggs = [].concat(p.aggregations || p.aggregates || []);
+        var grps = [].concat(p.groupings || p.groupBy || []);
+        var aggDesc = aggs.map(function (a) { return (a.function || a.type || "AGG") + "(" + (a.field || a.column || "") + ")"; }).join(", ");
+        var grpDesc = grps.length ? " grouped by " + grps.join(", ") : "";
+        steps.push({ id: k, kind: "AGGREGATE", detail: (aggDesc || "roll-up") + grpDesc });
+      } else if (act === "transform" || act === "formula" || act === "compute" || act === "expression") {
+        var xforms = [].concat(p.transformations || p.formulas || p.expressions || []);
+        var xDesc = xforms.length ? xforms.length + " operation" + (xforms.length > 1 ? "s" : "") : "";
+        if (!xDesc && p.formula) xDesc = String(p.formula).slice(0, 80);
+        steps.push({ id: k, kind: "TRANSFORM", detail: xDesc || "calculated fields" });
+      } else if (act === "append" || act === "union") {
+        steps.push({ id: k, kind: "APPEND", detail: "combines rows from multiple branches" });
+      } else if (act === "update" || act === "swap") {
+        var updCol = p.column || p.field || "";
+        steps.push({ id: k, kind: "UPDATE", detail: updCol ? "updates " + updCol + " from lookup" : "swaps values from lookup source" });
+      } else if (act === "output" || act === "save" || act === "write") {
+        // handled by outputDataObjects
       } else if (act) {
         steps.push({ id: k, kind: act.toUpperCase(), detail: JSON.stringify(p).slice(0, 120) });
       }
@@ -7140,25 +7165,53 @@
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
-    // ── Build plain-English summary ──
+    // ── Build plain-English summary from all node types ──
+    // SF Data Cloud batch transforms have: Input, Output, Join, Append, Filter,
+    // Aggregate, Transform (formula/compute), Update
     var summaryLines = [];
     if (isSql) {
       summaryLines.push("This is a <b>streaming transform</b> that runs a SQL query to produce output.");
     } else {
-      summaryLines.push("This is a <b>batch transform</b> with " + sources.length + " source" + (sources.length !== 1 ? "s" : "") + ", " + steps.length + " step" + (steps.length !== 1 ? "s" : "") + ", and " + outs.length + " output" + (outs.length !== 1 ? "s" : "") + ".");
+      // Categorize ALL steps by type
+      var joins = [], filters = [], aggregates = [], transforms = [], appends = [], updates = [], others = [];
+      steps.forEach(function (s) {
+        var k = s.kind.toUpperCase();
+        if (k === "JOIN" || k === "LOOKUP") joins.push(s);
+        else if (k === "FILTER" || k === "WHERE") filters.push(s);
+        else if (k === "AGGREGATE" || k === "GROUP" || k === "ROLLUP") aggregates.push(s);
+        else if (k === "TRANSFORM" || k === "FORMULA" || k === "COMPUTE" || k === "EXPRESSION") transforms.push(s);
+        else if (k === "APPEND" || k === "UNION") appends.push(s);
+        else if (k === "UPDATE" || k === "SWAP") updates.push(s);
+        else others.push(s);
+      });
+
+      var parts = [];
+      if (sources.length) parts.push(sources.length + " input" + (sources.length > 1 ? "s" : ""));
+      if (joins.length) parts.push(joins.length + " join" + (joins.length > 1 ? "s" : ""));
+      if (appends.length) parts.push(appends.length + " append");
+      if (filters.length) parts.push(filters.length + " filter" + (filters.length > 1 ? "s" : ""));
+      if (aggregates.length) parts.push(aggregates.length + " aggregate" + (aggregates.length > 1 ? "s" : ""));
+      if (transforms.length) parts.push(transforms.length + " transform" + (transforms.length > 1 ? "s" : ""));
+      if (updates.length) parts.push(updates.length + " update" + (updates.length > 1 ? "s" : ""));
+      if (outs.length) parts.push(outs.length + " output" + (outs.length > 1 ? "s" : ""));
+      summaryLines.push("<b>Batch transform</b> — " + parts.join(", "));
+
       if (sources.length) {
-        summaryLines.push("<b>Reads from:</b> " + sources.map(function (s) { return esc(s.obj); }).join(", "));
+        summaryLines.push("<b>Reads from:</b> " + sources.map(function (s) { return esc(s.obj) + (s.fields.length ? " (" + s.fields.length + " fields)" : ""); }).join(", "));
       }
-      var joins = steps.filter(function (s) { return s.kind === "JOIN"; });
-      var filters = steps.filter(function (s) { return s.kind === "FILTER" || s.kind === "WHERE"; });
-      var aggregates = steps.filter(function (s) { return s.kind === "AGGREGATE" || s.kind === "GROUP"; });
-      var dedup = steps.filter(function (s) { return s.kind === "DEDUPLICATE" || s.kind === "DEDUP"; });
-      if (joins.length) summaryLines.push("<b>Joins:</b> " + joins.length + " join operation" + (joins.length > 1 ? "s" : "") + " — " + joins.map(function (j) { return esc(j.detail); }).join("; "));
-      if (filters.length) summaryLines.push("<b>Filters:</b> " + filters.length + " filter condition" + (filters.length > 1 ? "s" : ""));
-      if (aggregates.length) summaryLines.push("<b>Aggregation:</b> groups and aggregates data");
-      if (dedup.length) summaryLines.push("<b>Deduplication:</b> removes duplicate records");
-      var others = steps.filter(function (s) { return s.kind !== "JOIN" && s.kind !== "FILTER" && s.kind !== "WHERE" && s.kind !== "AGGREGATE" && s.kind !== "GROUP" && s.kind !== "DEDUPLICATE" && s.kind !== "DEDUP"; });
-      if (others.length) summaryLines.push("<b>Other steps:</b> " + others.map(function (s) { return esc(s.kind); }).join(", "));
+      if (joins.length) {
+        joins.forEach(function (j) { summaryLines.push("<b>Join:</b> " + esc(j.detail)); });
+      }
+      if (appends.length) summaryLines.push("<b>Append:</b> combines rows from " + appends.length + " branch" + (appends.length > 1 ? "es" : ""));
+      if (filters.length) {
+        filters.forEach(function (f) { summaryLines.push("<b>Filter:</b> " + esc(f.detail)); });
+      }
+      if (aggregates.length) {
+        aggregates.forEach(function (a) { summaryLines.push("<b>Aggregate:</b> " + esc(a.detail)); });
+      }
+      if (transforms.length) summaryLines.push("<b>Transform:</b> " + transforms.length + " calculated/modified field" + (transforms.length > 1 ? "s" : ""));
+      if (updates.length) summaryLines.push("<b>Update:</b> swaps column values from lookup source");
+      if (others.length) summaryLines.push("<b>Other:</b> " + others.map(function (s) { return esc(s.kind); }).join(", "));
       if (outs.length) {
         summaryLines.push("<b>Writes to:</b> " + outs.map(function (o) { return esc(o.name) + (o.fields.length ? " (" + o.fields.length + " fields)" : ""); }).join(", "));
       }
