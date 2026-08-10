@@ -7303,10 +7303,9 @@
         }
       }
       aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
-      if (aiSettingsBtn) {
-        aiSettingsBtn.addEventListener("click", function (e) { e.stopPropagation(); e.preventDefault(); showAiSettings(); }, true);
-        aiSettingsBtn.addEventListener("pointerdown", function (e) { e.stopPropagation(); }, true);
-      }
+      try {
+        if (aiSettingsBtn) aiSettingsBtn.onclick = function () { showAiSettings(); };
+      } catch (e) { console.error("[DC-MI] settings btn error:", e); }
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
         function doExplain() {
