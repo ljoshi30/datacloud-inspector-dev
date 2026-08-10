@@ -7162,6 +7162,7 @@
       "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
       "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(rep.type || "") + " &bull; data space: " + esc(rep.dataSpaceName || "—") +
       " &bull; last run: " + esc(rep.lastRunStatus || "—") + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : "") + "</div></div>" +
+      "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
@@ -7253,6 +7254,51 @@
     document.body.appendChild(m);
     m.querySelector(".dc-xf-x").onclick = closeTransformView;
     m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
+
+    // ── AI Explain button (extension-only, needs Anthropic API key) ──
+    var aiBtn = m.querySelector(".dc-xf-ai");
+    if (aiBtn && extBridgePresent()) {
+      aiBtn.style.display = "";
+      aiBtn.onclick = function () {
+        aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
+        function doExplain() {
+          var id = "dcai-" + Date.now();
+          var done = false;
+          function onMsg(ev) {
+            if (ev.source !== window) return;
+            var d = ev.data;
+            if (!d || d.__dcRes !== "dc-ai-explain" || d.id !== id) return;
+            window.removeEventListener("message", onMsg, false);
+            if (done) return; done = true;
+            aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
+            if (d.ok && d.explanation) {
+              var aiDiv = m.querySelector(".dc-xf-ai-result");
+              if (!aiDiv) { aiDiv = document.createElement("div"); aiDiv.className = "dc-xf-ai-result"; m.querySelector("[style*='overflow:auto']").insertBefore(aiDiv, m.querySelector("[style*='overflow:auto']").firstChild); }
+              aiDiv.style.cssText = "background:linear-gradient(135deg,#faf5ff,#f0f9ff);border:1px solid #c4b5fd;border-radius:10px;padding:14px 16px;margin-bottom:16px;";
+              aiDiv.innerHTML = "<div style='font-weight:700;font-size:13px;color:#5b21b6;margin-bottom:8px'>✨ AI Explanation</div>" +
+                "<div style='font-size:12px;line-height:1.8;color:#334155;white-space:pre-wrap'>" + d.explanation.replace(/</g,"&lt;").replace(/\n/g,"<br>") + "</div>";
+            } else {
+              var errMsg = d.error || "Unknown error";
+              if (/No API key/i.test(errMsg)) {
+                var key = prompt("Enter your Anthropic API key (starts with sk-ant-...):\n\nGet one at: https://console.anthropic.com/settings/keys\n\nThe key is stored locally in your browser — never sent anywhere except Anthropic's API.");
+                if (key && key.trim()) {
+                  window.postMessage({ __dcReq: "dc-save-api-key", id: "save-" + Date.now(), key: key.trim() }, "*");
+                  setTimeout(doExplain, 500);
+                  return;
+                }
+              }
+              alert("AI Explain failed: " + errMsg);
+            }
+          }
+          window.addEventListener("message", onMsg, false);
+          window.postMessage({ __dcReq: "dc-ai-explain", id: id, transformJson: JSON.stringify(rep) }, "*");
+        }
+        doExplain();
+      };
+    } else if (aiBtn) {
+      aiBtn.style.display = "none";
+    }
+
     if (typeof makeDraggable === "function") try { makeDraggable(m, m.querySelector(".dc-xf-hdr")); } catch (e) {}
   }
 

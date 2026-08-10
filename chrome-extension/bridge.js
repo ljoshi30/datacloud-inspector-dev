@@ -42,7 +42,33 @@
         );
         return;
       }
-      // (c) Data Transform read relay (GET /ssot/data-transforms/{nameOrId})
+      // (c) AI Explain relay — sends transform JSON to Anthropic via background
+      if (d.__dcReq === "dc-ai-explain") {
+        api.runtime.sendMessage(
+          { type: "dcAiExplain", transformJson: d.transformJson },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-ai-explain", id: d.id, ok: !err && resp && resp.ok, explanation: resp && resp.explanation, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
+      // (d) Save/Get API key relay
+      if (d.__dcReq === "dc-save-api-key") {
+        api.runtime.sendMessage({ type: "dcSaveApiKey", key: d.key }, function (resp) {
+          var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+          window.postMessage({ __dcRes: "dc-save-api-key", id: d.id, ok: !err && resp && resp.ok, error: err }, "*");
+        });
+        return;
+      }
+      if (d.__dcReq === "dc-get-api-key") {
+        api.runtime.sendMessage({ type: "dcGetApiKey" }, function (resp) {
+          var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+          window.postMessage({ __dcRes: "dc-get-api-key", id: d.id, ok: !err, hasKey: resp && resp.hasKey, error: err }, "*");
+        });
+        return;
+      }
+      // (e) Data Transform read relay (GET /ssot/data-transforms/{nameOrId})
       if (d.__dcReq === "dc-transform") {
         api.runtime.sendMessage(
           { type: "dcTransform", nameOrId: d.nameOrId, host: location.host },

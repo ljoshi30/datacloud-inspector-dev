@@ -173,6 +173,53 @@ async function runDcTransform(req) {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+// ── AI Explain: call Anthropic Claude API to explain a Data Transform ────────
+async function aiExplainTransform(req) {
+  try {
+    var keyData = await api.storage.local.get("dc_anthropic_key");
+    var apiKey = keyData && keyData.dc_anthropic_key;
+    if (!apiKey) return { ok: false, error: "No API key configured. Click the extension icon → Settings → enter your Anthropic API key." };
+    var transformJson = req.transformJson || "";
+    if (!transformJson) return { ok: false, error: "No transform data to explain." };
+    var prompt = "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. A one-paragraph overview of what this transform does (business purpose)\n2. For each output branch, explain the data flow: source → transformations → filters → output\n3. Highlight key business logic (rankings, calculated fields, joins, deduplication)\n4. Mention the write mode and any important field mappings\n\nKeep it concise but thorough. Use bullet points for branch breakdowns. Don't list every field — focus on what the transform DOES.\n\nTransform JSON:\n" + transformJson;
+    var r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2000,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    var txt = await r.text();
+    var j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      var em = (j && j.error && j.error.message) || "HTTP " + r.status;
+      if (r.status === 401) em = "Invalid API key. Check your Anthropic API key in extension settings.";
+      return { ok: false, error: em };
+    }
+    var content = (j && j.content && j.content[0] && j.content[0].text) || "";
+    return { ok: true, explanation: content };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ── Save/get API key ────────────────────────────────────────────────────────
+async function saveApiKey(key) {
+  await api.storage.local.set({ dc_anthropic_key: key });
+  return { ok: true };
+}
+async function getApiKey() {
+  var data = await api.storage.local.get("dc_anthropic_key");
+  return { ok: true, hasKey: !!(data && data.dc_anthropic_key) };
+}
+
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabHost = (sender && sender.tab && sender.tab.url) ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return null; } })() : null;
   if (msg && msg.type === "dcSqlQuery") {
@@ -186,6 +233,18 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "dcFetchPage") {
     fetchQueryPage({ queryId: msg.queryId, offset: msg.offset, rowLimit: msg.rowLimit, dataspace: msg.dataspace, host: tabHost || msg.host }).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcAiExplain") {
+    aiExplainTransform({ transformJson: msg.transformJson }).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcSaveApiKey") {
+    saveApiKey(msg.key).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcGetApiKey") {
+    getApiKey().then(sendResponse);
     return true;
   }
 });
