@@ -6426,7 +6426,12 @@
         fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
           .then(function (r) { return r.text(); }).then(function (txt) {
             if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Your Salesforce session has expired — reload the page and retry.")); return; }
-            var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("SQL response was not JSON.")); return; }
+            var j; try { j = JSON.parse(txt); } catch (e) {
+              // Non-JSON response = session expired or SF returned an error page
+              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — sort any column on the SF table to re-establish, then retry.")); return; }
+              reject(new Error("SQL response was not JSON. The session may have expired — sort a column on the SF table, then retry."));
+              return;
+            }
             var a = j && j.actions && j.actions[0];
             if (!a || a.state !== "SUCCESS") {
               var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
