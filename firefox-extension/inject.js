@@ -7199,7 +7199,7 @@
       "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(rep.type || "") + " &bull; data space: " + esc(rep.dataSpaceName || "—") +
       " &bull; last run: " + esc(rep.lastRunStatus || "—") + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : "") + "</div></div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
-      "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569' title='Change AI provider or API key'>⚙</button>" +
+      "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569;position:relative;z-index:10' title='Change AI provider or API key'>⚙</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
@@ -7304,8 +7304,8 @@
       }
       aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
       if (aiSettingsBtn) {
-        aiSettingsBtn.onclick = function (e) { e.stopPropagation(); e.preventDefault(); showAiSettings(); };
-        aiSettingsBtn.onpointerdown = function (e) { e.stopPropagation(); };
+        aiSettingsBtn.addEventListener("click", function (e) { e.stopPropagation(); e.preventDefault(); showAiSettings(); }, true);
+        aiSettingsBtn.addEventListener("pointerdown", function (e) { e.stopPropagation(); }, true);
       }
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
