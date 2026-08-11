@@ -6439,9 +6439,21 @@
             var a = j && j.actions && j.actions[0];
             if (!a || a.state !== "SUCCESS") {
               var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+              // Try to parse JSON error for a cleaner message
+              var cleanErr = em;
+              try {
+                var parsed = (typeof em === "string" && em.charAt(0) === "{") ? JSON.parse(em) : null;
+                if (parsed && parsed.primaryMessage) cleanErr = parsed.primaryMessage;
+                else if (parsed && parsed.errorMessage) cleanErr = parsed.errorMessage.replace(/^[A-Z_]+:\s*/, "");
+              } catch (e2) {}
               // "denied authorization" = wrong dataspace → try next candidate
-              if (/denied authorization|not authorized/i.test(em) && dsi + 1 < dsCandidates.length) { tryDs(dsi + 1); return; }
-              reject(new Error("SQL query failed: " + (em || "unknown")));
+              if (/denied authorization|not authorized/i.test(cleanErr) && dsi + 1 < dsCandidates.length) { tryDs(dsi + 1); return; }
+              // Add helpful hints based on error type
+              var hint = "";
+              if (/does not exist|42P01/i.test(cleanErr)) hint = "\n\nCheck the table name — it may need a different prefix or the dataspace may be wrong.";
+              else if (/unknown column|42703/i.test(cleanErr)) hint = "\n\nCheck the column name in your query — it may be misspelled or not exist on this object.";
+              else if (/syntax error|42601/i.test(cleanErr)) hint = "\n\nCheck your SQL syntax.";
+              reject(new Error(cleanErr + hint));
               return;
             }
             // Success — remember this dataspace for future queries
