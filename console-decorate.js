@@ -7270,8 +7270,13 @@
     m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
     var hdr = "<div style='display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move' class='dc-xf-hdr'>" +
       "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
-      "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(rep.type || "") + " &bull; data space: " + esc(rep.dataSpaceName || "—") +
-      " &bull; last run: " + esc(rep.lastRunStatus || "—") + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : "") + "</div></div>" +
+      (function () {
+        var parts = [];
+        if (rep.type) parts.push(esc(rep.type));
+        if (rep.dataSpaceName) parts.push("data space: " + esc(rep.dataSpaceName));
+        if (rep.lastRunStatus) parts.push("last run: " + esc(rep.lastRunStatus) + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : ""));
+        return parts.length ? "<div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + parts.join(" &bull; ") + "</div>" : "";
+      })() + "</div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
       "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569;position:relative;z-index:10' title='Change AI provider or API key'>⚙</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
