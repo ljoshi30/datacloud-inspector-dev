@@ -7797,7 +7797,33 @@
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
-                showAiSettings();
+                // Check if we have key in localStorage (extension may have lost it)
+                var savedSettings = null;
+                try { savedSettings = JSON.parse(localStorage.getItem("dc_ai_settings") || "null"); } catch (e3) {}
+                if (savedSettings && savedSettings.key) {
+                  // Retry via popup proxy with the saved key
+                  aiBtn.textContent = "Retrying…";
+                  var proxyUrl2 = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html";
+                  var popup2 = window.open(proxyUrl2, "dc_ai_proxy", "width=420,height=300,top=100,left=100");
+                  function onRetryMsg(ev2) {
+                    if (ev2.data && ev2.data.type === "dc-ai-proxy-ready") {
+                      var msgs2 = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform:\n" + JSON.stringify(rep).slice(0, 30000) }];
+                      popup2.postMessage({ type: "dc-ai-request", provider: savedSettings.provider || "sf-gateway", apiKey: savedSettings.key, gatewayUrl: savedSettings.gatewayUrl || "", messages: msgs2 }, "*");
+                    }
+                    if (ev2.data && ev2.data.type === "dc-ai-response") {
+                      window.removeEventListener("message", onRetryMsg);
+                      aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
+                      if (ev2.data.result && ev2.data.result.ok) {
+                        onMsg({ source: window, data: { __dcRes: "dc-ai-explain", id: id, ok: true, explanation: ev2.data.result.explanation } });
+                      } else {
+                        showAiSettings();
+                      }
+                    }
+                  }
+                  window.addEventListener("message", onRetryMsg);
+                } else {
+                  showAiSettings();
+                }
                 return;
               }
               var aiErrDiv = m.querySelector(".dc-xf-ai-result");
