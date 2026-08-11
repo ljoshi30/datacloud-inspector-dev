@@ -7654,10 +7654,10 @@
       setTimeout(function () { btn.textContent = "Download Summary"; }, 2000);
     };
 
-    // ── AI Explain button (extension-only, needs Anthropic API key) ──
+    // ── AI Explain button (works for both extension and bookmarklet via popup proxy) ──
     var aiBtn = m.querySelector(".dc-xf-ai");
     var aiSettingsBtn = m.querySelector(".dc-xf-ai-settings");
-    if (aiBtn && extBridgePresent()) {
+    if (aiBtn) {
       aiBtn.style.display = "";
       if (aiSettingsBtn) aiSettingsBtn.style.display = "";
       aiBtn.title = "AI-powered explanation of this transform";
@@ -7691,6 +7691,8 @@
           else if (prov === "sf-gateway") s.sfGatewayKey = key;
           else s.anthropicKey = key;
           window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: s }, "*");
+          // Also save to localStorage for bookmarklet popup proxy path
+          try { localStorage.setItem("dc_ai_settings", JSON.stringify({ provider: prov, key: key, gatewayUrl: prov === "sf-gateway" ? "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl" : "" })); } catch (e2) {}
           dlg.innerHTML = "<div style='text-align:center;padding:20px;font:600 14px system-ui;color:#059669'>✓ Saved!</div>";
           setTimeout(function () { dlg.remove(); }, 1000);
         };
@@ -7805,12 +7807,38 @@
             }
           }
           window.addEventListener("message", onMsg, false);
-          window.postMessage({ __dcReq: "dc-ai-explain", id: id, transformJson: JSON.stringify(rep) }, "*");
+          if (extBridgePresent()) {
+            // Extension path — direct bridge
+            window.postMessage({ __dcReq: "dc-ai-explain", id: id, transformJson: JSON.stringify(rep) }, "*");
+          } else {
+            // Bookmarklet path — popup proxy (bypasses CSP)
+            var aiSettings = JSON.parse(localStorage.getItem("dc_ai_settings") || "{}");
+            var proxyUrl = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html";
+            var popup = window.open(proxyUrl, "dc_ai_proxy", "width=420,height=300,top=100,left=100");
+            var proxyReady = false;
+            function onProxyMsg(ev) {
+              if (ev.data && ev.data.type === "dc-ai-proxy-ready" && !proxyReady) {
+                proxyReady = true;
+                var msgs = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. Overview (business purpose)\n2. Branch-by-branch data flow\n3. Key business logic\n4. Write mode and important mappings\n\nTransform JSON:\n" + JSON.stringify(rep).slice(0, 30000) }];
+                popup.postMessage({ type: "dc-ai-request", provider: aiSettings.provider || "sf-gateway", apiKey: aiSettings.key || "", gatewayUrl: aiSettings.gatewayUrl || "", messages: msgs }, "*");
+              }
+              if (ev.data && ev.data.type === "dc-ai-response") {
+                window.removeEventListener("message", onProxyMsg);
+                clearTimeout(timeout);
+                if (done) return; done = true;
+                aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain";
+                if (ev.data.result && ev.data.result.ok) {
+                  onMsg({ source: window, data: { __dcRes: "dc-ai-explain", id: id, ok: true, explanation: ev.data.result.explanation } });
+                } else {
+                  onMsg({ source: window, data: { __dcRes: "dc-ai-explain", id: id, ok: false, error: (ev.data.result && ev.data.result.error) || "Failed" } });
+                }
+              }
+            }
+            window.addEventListener("message", onProxyMsg);
+          }
         }
         doExplain();
       };
-    } else if (aiBtn) {
-      aiBtn.style.display = "none";
     }
 
     // Drag handler — direct implementation (makeDraggable can fail due to overflow/transform issues)

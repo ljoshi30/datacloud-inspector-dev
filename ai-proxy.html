@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Data 360 Inspector — AI</title>
+<style>
+body{font:13px -apple-system,sans-serif;margin:20px;color:#334155;background:#f8fafc}
+.status{padding:12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;margin-bottom:12px}
+.error{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
+.success{background:#f0fdf4;border-color:#86efac;color:#166534}
+#log{font:11px monospace;color:#64748b;max-height:200px;overflow:auto;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="status" id="status">Waiting for request from Data 360 Inspector...</div>
+<div id="log"></div>
+<script>
+(function() {
+  var opener = window.opener;
+  var statusEl = document.getElementById("status");
+  var logEl = document.getElementById("log");
+
+  function log(msg) { logEl.innerHTML += msg + "<br>"; }
+  function setStatus(msg, type) { statusEl.textContent = msg; statusEl.className = "status " + (type || ""); }
+
+  // Listen for messages from the bookmarklet (opener window)
+  window.addEventListener("message", function(ev) {
+    var d = ev.data;
+    if (!d || d.type !== "dc-ai-request") return;
+
+    setStatus("Processing AI request...", "");
+    log("Received request: " + (d.provider || "unknown") + " | " + (d.messages ? d.messages.length + " messages" : "prompt"));
+
+    var provider = d.provider || "sf-gateway";
+    var apiKey = d.apiKey || "";
+    var messages = d.messages || [{ role: "user", content: d.prompt || "" }];
+    var gatewayUrl = d.gatewayUrl || "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl";
+
+    if (!apiKey) {
+      sendBack({ ok: false, error: "No API key provided" });
+      return;
+    }
+
+    if (provider === "sf-gateway") {
+      var url = gatewayUrl + "/v1/chat/completions";
+      log("Calling: " + url);
+      fetch(url, {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: messages })
+      }).then(function(r) { return r.text(); }).then(function(txt) {
+        var j = null; try { j = JSON.parse(txt); } catch(e) {}
+        if (!j || !j.choices || !j.choices[0]) {
+          sendBack({ ok: false, error: "Invalid response: " + txt.slice(0, 200) });
+          return;
+        }
+        var content = j.choices[0].message.content || "";
+        log("Success: " + content.length + " chars");
+        setStatus("Done! Response sent back.", "success");
+        sendBack({ ok: true, explanation: content });
+      }).catch(function(err) {
+        log("Error: " + err.message);
+        setStatus("Failed: " + err.message, "error");
+        sendBack({ ok: false, error: err.message });
+      });
+    } else if (provider === "gemini") {
+      var gUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
+      var prompt = messages.map(function(m) { return m.role + ": " + m.content; }).join("\n\n");
+      fetch(gUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: 4096 } })
+      }).then(function(r) { return r.json(); }).then(function(j) {
+        var content = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts && j.candidates[0].content.parts[0] && j.candidates[0].content.parts[0].text) || "";
+        if (!content) { sendBack({ ok: false, error: "Empty response from Gemini" }); return; }
+        setStatus("Done!", "success");
+        sendBack({ ok: true, explanation: content });
+      }).catch(function(err) {
+        sendBack({ ok: false, error: err.message });
+      });
+    } else if (provider === "anthropic") {
+      fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true", "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: messages })
+      }).then(function(r) { return r.json(); }).then(function(j) {
+        var content = (j.content && j.content[0] && j.content[0].text) || "";
+        if (!content) { sendBack({ ok: false, error: j.error ? j.error.message : "Empty response" }); return; }
+        setStatus("Done!", "success");
+        sendBack({ ok: true, explanation: content });
+      }).catch(function(err) {
+        sendBack({ ok: false, error: err.message });
+      });
+    } else if (provider === "openai") {
+      fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "gpt-4o-mini", max_tokens: 4096, messages: messages })
+      }).then(function(r) { return r.json(); }).then(function(j) {
+        var content = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+        if (!content) { sendBack({ ok: false, error: j.error ? j.error.message : "Empty response" }); return; }
+        setStatus("Done!", "success");
+        sendBack({ ok: true, explanation: content });
+      }).catch(function(err) {
+        sendBack({ ok: false, error: err.message });
+      });
+    } else {
+      sendBack({ ok: false, error: "Unknown provider: " + provider });
+    }
+  });
+
+  function sendBack(result) {
+    if (opener) {
+      opener.postMessage({ type: "dc-ai-response", result: result }, "*");
+      // Auto-close after sending (small delay for user to see status)
+      setTimeout(function() { window.close(); }, 2000);
+    }
+  }
+
+  // Tell opener we're ready
+  if (opener) opener.postMessage({ type: "dc-ai-proxy-ready" }, "*");
+  else setStatus("Error: This page must be opened by Data 360 Inspector.", "error");
+})();
+</script>
+</body>
+</html>
