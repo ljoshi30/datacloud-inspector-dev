@@ -7804,7 +7804,7 @@
                   // Retry via popup proxy with the saved key
                   aiBtn.textContent = "Retrying…";
                   var proxyUrl2 = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html";
-                  var popup2 = window.open(proxyUrl2, "dc_ai_proxy", "width=420,height=300,top=100,left=100");
+                  var popup2 = window.open(proxyUrl2, "dc_ai_proxy", "width=300,height=200,top=0,left=" + (screen.width - 310));
                   function onRetryMsg(ev2) {
                     if (ev2.data && ev2.data.type === "dc-ai-proxy-ready") {
                       var msgs2 = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform:\n" + JSON.stringify(rep).slice(0, 30000) }];
@@ -7859,7 +7859,7 @@
             var msgs = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. Overview (business purpose)\n2. Branch-by-branch data flow\n3. Key business logic\n4. Write mode and important mappings\n\nTransform JSON:\n" + JSON.stringify(rep).slice(0, 30000) }];
             var reqPayload = encodeURIComponent(JSON.stringify({ provider: aiSettings.provider || "sf-gateway", apiKey: aiSettings.key, gatewayUrl: aiSettings.gatewayUrl || "", messages: msgs }));
             var proxyUrl = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html#" + reqPayload;
-            window.open(proxyUrl, "dc_ai_proxy", "width=420,height=300,top=100,left=100");
+            window.open(proxyUrl, "dc_ai_proxy", "width=300,height=200,top=0,left=" + (screen.width - 310));
           }
         }
         doExplain();
