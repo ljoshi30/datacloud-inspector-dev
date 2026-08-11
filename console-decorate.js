@@ -7947,51 +7947,80 @@
     m.querySelector(".dc-cv-x").onclick = close;
     if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
   }
-  // Render a JSON object/array as a styled HTML table (record view)
+  // Render a JSON object/array as a styled tabbed view (Data Graph style)
   function renderJsonAsTable(data, esc2) {
     if (Array.isArray(data)) {
       if (data.length === 0) return "<div style='padding:12px;color:#64748b'>Empty array</div>";
-      // Array of objects → table with columns
       if (typeof data[0] === "object" && data[0] !== null) {
         var cols = [];
         data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0) cols.push(k); }); });
-        var html = "<table style='border-collapse:collapse;width:100%;font-size:11px'>";
-        html += "<thead><tr style='background:#f1f5f9'>" + cols.map(function (c) { return "<th style='text-align:left;padding:6px 10px;font-weight:700;border-bottom:2px solid #e2e8f0;color:#334155;white-space:nowrap'>" + esc2(c) + "</th>"; }).join("") + "</tr></thead>";
+        var scalarCols = cols.filter(function (c) { return !data.some(function (item) { return item && item[c] && typeof item[c] === "object"; }); });
+        var nestedCols = cols.filter(function (c) { return data.some(function (item) { return item && item[c] && typeof item[c] === "object"; }); });
+        var html = "<table style='border-collapse:collapse;width:100%;font-size:11px;min-width:400px'>";
+        html += "<thead><tr style='background:#fafaf9'>" + scalarCols.map(function (c) { return "<th style='text-align:left;padding:8px;border-bottom:2px solid #d8dde6;text-transform:uppercase;color:#514f4d;white-space:nowrap;font-size:10px'>" + esc2(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead>";
         html += "<tbody>";
         data.forEach(function (item, idx) {
-          html += "<tr style='background:" + (idx % 2 ? "#f8fafc" : "#fff") + "'>";
-          cols.forEach(function (c) {
+          html += "<tr style='" + (idx % 2 ? "" : "background:#f8fafc") + "'>";
+          scalarCols.forEach(function (c) {
             var v = item && item[c] != null ? item[c] : "";
-            var cellContent = "";
-            if (typeof v === "object") {
-              cellContent = "<button style='border:1px solid #c9d0da;background:#fff;border-radius:3px;font:9px system-ui;padding:2px 6px;cursor:pointer;color:#0d6efd' onclick='this.nextSibling.style.display=this.nextSibling.style.display===\"none\"?\"block\":\"none\"'>Expand</button><div style='display:none;margin-top:4px;font:10px monospace;background:#f8fafc;padding:4px;border-radius:3px;max-height:100px;overflow:auto'>" + esc2(JSON.stringify(v, null, 2)) + "</div>";
-            } else {
-              cellContent = esc2(String(v));
-            }
-            html += "<td style='padding:5px 10px;border-bottom:1px solid #f1f5f9;max-width:250px;overflow:hidden;text-overflow:ellipsis'>" + cellContent + "</td>";
+            html += "<td style='padding:8px;border-bottom:1px solid #edeff0;vertical-align:top;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc2(String(v)) + "'>" + esc2(String(v)) + "</td>";
           });
           html += "</tr>";
+          // Show nested objects as expandable sub-rows
+          if (nestedCols.length > 0) {
+            nestedCols.forEach(function (nc) {
+              var nv = item && item[nc];
+              if (nv && typeof nv === "object") {
+                html += "<tr style='background:#f0f7ff'><td colspan='" + scalarCols.length + "' style='padding:4px 8px 8px 24px;border-bottom:1px solid #e2e8f0'>";
+                html += "<span style='font-size:10px;font-weight:700;color:#0070d2;text-transform:uppercase'>" + esc2(nc.replace(/__dlm$|__c$/, "")) + "</span>";
+                html += "<div style='margin-top:4px'>" + renderJsonAsTable(Array.isArray(nv) ? nv : [nv], esc2) + "</div>";
+                html += "</td></tr>";
+              }
+            });
+          }
         });
         html += "</tbody></table>";
         return html;
       }
-      // Array of primitives
       return "<div style='padding:12px'>" + data.map(function (item, i) { return "<div style='padding:3px 10px;border-bottom:1px solid #f1f5f9;font-size:11px'><span style='color:#64748b;margin-right:8px'>" + (i + 1) + ".</span>" + esc2(String(item)) + "</div>"; }).join("") + "</div>";
     }
-    // Single object → key-value table
+    // Single object with nested arrays → tabbed view (like Data Graph Visualizer)
     if (typeof data === "object" && data !== null) {
-      var keys2 = Object.keys(data);
-      var html2 = "<table style='border-collapse:collapse;width:100%;font-size:12px'>";
-      keys2.forEach(function (k, idx) {
-        var v = data[k];
-        var valHtml = "";
-        if (v === null || v === undefined) { valHtml = "<span style='color:#94a3b8;font-style:italic'>null</span>"; }
-        else if (Array.isArray(v)) { valHtml = "<span style='color:#0d6efd;cursor:pointer' onclick='var d=this.nextSibling;d.style.display=d.style.display===\"none\"?\"block\":\"none\"'>[Array: " + v.length + " items] ▾</span><div style='display:none;margin-top:4px'>" + renderJsonAsTable(v, esc2) + "</div>"; }
-        else if (typeof v === "object") { valHtml = "<span style='color:#0d6efd;cursor:pointer' onclick='var d=this.nextSibling;d.style.display=d.style.display===\"none\"?\"block\":\"none\"'>{Object} ▾</span><div style='display:none;margin-top:4px'>" + renderJsonAsTable(v, esc2) + "</div>"; }
-        else { valHtml = "<span style='user-select:text'>" + esc2(String(v)) + "</span>"; }
-        html2 += "<tr style='background:" + (idx % 2 ? "#f8fafc" : "#fff") + "'><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#334155;white-space:nowrap;vertical-align:top;width:200px'>" + esc2(k) + "</td><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;color:#1e293b;word-break:break-word'>" + valHtml + "</td></tr>";
-      });
-      html2 += "</table>";
+      var allKeys = Object.keys(data);
+      var scalarKeys = allKeys.filter(function (k) { return !data[k] || typeof data[k] !== "object"; });
+      var nestedKeys = allKeys.filter(function (k) { return data[k] && typeof data[k] === "object"; });
+      var html2 = "";
+      // Scalar fields as a key-value table (top section)
+      if (scalarKeys.length > 0) {
+        html2 += "<table style='border-collapse:collapse;width:100%;font-size:12px;margin-bottom:12px'>";
+        scalarKeys.forEach(function (k, idx) {
+          var v = data[k];
+          html2 += "<tr style='" + (idx % 2 ? "background:#f8fafc" : "") + "'><td style='padding:6px 12px;border-bottom:1px solid #edeff0;font-weight:600;color:#514f4d;white-space:nowrap;vertical-align:top;width:200px;text-transform:uppercase;font-size:10px'>" + esc2(k.replace(/__c$/, "")) + "</td><td style='padding:6px 12px;border-bottom:1px solid #edeff0;color:#16325c;word-break:break-word;user-select:text'>" + (v == null ? "<span style='color:#94a3b8'>null</span>" : esc2(String(v))) + "</td></tr>";
+        });
+        html2 += "</table>";
+      }
+      // Nested arrays as tabs (like your Data Graph Visualizer)
+      if (nestedKeys.length > 0) {
+        var tabId = "dc-jt-" + Date.now();
+        html2 += "<div style='display:flex;flex-wrap:wrap;gap:4px;border-bottom:2px solid #d8dde6;margin-top:8px;padding-bottom:4px'>";
+        nestedKeys.forEach(function (nk, ni) {
+          var count = Array.isArray(data[nk]) ? data[nk].length : 1;
+          var isEmpty = Array.isArray(data[nk]) && data[nk].length === 0;
+          html2 += "<span class='" + tabId + "-tab' data-tab='" + ni + "' style='padding:6px 10px;cursor:pointer;border-radius:4px;font-weight:600;font-size:11px;" + (ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;")) + "' onclick='var tabs=document.querySelectorAll(\"." + tabId + "-tab\");var panes=document.querySelectorAll(\"." + tabId + "-pane\");tabs.forEach(function(t){t.style.background=\"#f3f2f2\";t.style.color=\"#54698d\"});panes.forEach(function(p){p.style.display=\"none\"});this.style.background=\"#0070d2\";this.style.color=\"white\";document.querySelector(\"." + tabId + "-pane[data-pane=\\\"" + ni + "\\\"]\").style.display=\"block\"'>" + esc2(nk.replace(/__dlm$|__c$/, "")) + " (" + count + ")</span>";
+        });
+        html2 += "</div>";
+        nestedKeys.forEach(function (nk, ni) {
+          var nv = data[nk];
+          var arrData = Array.isArray(nv) ? nv : [nv];
+          html2 += "<div class='" + tabId + "-pane' data-pane='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:8px'>";
+          if (arrData.length === 0) {
+            html2 += "<div style='padding:12px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
+          } else {
+            html2 += renderJsonAsTable(arrData, esc2);
+          }
+          html2 += "</div>";
+        });
+      }
       return html2;
     }
     return "<pre style='margin:0;padding:12px;font:12px monospace'>" + esc2(String(data)) + "</pre>";
