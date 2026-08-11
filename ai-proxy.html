@@ -121,7 +121,7 @@ body{font:13px -apple-system,sans-serif;margin:20px;color:#334155;background:#f8
     } else {
       sendBack({ ok: false, error: "Unknown provider: " + provider });
     }
-  });
+  }
 
   function sendBack(result) {
     // Write result to localStorage (bookmarklet polls for this)
