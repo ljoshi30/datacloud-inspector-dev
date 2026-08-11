@@ -7637,6 +7637,7 @@
             var n = parsedNodes[k]; if (!n) return;
             htmlDoc += "<div class='node'><span class='node-action'>" + esc(n.action || k) + "</span><span class='node-summary'>" + esc(n.summary || "") + "</span></div>";
           });
+        }
       } else {
         htmlDoc += "<h2>SQL</h2><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:12px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
       }
