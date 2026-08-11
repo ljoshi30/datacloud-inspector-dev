@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data 360 Inspector — Feature Overview</title>
+<style>
+  body{margin:0;font:15px/1.7 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1e293b;background:#f8fafc}
+  .wrap{max-width:900px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:28px;margin:0 0 8px;color:#0f172a}
+  h2{font-size:20px;margin:32px 0 12px;color:#0f172a;border-bottom:2px solid #e2e8f0;padding-bottom:6px}
+  h3{font-size:15px;margin:20px 0 8px;color:#334155}
+  .subtitle{font-size:14px;color:#64748b;margin-bottom:32px}
+  .card{border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px;margin:16px 0;background:#fff}
+  .card h3{margin-top:0}
+  .highlight{background:#eff6ff;border-left:4px solid #3b82f6;padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:12px 0}
+  th{text-align:left;padding:8px 12px;background:#f1f5f9;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#475569}
+  td{padding:8px 12px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+  .tag{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:4px}
+  .tag-green{background:#dcfce7;color:#166534}
+  .tag-blue{background:#dbeafe;color:#1e40af}
+  .tag-purple{background:#f3e8ff;color:#6b21a8}
+  ul{padding-left:20px}li{margin:6px 0}
+  .gap{color:#dc2626;font-weight:600}
+  .solve{color:#059669;font-weight:600}
+  @media print{body{background:#fff}.wrap{padding:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Data 360 Inspector</h1>
+<p class="subtitle">A browser-based toolkit for Salesforce Data Cloud. Zero setup. Read-only. Works on any org.</p>
+
+<h2>What It Does</h2>
+
+<div class="card">
+<h3><span class="tag tag-green">Segment</span> Segment Rule Export</h3>
+<table>
+<tr><th>What</th><td>Reads all segment conditions (Include, Exclude, Rank & Limit) from the builder canvas and exports them</td></tr>
+<tr><th>Output</th><td>Copy to Google Sheets or download as formatted HTML/Excel</td></tr>
+<tr><th style="width:100px">Gap solved</th><td><span class="gap">No native way</span> to export segment logic for documentation, audit, or sharing with non-SF users</td></tr>
+<tr><th>Time saved</th><td>15-20 min manual documentation per segment → <span class="solve">1 click</span></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3><span class="tag tag-blue">Explorer</span> Data Explorer</h3>
+<table>
+<tr><th>What</th><td>View ALL columns, filter, sort, count records, and export any DLO/DMO data as CSV</td></tr>
+<tr><th>Key features</th><td>
+  <ul style="margin:0;padding-left:16px">
+    <li>Breaks SF's 10-column display limit — view all 40+ fields at once</li>
+    <li>Save/restore column selections (persists across sessions)</li>
+    <li>Multi-condition filter with real-time COUNT</li>
+    <li>Export All — download entire object (up to 500K rows) as CSV</li>
+    <li>Edit SQL — inline query editor with editable WHERE/LIMIT</li>
+    <li>Sort any column, hide empty columns</li>
+  </ul>
+</td></tr>
+<tr><th>Gap solved</th><td><span class="gap">SF Data Explorer limits to 10 columns, 2K rows, no export, no inline filter</span></td></tr>
+<tr><th>Time saved</th><td>Data validation: 30+ min (write SQL, use API) → <span class="solve">30 seconds</span> (filter + count + download)</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3><span class="tag tag-blue">Query</span> Query Editor Export</h3>
+<table>
+<tr><th>What</th><td>Run any SQL query and export full results as CSV — bypasses SF's 2,000-row UI limit</td></tr>
+<tr><th>Key features</th><td>
+  <ul style="margin:0;padding-left:16px">
+    <li>Paginated export (up to 500K rows) with progress + cancel</li>
+    <li>Highlight SQL → click Run & Export → CSV downloads</li>
+    <li>Actionable error messages</li>
+  </ul>
+</td></tr>
+<tr><th>Gap solved</th><td><span class="gap">SF Query Editor shows results but has NO download/export option</span></td></tr>
+<tr><th>Time saved</th><td>Exporting query results: build API integration (hours) → <span class="solve">1 click</span></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3><span class="tag tag-purple">Transform</span> Data Transform Summary</h3>
+<table>
+<tr><th>What</th><td>Auto-reads the transform definition and generates a plain-English summary</td></tr>
+<tr><th>Key features</th><td>
+  <ul style="margin:0;padding-left:16px">
+    <li>Branch-by-branch breakdown in readable language</li>
+    <li>Shows: which fields are kept/dropped/renamed</li>
+    <li>Download as styled HTML (printable as PDF)</li>
+    <li>AI-powered explanation (optional)</li>
+  </ul>
+</td></tr>
+<tr><th>Gap solved</th><td><span class="gap">Understanding a 20+ node transform requires clicking into each node one by one. No native documentation feature.</span></td></tr>
+<tr><th>Time saved</th><td>Documenting a transform: 30-60 min → <span class="solve">instant</span>. KT for new member: 1-hour walkthrough → share the summary</td></tr>
+</table>
+</div>
+
+<h2>Who Benefits</h2>
+<table>
+<tr><th>Role</th><th>How they use it</th></tr>
+<tr><td>Data Cloud Architect</td><td>Validate transforms, review segments, document architecture</td></tr>
+<tr><td>Data Engineer</td><td>Query data, export for analysis, debug transform logic</td></tr>
+<tr><td>Business Analyst</td><td>Review segment rules, validate record counts, export data</td></tr>
+<tr><td>QA / Testing</td><td>Verify data after ingestion, compare counts, validate filters</td></tr>
+<tr><td>Project Manager</td><td>Get documentation for audits, share with stakeholders</td></tr>
+<tr><td>New Team Member</td><td>Self-service understanding of transforms and segments</td></tr>
+</table>
+
+<h2>Key Differentiators</h2>
+<div class="highlight">
+<strong>Zero setup</strong> — drag a bookmarklet, works instantly. No Connected App, no API keys, no admin approval.<br>
+<strong>Read-only</strong> — never modifies any Salesforce data. Safe for production.<br>
+<strong>Works on any org</strong> — no package install, no metadata deployment.<br>
+<strong>Breaks native limits</strong> — 10-column cap, 2K-row cap, no-export limitation — all bypassed.<br>
+<strong>Instant documentation</strong> — transforms, segments, and data exports generated automatically.
+</div>
+
+<h2>Supported Pages</h2>
+<table>
+<tr><th>Page</th><th>Features available</th></tr>
+<tr><td>DLO → DMO Mapping Canvas</td><td>API names (tooltip + pin), full mapping export</td></tr>
+<tr><td>Data Stream / DLO / DMO Detail</td><td>Export all fields (API name, type, status)</td></tr>
+<tr><td>Data Explorer</td><td>All columns, filter, count, sort, Export All CSV, Edit SQL</td></tr>
+<tr><td>Query Editor</td><td>Run & Export any SQL as CSV (up to 500K rows)</td></tr>
+<tr><td>Segment Builder</td><td>Export rules (Include/Exclude/Rank & Limit) to Sheets/HTML</td></tr>
+<tr><td>Data Transform</td><td>Plain-English summary, Download as PDF, column details</td></tr>
+</table>
+
+<h2>Implementation Impact</h2>
+<table>
+<tr><th>Phase</th><th>Without tool</th><th>With tool</th></tr>
+<tr><td>Data Validation</td><td>Write SQL, use API, export via scripts</td><td><span class="solve">Filter + COUNT + Export in the UI</span></td></tr>
+<tr><td>Transform Documentation</td><td>Manual screenshots + descriptions</td><td><span class="solve">Auto-generated summary, downloadable</span></td></tr>
+<tr><td>Segment Review</td><td>Screenshots or verbal walkthroughs</td><td><span class="solve">One-click export to Sheets</span></td></tr>
+<tr><td>Stakeholder Reporting</td><td>Build reports, share screenshots</td><td><span class="solve">Download summary / Copy for Sheets</span></td></tr>
+<tr><td>Team Onboarding</td><td>Live walkthroughs on each page</td><td><span class="solve">Self-service: click and read</span></td></tr>
+<tr><td>Troubleshooting</td><td>Click through nodes/columns manually</td><td><span class="solve">Instant summary + full data access</span></td></tr>
+</table>
+
+<p style="font-size:12px;color:#94a3b8;margin-top:40px;text-align:center">Data 360 Inspector — v1.2.130 — Internal use</p>
+
+</div>
+</body>
+</html>
