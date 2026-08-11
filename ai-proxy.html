@@ -23,10 +23,22 @@ body{font:13px -apple-system,sans-serif;margin:20px;color:#334155;background:#f8
   function log(msg) { logEl.innerHTML += msg + "<br>"; }
   function setStatus(msg, type) { statusEl.textContent = msg; statusEl.className = "status " + (type || ""); }
 
-  // Listen for messages from the bookmarklet (opener window)
+  // Read request from localStorage (set by the bookmarklet before opening this popup)
+  var requestData = null;
+  try { requestData = JSON.parse(localStorage.getItem("dc_ai_request")); } catch(e) {}
+  if (requestData) {
+    localStorage.removeItem("dc_ai_request");
+    handleRequest(requestData);
+  }
+
+  // Also listen for postMessage (for extension path or direct calls)
   window.addEventListener("message", function(ev) {
     var d = ev.data;
     if (!d || d.type !== "dc-ai-request") return;
+    handleRequest(d);
+  });
+
+  function handleRequest(d) {
 
     setStatus("Processing AI request...", "");
     log("Received request: " + (d.provider || "unknown") + " | " + (d.messages ? d.messages.length + " messages" : "prompt"));
@@ -110,16 +122,18 @@ body{font:13px -apple-system,sans-serif;margin:20px;color:#334155;background:#f8
   });
 
   function sendBack(result) {
+    // Write result to localStorage (bookmarklet polls for this)
+    try { localStorage.setItem("dc_ai_response", JSON.stringify(result)); } catch(e) {}
+    // Also try postMessage for extension path
     if (opener) {
-      opener.postMessage({ type: "dc-ai-response", result: result }, "*");
-      // Auto-close after sending (small delay for user to see status)
-      setTimeout(function() { window.close(); }, 2000);
+      try { opener.postMessage({ type: "dc-ai-response", result: result }, "*"); } catch(e) {}
     }
+    // Auto-close after sending
+    setTimeout(function() { window.close(); }, 2000);
   }
 
-  // Tell opener we're ready
-  if (opener) opener.postMessage({ type: "dc-ai-proxy-ready" }, "*");
-  else setStatus("Error: This page must be opened by Data 360 Inspector.", "error");
+  // Tell opener we're ready (for postMessage path)
+  if (opener) { try { opener.postMessage({ type: "dc-ai-proxy-ready" }, "*"); } catch(e) {} }
 })();
 </script>
 </body>
