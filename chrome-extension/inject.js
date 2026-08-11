@@ -9350,54 +9350,79 @@
         return;
       }
 
-      // Bookmarklet path — try DOM read, then same-origin API, then paste fallback
-      btn.disabled = true; btn.textContent = "Scanning page…"; note.style.display = "none";
+      // Bookmarklet path — intercept SF's Download JSON button to get the definition
+      btn.disabled = true; btn.textContent = "Reading transform…"; note.style.display = "none";
       setTimeout(function () {
+        // 1) Try DOM read first (instant)
         var domDef = readTransformFromDom();
         if (domDef) {
           btn.disabled = false; btn.textContent = "🔎 Understand this transform";
           showTransformSummary({ definition: domDef, name: nameOrId, label: nameOrId });
           return;
         }
-        // Try same-origin REST API call (works if SF sends session cookie)
-        btn.textContent = "Loading via API…";
-        fetch("/services/data/v63.0/ssot/data-transforms/" + encodeURIComponent(nameOrId), {
-          headers: { "Accept": "application/json" }, credentials: "include"
-        }).then(function (r) {
-          if (r.ok) return r.json();
-          return null;
-        }).then(function (data) {
-          if (data) {
-            btn.disabled = false; btn.textContent = "🔎 Understand this transform";
-            showTransformSummary(data);
-            return;
-          }
+        // 2) Auto-click SF's Download JSON button and intercept the blob (no file saved)
+        var dlBtnEl = null;
+        var allBtns = document.querySelectorAll("button");
+        for (var bi = 0; bi < allBtns.length; bi++) {
+          var at = allBtns[bi].querySelector(".slds-assistive-text");
+          if (at && /download.*json/i.test(at.textContent)) { dlBtnEl = allBtns[bi]; break; }
+        }
+        if (dlBtnEl) {
+          var realCreateObjectURL = URL.createObjectURL.bind(URL);
+          var realAnchorClick = HTMLAnchorElement.prototype.click;
+          var captured = null;
+          URL.createObjectURL = function (blob) {
+            if (blob && blob.type === "application/json") {
+              blob.text().then(function (t) { captured = t; });
+            }
+            return realCreateObjectURL(blob);
+          };
+          HTMLAnchorElement.prototype.click = function () {
+            if (this.download && /\.json$/i.test(this.download)) return;
+            return realAnchorClick.call(this);
+          };
+          dlBtnEl.click();
+          setTimeout(function () {
+            URL.createObjectURL = realCreateObjectURL;
+            HTMLAnchorElement.prototype.click = realAnchorClick;
+            if (captured) {
+              try {
+                var parsed = JSON.parse(captured);
+                btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+                showTransformSummary({ definition: parsed, name: nameOrId, label: parsed.label || parsed.name || nameOrId });
+              } catch (e) {
+                btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+                note.textContent = "Failed to parse transform JSON."; note.style.display = "block";
+              }
+            } else {
+              showPasteFallback();
+            }
+          }, 2000);
+        } else {
           showPasteFallback();
-        }).catch(function () {
-          showPasteFallback();
-        });
+        }
         function showPasteFallback() {
           btn.disabled = false; btn.textContent = "🔎 Understand this transform";
-          note.innerHTML = "Could not read the transform definition from this page.<br><br>" +
-            "Click SF's <b>Download JSON</b> button, then paste the JSON here:";
+          note.innerHTML = "Could not read the transform definition automatically.<br><br>" +
+            "Click SF's <b>Download JSON</b> button (upload icon in toolbar), then paste the JSON here:";
           var ta = document.createElement("textarea");
           ta.placeholder = "Paste transform JSON here…";
           ta.style.cssText = "width:100%;height:80px;margin-top:6px;font:11px monospace;border:1px solid #c9d0da;border-radius:4px;padding:6px;";
-          var parseBtn = document.createElement("button");
-          parseBtn.textContent = "Parse & Show";
-          parseBtn.style.cssText = "margin-top:4px;border:none;background:#0d6efd;color:#fff;border-radius:4px;padding:5px 12px;cursor:pointer;font:600 11px system-ui;";
-          parseBtn.onclick = function () {
+          var parseBtn2 = document.createElement("button");
+          parseBtn2.textContent = "Parse & Show";
+          parseBtn2.style.cssText = "margin-top:4px;border:none;background:#0d6efd;color:#fff;border-radius:4px;padding:5px 12px;cursor:pointer;font:600 11px system-ui;";
+          parseBtn2.onclick = function () {
             try {
-              var parsed = JSON.parse(ta.value);
-              var def = parsed.definition || parsed;
-              if (!def.nodes && parsed.definitions && parsed.definitions[0]) def = parsed.definitions[0].definition || parsed.definitions[0];
-              showTransformSummary({ definition: def, name: nameOrId, label: parsed.label || parsed.name || nameOrId });
+              var p = JSON.parse(ta.value);
+              var def = p.definition || p;
+              if (!def.nodes && p.definitions && p.definitions[0]) def = p.definitions[0].definition || p.definitions[0];
+              showTransformSummary({ definition: def, name: nameOrId, label: p.label || p.name || nameOrId });
             } catch (e) { note.textContent = "Invalid JSON: " + e.message; }
           };
-          note.appendChild(ta); note.appendChild(parseBtn);
+          note.appendChild(ta); note.appendChild(parseBtn2);
           note.style.display = "block";
         }
-      }, 500);
+      }, 300);
     };
     wrap.appendChild(note); wrap.appendChild(btn);
     document.body.appendChild(wrap);
