@@ -2713,13 +2713,15 @@
       const m = toks.find(t => /^(waterfall segment|dynamic segment|segment)$/i.test(t));
       if (m) { headerLabel = m.replace(/\b\w/g, c => c.toUpperCase()); break; }
     }
-    if (hasWaterfall || /waterfall/i.test(headerLabel)) return "Waterfall Segment";
+    // Only return "Waterfall" if the waterfall container element actually exists in DOM
+    if (hasWaterfall) return "Waterfall Segment";
     // 3) a labeled "Segment Type" value, if SF renders one (e.g. Dynamic).
     const pairs = readAllFormPairs();
     const typed = (pairs.get("Segment Type") || pairs.get("Membership Type") || "").trim();
-    if (typed && !/share an update|share this/i.test(typed)) return typed + (/(segment)$/i.test(typed) ? "" : " Segment");
-    if (headerLabel) return headerLabel;
-    return "";
+    // Validate: only use if it looks like a real segment type (not random UI text)
+    if (typed && /^(standard|waterfall|dynamic|real.?time|batch)/i.test(typed)) return typed + (/(segment)$/i.test(typed) ? "" : " Segment");
+    // Default: just "Segment" — don't guess
+    return headerLabel || "Segment";
   }
 
   function readSegmentMeta() {
