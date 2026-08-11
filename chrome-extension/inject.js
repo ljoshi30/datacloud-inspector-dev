@@ -7279,6 +7279,7 @@
       })() + "</div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
       "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569;position:relative;z-index:10' title='Change AI provider or API key'>⚙</button>" +
+      "<button class='dc-xf-sheets' style='border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy for Sheets</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
@@ -7319,9 +7320,9 @@
 
     var body = "<div style='flex:1;overflow:auto;padding:14px 16px'>";
     // SUMMARY section
-    body += "<div style='background:linear-gradient(135deg,#eff6ff,#f0fdf4);border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:16px'>";
-    body += "<div style='font-weight:700;font-size:13px;color:#1e3a5f;margin-bottom:8px'>Summary</div>";
-    body += "<div style='font-size:12px;line-height:1.8;color:#334155'>" + summaryLines.join("<br>") + "</div>";
+    body += "<div style='background:linear-gradient(135deg,#eff6ff,#f0fdf4);border:1px solid #bfdbfe;border-radius:10px;padding:16px 18px;margin-bottom:16px'>";
+    body += "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px'><div style='width:6px;height:6px;border-radius:50%;background:#0d6efd'></div><span style='font-weight:700;font-size:13px;color:#1e3a5f'>Summary</span></div>";
+    body += "<div style='font-size:12px;line-height:2;color:#334155;padding-left:14px'>" + summaryLines.join("<br>") + "</div>";
     body += "</div>";
 
     if (isSql) {
@@ -7356,6 +7357,41 @@
     document.body.appendChild(m);
     m.querySelector(".dc-xf-x").onclick = closeTransformView;
     m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
+    // Copy for Sheets — builds a rich HTML table that pastes nicely into Google Sheets/Docs
+    m.querySelector(".dc-xf-sheets").onclick = function () {
+      var html = "<table><tr><th colspan='3' style='font-size:14px;font-weight:bold;text-align:left;padding:8px;background:#f3f6fb'>" + esc(rep.label || rep.name || "Data Transform") + "</th></tr>";
+      html += "<tr><td colspan='3' style='padding:4px 8px;color:#5c6b8a'>Source: " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", ") + "</td></tr>";
+      html += "<tr><td colspan='3' style='padding:4px 8px;color:#5c6b8a'>" + inputNodes.length + " source → " + keys.length + " nodes → " + outputNodes.length + " outputs</td></tr>";
+      html += "<tr><th style='padding:4px 8px;background:#e0e5ee'>Branch</th><th style='padding:4px 8px;background:#e0e5ee'>Step</th><th style='padding:4px 8px;background:#e0e5ee'>Description</th></tr>";
+      branches.forEach(function (br, idx) {
+        var first = true;
+        br.path.forEach(function (n) {
+          if (!n.action || n.action === "load" || n.action === "input") return;
+          var act = n.action || "";
+          var desc = "";
+          if (act === "filter") desc = "Filter: " + (n.summary || "");
+          else if (act === "formula" || act === "computerelative" || act === "compute") desc = "Calculate: " + (n.summary || "");
+          else if (act === "schema") desc = n.summary || "Select columns";
+          else if (act === "join" || act === "lookup") desc = "Join: " + (n.summary || "");
+          else if (act === "aggregate") desc = "Aggregate: " + (n.summary || "");
+          else if (act === "outputd360" || act === "output") desc = "Output: " + esc(br.output.target) + " (" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")";
+          else desc = act + ": " + (n.summary || "");
+          html += "<tr><td style='padding:3px 8px;vertical-align:top;font-weight:" + (first ? "bold" : "normal") + "'>" + (first ? "→ " + esc(br.output.target) : "") + "</td><td style='padding:3px 8px;color:#5c6b8a'>" + esc(act) + "</td><td style='padding:3px 8px'>" + esc(desc) + "</td></tr>";
+          first = false;
+        });
+      });
+      html += "</table>";
+      try {
+        var blob = new Blob([html], { type: "text/html" });
+        var item = new ClipboardItem({ "text/html": blob, "text/plain": new Blob([summaryLines.join("\n")], { type: "text/plain" }) });
+        navigator.clipboard.write([item]);
+        var sb = m.querySelector(".dc-xf-sheets"); sb.textContent = "✓ Copied!"; setTimeout(function () { sb.textContent = "Copy for Sheets"; }, 1500);
+      } catch (e) {
+        // Fallback: copy plain text
+        navigator.clipboard.writeText(summaryLines.join("\n"));
+        var sb2 = m.querySelector(".dc-xf-sheets"); sb2.textContent = "✓ Copied (text)"; setTimeout(function () { sb2.textContent = "Copy for Sheets"; }, 1500);
+      }
+    };
 
     // ── AI Explain button (extension-only, needs Anthropic API key) ──
     var aiBtn = m.querySelector(".dc-xf-ai");
