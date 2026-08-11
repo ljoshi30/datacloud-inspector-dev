@@ -7369,7 +7369,8 @@
     if (isSql) {
       summaryLines.push("<b>Streaming transform</b> — runs a SQL query to produce output.");
     } else {
-      summaryLines.push("<b>Batch transform</b> — " + inputNodes.length + " source" + (inputNodes.length !== 1 ? "s" : "") + " → " + keys.length + " steps → " + outputNodes.length + " output" + (outputNodes.length !== 1 ? "s" : ""));
+      var uiNodeCount = Object.keys(uiNodes).length || keys.length;
+      summaryLines.push("<b>Batch transform</b> — " + inputNodes.length + " source" + (inputNodes.length !== 1 ? "s" : "") + " → " + uiNodeCount + " nodes → " + outputNodes.length + " output" + (outputNodes.length !== 1 ? "s" : ""));
       summaryLines.push("<b>Reads from:</b> " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", "));
 
       branches.forEach(function (br, idx) {
