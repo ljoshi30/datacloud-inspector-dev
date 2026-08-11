@@ -7283,38 +7283,69 @@
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
-    // ── Build summary: overview + per-branch flow ──
+    // ── Translate node actions to plain English ──
+    function humanize(n) {
+      var act = n.action || "", s = n.summary || "";
+      // row_number + partition = "keep latest/first per group"
+      if (act === "computerelative" && /row_number/i.test(s)) {
+        var partMatch = s.match(/PARTITION BY\s+([^\s]+)/i);
+        var orderMatch = s.match(/ORDER BY\s+([^\s]+)\s+(DESC|ASC)/i);
+        var groupField = partMatch ? partMatch[1].replace(/__c$/i, "").replace(/_/g, " ") : "group";
+        var direction = (orderMatch && /DESC/i.test(orderMatch[2])) ? "most recent" : "earliest";
+        return "Rank records per " + groupField + " (" + direction + " first)";
+      }
+      if (act === "filter") {
+        // rank = 1 pattern
+        if (/rank.*equal.*1/i.test(s)) return "Keep only the top-ranked record (deduplication)";
+        // IS_NOT_NULL
+        if (/is.not.null/i.test(s) && !/AND/i.test(s)) { var fld = s.match(/^(\w+)/); return "Exclude records where " + (fld ? fld[1].replace(/__c$/i, "").replace(/_/g, " ") : "field") + " is empty"; }
+        // IN_RANGE date
+        if (/in.range/i.test(s)) return "Filter by date range (keep valid/active records)";
+        // Generic filter
+        var parts = s.split(/\s+AND\s+/i);
+        if (parts.length > 2) return "Filter: " + parts.length + " conditions applied";
+        return "Filter: " + esc(s.slice(0, 80));
+      }
+      if (act === "formula") {
+        if (/concat/i.test(s)) return "Create composite key (combine fields)";
+        if (/datediff|date_diff/i.test(s)) return "Calculate days between dates";
+        if (/case\s+when|if\s*\(/i.test(s)) return "Apply conditional logic (IF/CASE)";
+        var fname = s.match(/^(\w+)\s*=/);
+        return "Calculate field: " + (fname ? fname[1].replace(/_/g, " ") : s.slice(0, 50));
+      }
+      if (act === "schema") return "Select output columns (" + (s.match(/\d+/) || [""])[0] + " fields)";
+      if (act === "join" || act === "lookup") {
+        var jtype = s.match(/^([A-Z_ ]+)\s+on/i);
+        return (jtype ? jtype[1].trim() : "Join") + " with another dataset";
+      }
+      if (act === "aggregate") return "Aggregate/summarize data";
+      if (act === "append" || act === "union") return "Combine rows from multiple paths";
+      if (act === "update") return "Update field values from lookup";
+      if (act === "outputd360" || act === "output") return null;
+      return act ? (act.charAt(0).toUpperCase() + act.slice(1)).replace(/([a-z])([A-Z])/g, "$1 $2") + (s ? ": " + s.slice(0, 50) : "") : null;
+    }
+
+    // ── Build summary: readable narrative + per-branch flow ──
     var summaryLines = [];
     if (isSql) {
       summaryLines.push("<b>Streaming transform</b> — runs a SQL query to produce output.");
     } else {
-      // Overview line
-      summaryLines.push("<b>Batch transform</b> — " + inputNodes.length + " source" + (inputNodes.length !== 1 ? "s" : "") + " → " + keys.length + " nodes → " + outputNodes.length + " output" + (outputNodes.length !== 1 ? "s" : ""));
-      summaryLines.push("<b>Source:</b> " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", "));
+      summaryLines.push("<b>Batch transform</b> — " + inputNodes.length + " source" + (inputNodes.length !== 1 ? "s" : "") + " → " + keys.length + " steps → " + outputNodes.length + " output" + (outputNodes.length !== 1 ? "s" : ""));
+      summaryLines.push("<b>Reads from:</b> " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", "));
 
-      // Per-branch flow
       branches.forEach(function (br, idx) {
-        var flowSteps = [];
+        var humanSteps = [];
         br.path.forEach(function (n) {
-          var act = n.action || "";
-          var label = "";
-          if (act === "filter") label = "Filter: " + esc(n.summary || "");
-          else if (act === "formula" || act === "computerelative" || act === "compute" || act === "expression" || act === "transform") label = "Calculate: " + esc(n.summary || "");
-          else if (act === "schema") label = esc(n.summary || "Select columns");
-          else if (act === "join" || act === "lookup") label = "Join: " + esc(n.summary || "");
-          else if (act === "aggregate" || act === "group") label = "Aggregate: " + esc(n.summary || "");
-          else if (act === "append" || act === "union") label = "Append branches";
-          else if (act === "update" || act === "swap") label = "Update: " + esc(n.summary || "");
-          else if (act && act !== "load" && act !== "input") label = esc(act) + ": " + esc(n.summary || "");
-          if (label) flowSteps.push(label);
+          var h = humanize(n);
+          if (h) humanSteps.push(h);
         });
-        var outLabel = esc(br.output.target) + " (" + br.output.mappings.length + " fields" + (br.output.writeMode ? ", " + br.output.writeMode : "") + ")";
+        var outName = esc(br.output.target).replace(/__dll$|__dlm$/i, "").replace(/_/g, " ");
         summaryLines.push("");
-        summaryLines.push("<b style='color:#0d6efd'>Branch " + (idx + 1) + " → " + esc(br.output.target) + "</b>");
-        flowSteps.forEach(function (s, i) {
-          summaryLines.push("<span style='color:#64748b'>" + (i + 1) + ".</span> " + s);
+        summaryLines.push("<b style='color:#0d6efd'>Branch " + (idx + 1) + ": " + outName + "</b>");
+        humanSteps.forEach(function (s, i) {
+          summaryLines.push("&nbsp;&nbsp;" + (i + 1) + ". " + s);
         });
-        summaryLines.push("<span style='color:#059669'>→ Output:</span> " + outLabel);
+        summaryLines.push("&nbsp;&nbsp;<span style='color:#059669'>→ Writes to: " + esc(br.output.target) + " (" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")</span>");
       });
     }
 
@@ -7328,29 +7359,34 @@
     if (isSql) {
       body += "<div style='font-weight:700;margin-bottom:6px'>SQL</div><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:10px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
     } else {
+      // Collapsible technical details
+      body += "<details style='margin-top:12px;border:1px solid #e0e5ee;border-radius:8px;padding:0'>";
+      body += "<summary style='font-weight:700;font-size:12px;padding:10px 14px;cursor:pointer;background:#f8fafc;border-radius:8px;color:#475569;user-select:none'>Technical Details (sources, nodes, outputs, field mappings)</summary>";
+      body += "<div style='padding:10px 14px'>";
       // SOURCES
-      body += "<div style='font-weight:700;margin:2px 0 6px'>Sources (" + sources.length + ")</div>";
+      body += "<div style='font-weight:700;margin:2px 0 6px;font-size:11px;color:#1e3a5f'>Sources (" + sources.length + ")</div>";
       sources.forEach(function (s) {
-        body += "<div style='padding:6px 10px;border:1px solid #e6ebf3;border-radius:6px;margin-bottom:5px'>" +
-          "<b>" + esc(s.summary) + "</b> <span style='color:#8a94a6'>" + esc(s.fields.length + " fields") + "</span>" +
-          (s.fields.length ? "<details style='margin-top:4px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show fields</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px;max-height:80px;overflow:auto'>" + s.fields.map(esc).join(", ") + "</div></details>" : "") + "</div>";
+        body += "<div style='padding:5px 10px;border:1px solid #e6ebf3;border-radius:6px;margin-bottom:4px;font-size:11px'>" +
+          "<b>" + esc(s.summary) + "</b> <span style='color:#8a94a6'>(" + s.fields.length + " fields)</span>" +
+          (s.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show fields</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px;max-height:60px;overflow:auto'>" + s.fields.map(esc).join(", ") + "</div></details>" : "") + "</div>";
       });
-      // ALL NODES as flow
-      body += "<div style='font-weight:700;margin:12px 0 6px'>All Nodes (" + keys.length + ")</div>";
+      // OUTPUTS with mappings
+      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>Outputs (" + outs.length + ")</div>";
+      outs.forEach(function (o) {
+        body += "<div style='padding:5px 10px;border:1px solid #cfe0d3;border-radius:6px;margin-bottom:4px;background:#f9fdfb;font-size:11px'>" +
+          "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>" +
+          (o.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
+      });
+      // ALL NODES color-coded
+      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ")</div>";
       keys.forEach(function (k) {
         var n = parsedNodes[k];
         if (!n) return;
         var color = n.action === "filter" ? "#dc2626" : n.action === "join" || n.action === "lookup" ? "#2563eb" : n.action === "formula" || n.action === "computerelative" ? "#7c3aed" : n.action === "schema" ? "#d97706" : n.action === "outputd360" || n.action === "output" ? "#059669" : "#334155";
-        body += "<div style='padding:4px 10px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:3px;font-size:11px'>" +
+        body += "<div style='padding:3px 8px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:2px;font-size:10px'>" +
           "<b style='color:" + color + "'>" + esc(n.action || k) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span></div>";
       });
-      // OUTPUTS
-      body += "<div style='font-weight:700;margin:12px 0 6px'>Outputs (" + outs.length + ")</div>";
-      outs.forEach(function (o) {
-        body += "<div style='padding:6px 10px;border:1px solid #cfe0d3;border-radius:6px;margin-bottom:5px;background:#f4faf5'>" +
-          "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields mapped</span>" +
-          (o.fields.length ? "<details style='margin-top:4px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
-      });
+      body += "</div></details>";
     }
     body += "</div>";
     m.innerHTML = hdr + body;
