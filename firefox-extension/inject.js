@@ -6428,8 +6428,12 @@
             if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Your Salesforce session has expired — reload the page and retry.")); return; }
             var j; try { j = JSON.parse(txt); } catch (e) {
               // Non-JSON response = session expired or SF returned an error page
-              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — sort any column on the SF table to re-establish, then retry.")); return; }
-              reject(new Error("SQL response was not JSON. The session may have expired — sort a column on the SF table, then retry."));
+              var isQueryEditor = /DataQueryWorkspace/i.test(location.href);
+              var sessionHint = isQueryEditor
+                ? "Click SF's \"Run Highlighted Query\" button first to establish a session, then click our Run & Export again."
+                : "Sort any column on the Data Explorer table to re-establish the session, then retry.";
+              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — " + sessionHint)); return; }
+              reject(new Error("Session may have expired — " + sessionHint));
               return;
             }
             var a = j && j.actions && j.actions[0];
