@@ -7726,9 +7726,30 @@
             if (d.ok && d.explanation) {
               var aiDiv = m.querySelector(".dc-xf-ai-result");
               if (!aiDiv) { aiDiv = document.createElement("div"); aiDiv.className = "dc-xf-ai-result"; m.querySelector("[style*='overflow:auto']").insertBefore(aiDiv, m.querySelector("[style*='overflow:auto']").firstChild); }
-              aiDiv.style.cssText = "background:linear-gradient(135deg,#faf5ff,#f0f9ff);border:1px solid #c4b5fd;border-radius:10px;padding:14px 16px;margin-bottom:16px;";
-              aiDiv.innerHTML = "<div style='font-weight:700;font-size:13px;color:#5b21b6;margin-bottom:8px'>✨ AI Explanation</div>" +
-                "<div style='font-size:12px;line-height:1.8;color:#334155;white-space:pre-wrap'>" + d.explanation.replace(/</g,"&lt;").replace(/\n/g,"<br>") + "</div>";
+              aiDiv.style.cssText = "background:linear-gradient(135deg,#faf5ff,#f0f9ff);border:1px solid #c4b5fd;border-radius:10px;padding:16px 20px;margin-bottom:16px;max-height:70vh;overflow:auto;";
+              // Simple markdown → HTML renderer
+              var mdHtml = d.explanation
+                .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                .replace(/^### (.+)$/gm, "<h4 style='font-size:13px;font-weight:700;margin:16px 0 6px;color:#1e293b'>$1</h4>")
+                .replace(/^## (.+)$/gm, "<h3 style='font-size:14px;font-weight:700;margin:20px 0 8px;color:#0f172a;border-bottom:1px solid #e2e8f0;padding-bottom:4px'>$1</h3>")
+                .replace(/^# (.+)$/gm, "<h2 style='font-size:16px;font-weight:700;margin:0 0 12px;color:#0f172a'>$1</h2>")
+                .replace(/^---$/gm, "<hr style='border:none;border-top:1px solid #e2e8f0;margin:12px 0'>")
+                .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+                .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+                .replace(/`([^`]+)`/g, "<code style='font:11px SF Mono,Consolas,monospace;background:#f1f5f9;padding:1px 4px;border-radius:3px'>$1</code>")
+                .replace(/^\| (.+) \|$/gm, function (line) {
+                  var cells = line.split("|").filter(function (c) { return c.trim(); });
+                  return "<tr>" + cells.map(function (c) { return "<td style='padding:4px 8px;border-bottom:1px solid #e2e8f0;font-size:11px'>" + c.trim() + "</td>"; }).join("") + "</tr>";
+                })
+                .replace(/^\|[-| :]+\|$/gm, "")
+                .replace(/(<tr>[\s\S]*?<\/tr>)/g, "<table style='border-collapse:collapse;width:100%;margin:8px 0;font-size:11px'>$1</table>")
+                .replace(/^- (.+)$/gm, "<li style='margin:3px 0;font-size:12px'>$1</li>")
+                .replace(/(<li[\s\S]*?<\/li>)\n/g, "$1")
+                .replace(/((?:<li[^>]*>.*?<\/li>)+)/g, "<ul style='padding-left:18px;margin:6px 0'>$1</ul>")
+                .replace(/\n\n/g, "<br><br>")
+                .replace(/\n/g, "<br>");
+              aiDiv.innerHTML = "<div style='font-weight:700;font-size:14px;color:#5b21b6;margin-bottom:12px'>✨ AI Explanation</div>" +
+                "<div style='font-size:12px;line-height:1.7;color:#334155'>" + mdHtml + "</div>";
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
