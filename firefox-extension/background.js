@@ -191,7 +191,10 @@ async function aiExplainTransform(req) {
     var provider = settings.dc_ai_provider || "anthropic";
     var transformJson = req.transformJson || "";
     if (!transformJson) return { ok: false, error: "No transform data to explain." };
-    var prompt = AI_PROMPT + transformJson;
+    // Support chat follow-ups: if transformJson contains _chatMessages, use them directly
+    var chatMessages = null;
+    try { var parsed = JSON.parse(transformJson); if (parsed._chatMessages) chatMessages = parsed._chatMessages; } catch (e) {}
+    var prompt = chatMessages ? null : AI_PROMPT + transformJson;
 
     if (provider === "gemini") {
       var gKey = settings.dc_gemini_key;
@@ -218,10 +221,11 @@ async function aiExplainTransform(req) {
       if (!sfKey) return { ok: false, error: "NO_KEY" };
       var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
       console.log("[DC-MI] AI: calling sf-gateway →", sfUrl);
+      var msgs = chatMessages || [{ role: "user", content: prompt }];
       var r = await fetch(sfUrl, {
         method: "POST",
         headers: { "Authorization": "Bearer " + sfKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: [{ role: "user", content: prompt }] })
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: msgs })
       });
       var txt = await r.text();
       console.log("[DC-MI] AI: response status:", r.status, "body length:", txt.length, "first 200:", txt.slice(0, 200));

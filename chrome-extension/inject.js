@@ -7749,7 +7749,49 @@
                 .replace(/\n\n/g, "<br><br>")
                 .replace(/\n/g, "<br>");
               aiDiv.innerHTML = "<div style='font-weight:700;font-size:14px;color:#5b21b6;margin-bottom:12px'>✨ AI Explanation</div>" +
-                "<div style='font-size:12px;line-height:1.7;color:#334155'>" + mdHtml + "</div>";
+                "<div class='dc-ai-chat-history' style='font-size:12px;line-height:1.7;color:#334155'>" + mdHtml + "</div>" +
+                "<div style='margin-top:12px;border-top:1px solid #e2e8f0;padding-top:10px'>" +
+                "<div style='display:flex;gap:6px'>" +
+                "<input class='dc-ai-chat-input' type='text' placeholder='Ask a follow-up question about this transform...' style='flex:1;padding:8px 12px;border:1px solid #c4b5fd;border-radius:8px;font:12px -apple-system,sans-serif;color:#1e293b;outline:none'>" +
+                "<button class='dc-ai-chat-send' style='border:none;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px system-ui;white-space:nowrap'>Ask</button>" +
+                "</div></div>";
+              // Wire up the chat input
+              var chatInput = aiDiv.querySelector(".dc-ai-chat-input");
+              var chatSend = aiDiv.querySelector(".dc-ai-chat-send");
+              var chatHistory = aiDiv.querySelector(".dc-ai-chat-history");
+              var conversationContext = [{ role: "user", content: "Analyze this Data Transform and explain it:\n" + JSON.stringify(rep).slice(0, 30000) }, { role: "assistant", content: d.explanation }];
+              function sendChat() {
+                var question = chatInput.value.trim();
+                if (!question) return;
+                chatInput.value = "";
+                chatSend.disabled = true; chatSend.textContent = "...";
+                // Show user question in chat
+                chatHistory.innerHTML += "<div style='margin-top:12px;padding:8px 12px;background:#f3e8ff;border-radius:8px;font-size:12px;color:#5b21b6'><b>You:</b> " + question.replace(/</g, "&lt;") + "</div>";
+                chatHistory.innerHTML += "<div class='dc-ai-typing' style='margin-top:6px;padding:8px 12px;color:#64748b;font-size:11px;font-style:italic'>Thinking...</div>";
+                // Send follow-up via bridge
+                conversationContext.push({ role: "user", content: question });
+                var chatId = "dcai-chat-" + Date.now();
+                function onChatMsg(ev) {
+                  if (ev.source !== window) return;
+                  var cd = ev.data;
+                  if (!cd || cd.__dcRes !== "dc-ai-explain" || cd.id !== chatId) return;
+                  window.removeEventListener("message", onChatMsg, false);
+                  chatSend.disabled = false; chatSend.textContent = "Ask";
+                  var typing = aiDiv.querySelector(".dc-ai-typing"); if (typing) typing.remove();
+                  if (cd.ok && cd.explanation) {
+                    conversationContext.push({ role: "assistant", content: cd.explanation });
+                    var ansHtml = cd.explanation.replace(/</g, "&lt;").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code style='font:11px monospace;background:#f1f5f9;padding:1px 3px;border-radius:2px'>$1</code>").replace(/\n/g, "<br>");
+                    chatHistory.innerHTML += "<div style='margin-top:6px;padding:8px 12px;background:#f0fdf4;border-radius:8px;font-size:12px;line-height:1.6;color:#334155'>" + ansHtml + "</div>";
+                  } else {
+                    chatHistory.innerHTML += "<div style='margin-top:6px;padding:8px;color:#dc2626;font-size:11px'>Error: " + (cd.error || "Failed") + "</div>";
+                  }
+                  aiDiv.scrollTop = aiDiv.scrollHeight;
+                }
+                window.addEventListener("message", onChatMsg, false);
+                window.postMessage({ __dcReq: "dc-ai-explain", id: chatId, transformJson: JSON.stringify({ _chatMessages: conversationContext }) }, "*");
+              }
+              chatSend.onclick = sendChat;
+              chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter") sendChat(); });
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
