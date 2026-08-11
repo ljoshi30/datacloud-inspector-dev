@@ -7913,7 +7913,7 @@
     }
     var m = document.createElement("div");
     _cellViewEl = m;
-    m.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(800px,92vw);max-height:80vh;z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+    m.style.cssText = "position:fixed;top:3vh;left:50%;transform:translateX(-50%);width:min(1100px,94vw);height:min(90vh,900px);z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;";
     m.innerHTML =
       "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb'>" +
         "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc2(fieldLabel) + "</div>" +
