@@ -1280,12 +1280,16 @@
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
-      ["dc-explore-modal", "dc-allcols-table", "dc-export", "dc-detail-export", "dc-hide-overlay"].forEach(function (id) {
+      ["dc-explore-modal", "dc-allcols-table", "dc-export", "dc-detail-export", "dc-hide-overlay", "dc-ai-settings-dialog"].forEach(function (id) {
         var el = document.getElementById(id); if (el) el.remove();
       });
     } catch (e) {}
+    // Remove transform view
+    try { if (typeof closeTransformView === "function") closeTransformView(); } catch (e) {}
     try { if (navPoll) { clearInterval(navPoll); navPoll = null; } } catch (e) {}
-    try { const bar = document.getElementById("dc-bar"); if (bar) bar.remove(); } catch (e) {}
+    try { var bar = document.getElementById("dc-bar"); if (bar) bar.remove(); } catch (e) {}
+    // Nuclear cleanup: remove any remaining elements our tool created
+    try { document.querySelectorAll("[id^='dc-']").forEach(function (el) { el.remove(); }); } catch (e) {}
     try { delete window.__DC_DECOR__; } catch (e) { window.__DC_DECOR__ = null; }
   }
 
@@ -7569,7 +7573,7 @@
       "<svg width='16' height='16' style='display:block'><path d='M14,10 L10,14 M14,6 L6,14 M14,2 L2,14' stroke='#94a3b8' stroke-width='1.5' stroke-linecap='round'/></svg></div>";
     m.innerHTML = hdr + body + resizeHandle;
     document.body.appendChild(m);
-    m.querySelector(".dc-xf-x").onclick = closeTransformView;
+    m.querySelector(".dc-xf-x").onclick = function () { closeTransformView(); teardown(); };
     m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
     // ── Download Summary button — generates styled HTML for printing/PDF ──
     m.querySelector(".dc-xf-download").onclick = function () {
