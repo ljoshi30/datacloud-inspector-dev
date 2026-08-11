@@ -7721,7 +7721,26 @@
       aiBtn.style.display = "none";
     }
 
-    if (typeof makeDraggable === "function") try { makeDraggable(m, m.querySelector(".dc-xf-hdr")); } catch (e) {}
+    // Drag handler — direct implementation (makeDraggable can fail due to overflow/transform issues)
+    var xfHdr = m.querySelector(".dc-xf-hdr");
+    if (xfHdr) {
+      var _xfDragging = false, _xfSx = 0, _xfSy = 0, _xfOx = 0, _xfOy = 0;
+      xfHdr.addEventListener("pointerdown", function (e) {
+        if (e.target.closest && e.target.closest("button,select,input")) return;
+        _xfDragging = true;
+        var r = m.getBoundingClientRect();
+        m.style.left = r.left + "px"; m.style.top = r.top + "px";
+        m.style.right = "auto"; m.style.bottom = "auto"; m.style.transform = "none";
+        _xfSx = e.clientX; _xfSy = e.clientY; _xfOx = r.left; _xfOy = r.top;
+        xfHdr.setPointerCapture(e.pointerId);
+      });
+      xfHdr.addEventListener("pointermove", function (e) {
+        if (!_xfDragging) return;
+        m.style.left = Math.max(0, _xfOx + e.clientX - _xfSx) + "px";
+        m.style.top = Math.max(0, _xfOy + e.clientY - _xfSy) + "px";
+      });
+      xfHdr.addEventListener("pointerup", function () { _xfDragging = false; });
+    }
   }
 
   // Render the tool's OWN full-width, scrollable results table showing EVERY selected
