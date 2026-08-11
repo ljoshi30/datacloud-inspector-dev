@@ -7924,6 +7924,25 @@
       "</div>" +
       "<div class='dc-cv-body' style='overflow:auto;flex:1'>" + bodyHtml + "</div>";
     document.body.appendChild(m);
+    // Wire up JSON record view tabs (click to switch)
+    if (window.__dcJsonTabIds && window.__dcJsonTabIds.length) {
+      window.__dcJsonTabIds.forEach(function (tid) {
+        var nav = m.querySelector("." + tid + "-nav");
+        if (nav) {
+          nav.addEventListener("click", function (e) {
+            var t = e.target; while (t && !t.getAttribute("data-idx") && t !== nav) t = t.parentElement;
+            if (!t || !t.getAttribute("data-idx")) return;
+            var idx = t.getAttribute("data-idx");
+            m.querySelectorAll("." + tid + "-tab").forEach(function (tb) { tb.style.background = "#f3f2f2"; tb.style.color = "#54698d"; });
+            t.style.background = "#0070d2"; t.style.color = "white";
+            m.querySelectorAll("." + tid + "-pane").forEach(function (p) { p.style.display = "none"; });
+            var pane = m.querySelector("." + tid + "-pane[data-idx='" + idx + "']");
+            if (pane) pane.style.display = "block";
+          });
+        }
+      });
+      window.__dcJsonTabIds = [];
+    }
     m.querySelector(".dc-cv-copy").onclick = function () {
       try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
     };
@@ -7999,27 +8018,32 @@
         });
         html2 += "</table>";
       }
-      // Nested arrays as tabs (like your Data Graph Visualizer)
+      // Nested arrays as tabs (like Data Graph Visualizer)
       if (nestedKeys.length > 0) {
-        var tabId = "dc-jt-" + Date.now();
-        html2 += "<div style='display:flex;flex-wrap:wrap;gap:4px;border-bottom:2px solid #d8dde6;margin-top:8px;padding-bottom:4px'>";
+        var tabId = "dcjt" + Math.random().toString(36).slice(2, 8);
+        html2 += "<div class='" + tabId + "-nav' style='display:flex;flex-wrap:wrap;gap:5px;border-bottom:2px solid #d8dde6;margin-top:12px;padding-bottom:5px'>";
         nestedKeys.forEach(function (nk, ni) {
           var count = Array.isArray(data[nk]) ? data[nk].length : 1;
           var isEmpty = Array.isArray(data[nk]) && data[nk].length === 0;
-          html2 += "<span class='" + tabId + "-tab' data-tab='" + ni + "' style='padding:6px 10px;cursor:pointer;border-radius:4px;font-weight:600;font-size:11px;" + (ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;")) + "' onclick='var tabs=document.querySelectorAll(\"." + tabId + "-tab\");var panes=document.querySelectorAll(\"." + tabId + "-pane\");tabs.forEach(function(t){t.style.background=\"#f3f2f2\";t.style.color=\"#54698d\"});panes.forEach(function(p){p.style.display=\"none\"});this.style.background=\"#0070d2\";this.style.color=\"white\";document.querySelector(\"." + tabId + "-pane[data-pane=\\\"" + ni + "\\\"]\").style.display=\"block\"'>" + esc2(nk.replace(/__dlm$|__c$/, "")) + " (" + count + ")</span>";
+          var baseStyle = "padding:8px 12px;cursor:pointer;border-radius:4px;font-weight:600;font-size:12px;";
+          var activeStyle = ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;");
+          html2 += "<span class='" + tabId + "-tab' data-idx='" + ni + "' style='" + baseStyle + activeStyle + "'>" + esc2(nk.replace(/__dlm$|__cio$|__c$/, "")) + " (" + count + ")</span>";
         });
         html2 += "</div>";
         nestedKeys.forEach(function (nk, ni) {
           var nv = data[nk];
           var arrData = Array.isArray(nv) ? nv : [nv];
-          html2 += "<div class='" + tabId + "-pane' data-pane='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:8px'>";
+          html2 += "<div class='" + tabId + "-pane' data-idx='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:10px;overflow:auto'>";
           if (arrData.length === 0) {
-            html2 += "<div style='padding:12px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
+            html2 += "<div style='padding:16px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
           } else {
             html2 += renderJsonAsTable(arrData, esc2);
           }
           html2 += "</div>";
         });
+        // Store tabId so we can wire up clicks after innerHTML is set
+        if (!window.__dcJsonTabIds) window.__dcJsonTabIds = [];
+        window.__dcJsonTabIds.push(tabId);
       }
       return html2;
     }
