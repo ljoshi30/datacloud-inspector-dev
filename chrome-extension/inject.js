@@ -7267,7 +7267,7 @@
 
     var m = document.createElement("div");
     _xformEl = m;
-    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;overflow:auto;";
     var hdr = "<div style='display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move' class='dc-xf-hdr'>" +
       "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
       (function () {
@@ -7279,7 +7279,7 @@
       })() + "</div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
       "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569;position:relative;z-index:10' title='Change AI provider or API key'>⚙</button>" +
-      "<button class='dc-xf-sheets' style='border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy for Sheets</button>" +
+      "<button class='dc-xf-download' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Download Summary</button>" +
       "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
       "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
@@ -7343,9 +7343,9 @@
         summaryLines.push("");
         summaryLines.push("<b style='color:#0d6efd'>Branch " + (idx + 1) + ": " + outName + "</b>");
         humanSteps.forEach(function (s, i) {
-          summaryLines.push("&nbsp;&nbsp;" + (i + 1) + ". " + s);
+          summaryLines.push("&nbsp;&nbsp;<span style='color:#475569'>" + (i + 1) + ".</span> <b>" + s + "</b>");
         });
-        summaryLines.push("&nbsp;&nbsp;<span style='color:#059669'>→ Writes to: " + esc(br.output.target) + " (" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")</span>");
+        summaryLines.push("&nbsp;&nbsp;<span style='color:#059669;font-weight:700'>→ Output: " + esc(br.output.target) + "</span> <span style='color:#64748b'>(" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")</span>");
       });
     }
 
@@ -7377,56 +7377,187 @@
           "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>" +
           (o.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
       });
-      // ALL NODES color-coded
+      // ALL NODES color-coded with detailed column info
       body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ")</div>";
       keys.forEach(function (k) {
         var n = parsedNodes[k];
         if (!n) return;
         var color = n.action === "filter" ? "#dc2626" : n.action === "join" || n.action === "lookup" ? "#2563eb" : n.action === "formula" || n.action === "computerelative" ? "#7c3aed" : n.action === "schema" ? "#d97706" : n.action === "outputd360" || n.action === "output" ? "#059669" : "#334155";
+        var details = "";
+        // Extract detailed info from params
+        if (n.params) {
+          try {
+            var p = typeof n.params === "string" ? JSON.parse(n.params) : n.params;
+            // Schema nodes: show kept/dropped columns
+            if (n.action === "schema" && p.mode && p.columns) {
+              var cols = Array.isArray(p.columns) ? p.columns : [];
+              if (cols.length > 0) {
+                if (p.mode === "SELECT") details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Keeps: " + esc(cols.join(", ")) + "</span>";
+                else if (p.mode === "DROP") details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Drops: " + esc(cols.join(", ")) + "</span>";
+              }
+            }
+            // Output nodes: show renamed fields
+            if ((n.action === "outputd360" || n.action === "output") && p.mappings) {
+              var renames = [];
+              p.mappings.forEach(function (m) {
+                if (m.sourceField && m.targetField && m.sourceField !== m.targetField) {
+                  renames.push(esc(m.sourceField) + " → " + esc(m.targetField));
+                }
+              });
+              if (renames.length > 0) details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Renamed: " + renames.join(", ") + "</span>";
+            }
+            // Formula/compute nodes: show expression
+            if ((n.action === "formula" || n.action === "computerelative") && p.expression) {
+              var expr = String(p.expression).slice(0, 120);
+              details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px;font-family:SF Mono,Consolas,monospace'>" + esc(expr) + (p.expression.length > 120 ? "..." : "") + "</span>";
+            }
+            // Filter nodes: show conditions
+            if (n.action === "filter" && p.conditions) {
+              var conds = Array.isArray(p.conditions) ? p.conditions : [];
+              if (conds.length > 0) {
+                var condStrs = conds.slice(0, 3).map(function (c) {
+                  if (typeof c === "string") return esc(c);
+                  if (c.field && c.operator) return esc(c.field) + " " + esc(c.operator) + (c.value ? " " + esc(String(c.value).slice(0, 20)) : "");
+                  return esc(JSON.stringify(c).slice(0, 40));
+                });
+                details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>" + condStrs.join("; ") + (conds.length > 3 ? "; ..." : "") + "</span>";
+              }
+            }
+            // Join nodes: show keys and type
+            if ((n.action === "join" || n.action === "lookup") && (p.leftKey || p.rightKey || p.joinType)) {
+              var jinfo = [];
+              if (p.leftKey) jinfo.push("left: " + esc(p.leftKey));
+              if (p.rightKey) jinfo.push("right: " + esc(p.rightKey));
+              if (p.joinType) jinfo.push("type: " + esc(p.joinType));
+              if (jinfo.length > 0) details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>" + jinfo.join(", ") + "</span>";
+            }
+          } catch (e) {}
+        }
         body += "<div style='padding:3px 8px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:2px;font-size:10px'>" +
-          "<b style='color:" + color + "'>" + esc(n.action || k) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span></div>";
+          "<b style='color:" + color + "'>" + esc(n.action || k) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span>" + details + "</div>";
       });
       body += "</div></details>";
     }
     body += "</div>";
-    m.innerHTML = hdr + body;
+    // Add resize handle visual indicator
+    var resizeHandle = "<div style='position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:nwse-resize;z-index:10'>" +
+      "<svg width='16' height='16' style='display:block'><path d='M14,10 L10,14 M14,6 L6,14 M14,2 L2,14' stroke='#94a3b8' stroke-width='1.5' stroke-linecap='round'/></svg></div>";
+    m.innerHTML = hdr + body + resizeHandle;
     document.body.appendChild(m);
     m.querySelector(".dc-xf-x").onclick = closeTransformView;
     m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
-    // Copy for Sheets — builds a rich HTML table that pastes nicely into Google Sheets/Docs
-    m.querySelector(".dc-xf-sheets").onclick = function () {
-      var html = "<table><tr><th colspan='3' style='font-size:14px;font-weight:bold;text-align:left;padding:8px;background:#f3f6fb'>" + esc(rep.label || rep.name || "Data Transform") + "</th></tr>";
-      html += "<tr><td colspan='3' style='padding:4px 8px;color:#5c6b8a'>Source: " + inputNodes.map(function (s) { return esc(s.summary) + " (" + s.fields.length + " fields)"; }).join(", ") + "</td></tr>";
-      html += "<tr><td colspan='3' style='padding:4px 8px;color:#5c6b8a'>" + inputNodes.length + " source → " + keys.length + " nodes → " + outputNodes.length + " outputs</td></tr>";
-      html += "<tr><th style='padding:4px 8px;background:#e0e5ee'>Branch</th><th style='padding:4px 8px;background:#e0e5ee'>Step</th><th style='padding:4px 8px;background:#e0e5ee'>Description</th></tr>";
-      branches.forEach(function (br, idx) {
-        var first = true;
-        br.path.forEach(function (n) {
-          if (!n.action || n.action === "load" || n.action === "input") return;
-          var act = n.action || "";
-          var desc = "";
-          if (act === "filter") desc = "Filter: " + (n.summary || "");
-          else if (act === "formula" || act === "computerelative" || act === "compute") desc = "Calculate: " + (n.summary || "");
-          else if (act === "schema") desc = n.summary || "Select columns";
-          else if (act === "join" || act === "lookup") desc = "Join: " + (n.summary || "");
-          else if (act === "aggregate") desc = "Aggregate: " + (n.summary || "");
-          else if (act === "outputd360" || act === "output") desc = "Output: " + esc(br.output.target) + " (" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")";
-          else desc = act + ": " + (n.summary || "");
-          html += "<tr><td style='padding:3px 8px;vertical-align:top;font-weight:" + (first ? "bold" : "normal") + "'>" + (first ? "→ " + esc(br.output.target) : "") + "</td><td style='padding:3px 8px;color:#5c6b8a'>" + esc(act) + "</td><td style='padding:3px 8px'>" + esc(desc) + "</td></tr>";
-          first = false;
+    // ── Download Summary button — generates styled HTML for printing/PDF ──
+    m.querySelector(".dc-xf-download").onclick = function () {
+      var xformName = (rep.label || rep.name || "transform").replace(/[^a-zA-Z0-9_-]/g, "_");
+      var htmlDoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>" + esc(rep.label || rep.name || "Data Transform Summary") + "</title>";
+      htmlDoc += "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1e293b;background:#fff;margin:40px;line-height:1.6}";
+      htmlDoc += "h1{font-size:24px;font-weight:700;margin:0 0 8px;color:#0f172a}h2{font-size:16px;font-weight:700;margin:28px 0 12px;color:#334155;border-bottom:2px solid #e2e8f0;padding-bottom:4px}";
+      htmlDoc += "h3{font-size:14px;font-weight:700;margin:18px 0 8px;color:#475569}.meta{font-size:13px;color:#64748b;margin-bottom:24px}";
+      htmlDoc += ".summary{background:#f8fafc;border-left:4px solid #0d6efd;padding:16px 20px;margin:20px 0;border-radius:4px}.summary-line{margin:8px 0;font-size:14px}";
+      htmlDoc += ".branch{margin:12px 0 12px 20px}.branch-title{font-weight:700;color:#0d6efd;margin-bottom:6px}";
+      htmlDoc += ".step{margin:4px 0 4px 20px;font-size:13px}.output{margin:6px 0 6px 20px;color:#059669;font-size:13px}";
+      htmlDoc += ".node{padding:8px 12px;margin:6px 0;border-left:4px solid #cbd5e1;background:#f9fafb;border-radius:3px;font-size:13px}";
+      htmlDoc += ".node-action{font-weight:700;color:#334155}.node-summary{color:#64748b;margin-left:8px}.node-details{color:#64748b;font-size:12px;margin-top:4px;font-family:'SF Mono',Consolas,monospace}";
+      htmlDoc += ".source,.output-detail{padding:10px;border:1px solid #e2e8f0;border-radius:4px;margin:6px 0;background:#fefefe;font-size:13px}";
+      htmlDoc += ".source strong,.output-detail strong{color:#0f172a}.field-list{font-size:11px;color:#64748b;font-family:'SF Mono',Consolas,monospace;margin-top:4px;max-height:200px;overflow:auto}";
+      htmlDoc += "@media print{body{margin:20px}h2{page-break-after:avoid}@page{margin:1.5cm}}";
+      htmlDoc += "</style></head><body>";
+      htmlDoc += "<h1>" + esc(rep.label || rep.name || "Data Transform") + "</h1>";
+      var metaParts = [];
+      if (rep.type) metaParts.push(esc(rep.type));
+      if (rep.dataSpaceName) metaParts.push("Data space: " + esc(rep.dataSpaceName));
+      if (rep.lastRunStatus) metaParts.push("Last run: " + esc(rep.lastRunStatus) + (rep.lastRunDate ? " (" + esc(String(rep.lastRunDate).slice(0, 10)) + ")" : ""));
+      if (metaParts.length) htmlDoc += "<div class='meta'>" + metaParts.join(" &bull; ") + "</div>";
+      htmlDoc += "<h2>Summary</h2><div class='summary'>";
+      summaryLines.forEach(function (line) { htmlDoc += "<div class='summary-line'>" + line + "</div>"; });
+      htmlDoc += "</div>";
+      if (!isSql) {
+        htmlDoc += "<h2>Branch Details</h2>";
+        branches.forEach(function (br, idx) {
+          var outName = esc(br.output.target).replace(/__dll$|__dlm$/i, "").replace(/_/g, " ");
+          htmlDoc += "<div class='branch'><div class='branch-title'>Branch " + (idx + 1) + ": " + outName + "</div>";
+          var stepNum = 1;
+          br.path.forEach(function (n) {
+            var h = humanize(n);
+            if (h) { htmlDoc += "<div class='step'>" + stepNum + ". " + h + "</div>"; stepNum++; }
+          });
+          htmlDoc += "<div class='output'>→ Writes to: " + esc(br.output.target) + " (" + br.output.mappings.length + " fields, " + (br.output.writeMode || "OVERWRITE") + ")</div></div>";
         });
-      });
-      html += "</table>";
-      try {
-        var blob = new Blob([html], { type: "text/html" });
-        var item = new ClipboardItem({ "text/html": blob, "text/plain": new Blob([summaryLines.join("\n")], { type: "text/plain" }) });
-        navigator.clipboard.write([item]);
-        var sb = m.querySelector(".dc-xf-sheets"); sb.textContent = "✓ Copied!"; setTimeout(function () { sb.textContent = "Copy for Sheets"; }, 1500);
-      } catch (e) {
-        // Fallback: copy plain text
-        navigator.clipboard.writeText(summaryLines.join("\n"));
-        var sb2 = m.querySelector(".dc-xf-sheets"); sb2.textContent = "✓ Copied (text)"; setTimeout(function () { sb2.textContent = "Copy for Sheets"; }, 1500);
+        htmlDoc += "<h2>Technical Details</h2><h3>Sources (" + sources.length + ")</h3>";
+        sources.forEach(function (s) {
+          htmlDoc += "<div class='source'><strong>" + esc(s.summary) + "</strong> <span style='color:#8a94a6'>(" + s.fields.length + " fields)</span>";
+          if (s.fields.length) htmlDoc += "<div class='field-list'>" + s.fields.map(esc).join(", ") + "</div>";
+          htmlDoc += "</div>";
+        });
+        htmlDoc += "<h3>Outputs (" + outs.length + ")</h3>";
+        outs.forEach(function (o) {
+          htmlDoc += "<div class='output-detail'><strong>" + esc(o.name) + "</strong> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>";
+          if (o.fields.length) htmlDoc += "<div class='field-list'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div>";
+          htmlDoc += "</div>";
+        });
+        htmlDoc += "<h3>All Nodes (" + keys.length + ")</h3>";
+        keys.forEach(function (k) {
+          var n = parsedNodes[k];
+          if (!n) return;
+          var details = "";
+          if (n.params) {
+            try {
+              var p = typeof n.params === "string" ? JSON.parse(n.params) : n.params;
+              if (n.action === "schema" && p.mode && p.columns) {
+                var cols = Array.isArray(p.columns) ? p.columns : [];
+                if (cols.length > 0) {
+                  if (p.mode === "SELECT") details = "<div class='node-details'>Keeps: " + esc(cols.join(", ")) + "</div>";
+                  else if (p.mode === "DROP") details = "<div class='node-details'>Drops: " + esc(cols.join(", ")) + "</div>";
+                }
+              }
+              if ((n.action === "outputd360" || n.action === "output") && p.mappings) {
+                var renames = [];
+                p.mappings.forEach(function (m) {
+                  if (m.sourceField && m.targetField && m.sourceField !== m.targetField) {
+                    renames.push(esc(m.sourceField) + " → " + esc(m.targetField));
+                  }
+                });
+                if (renames.length > 0) details = "<div class='node-details'>Renamed: " + renames.join(", ") + "</div>";
+              }
+              if ((n.action === "formula" || n.action === "computerelative") && p.expression) {
+                details = "<div class='node-details'>" + esc(String(p.expression).slice(0, 200)) + "</div>";
+              }
+              if (n.action === "filter" && p.conditions) {
+                var conds = Array.isArray(p.conditions) ? p.conditions : [];
+                if (conds.length > 0) {
+                  var condStrs = conds.map(function (c) {
+                    if (typeof c === "string") return esc(c);
+                    if (c.field && c.operator) return esc(c.field) + " " + esc(c.operator) + (c.value ? " " + esc(String(c.value).slice(0, 20)) : "");
+                    return esc(JSON.stringify(c).slice(0, 40));
+                  });
+                  details = "<div class='node-details'>" + condStrs.join("; ") + "</div>";
+                }
+              }
+              if ((n.action === "join" || n.action === "lookup") && (p.leftKey || p.rightKey || p.joinType)) {
+                var jinfo = [];
+                if (p.leftKey) jinfo.push("left: " + esc(p.leftKey));
+                if (p.rightKey) jinfo.push("right: " + esc(p.rightKey));
+                if (p.joinType) jinfo.push("type: " + esc(p.joinType));
+                if (jinfo.length > 0) details = "<div class='node-details'>" + jinfo.join(", ") + "</div>";
+              }
+            } catch (e) {}
+          }
+          htmlDoc += "<div class='node'><span class='node-action'>" + esc(n.action || k) + "</span><span class='node-summary'>" + esc(n.summary || "") + "</span>" + details + "</div>";
+        });
+      } else {
+        htmlDoc += "<h2>SQL</h2><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:12px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
       }
+      htmlDoc += "</body></html>";
+      var blob = new Blob([htmlDoc], { type: "text/html" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = xformName + "_summary.html";
+      a.click();
+      URL.revokeObjectURL(url);
+      var btn = m.querySelector(".dc-xf-download");
+      btn.textContent = "✓ Downloaded!";
+      setTimeout(function () { btn.textContent = "Download Summary"; }, 2000);
     };
 
     // ── AI Explain button (extension-only, needs Anthropic API key) ──
