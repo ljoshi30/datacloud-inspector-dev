@@ -7654,10 +7654,10 @@
       setTimeout(function () { btn.textContent = "Download Summary"; }, 2000);
     };
 
-    // ── AI Explain button (works for both extension and bookmarklet via popup proxy) ──
+    // ── AI Explain button (extension only — CSP blocks all API calls from bookmarklet) ──
     var aiBtn = m.querySelector(".dc-xf-ai");
     var aiSettingsBtn = m.querySelector(".dc-xf-ai-settings");
-    if (aiBtn) {
+    if (aiBtn && extBridgePresent()) {
       aiBtn.style.display = "";
       if (aiSettingsBtn) aiSettingsBtn.style.display = "";
       aiBtn.title = "AI-powered explanation of this transform";
@@ -7869,6 +7869,9 @@
         }
         doExplain();
       };
+    } else if (aiBtn) {
+      aiBtn.style.display = "none";
+      if (aiSettingsBtn) aiSettingsBtn.style.display = "none";
     }
 
     // Drag handler — direct implementation (makeDraggable can fail due to overflow/transform issues)
