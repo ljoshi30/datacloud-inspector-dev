@@ -7185,6 +7185,9 @@
     var nodes = def.nodes || {};
     var keys = Object.keys(nodes);
     var isSql = !!(def.sql || def.query || def.dcSql || def.stlSql);
+    // UI metadata: user-given labels and canvas connectors (for display order)
+    var uiNodes = (def.ui && def.ui.nodes) || {};
+    var uiConnectors = (def.ui && def.ui.connectors) || [];
 
     // Parse each node into a structured object
     var parsedNodes = {};
@@ -7192,7 +7195,8 @@
     keys.forEach(function (k) {
       var n = nodes[k] || {}, p = n.parameters || {};
       var act = (n.action || n.type || "").toLowerCase();
-      var info = { id: k, action: act, sources: n.sources || [], params: p };
+      var uiLabel = (uiNodes[k] && uiNodes[k].label) || "";
+      var info = { id: k, action: act, sources: n.sources || [], params: p, label: uiLabel };
       if (act === "load" || act === "input") {
         var ds = p.dataset || p.source || {};
         info.summary = (ds.name || p.objectName || "unknown");
@@ -7378,25 +7382,39 @@
           "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>" +
           (o.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
       });
-      // ALL NODES in execution order (from branch traces), with node type labels
-      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ") — in execution order</div>";
-      // Build ordered node list from branches (avoids arbitrary JSON key order)
-      var orderedNodes = [];
-      var seenNodes = {};
-      branches.forEach(function (br, bIdx) {
-        body += "<div style='font-size:10px;font-weight:700;color:#0d6efd;margin:8px 0 4px;padding:4px 8px;background:#eff6ff;border-radius:4px'>Branch " + (bIdx + 1) + " → " + esc(br.output.target) + "</div>";
-        br.path.forEach(function (n) {
-          if (seenNodes[n.id]) return;
-          seenNodes[n.id] = true;
-          orderedNodes.push(n);
-        });
-        // Include the output node
-        if (!seenNodes[br.output.id]) { seenNodes[br.output.id] = true; orderedNodes.push(br.output); }
-      });
-      // Show any remaining nodes not in branches
-      keys.forEach(function (k) { if (!seenNodes[k] && parsedNodes[k]) orderedNodes.push(parsedNodes[k]); });
-      orderedNodes.forEach(function (n) {
-        if (!n) return;
+      // ALL NODES — ordered by UI connectors (same as canvas flow)
+      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ")</div>";
+      // Build execution order from ui.connectors (topological sort following canvas arrows)
+      var orderedNodeIds = [];
+      var seenIds = {};
+      if (uiConnectors.length > 0) {
+        // Find start nodes (nodes that are never a target)
+        var targets = {}; uiConnectors.forEach(function (c) { targets[c.target] = true; });
+        var starts = Object.keys(uiNodes).filter(function (id) { return !targets[id]; });
+        // BFS from start nodes following connectors
+        var queue = starts.slice();
+        while (queue.length > 0) {
+          var cur = queue.shift();
+          if (seenIds[cur]) continue;
+          seenIds[cur] = true;
+          orderedNodeIds.push(cur);
+          uiConnectors.forEach(function (c) { if (c.source === cur && !seenIds[c.target]) queue.push(c.target); });
+        }
+        // Add any missed nodes
+        Object.keys(uiNodes).forEach(function (id) { if (!seenIds[id]) orderedNodeIds.push(id); });
+      } else {
+        orderedNodeIds = keys.slice();
+      }
+      // Map UI node IDs to their inner definition nodes
+      orderedNodeIds.forEach(function (uiId) {
+        // UI nodes may wrap multiple definition nodes (e.g., Transform wraps FORMULA1, FORMULA2)
+        var uiNode = uiNodes[uiId] || {};
+        var innerKeys = (uiNode.graph) ? Object.keys(uiNode.graph) : [uiId];
+        innerKeys.forEach(function (innerK) {
+          var n = parsedNodes[innerK];
+          if (!n) return;
+          if (seenIds["_def_" + innerK]) return;
+          seenIds["_def_" + innerK] = true;
         var act = n.action || "";
         var nodeType = act === "load" || act === "input" ? "INPUT" : act === "outputd360" || act === "output" ? "OUTPUT" : act === "filter" ? "FILTER" : act === "join" || act === "lookup" ? "JOIN" : act === "formula" || act === "computerelative" || act === "compute" ? "TRANSFORM" : act === "schema" ? "SCHEMA" : act === "append" || act === "appendv2" ? "APPEND" : act === "aggregate" ? "AGGREGATE" : act.toUpperCase();
         var color = act === "filter" ? "#dc2626" : act === "join" || act === "lookup" ? "#2563eb" : act === "formula" || act === "computerelative" ? "#7c3aed" : act === "schema" ? "#d97706" : act === "outputd360" || act === "output" ? "#059669" : act === "load" || act === "input" ? "#475569" : "#334155";
@@ -7476,9 +7494,12 @@
             }
           } catch (e) {}
         }
+        var displayLabel = n.label || uiNode.label || "";
         body += "<div style='padding:4px 8px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:3px;font-size:10px'>" +
           "<span style='display:inline-block;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;background:" + color + ";color:#fff;margin-right:5px;vertical-align:middle'>" + nodeType + "</span>" +
-          "<b style='color:" + color + "'>" + esc(act || n.id) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span>" + details + "</div>";
+          (displayLabel ? "<b style='color:#1e293b'>" + esc(displayLabel) + "</b> " : "") +
+          "<span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span>" + details + "</div>";
+        });
       });
       body += "</div></details>";
     }
