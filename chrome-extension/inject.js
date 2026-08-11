@@ -7267,7 +7267,7 @@
 
     var m = document.createElement("div");
     _xformEl = m;
-    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;overflow:auto;";
+    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;overflow:hidden;";
     var hdr = "<div style='display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move' class='dc-xf-hdr'>" +
       "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
       (function () {
@@ -7384,52 +7384,78 @@
         if (!n) return;
         var color = n.action === "filter" ? "#dc2626" : n.action === "join" || n.action === "lookup" ? "#2563eb" : n.action === "formula" || n.action === "computerelative" ? "#7c3aed" : n.action === "schema" ? "#d97706" : n.action === "outputd360" || n.action === "output" ? "#059669" : "#334155";
         var details = "";
-        // Extract detailed info from params
         if (n.params) {
           try {
             var p = typeof n.params === "string" ? JSON.parse(n.params) : n.params;
-            // Schema nodes: show kept/dropped columns
-            if (n.action === "schema" && p.mode && p.columns) {
-              var cols = Array.isArray(p.columns) ? p.columns : [];
-              if (cols.length > 0) {
-                if (p.mode === "SELECT") details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Keeps: " + esc(cols.join(", ")) + "</span>";
-                else if (p.mode === "DROP") details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Drops: " + esc(cols.join(", ")) + "</span>";
+            // Schema: show kept/dropped column names
+            if (n.action === "schema") {
+              var sl = p.slice || p;
+              var sFields = sl.fields || p.columns || [];
+              var sMode = sl.mode || p.mode || "";
+              if (sFields.length > 0) {
+                var fList = sFields.length <= 8 ? sFields.map(esc).join(", ") : sFields.slice(0, 6).map(esc).join(", ") + " <i>(+" + (sFields.length - 6) + " more)</i>";
+                if (/SELECT/i.test(sMode)) details = "<br><span style='color:#059669;font-size:9px;padding-left:14px'><b>Keeps " + sFields.length + ":</b> " + fList + "</span>";
+                else if (/DROP/i.test(sMode)) details = "<br><span style='color:#dc2626;font-size:9px;padding-left:14px'><b>Drops " + sFields.length + ":</b> " + fList + "</span>";
               }
             }
-            // Output nodes: show renamed fields
-            if ((n.action === "outputd360" || n.action === "output") && p.mappings) {
-              var renames = [];
-              p.mappings.forEach(function (m) {
-                if (m.sourceField && m.targetField && m.sourceField !== m.targetField) {
-                  renames.push(esc(m.sourceField) + " → " + esc(m.targetField));
-                }
-              });
-              if (renames.length > 0) details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>Renamed: " + renames.join(", ") + "</span>";
+            // Output: target name + field mappings + renames
+            if (n.action === "outputd360" || n.action === "output") {
+              var maps = p.fieldsMappings || p.mappings || [];
+              var outN = p.name || ""; var wm = p.writeMode || "";
+              var rn = [];
+              maps.forEach(function (mp) { if (mp.sourceField && mp.targetField && mp.sourceField !== mp.targetField) rn.push(esc(mp.sourceField) + " → " + esc(mp.targetField)); });
+              details = "<br><span style='color:#059669;font-size:9px;padding-left:14px'><b>→ " + esc(outN) + "</b> (" + maps.length + " fields" + (wm ? ", " + wm : "") + ")</span>";
+              if (rn.length) details += "<br><span style='color:#d97706;font-size:9px;padding-left:14px'>Renamed: " + rn.join(", ") + "</span>";
             }
-            // Formula/compute nodes: show expression
-            if ((n.action === "formula" || n.action === "computerelative") && p.expression) {
-              var expr = String(p.expression).slice(0, 120);
-              details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px;font-family:SF Mono,Consolas,monospace'>" + esc(expr) + (p.expression.length > 120 ? "..." : "") + "</span>";
-            }
-            // Filter nodes: show conditions
-            if (n.action === "filter" && p.conditions) {
-              var conds = Array.isArray(p.conditions) ? p.conditions : [];
-              if (conds.length > 0) {
-                var condStrs = conds.slice(0, 3).map(function (c) {
-                  if (typeof c === "string") return esc(c);
-                  if (c.field && c.operator) return esc(c.field) + " " + esc(c.operator) + (c.value ? " " + esc(String(c.value).slice(0, 20)) : "");
-                  return esc(JSON.stringify(c).slice(0, 40));
-                });
-                details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>" + condStrs.join("; ") + (conds.length > 3 ? "; ..." : "") + "</span>";
+            // Formula/compute: show field name = expression + partition/order
+            if (n.action === "formula" || n.action === "computerelative") {
+              var flds2 = p.fields || [];
+              if (flds2.length) {
+                details = "<br>" + flds2.map(function (f) {
+                  var nm = f.name || f.label || "";
+                  var ex = f.formulaExpression || "";
+                  var pb = p.partitionBy ? " PARTITION BY " + [].concat(p.partitionBy).join(", ") : "";
+                  var ob = p.orderBy ? " ORDER BY " + [].concat(p.orderBy).map(function (o) { return (o.fieldName || o) + (o.direction ? " " + o.direction : ""); }).join(", ") : "";
+                  return "<span style='color:#7c3aed;font-size:9px;padding-left:14px;font-family:SF Mono,Consolas,monospace'><b>" + esc(nm) + "</b> = " + esc((ex + pb + ob).slice(0, 100)) + "</span>";
+                }).join("<br>");
               }
             }
-            // Join nodes: show keys and type
-            if ((n.action === "join" || n.action === "lookup") && (p.leftKey || p.rightKey || p.joinType)) {
-              var jinfo = [];
-              if (p.leftKey) jinfo.push("left: " + esc(p.leftKey));
-              if (p.rightKey) jinfo.push("right: " + esc(p.rightKey));
-              if (p.joinType) jinfo.push("type: " + esc(p.joinType));
-              if (jinfo.length > 0) details = "<br><span style='color:#5c6b8a;font-size:9px;padding-left:14px'>" + jinfo.join(", ") + "</span>";
+            // Filter: show each condition
+            if (n.action === "filter") {
+              var fe = p.filterExpressions || p.conditions || [];
+              if (fe.length) {
+                details = "<br>" + fe.map(function (c) {
+                  var field = c.field || "";
+                  var op = (c.operator || "").replace(/_/g, " ");
+                  var vals = (c.operands || []).map(function (o) { return typeof o === "object" ? (o.argument != null ? o.argument : "") + " " + (o.type || "") : String(o); }).join(", ");
+                  return "<span style='color:#dc2626;font-size:9px;padding-left:14px'>" + esc(field) + " <i>" + esc(op) + "</i>" + (vals ? " " + esc(vals) : "") + "</span>";
+                }).join("<br>");
+              } else if (p.sqlFilterExpression) {
+                details = "<br><span style='color:#dc2626;font-size:9px;padding-left:14px;font-family:SF Mono,Consolas,monospace'>" + esc(String(p.sqlFilterExpression).slice(0, 150)) + "</span>";
+              }
+            }
+            // Join: type + keys + qualifier
+            if (n.action === "join" || n.action === "lookup") {
+              var jt = p.joinType || p.type || n.action;
+              var lk2 = [].concat(p.leftKeys || p.leftKey || []).join(", ");
+              var rk2 = [].concat(p.rightKeys || p.rightKey || []).join(", ");
+              var jp = [];
+              if (jt) jp.push("<b>" + esc(jt.replace(/_/g, " ")) + "</b>");
+              if (lk2 && rk2) jp.push(esc(lk2) + " = " + esc(rk2));
+              if (p.rightQualifier) jp.push("(alias: " + esc(p.rightQualifier) + ")");
+              if (jp.length) details = "<br><span style='color:#2563eb;font-size:9px;padding-left:14px'>" + jp.join(" &bull; ") + "</span>";
+            }
+            // Load: show source object + field count
+            if (n.action === "load" || n.action === "input") {
+              var ds2 = p.dataset || p.source || {};
+              var lf = p.fields || [];
+              details = "<br><span style='color:#475569;font-size:9px;padding-left:14px'>Source: <b>" + esc(ds2.name || "") + "</b> (" + lf.length + " fields)</span>";
+            }
+            // Append: show field count
+            if (n.action === "appendv2" || n.action === "append") {
+              var fm2 = p.fieldMappings || [];
+              if (typeof fm2 === "string") try { var pp = JSON.parse(fm2); fm2 = pp.fieldMappings || pp; } catch (e3) {}
+              if (Array.isArray(fm2) && fm2.length) details = "<br><span style='color:#475569;font-size:9px;padding-left:14px'>Combines " + fm2.length + " fields from branches</span>";
             }
           } catch (e) {}
         }
