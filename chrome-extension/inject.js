@@ -7966,37 +7966,25 @@
     m.querySelector(".dc-cv-x").onclick = close;
     if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
   }
-  // Render a JSON object/array as a styled tabbed view (Data Graph style)
+  // Render a JSON object/array as a clean flat table (no inline nesting)
   function renderJsonAsTable(data, esc2) {
     if (Array.isArray(data)) {
       if (data.length === 0) return "<div style='padding:12px;color:#64748b'>Empty array</div>";
       if (typeof data[0] === "object" && data[0] !== null) {
+        // Get ONLY scalar columns — nested objects become their own tabs at the parent level
         var cols = [];
-        data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0) cols.push(k); }); });
-        var scalarCols = cols.filter(function (c) { return !data.some(function (item) { return item && item[c] && typeof item[c] === "object"; }); });
-        var nestedCols = cols.filter(function (c) { return data.some(function (item) { return item && item[c] && typeof item[c] === "object"; }); });
+        data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0 && (!item[k] || typeof item[k] !== "object")) cols.push(k); }); });
+        if (cols.length === 0) cols = Object.keys(data[0] || {}).slice(0, 10);
         var html = "<table style='border-collapse:collapse;width:100%;font-size:11px;min-width:400px'>";
-        html += "<thead><tr style='background:#fafaf9'>" + scalarCols.map(function (c) { return "<th style='text-align:left;padding:8px;border-bottom:2px solid #d8dde6;text-transform:uppercase;color:#514f4d;white-space:nowrap;font-size:10px'>" + esc2(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead>";
+        html += "<thead><tr style='background:#fafaf9'>" + cols.map(function (c) { return "<th style='text-align:left;padding:8px;border-bottom:2px solid #d8dde6;text-transform:uppercase;color:#514f4d;white-space:nowrap;font-size:10px'>" + esc2(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead>";
         html += "<tbody>";
         data.forEach(function (item, idx) {
           html += "<tr style='" + (idx % 2 ? "" : "background:#f8fafc") + "'>";
-          scalarCols.forEach(function (c) {
+          cols.forEach(function (c) {
             var v = item && item[c] != null ? item[c] : "";
-            html += "<td style='padding:8px;border-bottom:1px solid #edeff0;vertical-align:top;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc2(String(v)) + "'>" + esc2(String(v)) + "</td>";
+            html += "<td style='padding:8px;border-bottom:1px solid #edeff0;vertical-align:top;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc2(String(v)) + "'>" + esc2(String(v)) + "</td>";
           });
           html += "</tr>";
-          // Show nested objects as expandable sub-rows
-          if (nestedCols.length > 0) {
-            nestedCols.forEach(function (nc) {
-              var nv = item && item[nc];
-              if (nv && typeof nv === "object") {
-                html += "<tr style='background:#f0f7ff'><td colspan='" + scalarCols.length + "' style='padding:4px 8px 8px 24px;border-bottom:1px solid #e2e8f0'>";
-                html += "<span style='font-size:10px;font-weight:700;color:#0070d2;text-transform:uppercase'>" + esc2(nc.replace(/__dlm$|__c$/, "")) + "</span>";
-                html += "<div style='margin-top:4px'>" + renderJsonAsTable(Array.isArray(nv) ? nv : [nv], esc2) + "</div>";
-                html += "</td></tr>";
-              }
-            });
-          }
         });
         html += "</tbody></table>";
         return html;
@@ -8004,10 +7992,43 @@
       return "<div style='padding:12px'>" + data.map(function (item, i) { return "<div style='padding:3px 10px;border-bottom:1px solid #f1f5f9;font-size:11px'><span style='color:#64748b;margin-right:8px'>" + (i + 1) + ".</span>" + esc2(String(item)) + "</div>"; }).join("") + "</div>";
     }
     // Single object with nested arrays → tabbed view (like Data Graph Visualizer)
+    // Also handles arrays that contain nested objects — flatten them into tabs
     if (typeof data === "object" && data !== null) {
       var allKeys = Object.keys(data);
       var scalarKeys = allKeys.filter(function (k) { return !data[k] || typeof data[k] !== "object"; });
       var nestedKeys = allKeys.filter(function (k) { return data[k] && typeof data[k] === "object"; });
+      // If this object has arrays inside arrays (Data Graph), collect ALL nested objects
+      // from within array items and promote them to top-level tabs
+      if (nestedKeys.length > 0) {
+        nestedKeys.forEach(function (nk) {
+          var nv = data[nk];
+          if (Array.isArray(nv) && nv.length > 0 && typeof nv[0] === "object") {
+            // Check if items in this array have their own nested objects
+            var subNested = [];
+            nv.forEach(function (item) {
+              if (!item) return;
+              Object.keys(item).forEach(function (sk) {
+                if (item[sk] && typeof item[sk] === "object" && subNested.indexOf(sk) < 0) subNested.push(sk);
+              });
+            });
+            // Promote sub-nested to top-level tabs
+            subNested.forEach(function (snk) {
+              if (nestedKeys.indexOf(snk) < 0) {
+                nestedKeys.push(snk);
+                // Collect all sub-nested items into one array
+                var collected = [];
+                nv.forEach(function (item) {
+                  if (item && item[snk]) {
+                    var subItems = Array.isArray(item[snk]) ? item[snk] : [item[snk]];
+                    subItems.forEach(function (si) { collected.push(si); });
+                  }
+                });
+                data[snk] = collected;
+              }
+            });
+          }
+        });
+      }
       var html2 = "";
       // Scalar fields as a key-value table (top section)
       if (scalarKeys.length > 0) {
