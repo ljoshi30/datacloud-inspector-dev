@@ -7407,9 +7407,29 @@
       }
       // Map UI node IDs to their inner definition nodes
       orderedNodeIds.forEach(function (uiId) {
-        // UI nodes may wrap multiple definition nodes (e.g., Transform wraps FORMULA1, FORMULA2)
         var uiNode = uiNodes[uiId] || {};
         var innerKeys = (uiNode.graph) ? Object.keys(uiNode.graph) : [uiId];
+        var isGroup = innerKeys.length > 1 && uiNode.graph;
+        // If this is a Transform group node with multiple inner operations, show as one card
+        if (isGroup) {
+          var grpLabel = uiNode.label || uiId;
+          var grpType = (uiNode.type || "TRANSFORM").toUpperCase();
+          body += "<div style='padding:6px 8px;border-left:3px solid #7c3aed;background:#faf5ff;margin-bottom:3px;font-size:10px;border-radius:0 4px 4px 0'>";
+          body += "<span style='display:inline-block;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;background:#7c3aed;color:#fff;margin-right:5px;vertical-align:middle'>" + grpType + "</span>";
+          body += "<b style='color:#1e293b'>" + esc(grpLabel) + "</b>";
+          body += "<ul style='margin:4px 0 0;padding-left:16px;list-style:disc;color:#5c6b8a'>";
+          innerKeys.forEach(function (innerK) {
+            var n2 = parsedNodes[innerK];
+            if (!n2) return;
+            seenIds["_def_" + innerK] = true;
+            var innerLabel = (uiNode.graph[innerK] && uiNode.graph[innerK].label) || "";
+            var desc = n2.summary || "";
+            body += "<li style='margin:2px 0;font-size:9px'>" + (innerLabel ? "<b>" + esc(innerLabel) + ":</b> " : "") + "<span style='color:#475569'>" + esc(desc) + "</span></li>";
+          });
+          body += "</ul></div>";
+          return;
+        }
+        // Single node (not a group)
         innerKeys.forEach(function (innerK) {
           var n = parsedNodes[innerK];
           if (!n) return;
