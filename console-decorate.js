@@ -7621,93 +7621,21 @@
         htmlDoc += "<h3>Outputs (" + outs.length + ")</h3>";
         outs.forEach(function (o) {
           htmlDoc += "<div class='output-detail'><strong>" + esc(o.name) + "</strong> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>";
-          if (o.fields.length) htmlDoc += "<div class='field-list'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div>";
+          if (o.fields.length) htmlDoc += "<table style='font-size:11px;border-collapse:collapse;margin-top:6px;width:100%'><tr style='background:#f1f5f9'><th style='text-align:left;padding:3px 8px'>Source</th><th style='text-align:left;padding:3px 8px'>Target</th></tr>" + o.fields.map(function (f) { var renamed = f.label && f.name && f.label !== f.name; return "<tr" + (renamed ? " style='background:#fffbeb'" : "") + "><td style='padding:2px 8px;border-bottom:1px solid #f1f5f9'>" + esc(f.label || f.name) + "</td><td style='padding:2px 8px;border-bottom:1px solid #f1f5f9'>" + esc(f.name) + (renamed ? " <em style='color:#d97706;font-size:10px'>renamed</em>" : "") + "</td></tr>"; }).join("") + "</table>";
           htmlDoc += "</div>";
         });
+        // All Nodes section — reuse the same body HTML from the UI (already rendered with proper order + details)
         htmlDoc += "<h3>All Nodes (" + keys.length + ")</h3>";
-        keys.forEach(function (k) {
-          var n = parsedNodes[k];
-          if (!n) return;
-          var details = "";
-          if (n.params) {
-            try {
-              var p = typeof n.params === "string" ? JSON.parse(n.params) : n.params;
-              if (n.action === "schema" && p.mode && p.columns) {
-                var cols = Array.isArray(p.columns) ? p.columns : [];
-                if (cols.length > 0) {
-                  if (p.mode === "SELECT") details = "<div class='node-details'>Keeps: " + esc(cols.join(", ")) + "</div>";
-                  else if (p.mode === "DROP") details = "<div class='node-details'>Drops: " + esc(cols.join(", ")) + "</div>";
-                }
-              }
-              if ((n.action === "outputd360" || n.action === "output") && p.mappings) {
-                var renames = [];
-                p.mappings.forEach(function (m) {
-                  if (m.sourceField && m.targetField && m.sourceField !== m.targetField) {
-                    renames.push(esc(m.sourceField) + " → " + esc(m.targetField));
-                  }
-                });
-                if (renames.length > 0) details = "<div class='node-details'>Renamed: " + renames.join(", ") + "</div>";
-              }
-              if ((n.action === "formula" || n.action === "computerelative") && p.fields) {
-                var formFields = p.fields || [];
-                if (formFields.length) {
-                  var formDetails = formFields.map(function (f) {
-                    var nm = f.name || f.label || "";
-                    var ex = f.formulaExpression || "";
-                    return esc(nm) + " = " + esc(ex.slice(0, 80));
-                  }).join("<br>");
-                  details = "<div class='node-details' style='font-family:SF Mono,Consolas,monospace'>" + formDetails + "</div>";
-                } else if (p.expression) {
-                  details = "<div class='node-details'>" + esc(String(p.expression).slice(0, 200)) + "</div>";
-                }
-              }
-              if (n.action === "filter" && p.filterExpressions) {
-                var fExprs = p.filterExpressions || [];
-                if (fExprs.length) {
-                  var fStrs = fExprs.map(function (c) {
-                    var field = c.field || "";
-                    var op = (c.operator || "").replace(/_/g, " ");
-                    var vals = (c.operands || []).map(function (o) { return typeof o === "object" ? (o.argument != null ? o.argument : "") : String(o); }).join(", ");
-                    return esc(field) + " " + esc(op) + (vals ? " " + vals : "");
-                  });
-                  details = "<div class='node-details'>" + fStrs.join("<br>") + "</div>";
-                }
-              } else if (n.action === "filter" && p.conditions) {
-                var conds = Array.isArray(p.conditions) ? p.conditions : [];
-                if (conds.length > 0) {
-                  var condStrs = conds.map(function (c) {
-                    if (typeof c === "string") return esc(c);
-                    if (c.field && c.operator) return esc(c.field) + " " + esc(c.operator) + (c.value ? " " + esc(String(c.value).slice(0, 20)) : "");
-                    return esc(JSON.stringify(c).slice(0, 40));
-                  });
-                  details = "<div class='node-details'>" + condStrs.join("; ") + "</div>";
-                }
-              }
-              if (n.action === "sqlfilter" && p.sqlFilterExpression) {
-                details = "<div class='node-details' style='font-family:SF Mono,Consolas,monospace'>" + esc(String(p.sqlFilterExpression).slice(0, 150)) + "</div>";
-              }
-              if ((n.action === "appendv2" || n.action === "append") && p.fieldMappings) {
-                var fmaps = p.fieldMappings || [];
-                if (typeof fmaps === "string") try { var pp2 = JSON.parse(fmaps); fmaps = pp2.fieldMappings || pp2; } catch (e4) {}
-                if (Array.isArray(fmaps) && fmaps.length) details = "<div class='node-details'>Combines " + fmaps.length + " fields from branches</div>";
-              }
-              if (n.action === "extractgrains" && p.grainFields) {
-                var gFields = p.grainFields || p.fields || [];
-                if (gFields.length) details = "<div class='node-details'>Grain fields: " + gFields.map(function (g) { return esc(typeof g === "string" ? g : g.name || g.field || ""); }).join(", ") + "</div>";
-              }
-              if ((n.action === "join" || n.action === "lookup") && (p.leftKeys || p.rightKeys || p.leftKey || p.rightKey || p.joinType)) {
-                var jinfo = [];
-                var lk3 = [].concat(p.leftKeys || p.leftKey || []).join(", ");
-                var rk3 = [].concat(p.rightKeys || p.rightKey || []).join(", ");
-                if (lk3) jinfo.push("left: " + esc(lk3));
-                if (rk3) jinfo.push("right: " + esc(rk3));
-                if (p.joinType) jinfo.push("type: " + esc(p.joinType));
-                if (jinfo.length > 0) details = "<div class='node-details'>" + jinfo.join(", ") + "</div>";
-              }
-            } catch (e) {}
-          }
-          htmlDoc += "<div class='node'><span class='node-action'>" + esc(n.action || k) + "</span><span class='node-summary'>" + esc(n.summary || "") + "</span>" + details + "</div>";
-        });
+        // Extract the Technical Details section from the already-built body HTML
+        var techMatch = body.match(/<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes[\s\S]*?(?=<\/div><\/details>)/);
+        if (techMatch) {
+          htmlDoc += techMatch[0];
+        } else {
+          // Fallback: simple list
+          keys.forEach(function (k) {
+            var n = parsedNodes[k]; if (!n) return;
+            htmlDoc += "<div class='node'><span class='node-action'>" + esc(n.action || k) + "</span><span class='node-summary'>" + esc(n.summary || "") + "</span></div>";
+          });
       } else {
         htmlDoc += "<h2>SQL</h2><pre style='white-space:pre-wrap;word-break:break-word;background:#f7f9fc;border:1px solid #e0e5ee;border-radius:6px;padding:12px;font:12px/1.5 SF Mono,Consolas,monospace'>" + esc(def.sql || def.query || def.dcSql || def.stlSql) + "</pre>";
       }
