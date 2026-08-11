@@ -6430,7 +6430,7 @@
               // Non-JSON response = session expired or SF returned an error page
               var isQueryEditor = /DataQueryWorkspace/i.test(location.href);
               var sessionHint = isQueryEditor
-                ? "Click SF's \"Run Highlighted Query\" button first to establish a session, then click our Run & Export again."
+                ? "Click SF's \"Run Query\" (or \"Run Highlighted Query\") button first to establish a session, then click our Run & Export again."
                 : "Sort any column on the Data Explorer table to re-establish the session, then retry.";
               if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — " + sessionHint)); return; }
               reject(new Error("Session may have expired — " + sessionHint));
