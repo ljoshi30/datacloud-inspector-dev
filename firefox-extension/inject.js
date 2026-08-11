@@ -9350,7 +9350,7 @@
         return;
       }
 
-      // Bookmarklet path — try reading from DOM
+      // Bookmarklet path — try DOM read, then same-origin API, then paste fallback
       btn.disabled = true; btn.textContent = "Scanning page…"; note.style.display = "none";
       setTimeout(function () {
         var domDef = readTransformFromDom();
@@ -9359,25 +9359,44 @@
           showTransformSummary({ definition: domDef, name: nameOrId, label: nameOrId });
           return;
         }
-        btn.disabled = false; btn.textContent = "🔎 Understand this transform";
-        note.innerHTML = "Could not read the transform definition from this page.<br><br>" +
-          "Click SF's <b>Download JSON</b> button, then paste the JSON here:";
-        var ta = document.createElement("textarea");
-        ta.placeholder = "Paste transform JSON here…";
-        ta.style.cssText = "width:100%;height:80px;margin-top:6px;font:11px monospace;border:1px solid #c9d0da;border-radius:4px;padding:6px;";
-        var parseBtn = document.createElement("button");
-        parseBtn.textContent = "Parse & Show";
-        parseBtn.style.cssText = "margin-top:4px;border:none;background:#0d6efd;color:#fff;border-radius:4px;padding:5px 12px;cursor:pointer;font:600 11px system-ui;";
-        parseBtn.onclick = function () {
-          try {
-            var parsed = JSON.parse(ta.value);
-            var def = parsed.definition || parsed;
-            if (!def.nodes && parsed.definitions && parsed.definitions[0]) def = parsed.definitions[0].definition || parsed.definitions[0];
-            showTransformSummary({ definition: def, name: nameOrId, label: parsed.label || parsed.name || nameOrId });
-          } catch (e) { note.textContent = "Invalid JSON: " + e.message; }
-        };
-        note.appendChild(ta); note.appendChild(parseBtn);
-        note.style.display = "block";
+        // Try same-origin REST API call (works if SF sends session cookie)
+        btn.textContent = "Loading via API…";
+        fetch("/services/data/v63.0/ssot/data-transforms/" + encodeURIComponent(nameOrId), {
+          headers: { "Accept": "application/json" }, credentials: "include"
+        }).then(function (r) {
+          if (r.ok) return r.json();
+          return null;
+        }).then(function (data) {
+          if (data) {
+            btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+            showTransformSummary(data);
+            return;
+          }
+          showPasteFallback();
+        }).catch(function () {
+          showPasteFallback();
+        });
+        function showPasteFallback() {
+          btn.disabled = false; btn.textContent = "🔎 Understand this transform";
+          note.innerHTML = "Could not read the transform definition from this page.<br><br>" +
+            "Click SF's <b>Download JSON</b> button, then paste the JSON here:";
+          var ta = document.createElement("textarea");
+          ta.placeholder = "Paste transform JSON here…";
+          ta.style.cssText = "width:100%;height:80px;margin-top:6px;font:11px monospace;border:1px solid #c9d0da;border-radius:4px;padding:6px;";
+          var parseBtn = document.createElement("button");
+          parseBtn.textContent = "Parse & Show";
+          parseBtn.style.cssText = "margin-top:4px;border:none;background:#0d6efd;color:#fff;border-radius:4px;padding:5px 12px;cursor:pointer;font:600 11px system-ui;";
+          parseBtn.onclick = function () {
+            try {
+              var parsed = JSON.parse(ta.value);
+              var def = parsed.definition || parsed;
+              if (!def.nodes && parsed.definitions && parsed.definitions[0]) def = parsed.definitions[0].definition || parsed.definitions[0];
+              showTransformSummary({ definition: def, name: nameOrId, label: parsed.label || parsed.name || nameOrId });
+            } catch (e) { note.textContent = "Invalid JSON: " + e.message; }
+          };
+          note.appendChild(ta); note.appendChild(parseBtn);
+          note.style.display = "block";
+        }
       }, 500);
     };
     wrap.appendChild(note); wrap.appendChild(btn);
