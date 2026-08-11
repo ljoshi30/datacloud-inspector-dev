@@ -7236,8 +7236,17 @@
         var flds = sl.fields || [];
         info.summary = (sl.mode === "SELECT" ? "Keep " : "Drop ") + flds.length + " columns";
         info.action = "schema";
-      } else if (act === "append" || act === "union") {
-        info.summary = "combines rows from multiple branches";
+      } else if (act === "append" || act === "appendv2" || act === "union") {
+        var fm = p.fieldMappings || [];
+        if (typeof fm === "string") { try { var pp = JSON.parse(fm); fm = pp.fieldMappings || pp; } catch (e2) { fm = []; } }
+        if (Array.isArray(fm) && fm.length) { info.summary = "combines " + fm.length + " fields from multiple branches"; }
+        else { info.summary = "combines rows from multiple branches"; }
+      } else if (act === "sqlfilter") {
+        var sqlExpr = p.sqlFilterExpression || p.expression || "";
+        info.summary = sqlExpr ? String(sqlExpr).slice(0, 80) : "SQL filter";
+      } else if (act === "extractgrains") {
+        var grainFields = p.grainFields || p.fields || [];
+        info.summary = grainFields.length ? "extract grain values (" + grainFields.length + " fields)" : "extract grain values";
       } else if (act === "update" || act === "swap") {
         info.summary = "updates " + (p.column || p.field || "columns") + " from lookup";
       } else {
@@ -7291,6 +7300,8 @@
     // ── Translate node actions to plain English ──
     function humanize(n) {
       var act = n.action || "", s = n.summary || "";
+      // Don't show Load/Input nodes in the summary - they're shown separately in "Reads from"
+      if (act === "load" || act === "input") return null;
       // row_number + partition = "keep latest/first per group"
       if (act === "computerelative" && /row_number/i.test(s)) {
         var partMatch = s.match(/PARTITION BY\s+([^\s]+)/i);
@@ -7298,6 +7309,11 @@
         var groupField = partMatch ? partMatch[1].replace(/__c$/i, "").replace(/_/g, " ") : "group";
         var direction = (orderMatch && /DESC/i.test(orderMatch[2])) ? "most recent" : "earliest";
         return "Rank records per " + groupField + " (" + direction + " first)";
+      }
+      // Calculate/Aggregate from computerelative action
+      if (act === "computerelative") {
+        var fname2 = s.match(/^(\w+)\s*=/);
+        return "Calculate: " + (fname2 ? fname2[1].replace(/_/g, " ") + " = " + s.slice(s.indexOf("=") + 1, 60).trim() : s.slice(0, 60));
       }
       if (act === "filter") {
         // rank = 1 pattern
@@ -7311,6 +7327,9 @@
         if (parts.length > 2) return "Filter: " + parts.length + " conditions applied";
         return "Filter: " + esc(s.slice(0, 80));
       }
+      if (act === "sqlfilter") {
+        return "SQL Filter: " + esc(s.slice(0, 80));
+      }
       if (act === "formula") {
         if (/concat/i.test(s)) return "Create composite key (combine fields)";
         if (/datediff|date_diff/i.test(s)) return "Calculate days between dates";
@@ -7323,8 +7342,19 @@
         var jtype = s.match(/^([A-Z_ ]+)\s+on/i);
         return (jtype ? jtype[1].trim() : "Join") + " with another dataset";
       }
-      if (act === "aggregate") return "Aggregate/summarize data";
-      if (act === "append" || act === "union") return "Combine rows from multiple paths";
+      if (act === "aggregate") {
+        var aggMatch = s.match(/(.+?)\s+by\s+(.+)/i);
+        if (aggMatch) return "Aggregate: " + aggMatch[1] + " grouped by " + aggMatch[2];
+        return "Aggregate: " + (s || "summarize data");
+      }
+      if (act === "appendv2" || act === "append" || act === "union") {
+        var fieldCount = s.match(/combines\s+(\d+)\s+fields/i);
+        if (fieldCount) return "Combine branches (merge " + fieldCount[1] + " field mappings)";
+        return "Combine rows from multiple branches";
+      }
+      if (act === "extractgrains") {
+        return "Extract grain values" + (s.includes("(") ? " " + s.slice(s.indexOf("(")) : "");
+      }
       if (act === "update") return "Update field values from lookup";
       if (act === "outputd360" || act === "output") return null;
       return act ? (act.charAt(0).toUpperCase() + act.slice(1)).replace(/([a-z])([A-Z])/g, "$1 $2") + (s ? ": " + s.slice(0, 50) : "") : null;
@@ -7436,8 +7466,8 @@
           if (seenIds["_def_" + innerK]) return;
           seenIds["_def_" + innerK] = true;
         var act = n.action || "";
-        var nodeType = act === "load" || act === "input" ? "INPUT" : act === "outputd360" || act === "output" ? "OUTPUT" : act === "filter" ? "FILTER" : act === "join" || act === "lookup" ? "JOIN" : act === "formula" || act === "computerelative" || act === "compute" ? "TRANSFORM" : act === "schema" ? "SCHEMA" : act === "append" || act === "appendv2" ? "APPEND" : act === "aggregate" ? "AGGREGATE" : act.toUpperCase();
-        var color = act === "filter" ? "#dc2626" : act === "join" || act === "lookup" ? "#2563eb" : act === "formula" || act === "computerelative" ? "#7c3aed" : act === "schema" ? "#d97706" : act === "outputd360" || act === "output" ? "#059669" : act === "load" || act === "input" ? "#475569" : "#334155";
+        var nodeType = act === "load" || act === "input" ? "INPUT" : act === "outputd360" || act === "output" ? "OUTPUT" : act === "filter" || act === "sqlfilter" ? "FILTER" : act === "join" || act === "lookup" ? "JOIN" : act === "formula" || act === "computerelative" || act === "compute" ? "TRANSFORM" : act === "schema" ? "SCHEMA" : act === "append" || act === "appendv2" ? "APPEND" : act === "aggregate" ? "AGGREGATE" : act === "extractgrains" ? "EXTRACT" : act.toUpperCase();
+        var color = act === "filter" || act === "sqlfilter" ? "#dc2626" : act === "join" || act === "lookup" ? "#2563eb" : act === "formula" || act === "computerelative" ? "#7c3aed" : act === "schema" ? "#d97706" : act === "outputd360" || act === "output" ? "#059669" : act === "load" || act === "input" ? "#475569" : "#334155";
         var details = "";
         if (n.params) {
           try {
@@ -7511,6 +7541,16 @@
               var fm2 = p.fieldMappings || [];
               if (typeof fm2 === "string") try { var pp = JSON.parse(fm2); fm2 = pp.fieldMappings || pp; } catch (e3) {}
               if (Array.isArray(fm2) && fm2.length) details = "<br><span style='color:#475569;font-size:9px;padding-left:14px'>Combines " + fm2.length + " fields from branches</span>";
+            }
+            // SQL Filter: show expression
+            if (n.action === "sqlfilter") {
+              var sqlFilt = p.sqlFilterExpression || p.expression || "";
+              if (sqlFilt) details = "<br><span style='color:#dc2626;font-size:9px;padding-left:14px;font-family:SF Mono,Consolas,monospace'>" + esc(String(sqlFilt).slice(0, 150)) + "</span>";
+            }
+            // Extract Grains: show grain fields
+            if (n.action === "extractgrains") {
+              var gf = p.grainFields || p.fields || [];
+              if (gf.length) details = "<br><span style='color:#475569;font-size:9px;padding-left:14px'>Grain fields: " + gf.map(function (f) { return esc(typeof f === "string" ? f : f.name || f.field || ""); }).join(", ") + "</span>";
             }
           } catch (e) {}
         }
@@ -7604,10 +7644,31 @@
                 });
                 if (renames.length > 0) details = "<div class='node-details'>Renamed: " + renames.join(", ") + "</div>";
               }
-              if ((n.action === "formula" || n.action === "computerelative") && p.expression) {
-                details = "<div class='node-details'>" + esc(String(p.expression).slice(0, 200)) + "</div>";
+              if ((n.action === "formula" || n.action === "computerelative") && p.fields) {
+                var formFields = p.fields || [];
+                if (formFields.length) {
+                  var formDetails = formFields.map(function (f) {
+                    var nm = f.name || f.label || "";
+                    var ex = f.formulaExpression || "";
+                    return esc(nm) + " = " + esc(ex.slice(0, 80));
+                  }).join("<br>");
+                  details = "<div class='node-details' style='font-family:SF Mono,Consolas,monospace'>" + formDetails + "</div>";
+                } else if (p.expression) {
+                  details = "<div class='node-details'>" + esc(String(p.expression).slice(0, 200)) + "</div>";
+                }
               }
-              if (n.action === "filter" && p.conditions) {
+              if (n.action === "filter" && p.filterExpressions) {
+                var fExprs = p.filterExpressions || [];
+                if (fExprs.length) {
+                  var fStrs = fExprs.map(function (c) {
+                    var field = c.field || "";
+                    var op = (c.operator || "").replace(/_/g, " ");
+                    var vals = (c.operands || []).map(function (o) { return typeof o === "object" ? (o.argument != null ? o.argument : "") : String(o); }).join(", ");
+                    return esc(field) + " " + esc(op) + (vals ? " " + vals : "");
+                  });
+                  details = "<div class='node-details'>" + fStrs.join("<br>") + "</div>";
+                }
+              } else if (n.action === "filter" && p.conditions) {
                 var conds = Array.isArray(p.conditions) ? p.conditions : [];
                 if (conds.length > 0) {
                   var condStrs = conds.map(function (c) {
@@ -7618,10 +7679,24 @@
                   details = "<div class='node-details'>" + condStrs.join("; ") + "</div>";
                 }
               }
-              if ((n.action === "join" || n.action === "lookup") && (p.leftKey || p.rightKey || p.joinType)) {
+              if (n.action === "sqlfilter" && p.sqlFilterExpression) {
+                details = "<div class='node-details' style='font-family:SF Mono,Consolas,monospace'>" + esc(String(p.sqlFilterExpression).slice(0, 150)) + "</div>";
+              }
+              if ((n.action === "appendv2" || n.action === "append") && p.fieldMappings) {
+                var fmaps = p.fieldMappings || [];
+                if (typeof fmaps === "string") try { var pp2 = JSON.parse(fmaps); fmaps = pp2.fieldMappings || pp2; } catch (e4) {}
+                if (Array.isArray(fmaps) && fmaps.length) details = "<div class='node-details'>Combines " + fmaps.length + " fields from branches</div>";
+              }
+              if (n.action === "extractgrains" && p.grainFields) {
+                var gFields = p.grainFields || p.fields || [];
+                if (gFields.length) details = "<div class='node-details'>Grain fields: " + gFields.map(function (g) { return esc(typeof g === "string" ? g : g.name || g.field || ""); }).join(", ") + "</div>";
+              }
+              if ((n.action === "join" || n.action === "lookup") && (p.leftKeys || p.rightKeys || p.leftKey || p.rightKey || p.joinType)) {
                 var jinfo = [];
-                if (p.leftKey) jinfo.push("left: " + esc(p.leftKey));
-                if (p.rightKey) jinfo.push("right: " + esc(p.rightKey));
+                var lk3 = [].concat(p.leftKeys || p.leftKey || []).join(", ");
+                var rk3 = [].concat(p.rightKeys || p.rightKey || []).join(", ");
+                if (lk3) jinfo.push("left: " + esc(lk3));
+                if (rk3) jinfo.push("right: " + esc(rk3));
                 if (p.joinType) jinfo.push("type: " + esc(p.joinType));
                 if (jinfo.length > 0) details = "<div class='node-details'>" + jinfo.join(", ") + "</div>";
               }
