@@ -9359,8 +9359,7 @@
         }
         btn.disabled = false; btn.textContent = "🔎 Understand this transform";
         note.innerHTML = "Could not read the transform definition from this page.<br><br>" +
-          "<b>Options:</b><br>• Use the browser extension (recommended — reads via API)<br>" +
-          "• Or click SF's <b>Download JSON</b> button, then paste the JSON here:";
+          "Click SF's <b>Download JSON</b> button, then paste the JSON here:";
         var ta = document.createElement("textarea");
         ta.placeholder = "Paste transform JSON here…";
         ta.style.cssText = "width:100%;height:80px;margin-top:6px;font:11px monospace;border:1px solid #c9d0da;border-radius:4px;padding:6px;";
@@ -9479,7 +9478,7 @@
     function showGuide() {
       card.style.display = "block";
       var maxRows = "500K";
-      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Bookmarklet mode — fetches in batches (~4,000 rows per batch). Large exports may take 1-2 minutes.</span>";
+      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Fetches in batches (~4,000 rows per batch). Large exports may take 1-2 minutes.</span>";
       cardBody.innerHTML = ""
         + "<div style='font:600 14px -apple-system,sans-serif;margin-bottom:8px;'>Select your query</div>"
         + "<div style='color:#475569;font-size:12px;line-height:1.7;'>"
