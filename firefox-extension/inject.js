@@ -7267,7 +7267,8 @@
 
     var m = document.createElement("div");
     _xformEl = m;
-    m.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(900px,94vw);height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;overflow:hidden;";
+    var mWidth = Math.min(900, window.innerWidth * 0.94);
+    m.style.cssText = "position:fixed;top:5vh;left:" + Math.max(10, (window.innerWidth - mWidth) / 2) + "px;width:" + mWidth + "px;height:min(86vh,880px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;overflow:hidden;";
     var hdr = "<div style='display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move' class='dc-xf-hdr'>" +
       "<div style='flex:1'><div style='font-weight:700;font-size:14px'>" + esc(rep.label || rep.name || "Data Transform") + "</div>" +
       (function () {
@@ -7368,7 +7369,7 @@
       sources.forEach(function (s) {
         body += "<div style='padding:5px 10px;border:1px solid #e6ebf3;border-radius:6px;margin-bottom:4px;font-size:11px'>" +
           "<b>" + esc(s.summary) + "</b> <span style='color:#8a94a6'>(" + s.fields.length + " fields)</span>" +
-          (s.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show fields</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px;max-height:60px;overflow:auto'>" + s.fields.map(esc).join(", ") + "</div></details>" : "") + "</div>";
+          (s.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show " + s.fields.length + " fields</summary><div style='display:flex;flex-wrap:wrap;gap:2px 4px;margin-top:3px;max-height:80px;overflow:auto'>" + s.fields.map(function (f) { return "<span style='font:9px SF Mono,Consolas,monospace;background:#f1f5f9;padding:1px 4px;border-radius:2px;color:#334155'>" + esc(f) + "</span>"; }).join("") + "</div></details>" : "") + "</div>";
       });
       // OUTPUTS with mappings
       body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>Outputs (" + outs.length + ")</div>";
@@ -7377,25 +7378,41 @@
           "<b>" + esc(o.name) + "</b> <span style='color:#8a94a6'>" + esc(o.category || "") + " &bull; " + o.fields.length + " fields</span>" +
           (o.fields.length ? "<details style='margin-top:3px'><summary style='font-size:10px;color:#8a94a6;cursor:pointer'>show mappings</summary><div style='font:10px SF Mono,Consolas,monospace;color:#5c6b8a;margin-top:2px'>" + o.fields.map(function (f) { return esc(f.label || "") + " → " + esc(f.name); }).join("<br>") + "</div></details>" : "") + "</div>";
       });
-      // ALL NODES color-coded with detailed column info
-      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ")</div>";
-      keys.forEach(function (k) {
-        var n = parsedNodes[k];
+      // ALL NODES in execution order (from branch traces), with node type labels
+      body += "<div style='font-weight:700;margin:10px 0 6px;font-size:11px;color:#1e3a5f'>All Nodes (" + keys.length + ") — in execution order</div>";
+      // Build ordered node list from branches (avoids arbitrary JSON key order)
+      var orderedNodes = [];
+      var seenNodes = {};
+      branches.forEach(function (br, bIdx) {
+        body += "<div style='font-size:10px;font-weight:700;color:#0d6efd;margin:8px 0 4px;padding:4px 8px;background:#eff6ff;border-radius:4px'>Branch " + (bIdx + 1) + " → " + esc(br.output.target) + "</div>";
+        br.path.forEach(function (n) {
+          if (seenNodes[n.id]) return;
+          seenNodes[n.id] = true;
+          orderedNodes.push(n);
+        });
+        // Include the output node
+        if (!seenNodes[br.output.id]) { seenNodes[br.output.id] = true; orderedNodes.push(br.output); }
+      });
+      // Show any remaining nodes not in branches
+      keys.forEach(function (k) { if (!seenNodes[k] && parsedNodes[k]) orderedNodes.push(parsedNodes[k]); });
+      orderedNodes.forEach(function (n) {
         if (!n) return;
-        var color = n.action === "filter" ? "#dc2626" : n.action === "join" || n.action === "lookup" ? "#2563eb" : n.action === "formula" || n.action === "computerelative" ? "#7c3aed" : n.action === "schema" ? "#d97706" : n.action === "outputd360" || n.action === "output" ? "#059669" : "#334155";
+        var act = n.action || "";
+        var nodeType = act === "load" || act === "input" ? "INPUT" : act === "outputd360" || act === "output" ? "OUTPUT" : act === "filter" ? "FILTER" : act === "join" || act === "lookup" ? "JOIN" : act === "formula" || act === "computerelative" || act === "compute" ? "TRANSFORM" : act === "schema" ? "SCHEMA" : act === "append" || act === "appendv2" ? "APPEND" : act === "aggregate" ? "AGGREGATE" : act.toUpperCase();
+        var color = act === "filter" ? "#dc2626" : act === "join" || act === "lookup" ? "#2563eb" : act === "formula" || act === "computerelative" ? "#7c3aed" : act === "schema" ? "#d97706" : act === "outputd360" || act === "output" ? "#059669" : act === "load" || act === "input" ? "#475569" : "#334155";
         var details = "";
         if (n.params) {
           try {
             var p = typeof n.params === "string" ? JSON.parse(n.params) : n.params;
-            // Schema: show kept/dropped column names
+            // Schema: show kept/dropped column names as a grid
             if (n.action === "schema") {
               var sl = p.slice || p;
               var sFields = sl.fields || p.columns || [];
               var sMode = sl.mode || p.mode || "";
               if (sFields.length > 0) {
-                var fList = sFields.length <= 8 ? sFields.map(esc).join(", ") : sFields.slice(0, 6).map(esc).join(", ") + " <i>(+" + (sFields.length - 6) + " more)</i>";
-                if (/SELECT/i.test(sMode)) details = "<br><span style='color:#059669;font-size:9px;padding-left:14px'><b>Keeps " + sFields.length + ":</b> " + fList + "</span>";
-                else if (/DROP/i.test(sMode)) details = "<br><span style='color:#dc2626;font-size:9px;padding-left:14px'><b>Drops " + sFields.length + ":</b> " + fList + "</span>";
+                var fieldGrid = "<div style='display:flex;flex-wrap:wrap;gap:2px 6px;margin-top:3px;padding-left:14px'>" + sFields.map(function (f) { return "<span style='font:9px SF Mono,Consolas,monospace;background:#f1f5f9;padding:1px 4px;border-radius:2px;color:#334155'>" + esc(f) + "</span>"; }).join("") + "</div>";
+                if (/SELECT/i.test(sMode)) details = "<br><span style='color:#059669;font-size:9px;padding-left:14px'><b>Keeps " + sFields.length + " fields:</b></span>" + fieldGrid;
+                else if (/DROP/i.test(sMode)) details = "<br><span style='color:#dc2626;font-size:9px;padding-left:14px'><b>Drops " + sFields.length + " fields:</b></span>" + fieldGrid;
               }
             }
             // Output: target name + field mappings + renames
@@ -7459,8 +7476,9 @@
             }
           } catch (e) {}
         }
-        body += "<div style='padding:3px 8px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:2px;font-size:10px'>" +
-          "<b style='color:" + color + "'>" + esc(n.action || k) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span>" + details + "</div>";
+        body += "<div style='padding:4px 8px;border-left:3px solid " + color + ";background:#f9fafb;margin-bottom:3px;font-size:10px'>" +
+          "<span style='display:inline-block;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;background:" + color + ";color:#fff;margin-right:5px;vertical-align:middle'>" + nodeType + "</span>" +
+          "<b style='color:" + color + "'>" + esc(act || n.id) + "</b> <span style='color:#5c6b8a'>" + esc(n.summary || "") + "</span>" + details + "</div>";
       });
       body += "</div></details>";
     }
