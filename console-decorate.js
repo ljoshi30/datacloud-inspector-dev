@@ -7899,28 +7899,102 @@
   var _cellViewEl = null;
   function showCellValue(fieldApi, fieldLabel, value) {
     if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
-    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
-    // pretty-print JSON if it parses (common for blob/graph fields)
-    var pretty = value;
-    try { var p = JSON.parse(value); if (p && typeof p === "object") pretty = JSON.stringify(p, null, 2); } catch (e) {}
+    var esc2 = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+    // Try to parse as JSON and render as table/record view
+    var bodyHtml = "";
+    var parsed = null;
+    try { parsed = JSON.parse(value); } catch (e) {}
+    if (parsed && typeof parsed === "object") {
+      // JSON detected — render as formatted record view
+      bodyHtml = renderJsonAsTable(parsed, esc2);
+    } else {
+      // Plain text — show as-is
+      bodyHtml = "<pre style='margin:0;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(value) + "</pre>";
+    }
     var m = document.createElement("div");
     _cellViewEl = m;
-    m.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(760px,92vw);max-height:80vh;z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+    m.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(800px,92vw);max-height:80vh;z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
     m.innerHTML =
       "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb'>" +
-        "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc(fieldLabel) + "</div>" +
-        "<div style='font:600 10px SF Mono,Consolas,monospace;color:#5c6b8a'>" + esc(fieldApi) + " &bull; " + value.length + " chars</div></div>" +
+        "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc2(fieldLabel) + "</div>" +
+        "<div style='font:600 10px SF Mono,Consolas,monospace;color:#5c6b8a'>" + esc2(fieldApi) + (parsed ? " &bull; Record View" : " &bull; " + value.length + " chars") + "</div></div>" +
+        "<button class='dc-cv-json' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 10px;cursor:pointer;font:600 10px system-ui;color:#475569" + (parsed ? "" : ";display:none") + "'>JSON</button>" +
         "<button class='dc-cv-copy' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy</button>" +
         "<button class='dc-cv-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button>" +
       "</div>" +
-      "<pre style='margin:0;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc(pretty) + "</pre>";
+      "<div class='dc-cv-body' style='overflow:auto;flex:1'>" + bodyHtml + "</div>";
     document.body.appendChild(m);
     m.querySelector(".dc-cv-copy").onclick = function () {
       try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
     };
+    // Toggle between table view and raw JSON
+    var showingTable = true;
+    if (parsed) {
+      m.querySelector(".dc-cv-json").onclick = function () {
+        var bodyEl = m.querySelector(".dc-cv-body");
+        var btn = m.querySelector(".dc-cv-json");
+        if (showingTable) {
+          bodyEl.innerHTML = "<pre style='margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(JSON.stringify(parsed, null, 2)) + "</pre>";
+          btn.textContent = "Table";
+        } else {
+          bodyEl.innerHTML = renderJsonAsTable(parsed, esc2);
+          btn.textContent = "JSON";
+        }
+        showingTable = !showingTable;
+      };
+    }
     var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } };
     m.querySelector(".dc-cv-x").onclick = close;
     if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
+  }
+  // Render a JSON object/array as a styled HTML table (record view)
+  function renderJsonAsTable(data, esc2) {
+    if (Array.isArray(data)) {
+      if (data.length === 0) return "<div style='padding:12px;color:#64748b'>Empty array</div>";
+      // Array of objects → table with columns
+      if (typeof data[0] === "object" && data[0] !== null) {
+        var cols = [];
+        data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0) cols.push(k); }); });
+        var html = "<table style='border-collapse:collapse;width:100%;font-size:11px'>";
+        html += "<thead><tr style='background:#f1f5f9'>" + cols.map(function (c) { return "<th style='text-align:left;padding:6px 10px;font-weight:700;border-bottom:2px solid #e2e8f0;color:#334155;white-space:nowrap'>" + esc2(c) + "</th>"; }).join("") + "</tr></thead>";
+        html += "<tbody>";
+        data.forEach(function (item, idx) {
+          html += "<tr style='background:" + (idx % 2 ? "#f8fafc" : "#fff") + "'>";
+          cols.forEach(function (c) {
+            var v = item && item[c] != null ? item[c] : "";
+            var cellContent = "";
+            if (typeof v === "object") {
+              cellContent = "<button style='border:1px solid #c9d0da;background:#fff;border-radius:3px;font:9px system-ui;padding:2px 6px;cursor:pointer;color:#0d6efd' onclick='this.nextSibling.style.display=this.nextSibling.style.display===\"none\"?\"block\":\"none\"'>Expand</button><div style='display:none;margin-top:4px;font:10px monospace;background:#f8fafc;padding:4px;border-radius:3px;max-height:100px;overflow:auto'>" + esc2(JSON.stringify(v, null, 2)) + "</div>";
+            } else {
+              cellContent = esc2(String(v));
+            }
+            html += "<td style='padding:5px 10px;border-bottom:1px solid #f1f5f9;max-width:250px;overflow:hidden;text-overflow:ellipsis'>" + cellContent + "</td>";
+          });
+          html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
+      }
+      // Array of primitives
+      return "<div style='padding:12px'>" + data.map(function (item, i) { return "<div style='padding:3px 10px;border-bottom:1px solid #f1f5f9;font-size:11px'><span style='color:#64748b;margin-right:8px'>" + (i + 1) + ".</span>" + esc2(String(item)) + "</div>"; }).join("") + "</div>";
+    }
+    // Single object → key-value table
+    if (typeof data === "object" && data !== null) {
+      var keys2 = Object.keys(data);
+      var html2 = "<table style='border-collapse:collapse;width:100%;font-size:12px'>";
+      keys2.forEach(function (k, idx) {
+        var v = data[k];
+        var valHtml = "";
+        if (v === null || v === undefined) { valHtml = "<span style='color:#94a3b8;font-style:italic'>null</span>"; }
+        else if (Array.isArray(v)) { valHtml = "<span style='color:#0d6efd;cursor:pointer' onclick='var d=this.nextSibling;d.style.display=d.style.display===\"none\"?\"block\":\"none\"'>[Array: " + v.length + " items] ▾</span><div style='display:none;margin-top:4px'>" + renderJsonAsTable(v, esc2) + "</div>"; }
+        else if (typeof v === "object") { valHtml = "<span style='color:#0d6efd;cursor:pointer' onclick='var d=this.nextSibling;d.style.display=d.style.display===\"none\"?\"block\":\"none\"'>{Object} ▾</span><div style='display:none;margin-top:4px'>" + renderJsonAsTable(v, esc2) + "</div>"; }
+        else { valHtml = "<span style='user-select:text'>" + esc2(String(v)) + "</span>"; }
+        html2 += "<tr style='background:" + (idx % 2 ? "#f8fafc" : "#fff") + "'><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#334155;white-space:nowrap;vertical-align:top;width:200px'>" + esc2(k) + "</td><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;color:#1e293b;word-break:break-word'>" + valHtml + "</td></tr>";
+      });
+      html2 += "</table>";
+      return html2;
+    }
+    return "<pre style='margin:0;padding:12px;font:12px monospace'>" + esc2(String(data)) + "</pre>";
   }
 
   // Persisted filter state per object so conditions SURVIVE re-renders (Apply re-renders
