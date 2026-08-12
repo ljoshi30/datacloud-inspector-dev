@@ -10626,6 +10626,341 @@
     return esc(String(val));
   }
 
+  function generateRichDashboardHTML(data, targetName) {
+    var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); };
+    var jsonStr = JSON.stringify(data).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activation Studio Inspector - ${esc(targetName)}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+.container { max-width: 1400px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+.header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+.header h1 { font-size: 32px; margin-bottom: 8px; font-weight: 700; }
+.header p { font-size: 14px; opacity: 0.9; }
+.tabs { display: flex; border-bottom: 2px solid #e5e7eb; background: #f9fafb; overflow-x: auto; }
+.tab { padding: 16px 24px; cursor: pointer; font-weight: 600; color: #6b7280; border-bottom: 3px solid transparent; transition: all 0.2s; white-space: nowrap; }
+.tab:hover { background: #f3f4f6; color: #374151; }
+.tab.active { color: #667eea; border-bottom-color: #667eea; background: white; }
+.tab-content { display: none; padding: 30px; max-height: calc(100vh - 300px); overflow-y: auto; }
+.tab-content.active { display: block; }
+.section { margin-bottom: 30px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+.section-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 20px; font-weight: 700; font-size: 16px; }
+.section-body { padding: 20px; background: white; }
+.kv-grid { display: grid; grid-template-columns: 200px 1fr; gap: 12px 20px; }
+.kv-label { font-weight: 600; color: #374151; font-size: 13px; }
+.kv-value { color: #1f2937; font-size: 13px; word-break: break-word; }
+.pill-path { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.pill { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.arrow { color: #9ca3af; font-size: 18px; font-weight: bold; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+thead { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+th { padding: 12px; text-align: left; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+tbody tr:hover { background: #f9fafb; }
+.entity-group { margin-bottom: 24px; }
+.entity-header { background: #f3f4f6; padding: 10px 16px; font-weight: 700; color: #1f2937; border-left: 4px solid #667eea; margin-bottom: 8px; border-radius: 4px; }
+.badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge-active { background: #d1fae5; color: #065f46; }
+.badge-inactive { background: #fee2e2; color: #991b1b; }
+.filter-box { background: #fef3c7; border: 1px solid #fcd34d; padding: 14px; border-radius: 6px; margin-bottom: 12px; }
+.filter-box strong { color: #92400e; }
+.contact-point-card { background: #dbeafe; border: 1px solid #93c5fd; padding: 16px; border-radius: 8px; margin-bottom: 14px; }
+.contact-point-card h4 { color: #1e40af; margin-bottom: 10px; font-size: 14px; }
+pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.6; }
+.empty-state { text-align: center; color: #9ca3af; padding: 40px; font-style: italic; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>🎯 Activation Studio Inspector</h1>
+    <p>Deep-dive analysis of your Data Cloud activation configuration</p>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="studio">📊 Studio UI View</div>
+    <div class="tab" data-tab="filters">🎯 Audience Filters & Rules</div>
+    <div class="tab" data-tab="schema">🔗 Target Schema & Multi-Hop Joins</div>
+    <div class="tab" data-tab="audit">📋 Audit Logs & Metadata</div>
+  </div>
+
+  <div id="studio" class="tab-content active"></div>
+  <div id="filters" class="tab-content"></div>
+  <div id="schema" class="tab-content"></div>
+  <div id="audit" class="tab-content"></div>
+</div>
+
+<script>
+const embeddedData = JSON.parse('${jsonStr}');
+
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+  });
+});
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
+}
+
+function processJSON() {
+  const data = embeddedData;
+  if (!data) return;
+
+  const targetName = (data.activationTarget && (data.activationTarget.name || data.activationTargetName)) || data.name || 'Unknown';
+
+  // === TAB 1: Studio UI View ===
+  let studioHTML = '';
+
+  // Overview Section
+  studioHTML += '<div class="section"><div class="section-header">📋 Activation Overview</div><div class="section-body"><div class="kv-grid">';
+  studioHTML += kvRow('Name', data.name || data.activationTargetName);
+  studioHTML += kvRow('Status', data.status ? \`<span class="badge badge-\${data.status === 'ACTIVE' ? 'active' : 'inactive'}">\${data.status}</span>\` : '');
+  studioHTML += kvRow('Type', data.activationType);
+  studioHTML += kvRow('Platform', data.activationTarget && data.activationTarget.platformName);
+  studioHTML += kvRow('Target', data.activationTargetName);
+  studioHTML += kvRow('Data Space', data.dataSpaceName);
+  studioHTML += kvRow('Segment', data.segmentApiName);
+  studioHTML += kvRow('Refresh Type', data.refreshType);
+  studioHTML += kvRow('Processing Type', data.processingType);
+  studioHTML += kvRow('Enabled', data.isEnabled || data.enabled);
+  studioHTML += kvRow('Last Publish Date', data.lastPublishDate);
+  studioHTML += kvRow('Last Publish Status', data.lastPublishStatus);
+  studioHTML += kvRow('Created', data.createdDate);
+  studioHTML += kvRow('Last Modified', data.lastModifiedDate);
+  studioHTML += kvRow('Developer Name', data.developerName);
+  studioHTML += '</div></div></div>';
+
+  // Membership Section
+  studioHTML += '<div class="section"><div class="section-header">👥 Activation Membership</div><div class="section-body">';
+  if (data.activationTargetSubjectConfig) {
+    const sub = data.activationTargetSubjectConfig;
+    studioHTML += '<div class="kv-grid">';
+    studioHTML += kvRow('Subject Entity', sub.masterLabel || sub.developerName);
+    studioHTML += kvRow('Developer Name', sub.developerName);
+    studioHTML += kvRow('Membership Name', data.membershipName);
+    studioHTML += '</div>';
+  } else {
+    studioHTML += '<div class="empty-state">No membership configured</div>';
+  }
+  studioHTML += '</div></div>';
+
+  // Contact Points Section
+  studioHTML += '<div class="section"><div class="section-header">📧 Contact Points</div><div class="section-body">';
+  if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
+    data.contactPointsConfig.contactPoints.forEach(cp => {
+      studioHTML += \`<div class="contact-point-card"><h4>📌 \${esc(cp.type || 'Unknown Type')}</h4>\`;
+      studioHTML += \`<div class="kv-grid">\`;
+      studioHTML += kvRow('Entity', cp.contactPointEntityName);
+      if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+        const fields = cp.fieldConfig.contactPointFields.map(f => \`\${f.label} (\${f.name})\`).join(', ');
+        studioHTML += kvRow('Fields', fields);
+      }
+      studioHTML += \`</div>\`;
+
+      // Path visualization with pills
+      if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+        cp.queryPathConfig.configs.forEach((cfg, idx) => {
+          if (cfg.queryPath && cfg.queryPath.length > 0) {
+            studioHTML += \`<div style="margin-top:12px;"><strong>Path \${idx + 1}:</strong></div><div class="pill-path">\`;
+            cfg.queryPath.forEach((step, stepIdx) => {
+              const objLabel = step.objectLabel || (step.objectName || '').replace(/__dlm$|__cio$/g, '');
+              const fieldLabel = step.fieldLabel || step.fieldName || '';
+              if (stepIdx > 0) studioHTML += '<span class="arrow">→</span>';
+              studioHTML += \`<span class="pill">\${esc(objLabel)}.\${esc(fieldLabel)}</span>\`;
+            });
+            studioHTML += '</div>';
+          }
+        });
+      }
+
+      if (cp.sourceConfig && cp.sourceConfig.contactPointSources) {
+        studioHTML += '<div style="margin-top:12px;">';
+        cp.sourceConfig.contactPointSources.forEach(src => {
+          studioHTML += kvRow('Source', \`\${src.name} (Priority: \${src.dataSourcePriority})\`);
+        });
+        studioHTML += '</div>';
+      }
+      studioHTML += '</div>';
+    });
+  } else {
+    studioHTML += '<div class="empty-state">No contact points configured</div>';
+  }
+  studioHTML += '</div></div>';
+
+  // Attributes Section - Grouped by Entity
+  studioHTML += '<div class="section"><div class="section-header">📊 Attributes Included</div><div class="section-body">';
+  if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
+    const byEntity = {};
+    data.attributesConfig.attributes.forEach(a => {
+      const en = a.entityName || 'Unknown';
+      if (!byEntity[en]) byEntity[en] = [];
+      byEntity[en].push(a);
+    });
+
+    Object.keys(byEntity).sort().forEach(en => {
+      const attrs = byEntity[en];
+      studioHTML += \`<div class="entity-group"><div class="entity-header">\${esc(en.replace(/__dlm$|__cio$/g, ''))} (\${attrs.length} attributes)</div>\`;
+      studioHTML += '<table><thead><tr><th>#</th><th>Label</th><th>Preferred Name</th><th>API Name</th><th>Type</th><th>Source</th></tr></thead><tbody>';
+      attrs.forEach((a, i) => {
+        studioHTML += \`<tr>
+          <td>\${i+1}</td>
+          <td>\${esc(a.label)}</td>
+          <td style="color:#059669;font-style:italic;">\${esc(a.preferredName || '')}</td>
+          <td style="font-family:monospace;color:#4a6fa5;">\${esc(a.name)}</td>
+          <td>\${esc(a.dataSourceType)}</td>
+          <td>\${esc(a.source)}</td>
+        </tr>\`;
+      });
+      studioHTML += '</tbody></table></div>';
+    });
+  } else {
+    studioHTML += '<div class="empty-state">No attributes configured</div>';
+  }
+  studioHTML += '</div></div>';
+
+  // Campaign Data Section
+  studioHTML += '<div class="section"><div class="section-header">🎯 Campaign Data</div><div class="section-body">';
+  if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
+    studioHTML += '<table><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>';
+    data.staticDataConfig.staticData.forEach(sd => {
+      studioHTML += \`<tr><td style="font-weight:600;">\${esc(sd.name)}</td><td>\${esc(sd.value)}</td></tr>\`;
+    });
+    studioHTML += '</tbody></table>';
+  } else {
+    studioHTML += '<div class="empty-state">No campaign data</div>';
+  }
+  studioHTML += '</div></div>';
+
+  document.getElementById('studio').innerHTML = studioHTML;
+
+  // === TAB 2: Filters ===
+  let filtersHTML = '<div class="section"><div class="section-header">🎯 Related DMO Filters</div><div class="section-body">';
+  if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
+    data.relatedDmoFiltersConfig.filters.forEach(f => {
+      filtersHTML += '<div class="filter-box">';
+      filtersHTML += \`<strong>Entity:</strong> \${esc(f.entityName || '')}<br>\`;
+      if (f.entityFilter && f.entityFilter.condition) {
+        const cond = f.entityFilter.condition;
+        const field = (cond.subject && cond.subject.fieldName) || '';
+        const op = cond.operator || '';
+        const vals = cond.firstBoundValue != null ? \`\${cond.firstBoundValue} - \${cond.secondBoundValue}\` : (cond.values || []).join(', ');
+        filtersHTML += \`<strong>Condition:</strong> \${esc(field)} \${esc(op)} \${esc(vals)}<br>\`;
+      }
+      if (f.filterLimit) {
+        filtersHTML += \`<strong>Limit:</strong> Max \${f.filterLimit.maxNumberOfValues} values, order \${esc(f.filterLimit.order)}<br>\`;
+      }
+      filtersHTML += '</div>';
+    });
+  } else {
+    filtersHTML += '<div class="empty-state">No related DMO filters configured</div>';
+  }
+  filtersHTML += '</div></div>';
+
+  filtersHTML += '<div class="section"><div class="section-header">🎯 Direct DMO Filters</div><div class="section-body">';
+  if (data.directDmoFiltersConfig && data.directDmoFiltersConfig.filters && data.directDmoFiltersConfig.filters.length > 0) {
+    filtersHTML += \`<pre>\${esc(JSON.stringify(data.directDmoFiltersConfig.filters, null, 2))}</pre>\`;
+  } else {
+    filtersHTML += '<div class="empty-state">No direct DMO filters configured</div>';
+  }
+  filtersHTML += '</div></div>';
+
+  document.getElementById('filters').innerHTML = filtersHTML;
+
+  // === TAB 3: Schema ===
+  let schemaHTML = '<div class="section"><div class="section-header">🔗 Activation Record Schema</div><div class="section-body">';
+  if (data.activationRecordSchema) {
+    try {
+      const schema = typeof data.activationRecordSchema === 'string' ? JSON.parse(data.activationRecordSchema) : data.activationRecordSchema;
+      if (schema.fields && Array.isArray(schema.fields)) {
+        schemaHTML += '<table><thead><tr><th>#</th><th>Field Name</th><th>Type</th><th>Required</th><th>Description</th></tr></thead><tbody>';
+        schema.fields.forEach((field, i) => {
+          schemaHTML += \`<tr>
+            <td>\${i+1}</td>
+            <td style="font-family:monospace;color:#4a6fa5;font-weight:600;">\${esc(field.name || field.fieldName)}</td>
+            <td>\${esc(field.type || field.dataType)}</td>
+            <td>\${field.required || field.isRequired ? '✓' : ''}</td>
+            <td>\${esc(field.description || '')}</td>
+          </tr>\`;
+        });
+        schemaHTML += '</tbody></table>';
+      } else {
+        schemaHTML += \`<pre>\${esc(JSON.stringify(schema, null, 2))}</pre>\`;
+      }
+    } catch (e) {
+      schemaHTML += \`<pre>\${esc(data.activationRecordSchema)}</pre>\`;
+    }
+  } else {
+    schemaHTML += '<div class="empty-state">No schema available</div>';
+  }
+  schemaHTML += '</div></div>';
+
+  // Query Paths with visual representation
+  schemaHTML += '<div class="section"><div class="section-header">🔗 Multi-Hop Join Paths</div><div class="section-body">';
+  if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
+    data.contactPointsConfig.contactPoints.forEach((cp, cpIdx) => {
+      if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+        schemaHTML += \`<h4 style="margin-bottom:12px;">Contact Point: \${esc(cp.type || 'Unknown')}</h4>\`;
+        cp.queryPathConfig.configs.forEach((cfg, idx) => {
+          if (cfg.queryPath && cfg.queryPath.length > 0) {
+            schemaHTML += \`<div style="margin-bottom:20px;"><strong>Path \${idx + 1}:</strong><div class="pill-path" style="margin-top:8px;">\`;
+            cfg.queryPath.forEach((step, stepIdx) => {
+              const objLabel = step.objectLabel || (step.objectName || '').replace(/__dlm$|__cio$/g, '');
+              const fieldLabel = step.fieldLabel || step.fieldName || '';
+              if (stepIdx > 0) schemaHTML += '<span class="arrow">→</span>';
+              schemaHTML += \`<span class="pill">\${esc(objLabel)}.\${esc(fieldLabel)}</span>\`;
+            });
+            schemaHTML += '</div></div>';
+          }
+        });
+      }
+    });
+  } else {
+    schemaHTML += '<div class="empty-state">No query paths configured</div>';
+  }
+  schemaHTML += '</div></div>';
+
+  document.getElementById('schema').innerHTML = schemaHTML;
+
+  // === TAB 4: Audit ===
+  let auditHTML = '<div class="section"><div class="section-header">📋 Audience DMO Information</div><div class="section-body"><div class="kv-grid">';
+  auditHTML += kvRow('History Audience DMO', data.historyAudienceDmoLabel);
+  auditHTML += kvRow('History Audience API', data.historyAudienceDmoApiName);
+  auditHTML += kvRow('Latest Audience DMO', data.latestAudienceDmoLabel);
+  auditHTML += kvRow('Latest Audience API', data.latestAudienceDmoApiName);
+  auditHTML += kvRow('Last Run', data.latestAudienceDmoLastRunTimestamp);
+  auditHTML += '</div></div></div>';
+
+  auditHTML += '<div class="section"><div class="section-header">🔍 Raw JSON</div><div class="section-body">';
+  auditHTML += \`<pre>\${esc(JSON.stringify(data, null, 2))}</pre>\`;
+  auditHTML += '</div></div>';
+
+  document.getElementById('audit').innerHTML = auditHTML;
+}
+
+function kvRow(label, value) {
+  if (!value && value !== 0 && value !== false) return '';
+  return \`<div class="kv-label">\${esc(label)}</div><div class="kv-value">\${value}</div>\`;
+}
+
+// Auto-process on load
+document.addEventListener('DOMContentLoaded', processJSON);
+processJSON();
+</script>
+</body>
+</html>`;
+  }
+
   function showActivationModal(data) {
     var existing = document.getElementById("dc-activation-modal");
     if (existing) { try { existing.remove(); } catch (e) {} }
@@ -10666,11 +11001,31 @@
     closeBtn.style.cssText = "border:none;background:transparent;font:20px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
     closeBtn.onclick = function () { modal.remove(); };
 
+    var excelBtn = document.createElement("button");
+    excelBtn.textContent = "⬇ Download Excel";
+    excelBtn.style.cssText = "border:1px solid #10b981;background:#10b981;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+
     btnGroup.appendChild(toggleBtn);
+    btnGroup.appendChild(excelBtn);
     btnGroup.appendChild(downloadBtn);
     btnGroup.appendChild(closeBtn);
     header.appendChild(title);
     header.appendChild(btnGroup);
+
+    // Make modal draggable by header
+    var isDragging = false, dragX = 0, dragY = 0;
+    header.style.cursor = "grab";
+    header.addEventListener("mousedown", function(e) {
+      if (e.target === closeBtn || e.target === toggleBtn || e.target === downloadBtn || e.target === excelBtn) return;
+      isDragging = true; dragX = e.clientX - box.offsetLeft; dragY = e.clientY - box.offsetTop;
+      header.style.cursor = "grabbing";
+      box.style.position = "absolute"; box.style.margin = "0";
+    });
+    document.addEventListener("mousemove", function(e) {
+      if (!isDragging) return;
+      box.style.left = (e.clientX - dragX) + "px"; box.style.top = (e.clientY - dragY) + "px";
+    });
+    document.addEventListener("mouseup", function() { isDragging = false; header.style.cursor = "grab"; });
 
     // Content area (scrollable) — two views: formatted + raw JSON
     contentEl = document.createElement("div");
@@ -10851,17 +11206,132 @@
       }
     };
 
+    excelBtn.onclick = function() {
+      var csv = "";
+      // Header
+      csv += "ACTIVATION OVERVIEW\n";
+      csv += "Key,Value\n";
+      csv += "Name," + (data.name || data.activationTargetName || "") + "\n";
+      csv += "Status," + (data.status || "") + "\n";
+      csv += "Type," + (data.activationType || "") + "\n";
+      csv += "Platform," + (data.activationTarget && data.activationTarget.platformName || "") + "\n";
+      csv += "Target," + (data.activationTargetName || "") + "\n";
+      csv += "Data Space," + (data.dataSpaceName || "") + "\n";
+      csv += "Segment," + (data.segmentApiName || "") + "\n";
+      csv += "Refresh Type," + (data.refreshType || "") + "\n";
+      csv += "Processing Type," + (data.processingType || "") + "\n";
+      csv += "Enabled," + (data.isEnabled || data.enabled || "") + "\n";
+      csv += "Last Publish Date," + (data.lastPublishDate || "") + "\n";
+      csv += "Last Publish Status," + (data.lastPublishStatus || "") + "\n";
+      csv += "Created," + (data.createdDate || "") + "\n";
+      csv += "Last Modified," + (data.lastModifiedDate || "") + "\n";
+      csv += "Developer Name," + (data.developerName || "") + "\n";
+      csv += "\n";
+
+      // Membership
+      csv += "ACTIVATION MEMBERSHIP\n";
+      csv += "Key,Value\n";
+      if (data.activationTargetSubjectConfig) {
+        var sub = data.activationTargetSubjectConfig;
+        csv += "Subject Entity," + (sub.masterLabel || sub.developerName || "") + "\n";
+        csv += "Developer Name," + (sub.developerName || "") + "\n";
+        csv += "Membership Name," + (data.membershipName || "") + "\n";
+      }
+      csv += "\n";
+
+      // Attributes
+      csv += "ATTRIBUTES\n";
+      csv += "#,Label,Preferred Name,API Name,Entity,Type,Source\n";
+      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
+        data.attributesConfig.attributes.forEach(function(a, i) {
+          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          csv += (i+1) + "," + csvEscape(a.label) + "," + csvEscape(a.preferredName || "") + "," + csvEscape(a.name) + "," + csvEscape(a.entityName || "") + "," + csvEscape(a.dataSourceType || "") + "," + csvEscape(a.source || "") + "\n";
+        });
+      }
+      csv += "\n";
+
+      // Contact Points
+      csv += "CONTACT POINTS\n";
+      csv += "Type,Entity,Fields,Path\n";
+      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
+        data.contactPointsConfig.contactPoints.forEach(function(cp) {
+          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          var fields = "";
+          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+            fields = cp.fieldConfig.contactPointFields.map(function(f) { return f.label + " (" + f.name + ")"; }).join("; ");
+          }
+          var path = "";
+          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
+              if (cfg.queryPath && cfg.queryPath.length > 0) {
+                var pathStr = cfg.queryPath.map(function(step) {
+                  var objLabel = step.objectLabel || (step.objectName || "").replace(/__dlm$|__cio$/g,"");
+                  return objLabel + "." + (step.fieldLabel || step.fieldName || "");
+                }).join(" → ");
+                path += (idx > 0 ? "; " : "") + pathStr;
+              }
+            });
+          }
+          csv += csvEscape(cp.type || "") + "," + csvEscape(cp.contactPointEntityName || "") + "," + csvEscape(fields) + "," + csvEscape(path) + "\n";
+        });
+      }
+      csv += "\n";
+
+      // Campaign Data
+      csv += "CAMPAIGN DATA\n";
+      csv += "Name,Value\n";
+      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
+        data.staticDataConfig.staticData.forEach(function(sd) {
+          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          csv += csvEscape(sd.name) + "," + csvEscape(sd.value) + "\n";
+        });
+      }
+      csv += "\n";
+
+      // Filters
+      csv += "FILTERS\n";
+      csv += "Entity,Field,Operator,Values,Limit\n";
+      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
+        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
+          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          var field = "", op = "", vals = "", limit = "";
+          if (f.entityFilter && f.entityFilter.condition) {
+            var cond = f.entityFilter.condition;
+            field = (cond.subject && cond.subject.fieldName) || "";
+            op = cond.operator || "";
+            vals = cond.firstBoundValue != null ? (cond.firstBoundValue + " - " + cond.secondBoundValue) : ((cond.values || []).join("; "));
+          }
+          if (f.filterLimit) limit = "Max " + f.filterLimit.maxNumberOfValues + " values order " + f.filterLimit.order;
+          csv += csvEscape(f.entityName || "") + "," + csvEscape(field) + "," + csvEscape(op) + "," + csvEscape(vals) + "," + csvEscape(limit) + "\n";
+        });
+      }
+      csv += "\n";
+
+      // Audience DMOs
+      csv += "AUDIENCE DMOS\n";
+      csv += "Key,Value\n";
+      csv += "History Audience DMO," + (data.historyAudienceDmoLabel || "") + "\n";
+      csv += "History Audience API," + (data.historyAudienceDmoApiName || "") + "\n";
+      csv += "Latest Audience DMO," + (data.latestAudienceDmoLabel || "") + "\n";
+      csv += "Latest Audience API," + (data.latestAudienceDmoApiName || "") + "\n";
+      csv += "Last Run," + (data.latestAudienceDmoLastRunTimestamp || "") + "\n";
+
+      var blob = new Blob([csv], { type: "text/csv" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
     downloadBtn.onclick = function() {
-      var htmlDoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation: " + esc(targetName) + "</title>" +
-        "<style>body{font:13px/1.6 -apple-system,sans-serif;padding:30px;max-width:1200px;margin:0 auto;color:#111827;}table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left;vertical-align:top;}th{background:#f9fafb;font-weight:600;}h1{font-size:20px;margin-bottom:16px;}@media print{body{padding:10px;}}</style></head><body>" +
-        "<h1>Activation: " + esc(targetName) + "</h1><p style='color:#64748b;font-size:12px;'>Generated: " + new Date().toISOString().slice(0,10) + "</p>" +
-        renderFormattedView() +
-        "</body></html>";
+      var htmlDoc = generateRichDashboardHTML(data, targetName);
       var blob = new Blob([htmlDoc], { type: "text/html" });
       var url = URL.createObjectURL(blob);
       var a = document.createElement("a");
       a.href = url;
-      a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".html";
+      a.download = "activation-dashboard-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".html";
       a.click();
       URL.revokeObjectURL(url);
     };
