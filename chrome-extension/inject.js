@@ -10621,7 +10621,18 @@
     closeBtn.style.cssText = "border:none;background:transparent;font:18px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
     closeBtn.onclick = function () { modal.remove(); };
 
+    var rawBtn = document.createElement("button");
+    rawBtn.textContent = "{ } Raw JSON";
+    rawBtn.style.cssText = "border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 12px;cursor:pointer;font:11px system-ui;color:#475569;margin-right:8px;";
+    rawBtn.onclick = function() {
+      var rawModal = document.createElement("div");
+      rawModal.style.cssText = "position:fixed;top:5%;left:5%;right:5%;bottom:5%;z-index:2147483648;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:auto;padding:20px;";
+      rawModal.innerHTML = "<div style='display:flex;justify-content:space-between;margin-bottom:12px;'><b>Raw API Response</b><button onclick='this.parentElement.parentElement.remove()' style='border:none;background:none;cursor:pointer;font-size:18px;'>✕</button></div><pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;'>" + JSON.stringify(data, null, 2).replace(/</g,"&lt;") + "</pre>";
+      document.body.appendChild(rawModal);
+    };
+
     header.appendChild(title);
+    header.appendChild(rawBtn);
     header.appendChild(closeBtn);
 
     // Content area (scrollable)
@@ -10643,10 +10654,20 @@
     try {
       if (data.contactPointsConfig && data.contactPointsConfig.contactPoints) {
         contactPoints = data.contactPointsConfig.contactPoints.map(function (cp) {
-          return (cp.type || "Unknown") + ": " + (cp.fieldName || "N/A");
+          var cpLabel = cp.type || cp.contactPointType || cp.masterLabel || "Unknown";
+          var cpDetail = cp.fieldName || cp.developerName || cp.emailAddress || cp.name || "";
+          return cpLabel + (cpDetail ? ": " + cpDetail : "");
+        });
+      } else if (data.contactPointsConfig) {
+        var cpKeys = Object.keys(data.contactPointsConfig);
+        contactPoints = cpKeys.filter(function(k) { return k !== "id"; }).map(function(k) {
+          var v = data.contactPointsConfig[k];
+          return k + (typeof v === "string" ? ": " + v : typeof v === "object" ? " (configured)" : "");
         });
       }
     } catch (e) {}
+    console.log("[DC Activation] contactPointsConfig:", JSON.stringify(data.contactPointsConfig));
+    console.log("[DC Activation] Full response keys:", Object.keys(data));
 
     metaSection.innerHTML = "<div style='font:600 14px/1.4 -apple-system,sans-serif;color:#374151;margin-bottom:8px;'>Activation Details</div>" +
       "<div style='font:400 13px/1.6 -apple-system,sans-serif;color:#6b7280;'>" +
