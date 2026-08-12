@@ -10189,11 +10189,14 @@
         var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
         ds = dsCandidates[0] || "";
       }
-      var countSql = "SELECT COUNT(*) AS cnt FROM (" + sql.replace(/;\s*$/, "") + ")";
+      // Data Cloud SQL doesn't support subqueries — replace SELECT columns with COUNT(*)
+      var cleanSql = sql.replace(/;\s*$/, "");
+      var countSql = cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
+      console.log("[DC-MI] Count SQL:", countSql);
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
-      cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+      cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><div style='margin-top:6px;font:10px monospace;color:#94a3b8;word-break:break-all;max-height:40px;overflow:hidden'>" + countSql.replace(/</g,"&lt;") + "</div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
       ensureQueryContext(function (ready) {
         if (!ready) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
@@ -10204,15 +10207,15 @@
         runRawSql(countSql, ds, 1).then(function (res) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
-          if (res.error) {
-            cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
-              + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + String(res.error).replace(/</g,"&lt;") + "</div>";
-            return;
-          }
           var cnt = 0;
-          if (res.data && res.data.length > 0) {
-            var row = res.data[0];
-            cnt = row.cnt || row.CNT || row.count || row.COUNT || row[Object.keys(row)[0]] || 0;
+          var cRows = res.rows || res.data || [];
+          if (cRows.length > 0) {
+            var row = cRows[0];
+            var keys = Object.keys(row);
+            for (var ki = 0; ki < keys.length; ki++) {
+              var v = parseInt(row[keys[ki]], 10);
+              if (!isNaN(v) && v >= 0) { cnt = v; break; }
+            }
           }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
