@@ -11048,6 +11048,18 @@ processJSON();
       tab1Main += "</tbody></table></div>";
     }
 
+    // Waterfall Child Segments
+    if (data.waterfallSelectedChildSegmentsConfig && data.waterfallSelectedChildSegmentsConfig.childSegmentsConfig) {
+      var childSegs = data.waterfallSelectedChildSegmentsConfig.childSegmentsConfig.childSegments || [];
+      var allSelected = data.waterfallSelectedChildSegmentsConfig.selectedAllSegments;
+      if (childSegs.length > 0) {
+        tab1Main += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Waterfall Segments" + (allSelected ? " (All Selected)" : "") + "</div>";
+        tab1Main += "<div style='display:flex;flex-wrap:wrap;gap:6px;'>";
+        childSegs.forEach(function(seg) { tab1Main += "<span style='background:#dbeafe;color:#1e40af;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600;'>" + esc(seg.replace(/^TDI_/,"")) + "</span>"; });
+        tab1Main += "</div></div>";
+      }
+    }
+
     // Sidebar: Activation Overview + Attributes Included
     tab1Sidebar += "<div style='font:700 13px system-ui;color:#374151;margin-bottom:12px;border-bottom:1px solid #e5e7eb;padding-bottom:8px;'>Activation Overview</div>";
     tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;'><div style='width:24px;height:24px;border-radius:50%;background:#e06e00;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>DS</div><div><b>" + esc(data.dataSpaceName || "") + "</b><div style='font-size:10px;color:#64748b;'>Data Space</div></div></div>";
