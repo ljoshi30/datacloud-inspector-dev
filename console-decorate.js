@@ -6180,7 +6180,10 @@
     } catch (e) {}
     return out;
   }
-  function isTransformPage() { var t = transformIdsFromUrl(); return !!(t.transformId || t.devName); }
+  function isTransformPage() {
+    if (/marketSegmentActivation|\/r\/MarketSegmentActivation\//i.test(window.location.href)) return false;
+    var t = transformIdsFromUrl(); return !!(t.transformId || t.devName);
+  }
 
   // Detect the Data Cloud QUERY EDITOR page (the SQL workspace tab).
   // URL: /r/DataQueryWorkspace/<18-char-id>/view OR contains queryEditor/queryWorkspace keywords with an ID.
