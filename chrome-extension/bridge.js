@@ -90,6 +90,17 @@
         );
         return;
       }
+      // (f) Activation read relay (GET /ssot/activations/{activationId})
+      if (d.__dcReq === "dc-activation") {
+        api.runtime.sendMessage(
+          { type: "dcActivation", activationId: d.activationId, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-activation", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
     } catch (e) {
       try { window.postMessage({ __dcRes: (ev.data && ev.data.__dcReq === "dc-transform") ? "dc-transform" : "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, "*"); } catch (_) {}
     }

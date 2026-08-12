@@ -10538,6 +10538,340 @@
   /* @strip:end */
 
   // ═══════════════════════════════════════════════════════════════════════════════
+  // Activation Export feature (extension-only)
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  // Detect if we're on an Activation page
+  function isActivationPage() {
+    return /marketSegmentActivation/i.test(window.location.href);
+  }
+
+  // Get the activation ID from the URL query params
+  function getActivationIdFromUrl() {
+    var params = new URLSearchParams(window.location.search);
+    return params.get("runtime_cdp__recordId") || "";
+  }
+
+  // Fetch activation data via extension bridge
+  function fetchActivationViaBridge(activationId) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) {
+        reject(new Error("Reading an activation needs the browser extension (the page can't reach the API directly)."));
+        return;
+      }
+      var id = "dca-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-activation" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return;
+        done = true;
+        if (d.ok && d.resp) resolve(d.resp);
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "activation read failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-activation", id: id, activationId: activationId }, "*");
+      setTimeout(function () {
+        if (!done) {
+          done = true;
+          window.removeEventListener("message", onMsg, false);
+          reject(new Error("bridge timeout"));
+        }
+      }, 20000);
+    });
+  }
+
+  // Show activation data in a modal
+  function showActivationModal(data) {
+    // Remove any existing modal
+    var existing = document.getElementById("dc-activation-modal");
+    if (existing) { try { existing.remove(); } catch (e) {} }
+
+    var modal = document.createElement("div");
+    modal.id = "dc-activation-modal";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
+
+    var box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:12px;width:90vw;max-width:1200px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);";
+
+    // Header
+    var header = document.createElement("div");
+    header.style.cssText = "padding:20px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;";
+
+    var title = document.createElement("h2");
+    title.style.cssText = "margin:0;font:600 18px/1.3 -apple-system,sans-serif;color:#111827;";
+
+    var targetName = "";
+    var targetPlatform = "";
+    var targetStatus = "";
+    try {
+      if (data.activationTarget) {
+        targetName = data.activationTarget.name || "";
+        targetPlatform = data.activationTarget.platform || "";
+        targetStatus = data.activationTarget.status || "";
+      }
+    } catch (e) {}
+
+    title.textContent = "Activation Export: " + (targetName || "Unknown");
+
+    var closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.style.cssText = "border:none;background:transparent;font:18px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
+    closeBtn.onclick = function () { modal.remove(); };
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+
+    // Content area (scrollable)
+    var content = document.createElement("div");
+    content.style.cssText = "padding:24px;overflow-y:auto;flex:1;";
+
+    // Metadata section
+    var metaSection = document.createElement("div");
+    metaSection.style.cssText = "margin-bottom:24px;padding:16px;background:#f9fafb;border-radius:8px;";
+
+    var subjectEntity = "";
+    try {
+      if (data.activationTargetSubjectConfig && data.activationTargetSubjectConfig.entityName) {
+        subjectEntity = data.activationTargetSubjectConfig.entityName;
+      }
+    } catch (e) {}
+
+    var contactPoints = [];
+    try {
+      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints) {
+        contactPoints = data.contactPointsConfig.contactPoints.map(function (cp) {
+          return (cp.type || "Unknown") + ": " + (cp.fieldName || "N/A");
+        });
+      }
+    } catch (e) {}
+
+    metaSection.innerHTML = "<div style='font:600 14px/1.4 -apple-system,sans-serif;color:#374151;margin-bottom:8px;'>Activation Details</div>" +
+      "<div style='font:400 13px/1.6 -apple-system,sans-serif;color:#6b7280;'>" +
+      "<div><strong>Platform:</strong> " + (targetPlatform || "N/A") + "</div>" +
+      "<div><strong>Status:</strong> " + (targetStatus || "N/A") + "</div>" +
+      "<div><strong>Subject Entity (Base DMO):</strong> " + (subjectEntity || "N/A") + "</div>" +
+      "<div><strong>Contact Points:</strong> " + (contactPoints.length > 0 ? contactPoints.join(", ") : "None") + "</div>" +
+      "</div>";
+
+    content.appendChild(metaSection);
+
+    // Attributes section
+    var attrsTitle = document.createElement("div");
+    attrsTitle.style.cssText = "font:600 16px/1.4 -apple-system,sans-serif;color:#111827;margin-bottom:12px;";
+    attrsTitle.textContent = "Mapped Attributes";
+    content.appendChild(attrsTitle);
+
+    // Group attributes by source entity
+    var attrsByEntity = {};
+    var attributes = [];
+    try {
+      if (data.attributesConfig && data.attributesConfig.attributes) {
+        attributes = data.attributesConfig.attributes;
+      }
+    } catch (e) {}
+
+    for (var i = 0; i < attributes.length; i++) {
+      var attr = attributes[i];
+      var entityName = (attr.entityName || "Unknown");
+      if (!attrsByEntity[entityName]) attrsByEntity[entityName] = [];
+      attrsByEntity[entityName].push(attr);
+    }
+
+    // Render attributes grouped by entity
+    var entityNames = Object.keys(attrsByEntity).sort();
+    for (var e = 0; e < entityNames.length; e++) {
+      var eName = entityNames[e];
+      var entityAttrs = attrsByEntity[eName];
+
+      var entityHeader = document.createElement("div");
+      entityHeader.style.cssText = "font:600 14px/1.4 -apple-system,sans-serif;color:#1f2937;margin:16px 0 8px;padding:8px 12px;background:#f3f4f6;border-radius:6px;";
+      entityHeader.textContent = "DMO: " + eName + " (" + entityAttrs.length + " attribute" + (entityAttrs.length === 1 ? "" : "s") + ")";
+      content.appendChild(entityHeader);
+
+      // Table for this entity's attributes
+      var table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:12px;font:400 12px/1.5 'SF Mono',Menlo,Consolas,monospace;";
+
+      var thead = document.createElement("thead");
+      thead.innerHTML = "<tr style='background:#f9fafb;'>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Label</th>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>API Name</th>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Type</th>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Source</th>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Join Path</th>" +
+        "</tr>";
+      table.appendChild(thead);
+
+      var tbody = document.createElement("tbody");
+      for (var a = 0; a < entityAttrs.length; a++) {
+        var attr2 = entityAttrs[a];
+        var label = attr2.label || "";
+        var name = attr2.name || "";
+        var dataType = attr2.dataSourceType || "";
+        var source = attr2.source || "";
+
+        var joinPath = "";
+        try {
+          if (attr2.queryPathConfig && attr2.queryPathConfig.configs && attr2.queryPathConfig.configs.length > 0) {
+            var paths = [];
+            for (var c = 0; c < attr2.queryPathConfig.configs.length; c++) {
+              var cfg = attr2.queryPathConfig.configs[c];
+              if (cfg.queryPath && cfg.queryPath.length > 0) {
+                paths.push(cfg.queryPath.join(" → "));
+              }
+            }
+            joinPath = paths.join("; ");
+          }
+        } catch (e2) {}
+        if (!joinPath && source === "DIRECT") joinPath = "(direct)";
+
+        var row = document.createElement("tr");
+        row.style.cssText = "border:1px solid #e5e7eb;";
+        row.innerHTML = "<td style='padding:8px;border:1px solid #e5e7eb;'>" + label + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;color:#4a6fa5;'>" + name + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;'>" + dataType + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;'>" + source + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;'>" + joinPath + "</td>";
+        tbody.appendChild(row);
+      }
+      table.appendChild(tbody);
+      content.appendChild(table);
+    }
+
+    box.appendChild(header);
+    box.appendChild(content);
+
+    // Footer with download button
+    var footer = document.createElement("div");
+    footer.style.cssText = "padding:16px 24px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:12px;flex-shrink:0;";
+
+    var downloadBtn = document.createElement("button");
+    downloadBtn.textContent = "Download as HTML";
+    downloadBtn.style.cssText = "padding:8px 16px;border:none;border-radius:6px;background:#0d6efd;color:#fff;font:600 13px/1 -apple-system,sans-serif;cursor:pointer;";
+    downloadBtn.onclick = function () {
+      var htmlContent = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation Export: " + targetName + "</title>" +
+        "<style>body{font:14px/1.6 -apple-system,sans-serif;padding:40px;max-width:1200px;margin:0 auto;background:#fff;color:#111827;}" +
+        "h1{font-size:24px;margin-bottom:8px;}h2{font-size:18px;margin:24px 0 12px;}" +
+        ".meta{background:#f9fafb;padding:16px;border-radius:8px;margin-bottom:24px;}" +
+        ".meta div{margin:4px 0;}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px;}" +
+        "th,td{padding:8px;border:1px solid #e5e7eb;text-align:left;}" +
+        "th{background:#f9fafb;font-weight:600;}.entity-header{font-weight:600;background:#f3f4f6;padding:8px 12px;border-radius:6px;margin:16px 0 8px;}" +
+        "</style></head><body>" +
+        "<h1>Activation Export: " + targetName + "</h1>" +
+        "<div class='meta'>" +
+        "<div><strong>Platform:</strong> " + targetPlatform + "</div>" +
+        "<div><strong>Status:</strong> " + targetStatus + "</div>" +
+        "<div><strong>Subject Entity:</strong> " + subjectEntity + "</div>" +
+        "<div><strong>Contact Points:</strong> " + (contactPoints.length > 0 ? contactPoints.join(", ") : "None") + "</div>" +
+        "</div><h2>Mapped Attributes</h2>";
+
+      for (var e2 = 0; e2 < entityNames.length; e2++) {
+        var eName2 = entityNames[e2];
+        var entityAttrs2 = attrsByEntity[eName2];
+        htmlContent += "<div class='entity-header'>DMO: " + eName2 + " (" + entityAttrs2.length + " attribute" + (entityAttrs2.length === 1 ? "" : "s") + ")</div>";
+        htmlContent += "<table><thead><tr><th>Label</th><th>API Name</th><th>Type</th><th>Source</th><th>Join Path</th></tr></thead><tbody>";
+
+        for (var a2 = 0; a2 < entityAttrs2.length; a2++) {
+          var attr3 = entityAttrs2[a2];
+          var joinPath2 = "";
+          try {
+            if (attr3.queryPathConfig && attr3.queryPathConfig.configs && attr3.queryPathConfig.configs.length > 0) {
+              var paths2 = [];
+              for (var c2 = 0; c2 < attr3.queryPathConfig.configs.length; c2++) {
+                var cfg2 = attr3.queryPathConfig.configs[c2];
+                if (cfg2.queryPath && cfg2.queryPath.length > 0) {
+                  paths2.push(cfg2.queryPath.join(" → "));
+                }
+              }
+              joinPath2 = paths2.join("; ");
+            }
+          } catch (e3) {}
+          if (!joinPath2 && attr3.source === "DIRECT") joinPath2 = "(direct)";
+
+          htmlContent += "<tr><td>" + (attr3.label || "") + "</td><td>" + (attr3.name || "") + "</td>" +
+            "<td>" + (attr3.dataSourceType || "") + "</td><td>" + (attr3.source || "") + "</td>" +
+            "<td>" + joinPath2 + "</td></tr>";
+        }
+        htmlContent += "</tbody></table>";
+      }
+
+      htmlContent += "</body></html>";
+
+      var blob = new Blob([htmlContent], { type: "text/html" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "activation-export-" + (targetName || "unknown").replace(/[^a-z0-9]/gi, "-") + ".html";
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    footer.appendChild(downloadBtn);
+    box.appendChild(footer);
+
+    modal.appendChild(box);
+    modal.onclick = function (e) { if (e.target === modal) modal.remove(); };
+
+    document.body.appendChild(modal);
+  }
+
+  // Create the activation launcher button (extension-only)
+  function ensureActivationLauncher() {
+    if (!extBridgePresent()) return; // Extension-only feature
+    if (document.getElementById("dc-activation-bar")) return;
+
+    var wrap = document.createElement("div");
+    wrap.id = "dc-activation-bar";
+    wrap.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;";
+
+    var btn = document.createElement("button");
+    btn.textContent = "📋 Export Activation";
+    btn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.3);transition:transform .1s,box-shadow .1s;";
+    btn.onmouseenter = function () {
+      btn.style.transform = "scale(1.03)";
+      btn.style.boxShadow = "0 4px 16px rgba(16,185,129,.4)";
+    };
+    btn.onmouseleave = function () {
+      btn.style.transform = "scale(1)";
+      btn.style.boxShadow = "0 3px 12px rgba(16,185,129,.3)";
+    };
+
+    var note = document.createElement("div");
+    note.style.cssText = "margin-top:8px;font-size:11px;color:#dc2626;background:#fff;border:1px solid #fecaca;border-radius:6px;padding:6px 10px;display:none;max-width:280px;box-shadow:0 2px 8px rgba(0,0,0,.1);";
+
+    btn.onclick = function () {
+      var activationId = getActivationIdFromUrl();
+      if (!activationId) {
+        note.textContent = "Couldn't find the activation ID in the URL.";
+        note.style.display = "block";
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Reading…";
+      note.style.display = "none";
+
+      fetchActivationViaBridge(activationId).then(function (data) {
+        btn.disabled = false;
+        btn.textContent = "📋 Export Activation";
+        showActivationModal(data);
+      }).catch(function (err) {
+        btn.disabled = false;
+        btn.textContent = "📋 Export Activation";
+        note.textContent = String(err && err.message || err);
+        note.style.display = "block";
+      });
+    };
+
+    wrap.appendChild(btn);
+    wrap.appendChild(note);
+    document.body.appendChild(wrap);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
   // ERD Diagram feature for Data Model page
   // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -11027,10 +11361,12 @@
   const onTransformPage = (typeof isTransformPage === "function") && isTransformPage();
   const onQueryEditorPage = (typeof isQueryEditorPage === "function") && isQueryEditorPage();
   const onDataModelPage = (typeof isDataModelPage === "function") && isDataModelPage();
+  const onActivationPage = (typeof isActivationPage === "function") && isActivationPage();
   const onSegmentPage = detectDetailPageType() === "Segment";
   const detailPageType = onTransformPage ? "Transform"
     : onQueryEditorPage ? "QueryEditor"
     : onDataModelPage ? "DataModel"
+    : onActivationPage ? "Activation"
     : onSegmentPage ? "Segment"
     : ((typeof isDataExplorePage === "function" && isDataExplorePage()) ? "DataExplore" : detectDetailPageType());
   if (detailPageType === "Transform" && typeof ensureTransformLauncher === "function") {
@@ -11040,6 +11376,8 @@
     watchNavigation();
   } else if (detailPageType === "DataModel" && typeof ensureDataModelLauncher === "function") {
     ensureDataModelLauncher();
+  } else if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
+    ensureActivationLauncher();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();

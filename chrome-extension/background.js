@@ -172,6 +172,26 @@ async function runDcTransform(req) {
     return { ok: true, data: j };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
+// Read an Activation definition (documented GET, sid-cookie auth). READ-only.
+async function runDcActivation(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
+    const url = "https://" + got.coreHost + "/services/data/v67.0/ssot/activations/" + encodeURIComponent(req.activationId || "");
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
+        return { ok: false, sessionExpired: true, error: "Your Salesforce session has expired — refresh the Salesforce tab, then retry." };
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
+    }
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
 
 // ── AI Explain: call LLM API to explain a Data Transform ────────────────────
 var AI_PROMPT = "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. A one-paragraph overview of what this transform does (business purpose)\n2. For each output branch, explain the data flow: source → transformations → filters → output\n3. Highlight key business logic (rankings, calculated fields, joins, deduplication)\n4. Mention the write mode and any important field mappings\n\nKeep it concise but thorough. Use bullet points for branch breakdowns. Don't list every field — focus on what the transform DOES.\n\nTransform JSON:\n";
@@ -329,6 +349,10 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "dcTransform") {
     runDcTransform({ nameOrId: msg.nameOrId, host: tabHost || msg.host }).then(sendResponse);
     return true; // async
+  }
+  if (msg && msg.type === "dcActivation") {
+    runDcActivation({ activationId: msg.activationId, host: tabHost || msg.host }).then(sendResponse);
+    return true;
   }
   if (msg && msg.type === "dcFetchPage") {
     fetchQueryPage({ queryId: msg.queryId, offset: msg.offset, rowLimit: msg.rowLimit, dataspace: msg.dataspace, host: tabHost || msg.host }).then(sendResponse);
