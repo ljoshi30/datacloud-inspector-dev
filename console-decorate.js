@@ -11242,14 +11242,17 @@ processJSON();
     var jsonShowing = false;
     jsonBtn.onclick = function() {
       if (jsonShowing) {
+        contentWrap.style.display = "";
+        tabBar.style.display = "";
         var ov = box.querySelector("#dc-json-overlay"); if (ov) ov.remove();
         jsonBtn.textContent = "{ } JSON"; jsonShowing = false;
       } else {
+        contentWrap.style.display = "none";
+        tabBar.style.display = "none";
         var overlay = document.createElement("div");
         overlay.id = "dc-json-overlay";
-        overlay.style.cssText = "position:absolute;inset:0;z-index:10;background:#fff;display:flex;flex-direction:column;border-radius:12px;";
-        overlay.innerHTML = "<div style='padding:10px 16px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;'><b style='font-size:13px;'>Raw JSON Response</b><button id='dc-json-copy' style='border:1px solid #0176d3;background:#fff;color:#0176d3;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy JSON</button></div><pre style='flex:1;overflow:auto;padding:16px;margin:0;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
-        box.style.position = "relative";
+        overlay.style.cssText = "flex:1;overflow:auto;display:flex;flex-direction:column;";
+        overlay.innerHTML = "<div style='padding:10px 16px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;'><b style='font-size:13px;'>Raw JSON Response</b><button id='dc-json-copy' style='border:1px solid #0176d3;background:#fff;color:#0176d3;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy JSON</button></div><pre style='flex:1;overflow:auto;padding:16px;margin:0;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;background:#f8fafc;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
         box.appendChild(overlay);
         overlay.querySelector("#dc-json-copy").onclick = function() {
           var ta = document.createElement("textarea"); ta.value = JSON.stringify(data, null, 2); document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
