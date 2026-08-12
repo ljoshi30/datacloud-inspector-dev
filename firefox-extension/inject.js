@@ -11027,9 +11027,9 @@ processJSON();
     });
     document.addEventListener("mouseup", function() { isDragging = false; header.style.cursor = "grab"; });
 
-    // Content area — render full rich dashboard in an iframe
+    // Content area — scrollable
     contentEl = document.createElement("div");
-    contentEl.style.cssText = "flex:1;overflow:hidden;position:relative;";
+    contentEl.style.cssText = "flex:1;overflow-y:auto;padding:20px;";
 
     // Render structured view matching SF's activation detail layout
     function renderFormattedView() {
@@ -11186,33 +11186,145 @@ processJSON();
     function renderRawView() {
       return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
     }
-    // Render rich dashboard in iframe using blob URL (bypasses CSP srcdoc restrictions)
-    var dashboardHtml = generateRichDashboardHTML(data, targetName);
-    var dashboardBlob = new Blob([dashboardHtml], { type: "text/html" });
-    var dashboardUrl = URL.createObjectURL(dashboardBlob);
-    var iframe = document.createElement("iframe");
-    iframe.style.cssText = "width:100%;height:100%;border:none;";
-    iframe.src = dashboardUrl;
-    contentEl.appendChild(iframe);
+    // Render formatted view directly (no iframe — CSP blocks it)
+    function renderFormattedView() {
+      var h = "";
+      var section = function(title, content) { return "<div style='margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'><div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>" + title + "</div><div style='padding:14px 16px;'>" + content + "</div></div>"; };
+      var kv = function(label, value) { return value ? "<div style='display:flex;gap:12px;padding:3px 0;font-size:12px;'><span style='font-weight:600;color:#475569;min-width:180px;'>" + label + "</span><span style='color:#1f2937;'>" + esc(String(value)) + "</span></div>" : ""; };
+      var kvGrid = function(pairs) { var g = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px;'>"; pairs.forEach(function(p) { if (p[1]) g += "<div><div style='font:700 10px system-ui;color:#64748b;text-transform:uppercase;'>" + p[0] + "</div><div style='font:500 12px system-ui;color:#1e293b;margin-top:2px;'>" + esc(String(p[1])) + "</div></div>"; }); return g + "</div>"; };
+
+      // Overview
+      var target = data.activationTarget || {};
+      h += section("Overview", kvGrid([
+        ["Name", data.name || data.activationTargetName],
+        ["Status", data.status],
+        ["Platform", target.platformName],
+        ["Target", data.activationTargetName],
+        ["Type", data.activationType],
+        ["Data Space", data.dataSpaceName],
+        ["Segment", data.segmentApiName],
+        ["Refresh Type", data.refreshType],
+        ["Processing", data.processingType],
+        ["Last Publish", data.lastPublishDate],
+        ["Last Status", data.lastPublishStatus],
+        ["Created", data.createdDate],
+        ["Modified", data.lastModifiedDate]
+      ]));
+
+      // Membership
+      var sub = data.activationTargetSubjectConfig || {};
+      h += section("Activation Membership", "<div style='font:600 13px system-ui;color:#0176d3;margin-bottom:4px;'>" + esc(sub.masterLabel || data.membershipName || "") + "</div><div style='font-size:11px;color:#64748b;'>Developer: " + esc(sub.developerName || "") + "</div>");
+
+      // Contact Points
+      var cpHtml = "";
+      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
+        data.contactPointsConfig.contactPoints.forEach(function(cp) {
+          cpHtml += "<div style='padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;margin-bottom:10px;'>";
+          cpHtml += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:6px;'>Channel: " + esc(cp.type || "") + "</div>";
+          cpHtml += kv("Entity", cp.contactPointEntityName);
+          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+            cpHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;'><thead><tr><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>#</th><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>Field</th><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>Output Name</th></tr></thead><tbody>";
+            cp.fieldConfig.contactPointFields.forEach(function(f, i) {
+              cpHtml += "<tr><td style='padding:5px 8px;border:1px solid #e2e8f0;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e2e8f0;'>" + esc(f.label || f.name) + "</td><td style='padding:5px 8px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;'>" + esc(f.referenceAttributeName || f.name) + "</td></tr>";
+            });
+            cpHtml += "</tbody></table>";
+          }
+          // Path
+          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+            cpHtml += "<div style='margin-top:8px;padding:8px;background:#e0f2fe;border-radius:4px;'><div style='font:700 10px system-ui;color:#0369a1;text-transform:uppercase;margin-bottom:4px;'>Path</div>";
+            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
+              if (cfg.queryPath) {
+                var steps = cfg.queryPath.map(function(s) { return "<span style='background:#fff;border:1px solid #0284c7;color:#0369a1;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:600;display:inline-block;'>" + esc((s.objectLabel || s.objectName || "").replace(/__dlm$/,"")) + "." + esc(s.fieldLabel || s.fieldName || "") + "</span>"; });
+                cpHtml += "<div style='margin:3px 0;display:flex;flex-wrap:wrap;align-items:center;gap:4px;'>" + steps.join("<span style='color:#0284c7;font-weight:bold;'>→</span>") + "</div>";
+              }
+            });
+            cpHtml += "</div>";
+          }
+          cpHtml += "</div>";
+        });
+      } else { cpHtml = "<span style='color:#94a3b8;'>None configured</span>"; }
+      h += section("Contact Points", cpHtml);
+
+      // Attributes grouped by entity
+      var attrsHtml = "";
+      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
+        var attrs = data.attributesConfig.attributes;
+        var byEntity = {};
+        attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
+        Object.keys(byEntity).sort().forEach(function(en) {
+          var eAttrs = byEntity[en];
+          var objType = en.endsWith("__dlm") ? "DMO" : en.endsWith("__cio") ? "CIO" : "Custom";
+          var tagColor = objType === "DMO" ? "background:#e0f2fe;color:#0369a1;" : objType === "CIO" ? "background:#f3e8ff;color:#6b21a8;" : "";
+          attrsHtml += "<div style='margin-bottom:12px;'>";
+          attrsHtml += "<div style='font:600 12px system-ui;color:#1f2937;padding:6px 10px;background:#f3f4f6;border-radius:4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + eAttrs.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagColor + "'>" + objType + "</span></div>";
+          attrsHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
+          eAttrs.forEach(function(a, i) {
+            var srcTag = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
+            attrsHtml += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;color:#6b7280;text-align:center;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcTag + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
+          });
+          attrsHtml += "</tbody></table></div>";
+        });
+      }
+      h += section("Mapped Attributes (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", attrsHtml || "<span style='color:#94a3b8;'>None</span>");
+
+      // Campaign Data
+      var campaignHtml = "";
+      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
+        campaignHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
+        data.staticDataConfig.staticData.forEach(function(sd, i) {
+          campaignHtml += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#6b7280;'>" + (i+1) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;font-size:11px;'>" + esc(sd.value) + "</td></tr>";
+        });
+        campaignHtml += "</tbody></table>";
+      } else { campaignHtml = "<span style='color:#94a3b8;'>None</span>"; }
+      h += section("Campaign Data", campaignHtml);
+
+      // Filters
+      var filtersHtml = "";
+      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
+        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
+          var ef = f.entityFilter || {};
+          var cond = ef.condition || {};
+          var subj = cond.subject || {};
+          var limit = f.filterLimit || {};
+          filtersHtml += "<div style='background:#f0f7fc;border-left:4px solid #0176d3;border-radius:0 4px 4px 0;padding:10px 14px;margin-bottom:8px;font-size:12px;'>";
+          filtersHtml += "<b>Entity:</b> " + esc(f.entityName || "") + "<br>";
+          filtersHtml += "<b>Condition:</b> <code>" + esc(subj.fieldName || "") + "</code> " + esc(cond.operator || "") + " <b>" + (cond.firstBoundValue != null ? esc(cond.firstBoundValue + " – " + cond.secondBoundValue) : "") + "</b><br>";
+          filtersHtml += "<b>Limit:</b> Max " + esc(limit.maxNumberOfValues || "") + " records, sort by <code>" + esc(limit.attributeName || "") + "</code> " + esc(limit.order || "");
+          filtersHtml += "</div>";
+        });
+      } else { filtersHtml = "<span style='color:#94a3b8;'>No filters</span>"; }
+      h += section("Audience Filters", filtersHtml);
+
+      // Audit
+      h += section("Audit & System", kvGrid([
+        ["Activation ID", data.id],
+        ["Definition ID", data.activationDefinitionId],
+        ["Developer Name", data.developerName],
+        ["Segment ID", data.segmentId || data.marketSegmentId],
+        ["Target ID", data.activationTargetId],
+        ["Created By", data.createdBy && data.createdBy.id],
+        ["Modified By", data.lastModifiedBy && data.lastModifiedBy.id],
+        ["History DMO", data.historyAudienceDmoLabel],
+        ["Latest DMO", data.latestAudienceDmoLabel],
+        ["Last Run", data.latestAudienceDmoLastRunTimestamp],
+        ["Exclude Deletes", data.shouldExcludeDeletes],
+        ["Exclude Updates", data.shouldExcludeUpdates]
+      ]));
+
+      return h;
+    }
+    contentEl.innerHTML = renderFormattedView();
 
     toggleBtn.onclick = function() {
       if (viewMode === "formatted") {
-        contentEl.innerHTML = "";
-        var rawDiv = document.createElement("div");
-        rawDiv.style.cssText = "overflow:auto;height:100%;padding:20px;";
-        rawDiv.innerHTML = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
-        contentEl.appendChild(rawDiv);
-        toggleBtn.textContent = "◻ Dashboard View";
+        contentEl.innerHTML = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+        toggleBtn.textContent = "◻ Formatted View";
         toggleBtn.style.background = "#1e293b";
         toggleBtn.style.color = "#e2e8f0";
         toggleBtn.style.borderColor = "#1e293b";
         viewMode = "raw";
       } else {
-        contentEl.innerHTML = "";
-        var iframe2 = document.createElement("iframe");
-        iframe2.style.cssText = "width:100%;height:100%;border:none;";
-        iframe2.src = dashboardUrl;
-        contentEl.appendChild(iframe2);
+        contentEl.innerHTML = renderFormattedView();
         toggleBtn.textContent = "{ } Raw JSON";
         toggleBtn.style.background = "#f1f5f9";
         toggleBtn.style.color = "#475569";
