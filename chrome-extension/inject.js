@@ -11065,10 +11065,29 @@ processJSON();
     tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;'><div style='width:24px;height:24px;border-radius:50%;background:#e06e00;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>DS</div><div><b>" + esc(data.dataSpaceName || "") + "</b><div style='font-size:10px;color:#64748b;'>Data Space</div></div></div>";
     tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;'><div style='width:24px;height:24px;border-radius:50%;background:#0176d3;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>A</div><div><b style='color:#0176d3;'>" + esc(data.name || "") + "</b><div style='font-size:10px;color:#64748b;'>Status: <span style='background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;'>" + esc(data.status || "") + "</span></div><div style='font-size:10px;color:#64748b;'>Refresh: " + esc(data.refreshType || "") + "</div></div></div>";
     tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;'><div style='width:24px;height:24px;border-radius:50%;background:#c23934;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>MC</div><div><b>" + esc(target.name || data.activationTargetName || "") + "</b><div style='font-size:10px;color:#64748b;'>" + esc(target.platformName || "") + "</div></div></div>";
-    tab1Sidebar += "<div style='border-top:1px solid #e5e7eb;padding-top:12px;'><div style='font:700 12px system-ui;color:#374151;margin-bottom:8px;'>Attributes Included (" + attrs.length + ")</div><div style='max-height:350px;overflow-y:auto;'>";
-    attrs.forEach(function(a, idx) {
-      var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
-      tab1Sidebar += "<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:11px;'><div style='display:flex;justify-content:space-between;align-items:center;'><b>" + (idx+1) + ". " + esc(a.label || a.name) + "</b><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></div><div style='font-size:10px;color:#64748b;'>From: <code style='font-size:9px;'>" + esc((a.entityName || "").replace(/__dlm$|__cio$/g,"")) + "</code></div></div>";
+    // Build complete attributes list (merge: regular attrs + contact point fields + waterfall system fields)
+    var allIncluded = [];
+    // Waterfall system fields (SubSegmentId, SubSegmentName)
+    if (data.waterfallSelectedChildSegmentsConfig) {
+      allIncluded.push({ label: "SubSegmentId", source: "SYSTEM", entityName: "System" });
+      allIncluded.push({ label: "SubSegmentName", source: "SYSTEM", entityName: "System" });
+    }
+    // Regular attributes
+    attrs.forEach(function(a) { allIncluded.push(a); });
+    // Contact point fields (e.g. Email Address)
+    cps.forEach(function(cp) {
+      if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+        cp.fieldConfig.contactPointFields.forEach(function(f) {
+          var alreadyInAttrs = attrs.some(function(a) { return a.name === f.name; });
+          if (!alreadyInAttrs) allIncluded.push({ label: f.label || f.name, name: f.name, source: "CONTACT_POINT", entityName: cp.contactPointEntityName || "" });
+        });
+      }
+    });
+
+    tab1Sidebar += "<div style='border-top:1px solid #e5e7eb;padding-top:12px;'><div style='font:700 12px system-ui;color:#374151;margin-bottom:8px;'>Attributes Included (" + allIncluded.length + ")</div><div style='max-height:350px;overflow-y:auto;'>";
+    allIncluded.forEach(function(a, idx) {
+      var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : a.source === "CONTACT_POINT" ? "background:#dbeafe;color:#1e40af;" : a.source === "SYSTEM" ? "background:#f3f4f6;color:#374151;" : "background:#fae8ff;color:#86198f;";
+      tab1Sidebar += "<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:11px;'><div style='display:flex;justify-content:space-between;align-items:center;'><b>" + (idx+1) + ". " + esc(a.label || a.name || "") + "</b><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></div><div style='font-size:10px;color:#64748b;'>From: <code style='font-size:9px;'>" + esc((a.entityName || "").replace(/__dlm$|__cio$/g,"")) + "</code></div></div>";
     });
     tab1Sidebar += "</div></div>";
 
@@ -11222,7 +11241,7 @@ processJSON();
     // Tabs
     var tabBar = document.createElement("div");
     tabBar.style.cssText = "display:flex;border-bottom:2px solid #e5e7eb;background:#f9fafb;flex-shrink:0;";
-    var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"]];
+    var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"],["rawjson","Raw JSON"]];
     tabs.forEach(function(t, i) {
       var tb = document.createElement("div");
       tb.setAttribute("data-actab", t[0]);
@@ -11237,7 +11256,8 @@ processJSON();
     contentWrap.innerHTML = tab1;
 
     // Tab switching via event delegation
-    var tabContents = { studio: tab1, filters: tab2, schema: tab3, audit: tab4 };
+    var tab5 = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;background:#f8fafc;padding:16px;border-radius:6px;border:1px solid #e2e8f0;max-height:none;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+    var tabContents = { studio: tab1, filters: tab2, schema: tab3, audit: tab4, rawjson: tab5 };
     tabBar.addEventListener("click", function(e) {
       var t = e.target; if (!t.getAttribute("data-actab")) return;
       var key = t.getAttribute("data-actab");
