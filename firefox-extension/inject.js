@@ -10609,18 +10609,56 @@
     document.body.appendChild(wrap);
   }
 
+  // System fields to hide (not useful for architecture diagrams)
+  var _systemFields = ["DataSource__c","DataSourceObject__c","DataSourceId__c","DataSourceObjectId__c","InternalOrganization__c","InternalOrganizationId__c","ssot__DataSourceId__c","ssot__DataSourceObjectId__c","ssot__InternalOrganizationId__c","cdp_sys_SourceVersion__c"];
+
+  function parseEdgesFromDOT(dotString) {
+    var edges = [];
+    var edgeRegex = /(\d+)\s*->\s*(\d+)\s*(?:\[\s*label="([^"]*)"\s*\])?/g;
+    var m;
+    while ((m = edgeRegex.exec(dotString)) !== null) {
+      edges.push({ from: m[1], to: m[2], label: m[3] || "" });
+    }
+    return edges;
+  }
+
   function showERDModal() {
     if (!_dataModelCache.graphData) {
-      alert("No Data Model graph data captured yet. Please refresh the Data Model page (or switch views) to load the graph data, then try again.");
+      alert("No Data Model graph data captured yet. Please refresh the Data Model page (click the ↻ refresh icon), then try again.");
       return;
     }
 
-    // Parse DOT graph format
     var entities = parseDOTGraph(_dataModelCache.graphData);
     if (!entities || entities.length === 0) {
       alert("Failed to parse Data Model graph. Please try refreshing the page.");
       return;
     }
+
+    // Parse edges (relationships between entities)
+    var edges = parseEdgesFromDOT(_dataModelCache.graphData);
+    var entityById = {};
+    entities.forEach(function(e) { entityById[e.id] = e; });
+
+    // Enrich with source lineage from getDataModels
+    var sourceMap = {};
+    if (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels) {
+      _dataModelCache.dataModels.dataModels.forEach(function(dm) {
+        sourceMap[dm.name] = {
+          dataStream: (dm.dataStream || []).map(function(ds) { return ds.label; }),
+          dataLakeObject: (dm.dataLakeObject || []).map(function(dlo) { return dlo.label; }),
+          type: dm.type,
+          category: dm.category
+        };
+      });
+    }
+
+    // Build relationships list
+    var relationships = edges.map(function(edge) {
+      var fromEntity = entityById[edge.from];
+      var toEntity = entityById[edge.to];
+      if (!fromEntity || !toEntity) return null;
+      return { from: fromEntity.masterLabel, to: toEntity.masterLabel, label: edge.label, fromDev: fromEntity.developerName, toDev: toEntity.developerName };
+    }).filter(Boolean);
 
     // Create modal
     var modal = document.createElement("div");
@@ -10631,16 +10669,16 @@
 
     // Header
     var header = document.createElement("div");
-    header.style.cssText = "display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:2px solid #e2e8f0;background:linear-gradient(135deg,#f8f9fa,#e9ecef);";
+    header.style.cssText = "display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:2px solid #e2e8f0;background:linear-gradient(135deg,#f8f9fa,#e9ecef);flex-wrap:wrap;";
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    title.textContent = "Data Model ERD";
+    title.textContent = "Data Model ERD — " + entities.length + " entities, " + relationships.length + " relationships";
 
     var downloadBtn = document.createElement("button");
     downloadBtn.textContent = "⬇ Download HTML";
     downloadBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
-    downloadBtn.onclick = function() { downloadERDAsHTML(entities); };
+    downloadBtn.onclick = function() { downloadERDAsHTML(entities, relationships, sourceMap); };
 
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
@@ -10654,14 +10692,13 @@
     // Body (scrollable container)
     var body = document.createElement("div");
     body.style.cssText = "flex:1;overflow:auto;padding:20px;background:#f8fafc;";
-    body.innerHTML = renderERDCards(entities);
+    body.innerHTML = renderERDCards(entities, relationships, sourceMap);
 
     content.appendChild(header);
     content.appendChild(body);
     modal.appendChild(content);
     document.body.appendChild(modal);
 
-    // Close on outside click
     modal.addEventListener("click", function(e) {
       if (e.target === modal) modal.remove();
     });
@@ -10772,10 +10809,28 @@
     return "OTHER";
   }
 
-  function renderERDCards(entities) {
+  function renderERDCards(entities, relationships, sourceMap) {
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
+    var html = "";
 
-    var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:20px;'>";
+    // ── Relationships section ──
+    if (relationships.length > 0) {
+      html += "<div style='background:#fff;border:2px solid #3b82f6;border-radius:8px;padding:16px 20px;margin-bottom:24px;box-shadow:0 2px 8px rgba(0,0,0,.06);'>";
+      html += "<div style='font:700 14px -apple-system,sans-serif;color:#1e40af;margin-bottom:12px;'>Relationships (" + relationships.length + ")</div>";
+      html += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:8px;'>";
+      relationships.forEach(function(rel) {
+        html += "<div style='padding:6px 10px;background:#eff6ff;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;display:flex;align-items:center;gap:6px;'>";
+        html += "<b>" + esc(rel.from) + "</b>";
+        html += "<span style='color:#3b82f6;'>→</span>";
+        html += "<b>" + esc(rel.to) + "</b>";
+        if (rel.label) html += "<span style='color:#64748b;font-size:10px;margin-left:4px;'>(" + esc(rel.label.replace(/__c$|__dlm$/g,"")) + ")</span>";
+        html += "</div>";
+      });
+      html += "</div></div>";
+    }
+
+    // ── Entity cards ──
+    html += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px;'>";
 
     entities.forEach(function(entity) {
       var categoryColor = entity.category === "PROFILE" ? "#10b981"
@@ -10788,37 +10843,69 @@
       html += "<div style='background:" + categoryColor + ";color:#fff;padding:12px 14px;'>";
       html += "<div style='font:700 14px -apple-system,sans-serif'>" + esc(entity.masterLabel) + "</div>";
       html += "<div style='font:600 10px SF Mono,Consolas,monospace;opacity:0.9;margin-top:2px'>" + esc(entity.developerName) + "</div>";
-      html += "<div style='font:600 9px system-ui;opacity:0.8;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px'>" + esc(entity.category) + "</div>";
+      html += "<div style='display:flex;gap:8px;margin-top:4px;align-items:center;'>";
+      html += "<span style='font:600 9px system-ui;opacity:0.8;text-transform:uppercase;letter-spacing:0.5px'>" + esc(entity.category) + "</span>";
+      html += "</div>";
       html += "</div>";
 
+      // Source lineage (Data Stream → DLO)
+      var src = sourceMap[entity.developerName];
+      if (src && (src.dataStream.length > 0 || src.dataLakeObject.length > 0)) {
+        html += "<div style='padding:8px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font:11px -apple-system,sans-serif;color:#475569;'>";
+        if (src.dataStream.length > 0) html += "<div><b style='color:#64748b;'>Source:</b> " + src.dataStream.map(esc).join(", ") + "</div>";
+        if (src.dataLakeObject.length > 0) html += "<div><b style='color:#64748b;'>DLO:</b> " + src.dataLakeObject.map(esc).join(", ") + "</div>";
+        html += "</div>";
+      }
+
+      // Filter fields: show PKs, FKs, and business fields (hide system fields)
+      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.foreignKey; });
+      var bizFields = entity.attributes.filter(function(a) {
+        if (a.isPrimaryKey || a.foreignKey) return false;
+        if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        return true;
+      });
+
       // Fields table
-      if (entity.attributes.length > 0) {
+      if (keyFields.length > 0 || bizFields.length > 0) {
         html += "<div style='overflow-x:auto;'>";
         html += "<table style='width:100%;border-collapse:collapse;font:11px -apple-system,sans-serif;'>";
         html += "<thead><tr style='background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
-        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>Field Name</th>";
-        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>API Name</th>";
-        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>Type</th>";
-        html += "<th style='text-align:center;padding:8px 6px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>PK</th>";
-        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>FK</th>";
-        html += "</tr></thead>";
-        html += "<tbody>";
+        html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Field</th>";
+        html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>API Name</th>";
+        html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Type</th>";
+        html += "<th style='text-align:center;padding:6px 4px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Key</th>";
+        html += "</tr></thead><tbody>";
 
-        entity.attributes.forEach(function(attr, idx) {
-          var rowBg = idx % 2 === 0 ? "#fff" : "#f9fafb";
-          html += "<tr style='background:" + rowBg + ";border-bottom:1px solid #f1f5f9;'>";
-          html += "<td style='padding:8px 10px;color:#1e293b'>" + esc(attr.masterLabel) + "</td>";
-          html += "<td style='padding:8px 10px;font:600 10px SF Mono,Consolas,monospace;color:#475569'>" + esc(attr.developerName) + "</td>";
-          html += "<td style='padding:8px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
-          html += "<td style='padding:8px 6px;text-align:center;color:#10b981;font-size:12px'>" + (attr.isPrimaryKey ? "✓" : "") + "</td>";
-          html += "<td style='padding:8px 10px;font:600 10px SF Mono,Consolas,monospace;color:#7c3aed'>" + (attr.foreignKey ? esc(attr.foreignKey) : "") + "</td>";
+        // PKs first (highlighted)
+        keyFields.forEach(function(attr) {
+          html += "<tr style='background:#f0fdf4;border-bottom:1px solid #dcfce7;'>";
+          html += "<td style='padding:6px 10px;color:#166534;font-weight:600'>" + esc(attr.masterLabel) + "</td>";
+          html += "<td style='padding:6px 10px;font:600 10px SF Mono,Consolas,monospace;color:#166534'>" + esc(attr.developerName) + "</td>";
+          html += "<td style='padding:6px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
+          html += "<td style='padding:6px 4px;text-align:center;font:600 10px system-ui;'>" + (attr.isPrimaryKey ? "<span style='color:#10b981'>PK</span>" : "") + (attr.foreignKey ? "<span style='color:#7c3aed'>FK</span>" : "") + "</td>";
           html += "</tr>";
         });
 
-        html += "</tbody></table>";
-        html += "</div>";
+        // Business fields
+        bizFields.forEach(function(attr, idx) {
+          var rowBg = idx % 2 === 0 ? "#fff" : "#f9fafb";
+          html += "<tr style='background:" + rowBg + ";border-bottom:1px solid #f1f5f9;'>";
+          html += "<td style='padding:6px 10px;color:#1e293b'>" + esc(attr.masterLabel) + "</td>";
+          html += "<td style='padding:6px 10px;font:500 10px SF Mono,Consolas,monospace;color:#475569'>" + esc(attr.developerName) + "</td>";
+          html += "<td style='padding:6px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
+          html += "<td style='padding:6px 4px;text-align:center'></td>";
+          html += "</tr>";
+        });
+
+        html += "</tbody></table></div>";
+        // Field count summary
+        var totalFields = entity.attributes.length;
+        var hiddenCount = totalFields - keyFields.length - bizFields.length;
+        if (hiddenCount > 0) {
+          html += "<div style='padding:4px 14px 8px;font:10px -apple-system,sans-serif;color:#94a3b8;'>" + hiddenCount + " system fields hidden</div>";
+        }
       } else {
-        html += "<div style='padding:16px;color:#94a3b8;text-align:center;font:12px system-ui'>No attributes</div>";
+        html += "<div style='padding:16px;color:#94a3b8;text-align:center;font:12px system-ui'>No business attributes</div>";
       }
 
       html += "</div>";
@@ -10828,7 +10915,7 @@
     return html;
   }
 
-  function downloadERDAsHTML(entities) {
+  function downloadERDAsHTML(entities, relationships, sourceMap) {
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
 
     var html = "<!DOCTYPE html>\n<html>\n<head>\n";
@@ -10836,30 +10923,47 @@
     html += "<title>Data Model ERD</title>\n";
     html += "<style>\n";
     html += "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f8fafc; }\n";
-    html += "h1 { color: #1e293b; margin-bottom: 24px; }\n";
-    html += ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 20px; }\n";
+    html += "h1 { color: #1e293b; margin-bottom: 4px; }\n";
+    html += ".subtitle { color: #64748b; font-size: 13px; margin-bottom: 24px; }\n";
+    html += ".rel-section { background: #fff; border: 2px solid #3b82f6; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px; }\n";
+    html += ".rel-title { font-weight: 700; font-size: 14px; color: #1e40af; margin-bottom: 12px; }\n";
+    html += ".rel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 8px; }\n";
+    html += ".rel-item { padding: 6px 10px; background: #eff6ff; border-radius: 6px; font-size: 12px; }\n";
+    html += ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 20px; }\n";
     html += ".card { background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }\n";
     html += ".card-header { color: #fff; padding: 12px 14px; }\n";
     html += ".card-title { font-weight: 700; font-size: 14px; }\n";
     html += ".card-api { font: 600 10px 'SF Mono', Consolas, monospace; opacity: 0.9; margin-top: 2px; }\n";
-    html += ".card-category { font: 600 9px system-ui; opacity: 0.8; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }\n";
+    html += ".card-source { padding: 8px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #475569; }\n";
     html += "table { width: 100%; border-collapse: collapse; font-size: 11px; }\n";
     html += "thead { background: #f8fafc; border-bottom: 1px solid #e2e8f0; }\n";
-    html += "th { text-align: left; padding: 8px 10px; font: 600 10px system-ui; color: #64748b; text-transform: uppercase; }\n";
-    html += "th.center { text-align: center; }\n";
+    html += "th { text-align: left; padding: 6px 10px; font: 600 9px system-ui; color: #64748b; text-transform: uppercase; }\n";
+    html += ".pk-row { background: #f0fdf4 !important; border-bottom: 1px solid #dcfce7; }\n";
+    html += ".pk-row td { color: #166534; font-weight: 600; }\n";
     html += "tbody tr:nth-child(even) { background: #f9fafb; }\n";
     html += "tbody tr { border-bottom: 1px solid #f1f5f9; }\n";
-    html += "td { padding: 8px 10px; color: #1e293b; }\n";
-    html += "td.api { font: 600 10px 'SF Mono', Consolas, monospace; color: #475569; }\n";
-    html += "td.type { color: #64748b; font-size: 10px; }\n";
-    html += "td.pk { text-align: center; color: #10b981; font-size: 12px; }\n";
-    html += "td.fk { font: 600 10px 'SF Mono', Consolas, monospace; color: #7c3aed; }\n";
+    html += "td { padding: 6px 10px; color: #1e293b; }\n";
+    html += "td.api { font: 500 10px 'SF Mono', Consolas, monospace; color: #475569; }\n";
     html += ".profile { border: 2px solid #10b981; } .profile .card-header { background: #10b981; }\n";
     html += ".engagement { border: 2px solid #f59e0b; } .engagement .card-header { background: #f59e0b; }\n";
     html += ".other { border: 2px solid #6b7280; } .other .card-header { background: #6b7280; }\n";
+    html += "@media print { body { background: #fff; } .card { break-inside: avoid; } }\n";
     html += "</style>\n";
     html += "</head>\n<body>\n";
     html += "<h1>Data Model ERD</h1>\n";
+    html += "<div class='subtitle'>" + entities.length + " entities &bull; " + relationships.length + " relationships &bull; Generated " + new Date().toISOString().slice(0, 10) + "</div>\n";
+
+    // Relationships
+    if (relationships.length > 0) {
+      html += "<div class='rel-section'>\n<div class='rel-title'>Relationships</div>\n<div class='rel-grid'>\n";
+      relationships.forEach(function(rel) {
+        html += "<div class='rel-item'><b>" + esc(rel.from) + "</b> → <b>" + esc(rel.to) + "</b>";
+        if (rel.label) html += " <span style='color:#64748b;font-size:10px'>(" + esc(rel.label.replace(/__c$|__dlm$/g,"")) + ")</span>";
+        html += "</div>\n";
+      });
+      html += "</div>\n</div>\n";
+    }
+
     html += "<div class='grid'>\n";
 
     entities.forEach(function(entity) {
@@ -10871,24 +10975,32 @@
       html += "<div class='card-header'>\n";
       html += "<div class='card-title'>" + esc(entity.masterLabel) + "</div>\n";
       html += "<div class='card-api'>" + esc(entity.developerName) + "</div>\n";
-      html += "<div class='card-category'>" + esc(entity.category) + "</div>\n";
       html += "</div>\n";
 
-      if (entity.attributes.length > 0) {
-        html += "<table>\n<thead>\n<tr>\n";
-        html += "<th>Field Name</th><th>API Name</th><th>Type</th><th class='center'>PK</th><th>FK</th>\n";
-        html += "</tr>\n</thead>\n<tbody>\n";
+      // Source lineage
+      var src = sourceMap[entity.developerName];
+      if (src && (src.dataStream.length > 0 || src.dataLakeObject.length > 0)) {
+        html += "<div class='card-source'>";
+        if (src.dataStream.length > 0) html += "<div><b>Source:</b> " + src.dataStream.map(esc).join(", ") + "</div>";
+        if (src.dataLakeObject.length > 0) html += "<div><b>DLO:</b> " + src.dataLakeObject.map(esc).join(", ") + "</div>";
+        html += "</div>\n";
+      }
 
-        entity.attributes.forEach(function(attr) {
-          html += "<tr>\n";
-          html += "<td>" + esc(attr.masterLabel) + "</td>\n";
-          html += "<td class='api'>" + esc(attr.developerName) + "</td>\n";
-          html += "<td class='type'>" + esc(attr.dataType) + "</td>\n";
-          html += "<td class='pk'>" + (attr.isPrimaryKey ? "✓" : "") + "</td>\n";
-          html += "<td class='fk'>" + (attr.foreignKey ? esc(attr.foreignKey) : "") + "</td>\n";
-          html += "</tr>\n";
+      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.foreignKey; });
+      var bizFields = entity.attributes.filter(function(a) {
+        if (a.isPrimaryKey || a.foreignKey) return false;
+        if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        return true;
+      });
+
+      if (keyFields.length > 0 || bizFields.length > 0) {
+        html += "<table>\n<thead><tr><th>Field</th><th>API Name</th><th>Type</th><th>Key</th></tr></thead>\n<tbody>\n";
+        keyFields.forEach(function(attr) {
+          html += "<tr class='pk-row'><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td>" + (attr.isPrimaryKey ? "PK" : "") + (attr.foreignKey ? "FK" : "") + "</td></tr>\n";
         });
-
+        bizFields.forEach(function(attr) {
+          html += "<tr><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td></td></tr>\n";
+        });
         html += "</tbody>\n</table>\n";
       }
 
