@@ -11017,6 +11017,9 @@
 
   function generateMermaidERD(entities, relationships) {
     var lines = ["erDiagram"];
+    // Build entity lookup by label for FK inference
+    var entityByLabel = {};
+    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
     // Build a set of unique directional relationships (dedupe A->B and B->A into one)
     var seen = {};
     var dedupedRels = [];
@@ -11026,19 +11029,41 @@
       seen[key] = true;
       dedupedRels.push(rel);
     });
-    // Clean entity names for Mermaid (replace spaces/special chars with underscores)
     var cleanName = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
-    // Infer cardinality from entity names and KQ_ fields
+    // Infer linking field from KQ_ fields on the "from" entity
+    function inferLinkField(fromLabel, toLabel) {
+      var fromEnt = entityByLabel[fromLabel];
+      if (!fromEnt) return "";
+      // Look for KQ_ fields that reference the target (e.g. KQ_PartyId → Individual has PartyId)
+      var kqFields = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0; });
+      for (var i = 0; i < kqFields.length; i++) {
+        var fieldHint = kqFields[i].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+        // If field hint contains a reference to the target entity (e.g. "PartyId" for Individual, "InsurancePolicyId" for Insurance Policy)
+        var targetWords = toLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
+        if (fieldHint.toLowerCase().indexOf(targetWords.slice(0, 6)) >= 0 || fieldHint.toLowerCase().indexOf("party") >= 0 || fieldHint.toLowerCase().indexOf("id") >= 0) {
+          return fieldHint;
+        }
+      }
+      // Fallback: check non-KQ fields ending in Id that might reference target
+      var idFields = fromEnt.attributes.filter(function(a) { return !a.isPrimaryKey && /Id__c$|Id_c$/.test(a.developerName); });
+      for (var j = 0; j < idFields.length; j++) {
+        var fn = idFields[j].developerName.replace(/__c$/, "").replace(/^ssot__/, "");
+        return fn;
+      }
+      return "";
+    }
     dedupedRels.forEach(function(rel) {
       var fromClean = cleanName(rel.from);
       var toClean = cleanName(rel.to);
       var linkField = rel.label ? rel.label.replace(/__c$|__dlm$/g, "") : "";
-      // Heuristic: "Unified" or "Latest" entities are 1:1, Contact Points are 1:N
+      if (!linkField) linkField = inferLinkField(rel.from, rel.to) || inferLinkField(rel.to, rel.from);
+      if (!linkField) linkField = "FK";
+      // Heuristic cardinality
       var cardinality = "||--o{";
       if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) cardinality = "}o--o{";
       else if (/Latest/i.test(rel.from) || /Latest/i.test(rel.to)) cardinality = "||--||";
       else if (rel.from === rel.to) return;
-      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + (linkField || "relates") + "\"");
+      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + linkField + "\"");
     });
     // Add entity definitions with key fields
     entities.forEach(function(entity) {
@@ -11305,7 +11330,17 @@
         uniqueRelList.forEach(function(r) {
           var targetClean = cleanN(r.target);
           var card = /Latest/i.test(r.target) ? "||--||" : "||--o{";
-          cardMermaid += "    " + entityClean + " " + card + " " + targetClean + " : \"" + (r.label ? r.label.replace(/__c$|__dlm$/g,"") : "relates") + "\"\n";
+          // Infer linking field from KQ_ fields
+          var linkLabel = r.label ? r.label.replace(/__c$|__dlm$/g,"") : "";
+          if (!linkLabel) {
+            var kqs = entity.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0; });
+            for (var ki = 0; ki < kqs.length; ki++) {
+              var hint = kqs[ki].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+              if (hint !== "Id") { linkLabel = hint; break; }
+            }
+          }
+          if (!linkLabel) linkLabel = "FK";
+          cardMermaid += "    " + entityClean + " " + card + " " + targetClean + " : \"" + linkLabel + "\"\n";
         });
         var mermaidId = "dc-mermaid-" + entity.id;
         var toggleId = "dc-mermaid-toggle-" + entity.id;
