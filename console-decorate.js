@@ -10963,510 +10963,176 @@ processJSON();
 
   function showActivationModal(data) {
     var existing = document.getElementById("dc-activation-modal");
-    if (existing) { try { existing.remove(); } catch (e) {} }
-
+    if (existing) existing.remove();
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); };
+    var targetName = (data.activationTarget && (data.activationTarget.name || data.activationTargetName)) || data.name || "Activation";
+    var target = data.activationTarget || {};
+    var sub = data.activationTargetSubjectConfig || {};
+    var attrs = (data.attributesConfig && data.attributesConfig.attributes) || [];
+    var cps = (data.contactPointsConfig && data.contactPointsConfig.contactPoints) || [];
+    var staticData = (data.staticDataConfig && data.staticDataConfig.staticData) || [];
+    var filters = (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters) || [];
+
+    // Helper: render path pills
+    function renderPath(configs) {
+      if (!configs || !configs.length) return "";
+      var ph = "<div style='margin:6px 0;'>";
+      configs.forEach(function(cfg) {
+        if (!cfg.queryPath) return;
+        ph += "<div style='display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:4px 0;'>";
+        cfg.queryPath.forEach(function(step, si) {
+          if (si > 0) ph += "<span style='color:#0284c7;font-weight:bold;'>→</span>";
+          ph += "<span style='background:#fff;border:1px solid #0284c7;color:#0369a1;border-radius:14px;padding:3px 10px;font-size:10px;font-weight:600;white-space:nowrap;'>" + esc((step.objectLabel || step.objectName || "").replace(/__dlm$|__cio$/g,"")) + " <span style='color:#64748b;font-weight:400;'>(" + esc(step.fieldLabel || step.fieldName || "") + ")</span></span>";
+        });
+        ph += "</div>";
+      });
+      return ph + "</div>";
+    }
+
+    // Build tab content
+    // TAB 1: Studio UI
+    var tab1 = "";
+    // Overview grid
+    tab1 += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;margin-bottom:16px;'>";
+    var ovFields = [["Name", data.name],["Status", data.status],["Platform", target.platformName],["Target", data.activationTargetName],["Type", data.activationType],["Data Space", data.dataSpaceName],["Segment", data.segmentApiName],["Refresh", data.refreshType],["Processing", data.processingType],["Last Publish", data.lastPublishStatus]];
+    ovFields.forEach(function(f) { if (f[1]) tab1 += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 12px system-ui;color:#1e293b;margin-top:2px;'>" + esc(String(f[1])) + "</div></div>"; });
+    tab1 += "</div>";
+    // Membership
+    tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:4px;'>Activation Membership</div><div style='font:600 12px system-ui;color:#0176d3;'>" + esc(sub.masterLabel || data.membershipName || "") + "</div><div style='font:400 11px system-ui;color:#64748b;'>" + esc(sub.developerName || "") + "</div></div>";
+    // Contact Points
+    if (cps.length > 0) {
+      tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Contact Points</div>";
+      cps.forEach(function(cp) {
+        tab1 += "<div style='padding:10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;margin-bottom:8px;'>";
+        tab1 += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:4px;'>Channel: " + esc(cp.type || "") + " — " + esc(cp.contactPointEntityName || "") + "</div>";
+        if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+          cp.fieldConfig.contactPointFields.forEach(function(f) { tab1 += "<div style='font-size:11px;color:#1e293b;'>Field: <b>" + esc(f.label) + "</b> (" + esc(f.name) + ")</div>"; });
+        }
+        if (cp.queryPathConfig && cp.queryPathConfig.configs) tab1 += renderPath(cp.queryPathConfig.configs);
+        tab1 += "</div>";
+      });
+      tab1 += "</div>";
+    }
+    // Attributes grouped
+    tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Mapped Attributes (" + attrs.length + ")</div>";
+    var byEntity = {};
+    attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
+    Object.keys(byEntity).sort().forEach(function(en) {
+      var ea = byEntity[en];
+      var objType = en.endsWith("__dlm") ? "DMO" : en.endsWith("__cio") ? "CIO" : "Custom";
+      var tagStyle = objType === "DMO" ? "background:#e0f2fe;color:#0369a1;" : objType === "CIO" ? "background:#f3e8ff;color:#6b21a8;" : "background:#f3f4f6;color:#374151;";
+      tab1 += "<div style='font:600 12px system-ui;color:#1e293b;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin:10px 0 4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + ea.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagStyle + "'>" + objType + "</span></div>";
+      tab1 += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:5px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
+      ea.forEach(function(a, i) {
+        var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
+        tab1 += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
+      });
+      tab1 += "</tbody></table>";
+    });
+    tab1 += "</div>";
+    // Campaign
+    if (staticData.length > 0) {
+      tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Campaign Data</div>";
+      tab1 += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
+      staticData.forEach(function(sd) { tab1 += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;'>" + esc(sd.value) + "</td></tr>"; });
+      tab1 += "</tbody></table></div>";
+    }
+
+    // TAB 2: Filters
+    var tab2 = "";
+    if (filters.length > 0) {
+      filters.forEach(function(f, idx) {
+        var ef = f.entityFilter || {};
+        var cond = ef.condition || {};
+        var subj = cond.subject || {};
+        var limit = f.filterLimit || {};
+        tab2 += "<div style='background:#f0f7fc;border-left:4px solid #0176d3;border-radius:0 6px 6px 0;padding:14px;margin-bottom:12px;'>";
+        tab2 += "<div style='font:600 13px system-ui;color:#0176d3;margin-bottom:6px;'>Filter #" + (idx+1) + ": " + esc(f.entityName || "") + "</div>";
+        tab2 += "<div style='font-size:12px;color:#1e293b;'><b>Condition:</b> <code>" + esc(subj.fieldName || "") + "</code> <b>" + esc(cond.operator || "") + "</b> " + (cond.firstBoundValue != null ? "<b>" + esc(cond.firstBoundValue) + "</b> – <b>" + esc(cond.secondBoundValue) + "</b>" : "") + "</div>";
+        tab2 += "<div style='font-size:11px;color:#475569;margin-top:4px;'><b>Limit:</b> Max " + esc(limit.maxNumberOfValues || "") + " values, sort <code>" + esc(limit.attributeName || "") + "</code> " + esc(limit.order || "") + "</div>";
+        if (f.queryPathConfigForActivateOnToContainer && f.queryPathConfigForActivateOnToContainer.configs) {
+          tab2 += "<div style='margin-top:6px;font-size:10px;font-weight:600;color:#475569;'>Resolution Path:</div>" + renderPath(f.queryPathConfigForActivateOnToContainer.configs);
+        }
+        tab2 += "</div>";
+      });
+    } else { tab2 = "<div style='color:#94a3b8;padding:20px;text-align:center;'>No filters configured</div>"; }
+
+    // TAB 3: Schema & Paths
+    var tab3 = "";
+    attrs.forEach(function(a) {
+      if (a.queryPathConfig && a.queryPathConfig.configs && a.queryPathConfig.configs.length > 0 && a.queryPathConfig.configs[0].queryPath && a.queryPathConfig.configs[0].queryPath.length > 0) {
+        tab3 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:10px 14px;margin-bottom:10px;'>";
+        tab3 += "<div style='font:600 11px system-ui;color:#1e293b;margin-bottom:4px;'>" + esc(a.label || a.name) + " <span style='color:#64748b;font-weight:400;'>(" + esc(a.entityName || "") + ")</span></div>";
+        tab3 += renderPath(a.queryPathConfig.configs);
+        tab3 += "</div>";
+      }
+    });
+    if (!tab3) tab3 = "<div style='color:#94a3b8;padding:20px;text-align:center;'>No multi-hop paths (all attributes are DIRECT)</div>";
+
+    // TAB 4: Audit
+    var tab4 = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;'>";
+    var auditFields = [["Activation ID", data.id],["Definition ID", data.activationDefinitionId],["Developer Name", data.developerName],["Segment ID", data.segmentId || data.marketSegmentId],["Segment API", data.segmentApiName],["Target ID", data.activationTargetId],["Platform", target.platformType],["Created By", data.createdBy && data.createdBy.id],["Created", data.createdDate],["Modified By", data.lastModifiedBy && data.lastModifiedBy.id],["Modified", data.lastModifiedDate],["Last Publish", data.lastPublishDate],["Publish Status", data.lastPublishStatus],["History DMO", data.historyAudienceDmoLabel],["Latest DMO", data.latestAudienceDmoLabel],["Last Run", data.latestAudienceDmoLastRunTimestamp],["Enabled", data.isEnabled],["Exclude Deletes", data.shouldExcludeDeletes],["Exclude Updates", data.shouldExcludeUpdates]];
+    auditFields.forEach(function(f) { if (f[1] != null) tab4 += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 11px system-ui;color:#1e293b;margin-top:2px;word-break:break-all;'>" + esc(String(f[1])) + "</div></div>"; });
+    tab4 += "</div>";
+
+    // Build modal
     var modal = document.createElement("div");
     modal.id = "dc-activation-modal";
-    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
-
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;";
     var box = document.createElement("div");
     box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);resize:both;overflow:hidden;min-width:600px;min-height:400px;";
 
     // Header
-    var header = document.createElement("div");
-    header.style.cssText = "padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:10px;";
+    var hdr = document.createElement("div");
+    hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;display:flex;align-items:center;gap:12px;cursor:grab;flex-shrink:0;";
+    hdr.innerHTML = "<div style='flex:1;'><div style='font:700 16px system-ui;'>" + esc(targetName) + "</div><div style='font:400 11px system-ui;opacity:0.8;'>Activation Studio Inspector</div></div>";
+    // Buttons
+    var dlHtmlBtn = document.createElement("button");
+    dlHtmlBtn.textContent = "⬇ HTML"; dlHtmlBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    dlHtmlBtn.onclick = function() { var b = new Blob([generateRichDashboardHTML(data, targetName)], {type:"text/html"}); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".html"; a.click(); };
+    var closeX = document.createElement("button");
+    closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
+    closeX.onclick = function() { modal.remove(); };
+    hdr.appendChild(dlHtmlBtn); hdr.appendChild(closeX);
 
-    var targetName = (data.activationTarget && (data.activationTarget.name || data.activationTargetName)) || data.name || "Activation";
-    var title = document.createElement("h2");
-    title.style.cssText = "margin:0;font:600 18px/1.3 -apple-system,sans-serif;color:#111827;flex:1;";
-    title.textContent = "Activation: " + targetName;
+    // Tabs
+    var tabBar = document.createElement("div");
+    tabBar.style.cssText = "display:flex;border-bottom:2px solid #e5e7eb;background:#f9fafb;flex-shrink:0;";
+    var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"]];
+    tabs.forEach(function(t, i) {
+      var tb = document.createElement("div");
+      tb.setAttribute("data-actab", t[0]);
+      tb.textContent = t[1];
+      tb.style.cssText = "padding:12px 20px;cursor:pointer;font:600 12px system-ui;color:" + (i === 0 ? "#667eea" : "#6b7280") + ";border-bottom:3px solid " + (i === 0 ? "#667eea" : "transparent") + ";transition:all .15s;";
+      tabBar.appendChild(tb);
+    });
 
-    var btnGroup = document.createElement("div");
-    btnGroup.style.cssText = "display:flex;gap:8px;align-items:center;";
+    // Content
+    var contentWrap = document.createElement("div");
+    contentWrap.style.cssText = "flex:1;overflow-y:auto;padding:20px;";
+    contentWrap.innerHTML = tab1;
 
-    var viewMode = "formatted";
-    var contentEl;
+    // Tab switching via event delegation
+    var tabContents = { studio: tab1, filters: tab2, schema: tab3, audit: tab4 };
+    tabBar.addEventListener("click", function(e) {
+      var t = e.target; if (!t.getAttribute("data-actab")) return;
+      var key = t.getAttribute("data-actab");
+      tabBar.querySelectorAll("[data-actab]").forEach(function(tb) { tb.style.color = "#6b7280"; tb.style.borderBottomColor = "transparent"; });
+      t.style.color = "#667eea"; t.style.borderBottomColor = "#667eea";
+      contentWrap.innerHTML = tabContents[key] || "";
+    });
 
-    var toggleBtn = document.createElement("button");
-    toggleBtn.textContent = "{ } Raw JSON";
-    toggleBtn.style.cssText = "border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#475569;";
-
-    var downloadBtn = document.createElement("button");
-    downloadBtn.textContent = "⬇ Download HTML";
-    downloadBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
-
-    var closeBtn = document.createElement("button");
-    closeBtn.textContent = "✕";
-    closeBtn.style.cssText = "border:none;background:transparent;font:20px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
-    closeBtn.onclick = function () { modal.remove(); };
-
-    var excelBtn = document.createElement("button");
-    excelBtn.textContent = "⬇ Download Excel";
-    excelBtn.style.cssText = "border:1px solid #10b981;background:#10b981;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
-
-    btnGroup.appendChild(toggleBtn);
-    btnGroup.appendChild(excelBtn);
-    btnGroup.appendChild(downloadBtn);
-    btnGroup.appendChild(closeBtn);
-    header.appendChild(title);
-    header.appendChild(btnGroup);
-
-    // Make modal draggable by header
+    // Draggable
     var isDragging = false, dragX = 0, dragY = 0;
-    header.style.cursor = "grab";
-    header.addEventListener("mousedown", function(e) {
-      if (e.target === closeBtn || e.target === toggleBtn || e.target === downloadBtn || e.target === excelBtn) return;
-      isDragging = true; dragX = e.clientX - box.offsetLeft; dragY = e.clientY - box.offsetTop;
-      header.style.cursor = "grabbing";
-      box.style.position = "absolute"; box.style.margin = "0";
-    });
-    document.addEventListener("mousemove", function(e) {
-      if (!isDragging) return;
-      box.style.left = (e.clientX - dragX) + "px"; box.style.top = (e.clientY - dragY) + "px";
-    });
-    document.addEventListener("mouseup", function() { isDragging = false; header.style.cursor = "grab"; });
+    hdr.addEventListener("mousedown", function(e) { if (e.target === closeX || e.target === dlHtmlBtn) return; isDragging = true; dragX = e.clientX - box.offsetLeft; dragY = e.clientY - box.offsetTop; hdr.style.cursor = "grabbing"; box.style.position = "absolute"; box.style.margin = "0"; });
+    document.addEventListener("mousemove", function(e) { if (!isDragging) return; box.style.left = (e.clientX - dragX) + "px"; box.style.top = (e.clientY - dragY) + "px"; });
+    document.addEventListener("mouseup", function() { isDragging = false; hdr.style.cursor = "grab"; });
 
-    // Content area — scrollable
-    contentEl = document.createElement("div");
-    contentEl.style.cssText = "flex:1;overflow-y:auto;padding:20px;";
-
-    // Render structured view matching SF's activation detail layout
-    function renderFormattedView() {
-      var h = "";
-      var section = function(title, content) { return "<div style='margin-bottom:20px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'><div style='background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e2e8f0;font:600 14px -apple-system,sans-serif;color:#1e293b;'>" + title + "</div><div style='padding:16px;'>" + content + "</div></div>"; };
-      var kv = function(label, value) { return value ? "<div style='display:flex;gap:12px;padding:4px 0;'><span style='font-weight:600;color:#475569;min-width:180px;font-size:12px;'>" + label + "</span><span style='color:#1f2937;font-size:12px;'>" + esc(String(value)) + "</span></div>" : ""; };
-
-      // 1. Overview
-      var overview = "";
-      overview += kv("Name", data.name || data.activationTargetName);
-      overview += kv("Status", data.status);
-      overview += kv("Type", data.activationType);
-      overview += kv("Platform", data.activationTarget && data.activationTarget.platformName);
-      overview += kv("Target", data.activationTargetName);
-      overview += kv("Data Space", data.dataSpaceName);
-      overview += kv("Segment", data.segmentApiName);
-      overview += kv("Refresh Type", data.refreshType);
-      overview += kv("Processing Type", data.processingType);
-      overview += kv("Enabled", data.isEnabled || data.enabled);
-      overview += kv("Last Publish Date", data.lastPublishDate);
-      overview += kv("Last Publish Status", data.lastPublishStatus);
-      overview += kv("Created", data.createdDate);
-      overview += kv("Last Modified", data.lastModifiedDate);
-      overview += kv("Developer Name", data.developerName);
-      h += section("Overview", overview);
-
-      // 2. Activation Membership
-      var membership = "";
-      if (data.activationTargetSubjectConfig) {
-        var sub = data.activationTargetSubjectConfig;
-        membership += kv("Subject Entity", sub.masterLabel || sub.developerName);
-        membership += kv("Developer Name", sub.developerName);
-        membership += kv("Membership Name", data.membershipName);
-      }
-      h += section("Activation Membership", membership || "<span style='color:#94a3b8;'>No membership configured</span>");
-
-      // 3. Contact Points (with path)
-      var cpHtml = "";
-      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
-        data.contactPointsConfig.contactPoints.forEach(function(cp) {
-          cpHtml += "<div style='margin-bottom:12px;padding:12px 16px;background:#f0f9ff;border:1px solid #bfdbfe;border-radius:6px;'>";
-          cpHtml += "<div style='font:600 13px system-ui;color:#1e40af;margin-bottom:8px;'>Contact Point: " + esc(cp.type || "Unknown") + "</div>";
-          cpHtml += kv("Entity", cp.contactPointEntityName);
-          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
-            cp.fieldConfig.contactPointFields.forEach(function(f) {
-              cpHtml += kv("Field", f.label + " (" + f.name + ")");
-            });
-          }
-          // Contact Point Path (readable)
-          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
-            cpHtml += "<div style='margin-top:8px;padding:8px 12px;background:#e0f2fe;border-radius:4px;font-size:11px;'>";
-            cpHtml += "<div style='font-weight:600;color:#0369a1;margin-bottom:4px;'>Path:</div>";
-            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
-              if (cfg.queryPath && cfg.queryPath.length > 0) {
-                var pathStr = cfg.queryPath.map(function(step) {
-                  var objLabel = step.objectLabel || (step.objectName || "").replace(/__dlm$|__cio$/g,"");
-                  return objLabel + "." + (step.fieldLabel || step.fieldName || "");
-                }).join(" → ");
-                cpHtml += "<div style='color:#0c4a6e;margin:2px 0;'>" + (idx + 1) + ". " + esc(pathStr) + "</div>";
-              }
-            });
-            cpHtml += "</div>";
-          }
-          // Source config
-          if (cp.sourceConfig && cp.sourceConfig.contactPointSources) {
-            cpHtml += "<div style='margin-top:6px;'>";
-            cp.sourceConfig.contactPointSources.forEach(function(src) {
-              cpHtml += kv("Source", src.name + " (Priority: " + src.dataSourcePriority + ")");
-            });
-            cpHtml += "</div>";
-          }
-          cpHtml += "</div>";
-        });
-      } else {
-        cpHtml = "<span style='color:#94a3b8;'>No contact points configured</span>";
-      }
-      h += section("Contact Points", cpHtml);
-
-      // 3b. Attributes Included (numbered list with source DMO)
-      var inclHtml = "";
-      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
-        inclHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;width:30px;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Attribute</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Source DMO</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Source Type</th></tr></thead><tbody>";
-        data.attributesConfig.attributes.forEach(function(a, i) {
-          var srcDmo = (a.entityName || "").replace(/__dlm$|__cio$/g, "");
-          inclHtml += "<tr><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#6b7280;text-align:center;'>" + (i+1) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;font-weight:500;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#4a6fa5;font-size:11px;'>" + esc(srcDmo) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;'>" + esc(a.source || a.type || "") + "</td></tr>";
-        });
-        inclHtml += "</tbody></table>";
-      }
-      h += section("Attributes Included (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", inclHtml || "<span style='color:#94a3b8;'>None</span>");
-
-      // 4. Attributes — grouped by source DMO
-      var attrsHtml = "";
-      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
-        var attrs = data.attributesConfig.attributes;
-        var byEntity = {};
-        attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
-        Object.keys(byEntity).sort().forEach(function(en) {
-          var eAttrs = byEntity[en];
-          attrsHtml += "<div style='margin-bottom:14px;'>";
-          attrsHtml += "<div style='font:600 12px system-ui;color:#1f2937;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin-bottom:6px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + eAttrs.length + ")</div>";
-          attrsHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Label</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Preferred Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>API Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Type</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Source</th></tr></thead><tbody>";
-          eAttrs.forEach(function(a, i) {
-            attrsHtml += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#6b7280;'>" + (i+1) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.label) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#059669;font-style:italic;'>" + esc(a.preferredName || "") + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font:11px SF Mono,Consolas,monospace;color:#4a6fa5;'>" + esc(a.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.dataSourceType) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.source) + "</td></tr>";
-          });
-          attrsHtml += "</tbody></table></div>";
-        });
-      }
-      h += section("Attributes (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", attrsHtml || "<span style='color:#94a3b8;'>No attributes</span>");
-
-      // 5. Campaign Data (staticDataConfig)
-      var campaignHtml = "";
-      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
-        campaignHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:8px 12px;border:1px solid #e5e7eb;'>Name</th><th style='padding:8px 12px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
-        data.staticDataConfig.staticData.forEach(function(sd) {
-          campaignHtml += "<tr><td style='padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:8px 12px;border:1px solid #e5e7eb;'>" + esc(sd.value) + "</td></tr>";
-        });
-        campaignHtml += "</tbody></table>";
-      } else {
-        campaignHtml = "<span style='color:#94a3b8;'>No campaign data</span>";
-      }
-      h += section("Campaign Data", campaignHtml);
-
-      // 6. Filters
-      var filtersHtml = "";
-      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
-        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
-          filtersHtml += "<div style='padding:8px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;margin-bottom:8px;font-size:12px;'>";
-          filtersHtml += "<b>Entity:</b> " + esc(f.entityName || "") + "<br>";
-          if (f.entityFilter && f.entityFilter.condition) {
-            var cond = f.entityFilter.condition;
-            filtersHtml += "<b>Condition:</b> " + esc((cond.subject && cond.subject.fieldName) || "") + " " + esc(cond.operator || "") + " " + (cond.firstBoundValue != null ? esc(cond.firstBoundValue + " - " + cond.secondBoundValue) : esc((cond.values || []).join(", "))) + "<br>";
-          }
-          if (f.filterLimit) filtersHtml += "<b>Limit:</b> Max " + f.filterLimit.maxNumberOfValues + " values, order " + esc(f.filterLimit.order) + "<br>";
-          filtersHtml += "</div>";
-        });
-      }
-      if (data.directDmoFiltersConfig && data.directDmoFiltersConfig.filters && data.directDmoFiltersConfig.filters.length > 0) {
-        filtersHtml += "<div style='font:600 11px system-ui;color:#475569;margin-bottom:4px;'>Direct Filters:</div>";
-        filtersHtml += "<div style='color:#6b7280;font-size:11px;'>" + esc(JSON.stringify(data.directDmoFiltersConfig.filters)) + "</div>";
-      }
-      h += section("Filters", filtersHtml || "<span style='color:#94a3b8;'>No filters configured</span>");
-
-      // 7. Audience DMOs
-      var audienceHtml = "";
-      audienceHtml += kv("History Audience DMO", data.historyAudienceDmoLabel);
-      audienceHtml += kv("History Audience API", data.historyAudienceDmoApiName);
-      audienceHtml += kv("Latest Audience DMO", data.latestAudienceDmoLabel);
-      audienceHtml += kv("Latest Audience API", data.latestAudienceDmoApiName);
-      audienceHtml += kv("Last Run", data.latestAudienceDmoLastRunTimestamp);
-      h += section("Audience DMOs", audienceHtml);
-
-      return "<div style='font:13px/1.6 -apple-system,sans-serif;'>" + h + "</div>";
-    }
-    function renderRawView() {
-      return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
-    }
-    // Render formatted view directly (no iframe — CSP blocks it)
-    function renderFormattedView() {
-      var h = "";
-      var section = function(title, content) { return "<div style='margin-bottom:16px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'><div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>" + title + "</div><div style='padding:14px 16px;'>" + content + "</div></div>"; };
-      var kv = function(label, value) { return value ? "<div style='display:flex;gap:12px;padding:3px 0;font-size:12px;'><span style='font-weight:600;color:#475569;min-width:180px;'>" + label + "</span><span style='color:#1f2937;'>" + esc(String(value)) + "</span></div>" : ""; };
-      var kvGrid = function(pairs) { var g = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;padding:10px;background:#fafafa;border:1px solid #eee;border-radius:4px;'>"; pairs.forEach(function(p) { if (p[1]) g += "<div><div style='font:700 10px system-ui;color:#64748b;text-transform:uppercase;'>" + p[0] + "</div><div style='font:500 12px system-ui;color:#1e293b;margin-top:2px;'>" + esc(String(p[1])) + "</div></div>"; }); return g + "</div>"; };
-
-      // Overview
-      var target = data.activationTarget || {};
-      h += section("Overview", kvGrid([
-        ["Name", data.name || data.activationTargetName],
-        ["Status", data.status],
-        ["Platform", target.platformName],
-        ["Target", data.activationTargetName],
-        ["Type", data.activationType],
-        ["Data Space", data.dataSpaceName],
-        ["Segment", data.segmentApiName],
-        ["Refresh Type", data.refreshType],
-        ["Processing", data.processingType],
-        ["Last Publish", data.lastPublishDate],
-        ["Last Status", data.lastPublishStatus],
-        ["Created", data.createdDate],
-        ["Modified", data.lastModifiedDate]
-      ]));
-
-      // Membership
-      var sub = data.activationTargetSubjectConfig || {};
-      h += section("Activation Membership", "<div style='font:600 13px system-ui;color:#0176d3;margin-bottom:4px;'>" + esc(sub.masterLabel || data.membershipName || "") + "</div><div style='font-size:11px;color:#64748b;'>Developer: " + esc(sub.developerName || "") + "</div>");
-
-      // Contact Points
-      var cpHtml = "";
-      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
-        data.contactPointsConfig.contactPoints.forEach(function(cp) {
-          cpHtml += "<div style='padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;margin-bottom:10px;'>";
-          cpHtml += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:6px;'>Channel: " + esc(cp.type || "") + "</div>";
-          cpHtml += kv("Entity", cp.contactPointEntityName);
-          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
-            cpHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;margin-top:6px;'><thead><tr><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>#</th><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>Field</th><th style='padding:5px 8px;background:#e0f2fe;border:1px solid #bae6fd;text-align:left;'>Output Name</th></tr></thead><tbody>";
-            cp.fieldConfig.contactPointFields.forEach(function(f, i) {
-              cpHtml += "<tr><td style='padding:5px 8px;border:1px solid #e2e8f0;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e2e8f0;'>" + esc(f.label || f.name) + "</td><td style='padding:5px 8px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;'>" + esc(f.referenceAttributeName || f.name) + "</td></tr>";
-            });
-            cpHtml += "</tbody></table>";
-          }
-          // Path
-          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
-            cpHtml += "<div style='margin-top:8px;padding:8px;background:#e0f2fe;border-radius:4px;'><div style='font:700 10px system-ui;color:#0369a1;text-transform:uppercase;margin-bottom:4px;'>Path</div>";
-            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
-              if (cfg.queryPath) {
-                var steps = cfg.queryPath.map(function(s) { return "<span style='background:#fff;border:1px solid #0284c7;color:#0369a1;border-radius:12px;padding:2px 8px;font-size:10px;font-weight:600;display:inline-block;'>" + esc((s.objectLabel || s.objectName || "").replace(/__dlm$/,"")) + "." + esc(s.fieldLabel || s.fieldName || "") + "</span>"; });
-                cpHtml += "<div style='margin:3px 0;display:flex;flex-wrap:wrap;align-items:center;gap:4px;'>" + steps.join("<span style='color:#0284c7;font-weight:bold;'>→</span>") + "</div>";
-              }
-            });
-            cpHtml += "</div>";
-          }
-          cpHtml += "</div>";
-        });
-      } else { cpHtml = "<span style='color:#94a3b8;'>None configured</span>"; }
-      h += section("Contact Points", cpHtml);
-
-      // Attributes grouped by entity
-      var attrsHtml = "";
-      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
-        var attrs = data.attributesConfig.attributes;
-        var byEntity = {};
-        attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
-        Object.keys(byEntity).sort().forEach(function(en) {
-          var eAttrs = byEntity[en];
-          var objType = en.endsWith("__dlm") ? "DMO" : en.endsWith("__cio") ? "CIO" : "Custom";
-          var tagColor = objType === "DMO" ? "background:#e0f2fe;color:#0369a1;" : objType === "CIO" ? "background:#f3e8ff;color:#6b21a8;" : "";
-          attrsHtml += "<div style='margin-bottom:12px;'>";
-          attrsHtml += "<div style='font:600 12px system-ui;color:#1f2937;padding:6px 10px;background:#f3f4f6;border-radius:4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + eAttrs.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagColor + "'>" + objType + "</span></div>";
-          attrsHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:6px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
-          eAttrs.forEach(function(a, i) {
-            var srcTag = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
-            attrsHtml += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;color:#6b7280;text-align:center;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcTag + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
-          });
-          attrsHtml += "</tbody></table></div>";
-        });
-      }
-      h += section("Mapped Attributes (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", attrsHtml || "<span style='color:#94a3b8;'>None</span>");
-
-      // Campaign Data
-      var campaignHtml = "";
-      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
-        campaignHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
-        data.staticDataConfig.staticData.forEach(function(sd, i) {
-          campaignHtml += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#6b7280;'>" + (i+1) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;font-size:11px;'>" + esc(sd.value) + "</td></tr>";
-        });
-        campaignHtml += "</tbody></table>";
-      } else { campaignHtml = "<span style='color:#94a3b8;'>None</span>"; }
-      h += section("Campaign Data", campaignHtml);
-
-      // Filters
-      var filtersHtml = "";
-      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
-        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
-          var ef = f.entityFilter || {};
-          var cond = ef.condition || {};
-          var subj = cond.subject || {};
-          var limit = f.filterLimit || {};
-          filtersHtml += "<div style='background:#f0f7fc;border-left:4px solid #0176d3;border-radius:0 4px 4px 0;padding:10px 14px;margin-bottom:8px;font-size:12px;'>";
-          filtersHtml += "<b>Entity:</b> " + esc(f.entityName || "") + "<br>";
-          filtersHtml += "<b>Condition:</b> <code>" + esc(subj.fieldName || "") + "</code> " + esc(cond.operator || "") + " <b>" + (cond.firstBoundValue != null ? esc(cond.firstBoundValue + " – " + cond.secondBoundValue) : "") + "</b><br>";
-          filtersHtml += "<b>Limit:</b> Max " + esc(limit.maxNumberOfValues || "") + " records, sort by <code>" + esc(limit.attributeName || "") + "</code> " + esc(limit.order || "");
-          filtersHtml += "</div>";
-        });
-      } else { filtersHtml = "<span style='color:#94a3b8;'>No filters</span>"; }
-      h += section("Audience Filters", filtersHtml);
-
-      // Audit
-      h += section("Audit & System", kvGrid([
-        ["Activation ID", data.id],
-        ["Definition ID", data.activationDefinitionId],
-        ["Developer Name", data.developerName],
-        ["Segment ID", data.segmentId || data.marketSegmentId],
-        ["Target ID", data.activationTargetId],
-        ["Created By", data.createdBy && data.createdBy.id],
-        ["Modified By", data.lastModifiedBy && data.lastModifiedBy.id],
-        ["History DMO", data.historyAudienceDmoLabel],
-        ["Latest DMO", data.latestAudienceDmoLabel],
-        ["Last Run", data.latestAudienceDmoLastRunTimestamp],
-        ["Exclude Deletes", data.shouldExcludeDeletes],
-        ["Exclude Updates", data.shouldExcludeUpdates]
-      ]));
-
-      return h;
-    }
-    contentEl.innerHTML = renderFormattedView();
-
-    toggleBtn.onclick = function() {
-      if (viewMode === "formatted") {
-        contentEl.innerHTML = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
-        toggleBtn.textContent = "◻ Formatted View";
-        toggleBtn.style.background = "#1e293b";
-        toggleBtn.style.color = "#e2e8f0";
-        toggleBtn.style.borderColor = "#1e293b";
-        viewMode = "raw";
-      } else {
-        contentEl.innerHTML = renderFormattedView();
-        toggleBtn.textContent = "{ } Raw JSON";
-        toggleBtn.style.background = "#f1f5f9";
-        toggleBtn.style.color = "#475569";
-        toggleBtn.style.borderColor = "#94a3b8";
-        viewMode = "formatted";
-      }
-    };
-
-    excelBtn.onclick = function() {
-      var csv = "";
-      // Header
-      csv += "ACTIVATION OVERVIEW\n";
-      csv += "Key,Value\n";
-      csv += "Name," + (data.name || data.activationTargetName || "") + "\n";
-      csv += "Status," + (data.status || "") + "\n";
-      csv += "Type," + (data.activationType || "") + "\n";
-      csv += "Platform," + (data.activationTarget && data.activationTarget.platformName || "") + "\n";
-      csv += "Target," + (data.activationTargetName || "") + "\n";
-      csv += "Data Space," + (data.dataSpaceName || "") + "\n";
-      csv += "Segment," + (data.segmentApiName || "") + "\n";
-      csv += "Refresh Type," + (data.refreshType || "") + "\n";
-      csv += "Processing Type," + (data.processingType || "") + "\n";
-      csv += "Enabled," + (data.isEnabled || data.enabled || "") + "\n";
-      csv += "Last Publish Date," + (data.lastPublishDate || "") + "\n";
-      csv += "Last Publish Status," + (data.lastPublishStatus || "") + "\n";
-      csv += "Created," + (data.createdDate || "") + "\n";
-      csv += "Last Modified," + (data.lastModifiedDate || "") + "\n";
-      csv += "Developer Name," + (data.developerName || "") + "\n";
-      csv += "\n";
-
-      // Membership
-      csv += "ACTIVATION MEMBERSHIP\n";
-      csv += "Key,Value\n";
-      if (data.activationTargetSubjectConfig) {
-        var sub = data.activationTargetSubjectConfig;
-        csv += "Subject Entity," + (sub.masterLabel || sub.developerName || "") + "\n";
-        csv += "Developer Name," + (sub.developerName || "") + "\n";
-        csv += "Membership Name," + (data.membershipName || "") + "\n";
-      }
-      csv += "\n";
-
-      // Attributes
-      csv += "ATTRIBUTES\n";
-      csv += "#,Label,Preferred Name,API Name,Entity,Type,Source\n";
-      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
-        data.attributesConfig.attributes.forEach(function(a, i) {
-          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
-          csv += (i+1) + "," + csvEscape(a.label) + "," + csvEscape(a.preferredName || "") + "," + csvEscape(a.name) + "," + csvEscape(a.entityName || "") + "," + csvEscape(a.dataSourceType || "") + "," + csvEscape(a.source || "") + "\n";
-        });
-      }
-      csv += "\n";
-
-      // Contact Points
-      csv += "CONTACT POINTS\n";
-      csv += "Type,Entity,Fields,Path\n";
-      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
-        data.contactPointsConfig.contactPoints.forEach(function(cp) {
-          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
-          var fields = "";
-          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
-            fields = cp.fieldConfig.contactPointFields.map(function(f) { return f.label + " (" + f.name + ")"; }).join("; ");
-          }
-          var path = "";
-          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
-            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
-              if (cfg.queryPath && cfg.queryPath.length > 0) {
-                var pathStr = cfg.queryPath.map(function(step) {
-                  var objLabel = step.objectLabel || (step.objectName || "").replace(/__dlm$|__cio$/g,"");
-                  return objLabel + "." + (step.fieldLabel || step.fieldName || "");
-                }).join(" → ");
-                path += (idx > 0 ? "; " : "") + pathStr;
-              }
-            });
-          }
-          csv += csvEscape(cp.type || "") + "," + csvEscape(cp.contactPointEntityName || "") + "," + csvEscape(fields) + "," + csvEscape(path) + "\n";
-        });
-      }
-      csv += "\n";
-
-      // Campaign Data
-      csv += "CAMPAIGN DATA\n";
-      csv += "Name,Value\n";
-      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
-        data.staticDataConfig.staticData.forEach(function(sd) {
-          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
-          csv += csvEscape(sd.name) + "," + csvEscape(sd.value) + "\n";
-        });
-      }
-      csv += "\n";
-
-      // Filters
-      csv += "FILTERS\n";
-      csv += "Entity,Field,Operator,Values,Limit\n";
-      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
-        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
-          var csvEscape = function(s) { if (!s) return ""; s = String(s); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s; };
-          var field = "", op = "", vals = "", limit = "";
-          if (f.entityFilter && f.entityFilter.condition) {
-            var cond = f.entityFilter.condition;
-            field = (cond.subject && cond.subject.fieldName) || "";
-            op = cond.operator || "";
-            vals = cond.firstBoundValue != null ? (cond.firstBoundValue + " - " + cond.secondBoundValue) : ((cond.values || []).join("; "));
-          }
-          if (f.filterLimit) limit = "Max " + f.filterLimit.maxNumberOfValues + " values order " + f.filterLimit.order;
-          csv += csvEscape(f.entityName || "") + "," + csvEscape(field) + "," + csvEscape(op) + "," + csvEscape(vals) + "," + csvEscape(limit) + "\n";
-        });
-      }
-      csv += "\n";
-
-      // Audience DMOs
-      csv += "AUDIENCE DMOS\n";
-      csv += "Key,Value\n";
-      csv += "History Audience DMO," + (data.historyAudienceDmoLabel || "") + "\n";
-      csv += "History Audience API," + (data.historyAudienceDmoApiName || "") + "\n";
-      csv += "Latest Audience DMO," + (data.latestAudienceDmoLabel || "") + "\n";
-      csv += "Latest Audience API," + (data.latestAudienceDmoApiName || "") + "\n";
-      csv += "Last Run," + (data.latestAudienceDmoLastRunTimestamp || "") + "\n";
-
-      var blob = new Blob([csv], { type: "text/csv" });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".csv";
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-
-    downloadBtn.onclick = function() {
-      var htmlDoc = generateRichDashboardHTML(data, targetName);
-      var blob = new Blob([htmlDoc], { type: "text/html" });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "activation-dashboard-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".html";
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-
-    box.appendChild(header);
-    box.appendChild(contentEl);
+    box.appendChild(hdr);
+    box.appendChild(tabBar);
+    box.appendChild(contentWrap);
     modal.appendChild(box);
-    modal.onclick = function (e) { if (e.target === modal) modal.remove(); };
+    modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
     document.body.appendChild(modal);
   }
 
@@ -11509,12 +11175,7 @@ processJSON();
       fetchActivationViaBridge(activationId).then(function (data) {
         btn.disabled = false;
         btn.textContent = "📋 Export Activation";
-        // Open rich dashboard in a new tab (bypasses CSP)
-        var targetName = (data.activationTarget && data.activationTarget.name) || data.activationTargetName || data.name || "Activation";
-        var dashHtml = generateRichDashboardHTML(data, targetName);
-        var blob = new Blob([dashHtml], { type: "text/html" });
-        var url = URL.createObjectURL(blob);
-        window.open(url, "_blank");
+        showActivationModal(data);
       }).catch(function (err) {
         btn.disabled = false;
         btn.textContent = "📋 Export Activation";
