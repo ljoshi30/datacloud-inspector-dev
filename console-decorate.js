@@ -10669,13 +10669,37 @@
     console.log("[DC Activation] contactPointsConfig:", JSON.stringify(data.contactPointsConfig));
     console.log("[DC Activation] Full response keys:", Object.keys(data));
 
-    metaSection.innerHTML = "<div style='font:600 14px/1.4 -apple-system,sans-serif;color:#374151;margin-bottom:8px;'>Activation Details</div>" +
-      "<div style='font:400 13px/1.6 -apple-system,sans-serif;color:#6b7280;'>" +
-      "<div><strong>Platform:</strong> " + (targetPlatform || "N/A") + "</div>" +
-      "<div><strong>Status:</strong> " + (targetStatus || "N/A") + "</div>" +
-      "<div><strong>Subject Entity (Base DMO):</strong> " + (subjectEntity || "N/A") + "</div>" +
-      "<div><strong>Contact Points:</strong> " + (contactPoints.length > 0 ? contactPoints.join(", ") : "None") + "</div>" +
-      "</div>";
+    // Extract all available metadata from the response
+    var activationType = data.activationType || data.refreshType || "";
+    var refreshSchedule = data.publishSchedule || data.refreshSchedule || "";
+    var segmentName = "";
+    try { segmentName = data.marketSegmentName || data.segmentName || (data.activationTargetSubjectConfig && data.activationTargetSubjectConfig.masterLabel) || ""; } catch(e2) {}
+    var activationName = data.name || data.masterLabel || targetName || "";
+    var dataSpaceName = data.dataSpaceName || "";
+    var createdDate = data.createdDate || "";
+    var lastModified = data.lastModifiedDate || "";
+
+    var metaHtml = "<div style='font:600 15px/1.4 -apple-system,sans-serif;color:#111827;margin-bottom:12px;'>Activation Configuration</div>";
+    metaHtml += "<table style='width:100%;border-collapse:collapse;font:13px/1.6 -apple-system,sans-serif;'>";
+    var metaRows = [
+      ["Activation Name", activationName],
+      ["Platform", targetPlatform],
+      ["Target", targetName],
+      ["Status", targetStatus],
+      ["Type", activationType],
+      ["Subject Entity (Base DMO)", subjectEntity],
+      ["Segment", segmentName],
+      ["Data Space", dataSpaceName],
+      ["Contact Points", contactPoints.length > 0 ? contactPoints.join(", ") : "None configured"],
+      ["Publish Schedule", refreshSchedule || "Not set"],
+      ["Created", createdDate],
+      ["Last Modified", lastModified]
+    ];
+    metaRows.forEach(function(row) {
+      if (row[1]) metaHtml += "<tr><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#374151;width:200px;vertical-align:top;'>" + row[0] + "</td><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;color:#1f2937;'>" + row[1] + "</td></tr>";
+    });
+    metaHtml += "</table>";
+    metaSection.innerHTML = metaHtml;
 
     content.appendChild(metaSection);
 
@@ -10719,6 +10743,7 @@
       var thead = document.createElement("thead");
       thead.innerHTML = "<tr style='background:#f9fafb;'>" +
         "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Label</th>" +
+        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Preferred Name</th>" +
         "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>API Name</th>" +
         "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Type</th>" +
         "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Source</th>" +
@@ -10729,9 +10754,10 @@
       var tbody = document.createElement("tbody");
       for (var a = 0; a < entityAttrs.length; a++) {
         var attr2 = entityAttrs[a];
-        var label = attr2.label || "";
+        var label = attr2.label || attr2.attributeLabel || "";
+        var preferredName = attr2.preferredName || "";
         var name = attr2.name || "";
-        var dataType = attr2.dataSourceType || "";
+        var dataType = attr2.dataSourceType || attr2.type || "";
         var source = attr2.source || "";
 
         var joinPath = "";
@@ -10755,7 +10781,8 @@
         var row = document.createElement("tr");
         row.style.cssText = "border:1px solid #e5e7eb;";
         row.innerHTML = "<td style='padding:8px;border:1px solid #e5e7eb;'>" + label + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;color:#4a6fa5;'>" + name + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;color:#059669;font-style:italic;font-size:11px;'>" + preferredName + "</td>" +
+          "<td style='padding:8px;border:1px solid #e5e7eb;color:#4a6fa5;font:11px SF Mono,Consolas,monospace;'>" + name + "</td>" +
           "<td style='padding:8px;border:1px solid #e5e7eb;'>" + dataType + "</td>" +
           "<td style='padding:8px;border:1px solid #e5e7eb;'>" + source + "</td>" +
           "<td style='padding:8px;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;'>" + joinPath + "</td>";
@@ -10784,19 +10811,24 @@
         "th,td{padding:8px;border:1px solid #e5e7eb;text-align:left;}" +
         "th{background:#f9fafb;font-weight:600;}.entity-header{font-weight:600;background:#f3f4f6;padding:8px 12px;border-radius:6px;margin:16px 0 8px;}" +
         "</style></head><body>" +
-        "<h1>Activation Export: " + targetName + "</h1>" +
+        "<h1>Activation Export: " + (activationName || targetName) + "</h1>" +
         "<div class='meta'>" +
-        "<div><strong>Platform:</strong> " + targetPlatform + "</div>" +
-        "<div><strong>Status:</strong> " + targetStatus + "</div>" +
-        "<div><strong>Subject Entity:</strong> " + subjectEntity + "</div>" +
+        "<div><strong>Platform:</strong> " + (targetPlatform || "N/A") + "</div>" +
+        "<div><strong>Target:</strong> " + (targetName || "N/A") + "</div>" +
+        "<div><strong>Status:</strong> " + (targetStatus || "N/A") + "</div>" +
+        "<div><strong>Type:</strong> " + (activationType || "N/A") + "</div>" +
+        "<div><strong>Subject Entity (Base DMO):</strong> " + (subjectEntity || "N/A") + "</div>" +
+        "<div><strong>Segment:</strong> " + (segmentName || "N/A") + "</div>" +
+        "<div><strong>Data Space:</strong> " + (dataSpaceName || "N/A") + "</div>" +
         "<div><strong>Contact Points:</strong> " + (contactPoints.length > 0 ? contactPoints.join(", ") : "None") + "</div>" +
-        "</div><h2>Mapped Attributes</h2>";
+        "<div><strong>Publish Schedule:</strong> " + (refreshSchedule || "Not set") + "</div>" +
+        "</div><h2>Mapped Attributes (" + attributes.length + ")</h2>";
 
       for (var e2 = 0; e2 < entityNames.length; e2++) {
         var eName2 = entityNames[e2];
         var entityAttrs2 = attrsByEntity[eName2];
         htmlContent += "<div class='entity-header'>DMO: " + eName2 + " (" + entityAttrs2.length + " attribute" + (entityAttrs2.length === 1 ? "" : "s") + ")</div>";
-        htmlContent += "<table><thead><tr><th>Label</th><th>API Name</th><th>Type</th><th>Source</th><th>Join Path</th></tr></thead><tbody>";
+        htmlContent += "<table><thead><tr><th>Label</th><th>Preferred Name</th><th>API Name</th><th>Type</th><th>Source</th><th>Join Path</th></tr></thead><tbody>";
 
         for (var a2 = 0; a2 < entityAttrs2.length; a2++) {
           var attr3 = entityAttrs2[a2];
@@ -10818,8 +10850,8 @@
           } catch (e3) {}
           if (!joinPath2 && attr3.source === "DIRECT") joinPath2 = "(direct)";
 
-          htmlContent += "<tr><td>" + (attr3.label || "") + "</td><td>" + (attr3.name || "") + "</td>" +
-            "<td>" + (attr3.dataSourceType || "") + "</td><td>" + (attr3.source || "") + "</td>" +
+          htmlContent += "<tr><td>" + (attr3.label || attr3.attributeLabel || "") + "</td><td>" + (attr3.preferredName || "") + "</td><td>" + (attr3.name || "") + "</td>" +
+            "<td>" + (attr3.dataSourceType || attr3.type || "") + "</td><td>" + (attr3.source || "") + "</td>" +
             "<td>" + joinPath2 + "</td></tr>";
         }
         htmlContent += "</tbody></table>";
@@ -11218,8 +11250,8 @@
     var mermaidCode = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
-    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Mermaid ERD — paste into Lucidchart, draw.io, Confluence, or any Mermaid renderer</span>";
-    html += "<button onclick='navigator.clipboard.writeText(this.parentElement.nextElementSibling.textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy\"},1500)})' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
+    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</span>";
+    html += "<button onclick='var t=this.parentElement.nextElementSibling.textContent;var ta=document.createElement(\"textarea\");ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand(\"copy\");document.body.removeChild(ta);this.textContent=\"Copied!\";var btn=this;setTimeout(function(){btn.textContent=\"Copy\"},1500)' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
     html += "</div>";
     html += "<pre style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
     html += "</div>";
@@ -11278,8 +11310,8 @@
         var mermaidId = "dc-mermaid-" + entity.id;
         var toggleId = "dc-mermaid-toggle-" + entity.id;
         html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
-        html += "<button onclick='var el=document.getElementById(\"" + toggleId + "\");if(el.style.display===\"none\"){el.style.display=\"block\";this.textContent=\"Hide Relationships (" + uniqueRelList.length + ")\"}else{el.style.display=\"none\";this.textContent=\"Show Relationships (" + uniqueRelList.length + ")\"}' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>Show Relationships (" + uniqueRelList.length + ")</button>";
-        html += "<button onclick='navigator.clipboard.writeText(document.getElementById(\"" + mermaidId + "\").textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy Mermaid\"},1200)})' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Mermaid</button>";
+        html += "<button onclick='var el=document.getElementById(\"" + toggleId + "\");if(el.style.display===\"none\"){el.style.display=\"block\";this.textContent=\"Hide Connections (" + uniqueRelList.length + ")\"}else{el.style.display=\"none\";this.textContent=\"View Connections (" + uniqueRelList.length + ")\"}' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + uniqueRelList.length + ")</button>";
+        html += "<button onclick='var t=document.getElementById(\"" + mermaidId + "\").textContent;var ta=document.createElement(\"textarea\");ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand(\"copy\");document.body.removeChild(ta);this.textContent=\"Copied!\";var btn=this;setTimeout(function(){btn.textContent=\"Copy Diagram Code\"},1200)' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Diagram Code</button>";
         html += "</div>";
         html += "<div id='" + toggleId + "' style='display:none;padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;'>";
         html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;'>" + esc(cardMermaid) + "</pre>";
@@ -11327,11 +11359,13 @@
         });
 
         html += "</tbody></table></div>";
-        // Field count summary
-        var totalFields = entity.attributes.length;
-        var hiddenCount = totalFields - keyFields.length - bizFields.length;
-        if (hiddenCount > 0) {
-          html += "<div style='padding:4px 14px 8px;font:10px -apple-system,sans-serif;color:#94a3b8;'>" + hiddenCount + " system fields hidden</div>";
+        // Show hidden system fields list
+        var hiddenFields = entity.attributes.filter(function(a) {
+          if (a.isPrimaryKey || a.foreignKey) return false;
+          return _systemFields.indexOf(a.developerName) >= 0;
+        });
+        if (hiddenFields.length > 0) {
+          html += "<div style='padding:4px 14px 8px;font:10px -apple-system,sans-serif;color:#94a3b8;'>" + hiddenFields.length + " system fields not shown: " + hiddenFields.map(function(f) { return f.masterLabel || f.developerName; }).join(", ") + "</div>";
         }
       } else {
         html += "<div style='padding:16px;color:#94a3b8;text-align:center;font:12px system-ui'>No business attributes</div>";
@@ -11394,7 +11428,7 @@
     // Mermaid ERD block
     var mermaidCode2 = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;'>\n";
-    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Mermaid ERD — paste into Lucidchart, draw.io, Confluence, or any Mermaid renderer</div>\n";
+    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</div>\n";
     html += "<pre style='font:11px/1.6 monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;margin:0;'>" + esc(mermaidCode2) + "</pre>\n";
     html += "</div>\n";
 
