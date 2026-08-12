@@ -10217,6 +10217,7 @@
               if (!isNaN(v) && v >= 0) { cnt = v; break; }
             }
           }
+          var prevFetchNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'><b>" + _lastResult.rows.toLocaleString() + " rows</b> still ready to download ↓</div>" : "";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
@@ -10224,12 +10225,17 @@
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
             + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
-            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>";
+            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>"
+            + prevFetchNote;
+          if (_lastResult) downloadBtn.style.display = "inline-block";
         }).catch(function (err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
+          var prevFetchNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'><b>" + _lastResult.rows.toLocaleString() + " rows</b> still ready to download ↓</div>" : "";
           cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
-            + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
+            + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>"
+            + prevFetchNote;
+          if (_lastResult) downloadBtn.style.display = "inline-block";
         });
       });
     };
