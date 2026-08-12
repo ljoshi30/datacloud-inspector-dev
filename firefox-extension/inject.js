@@ -10753,14 +10753,15 @@
       }
       h += section("Contact Points", cpHtml);
 
-      // 3b. Attributes Included (numbered summary like SF sidebar)
+      // 3b. Attributes Included (numbered list with source DMO)
       var inclHtml = "";
       if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
-        inclHtml += "<div style='columns:2;column-gap:24px;font-size:12px;'>";
+        inclHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;width:30px;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Attribute</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Source DMO</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Source Type</th></tr></thead><tbody>";
         data.attributesConfig.attributes.forEach(function(a, i) {
-          inclHtml += "<div style='padding:3px 0;break-inside:avoid;'><span style='color:#6b7280;margin-right:6px;'>" + (i+1) + ".</span><span style='color:#1f2937;'>" + esc(a.label || a.name) + "</span></div>";
+          var srcDmo = (a.entityName || "").replace(/__dlm$|__cio$/g, "");
+          inclHtml += "<tr><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#6b7280;text-align:center;'>" + (i+1) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;font-weight:500;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#4a6fa5;font-size:11px;'>" + esc(srcDmo) + "</td><td style='padding:5px 10px;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;'>" + esc(a.source || a.type || "") + "</td></tr>";
         });
-        inclHtml += "</div>";
+        inclHtml += "</tbody></table>";
       }
       h += section("Attributes Included (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", inclHtml || "<span style='color:#94a3b8;'>None</span>");
 
