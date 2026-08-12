@@ -10671,10 +10671,58 @@
     var entities = [];
     var entityMap = {}; // id -> entity
 
-    // Extract node definitions: 1 [ label="DevName__dlm" entity="{...}" ]
-    // The entity JSON can contain nested structures, so we need to match until the closing quote of the entity attribute
+    // Log first 500 chars for debugging
+    console.log("[DC ERD] DOT string first 500:", dotString.slice(0, 500));
+
+    // The DOT format has nodes like: 1 [ label="Name__dlm" entity="{...escaped JSON...}" ]
+    // The entity JSON uses \" for quotes inside. We find each node by matching the pattern.
     var nodeRegex = /(\d+)\s*\[\s*label="([^"]+)"\s+entity="((?:[^"\\]|\\.)*)"\s*\]/g;
     var match;
+
+    // If regex doesn't find anything, try alternative parsing
+    if (!nodeRegex.test(dotString)) {
+      console.log("[DC ERD] Primary regex failed. Trying line-by-line parse...");
+      nodeRegex.lastIndex = 0;
+      // Alternative: split by lines and extract manually
+      var lines = dotString.split("\n");
+      lines.forEach(function(line) {
+        var labelMatch = line.match(/(\d+)\s*\[\s*label="([^"]+)"/);
+        var entityMatch = line.match(/entity="((?:[^"\\]|\\.)*)"/);
+        if (labelMatch && entityMatch) {
+          var nodeId = labelMatch[1];
+          var devName = labelMatch[2];
+          var entityJsonStr = entityMatch[1];
+          try {
+            var unescaped = entityJsonStr.replace(/\\"/g, '"').replace(/\\n/g, '').replace(/\\\\/g, '\\');
+            var entityData = JSON.parse(unescaped);
+            var entity = {
+              id: nodeId,
+              developerName: entityData.developerName || devName,
+              masterLabel: entityData.masterLabel || devName,
+              category: getCategoryName(entityData.dataEntityCategoryId),
+              categoryId: entityData.dataEntityCategoryId,
+              attributes: (entityData.attributes || []).map(function(attr) {
+                return {
+                  masterLabel: attr.masterLabel || attr.developerName || "",
+                  developerName: attr.developerName || "",
+                  dataType: attr.dataType || "",
+                  isPrimaryKey: (attr.primaryIndexOrder != null) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
+                  foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
+                  isRequired: attr.dataRequired || false
+                };
+              })
+            };
+            entities.push(entity);
+            entityMap[nodeId] = entity;
+          } catch (e) {
+            console.log("[DC ERD] Failed to parse entity line:", line.slice(0, 100), e.message);
+          }
+        }
+      });
+      console.log("[DC ERD] Line-by-line parse found", entities.length, "entities");
+      return entities;
+    }
+    nodeRegex.lastIndex = 0;
 
     while ((match = nodeRegex.exec(dotString)) !== null) {
       var nodeId = match[1];
