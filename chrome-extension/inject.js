@@ -11149,8 +11149,9 @@ processJSON();
     var dlExcelBtn = document.createElement("button");
     dlExcelBtn.textContent = "⬇ Excel"; dlExcelBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     dlExcelBtn.onclick = function() {
-      if (typeof MiniXLSX === "undefined") { alert("Excel builder not available"); return; }
-      var wb = new MiniXLSX.Workbook();
+      var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+      if (!_MiniXLSX) { alert("Excel builder not available — use the full extension build"); return; }
+      var wb = new _MiniXLSX.Workbook();
       var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF667eea" } };
       var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
       var boldFont = { bold: true, size: 11 };
