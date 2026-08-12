@@ -10711,17 +10711,40 @@
       }
       h += section("Activation Membership", membership || "<span style='color:#94a3b8;'>No membership configured</span>");
 
-      // 3. Contact Points
+      // 3. Contact Points (with path)
       var cpHtml = "";
       if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
         data.contactPointsConfig.contactPoints.forEach(function(cp) {
-          cpHtml += "<div style='margin-bottom:12px;padding:10px 14px;background:#f0f9ff;border:1px solid #bfdbfe;border-radius:6px;'>";
-          cpHtml += "<div style='font:600 12px system-ui;color:#1e40af;margin-bottom:6px;'>Type: " + esc(cp.type || "Unknown") + "</div>";
+          cpHtml += "<div style='margin-bottom:12px;padding:12px 16px;background:#f0f9ff;border:1px solid #bfdbfe;border-radius:6px;'>";
+          cpHtml += "<div style='font:600 13px system-ui;color:#1e40af;margin-bottom:8px;'>Contact Point: " + esc(cp.type || "Unknown") + "</div>";
           cpHtml += kv("Entity", cp.contactPointEntityName);
           if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
             cp.fieldConfig.contactPointFields.forEach(function(f) {
               cpHtml += kv("Field", f.label + " (" + f.name + ")");
             });
+          }
+          // Contact Point Path (readable)
+          if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+            cpHtml += "<div style='margin-top:8px;padding:8px 12px;background:#e0f2fe;border-radius:4px;font-size:11px;'>";
+            cpHtml += "<div style='font-weight:600;color:#0369a1;margin-bottom:4px;'>Path:</div>";
+            cp.queryPathConfig.configs.forEach(function(cfg, idx) {
+              if (cfg.queryPath && cfg.queryPath.length > 0) {
+                var pathStr = cfg.queryPath.map(function(step) {
+                  var objLabel = step.objectLabel || (step.objectName || "").replace(/__dlm$|__cio$/g,"");
+                  return objLabel + "." + (step.fieldLabel || step.fieldName || "");
+                }).join(" → ");
+                cpHtml += "<div style='color:#0c4a6e;margin:2px 0;'>" + (idx + 1) + ". " + esc(pathStr) + "</div>";
+              }
+            });
+            cpHtml += "</div>";
+          }
+          // Source config
+          if (cp.sourceConfig && cp.sourceConfig.contactPointSources) {
+            cpHtml += "<div style='margin-top:6px;'>";
+            cp.sourceConfig.contactPointSources.forEach(function(src) {
+              cpHtml += kv("Source", src.name + " (Priority: " + src.dataSourcePriority + ")");
+            });
+            cpHtml += "</div>";
           }
           cpHtml += "</div>";
         });
@@ -10729,6 +10752,17 @@
         cpHtml = "<span style='color:#94a3b8;'>No contact points configured</span>";
       }
       h += section("Contact Points", cpHtml);
+
+      // 3b. Attributes Included (numbered summary like SF sidebar)
+      var inclHtml = "";
+      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
+        inclHtml += "<div style='columns:2;column-gap:24px;font-size:12px;'>";
+        data.attributesConfig.attributes.forEach(function(a, i) {
+          inclHtml += "<div style='padding:3px 0;break-inside:avoid;'><span style='color:#6b7280;margin-right:6px;'>" + (i+1) + ".</span><span style='color:#1f2937;'>" + esc(a.label || a.name) + "</span></div>";
+        });
+        inclHtml += "</div>";
+      }
+      h += section("Attributes Included (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", inclHtml || "<span style='color:#94a3b8;'>None</span>");
 
       // 4. Attributes — grouped by source DMO
       var attrsHtml = "";
