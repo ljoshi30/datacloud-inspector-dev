@@ -6436,7 +6436,7 @@
               // Non-JSON response = session expired or SF returned an error page
               var isQueryEditor = /DataQueryWorkspace/i.test(location.href);
               var sessionHint = isQueryEditor
-                ? "Click SF's \"Run Query\" (or \"Run Highlighted Query\") button first to establish a session, then click our Run & Export again."
+                ? "Click SF's \"Run Query\" (or \"Run Highlighted Query\") button first to establish a session, then click our Fetch & Export again."
                 : "Sort any column on the Data Explorer table to re-establish the session, then retry.";
               if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — " + sessionHint)); return; }
               reject(new Error("Session may have expired — " + sessionHint));
@@ -7924,25 +7924,24 @@
       "</div>" +
       "<div class='dc-cv-body' style='overflow:auto;flex:1'>" + bodyHtml + "</div>";
     document.body.appendChild(m);
-    // Wire up JSON record view tabs (click to switch)
-    if (window.__dcJsonTabIds && window.__dcJsonTabIds.length) {
-      window.__dcJsonTabIds.forEach(function (tid) {
-        var nav = m.querySelector("." + tid + "-nav");
-        if (nav) {
-          nav.addEventListener("click", function (e) {
-            var t = e.target; while (t && !t.getAttribute("data-idx") && t !== nav) t = t.parentElement;
-            if (!t || !t.getAttribute("data-idx")) return;
-            var idx = t.getAttribute("data-idx");
-            m.querySelectorAll("." + tid + "-tab").forEach(function (tb) { tb.style.background = "#f3f2f2"; tb.style.color = "#54698d"; });
-            t.style.background = "#0070d2"; t.style.color = "white";
-            m.querySelectorAll("." + tid + "-pane").forEach(function (p) { p.style.display = "none"; });
-            var pane = m.querySelector("." + tid + "-pane[data-idx='" + idx + "']");
-            if (pane) pane.style.display = "block";
-          });
-        }
+    // Function to wire up all tabs inside the modal (reusable after re-render)
+    function wireUpTabs() {
+      m.querySelectorAll("[data-tabnav]").forEach(function (nav) {
+        nav.onclick = function (e) {
+          var t = e.target; while (t && !t.getAttribute("data-idx") && t !== nav) t = t.parentElement;
+          if (!t || !t.getAttribute("data-idx")) return;
+          var idx = t.getAttribute("data-idx");
+          var group = nav.getAttribute("data-tabnav");
+          m.querySelectorAll("[data-tabgrp='" + group + "']").forEach(function (tb) { tb.style.background = "#f3f2f2"; tb.style.color = "#54698d"; });
+          t.style.background = "#0070d2"; t.style.color = "white";
+          m.querySelectorAll("[data-panegrp='" + group + "']").forEach(function (p) { p.style.display = "none"; });
+          var pane = m.querySelector("[data-panegrp='" + group + "'][data-idx='" + idx + "']");
+          if (pane) pane.style.display = "block";
+        };
       });
-      window.__dcJsonTabIds = [];
     }
+    wireUpTabs();
+    window.__dcJsonTabIds = [];
     m.querySelector(".dc-cv-copy").onclick = function () {
       try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
     };
@@ -7957,6 +7956,7 @@
           btn.textContent = "Table";
         } else {
           bodyEl.innerHTML = renderJsonAsTable(parsed, esc2);
+          wireUpTabs(); // Re-attach tab handlers after re-render
           btn.textContent = "JSON";
         }
         showingTable = !showingTable;
@@ -8042,19 +8042,19 @@
       // Nested arrays as tabs (like Data Graph Visualizer)
       if (nestedKeys.length > 0) {
         var tabId = "dcjt" + Math.random().toString(36).slice(2, 8);
-        html2 += "<div class='" + tabId + "-nav' style='display:flex;flex-wrap:wrap;gap:5px;border-bottom:2px solid #d8dde6;margin-top:12px;padding-bottom:5px'>";
+        html2 += "<div data-tabnav='" + tabId + "' style='display:flex;flex-wrap:wrap;gap:5px;border-bottom:2px solid #d8dde6;margin-top:12px;padding-bottom:5px'>";
         nestedKeys.forEach(function (nk, ni) {
           var count = Array.isArray(data[nk]) ? data[nk].length : 1;
           var isEmpty = Array.isArray(data[nk]) && data[nk].length === 0;
           var baseStyle = "padding:8px 12px;cursor:pointer;border-radius:4px;font-weight:600;font-size:12px;";
           var activeStyle = ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;");
-          html2 += "<span class='" + tabId + "-tab' data-idx='" + ni + "' style='" + baseStyle + activeStyle + "'>" + esc2(nk.replace(/__dlm$|__cio$|__c$/, "")) + " (" + count + ")</span>";
+          html2 += "<span data-tabgrp='" + tabId + "' data-idx='" + ni + "' style='" + baseStyle + activeStyle + "'>" + esc2(nk.replace(/__dlm$|__cio$|__c$/, "")) + " (" + count + ")</span>";
         });
         html2 += "</div>";
         nestedKeys.forEach(function (nk, ni) {
           var nv = data[nk];
           var arrData = Array.isArray(nv) ? nv : [nv];
-          html2 += "<div class='" + tabId + "-pane' data-idx='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:10px;overflow:auto'>";
+          html2 += "<div data-panegrp='" + tabId + "' data-idx='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:10px;overflow:auto'>";
           if (arrData.length === 0) {
             html2 += "<div style='padding:16px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
           } else {
@@ -8062,9 +8062,6 @@
           }
           html2 += "</div>";
         });
-        // Store tabId so we can wire up clicks after innerHTML is set
-        if (!window.__dcJsonTabIds) window.__dcJsonTabIds = [];
-        window.__dcJsonTabIds.push(tabId);
       }
       return html2;
     }
@@ -10045,8 +10042,14 @@
     const btnRow = document.createElement("div");
     btnRow.style.cssText = "display:flex;gap:8px;align-items:center;";
 
+    const countBtn = document.createElement("button");
+    countBtn.textContent = "# Count";
+    countBtn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
+    countBtn.onmouseenter = () => { countBtn.style.transform = "scale(1.03)"; countBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
+    countBtn.onmouseleave = () => { countBtn.style.transform = "scale(1)"; countBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
+
     const runBtn = document.createElement("button");
-    runBtn.textContent = "▶ Run & Export";
+    runBtn.textContent = "▶ Fetch & Export";
     runBtn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.3);transition:transform .1s,box-shadow .1s;";
     runBtn.onmouseenter = () => { runBtn.style.transform = "scale(1.03)"; runBtn.style.boxShadow = "0 4px 16px rgba(16,185,129,.4)"; };
     runBtn.onmouseleave = () => { runBtn.style.transform = "scale(1)"; runBtn.style.boxShadow = "0 3px 12px rgba(16,185,129,.3)"; };
@@ -10057,6 +10060,7 @@
     downloadBtn.onmouseenter = () => { downloadBtn.style.transform = "scale(1.03)"; downloadBtn.style.boxShadow = "0 4px 16px rgba(37,99,235,.4)"; };
     downloadBtn.onmouseleave = () => { downloadBtn.style.transform = "scale(1)"; downloadBtn.style.boxShadow = "0 3px 12px rgba(37,99,235,.3)"; };
 
+    btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(downloadBtn);
 
@@ -10113,8 +10117,10 @@
       cardBody.innerHTML = ""
         + "<div style='font:600 14px -apple-system,sans-serif;margin-bottom:8px;'>Select your query</div>"
         + "<div style='color:#475569;font-size:12px;line-height:1.7;'>"
-        + "Highlight the SQL in the editor, then click <b>Run & Export</b>.<br><br>"
-        + "<span style='color:#64748b;font-size:11px;'>The tool will run your query (up to " + maxRows + " rows) and download the results as CSV.</span>"
+        + "Highlight the SQL in the editor, then:<br>"
+        + "<b># Count</b> — get the row count without fetching data<br>"
+        + "<b>▶ Fetch & Export</b> — fetch all rows and download as CSV<br><br>"
+        + "<span style='color:#64748b;font-size:11px;'>Fetch supports up to " + maxRows + " rows.</span>"
         + modeNote
         + "</div>";
     }
@@ -10133,42 +10139,100 @@
       return { ok: true };
     }
 
-    runBtn.onclick = () => {
-      // Try multiple sources for the highlighted SQL (order: most specific → broadest).
-      // KEY PROBLEM: clicking our button CLEARS the window selection (focus moves away).
-      // So we rely on: (a) _savedSelection from selectionchange, (b) _lastSqlEditor content,
-      // (c) readQueryEditorSql() which handles all edge cases including shadow DOM.
+    function getHighlightedSql() {
       var highlighted = "";
-      // 1) Saved selection (captured BEFORE button click cleared it)
       if (_savedSelection && _savedSelection.length > 10 && /select|from/i.test(_savedSelection)) {
         highlighted = _savedSelection;
       }
-      // 2) readQueryEditorSql — handles textarea, contenteditable, shadow DOM, multi-tab
       if (!highlighted || highlighted.length <= 10) {
         var qeResult = (typeof readQueryEditorSql === "function") ? readQueryEditorSql() : null;
-        if (qeResult) {
-          // Prefer selected text; if nothing selected, use full content (Cmd+A then click = full)
-          highlighted = qeResult.selected || qeResult.full || "";
-        }
+        if (qeResult) highlighted = qeResult.selected || qeResult.full || "";
       }
-      // 3) _lastSqlEditor — if user did Cmd+A, selection might be cleared but content is there
       if ((!highlighted || highlighted.length <= 10) && _lastSqlEditor) {
         var le = _lastSqlEditor;
         if (le.tagName === "TEXTAREA" && le.value && le.value.trim().length > 10) {
-          if (le.selectionStart !== le.selectionEnd) {
-            highlighted = le.value.substring(le.selectionStart, le.selectionEnd).trim();
-          } else {
-            highlighted = le.value.trim();
-          }
+          highlighted = (le.selectionStart !== le.selectionEnd) ? le.value.substring(le.selectionStart, le.selectionEnd).trim() : le.value.trim();
         } else if (le.getAttribute && le.getAttribute("contenteditable") === "true" && le.innerText && le.innerText.trim().length > 10) {
           highlighted = le.innerText.trim();
         }
       }
-      // 4) Current window selection (unlikely to work after button click, but try)
       if (!highlighted || highlighted.length <= 10) {
         var sel = window.getSelection();
         highlighted = (sel && sel.toString().trim().length > 10) ? sel.toString().trim() : "";
       }
+      _savedSelection = "";
+      return highlighted;
+    }
+
+    countBtn.onclick = () => {
+      var highlighted = getHighlightedSql();
+      var sql;
+      if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
+        sql = highlighted;
+      } else { showGuide(); return; }
+      var check = validateSql(sql);
+      if (!check.ok) {
+        card.style.display = "block";
+        cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
+          + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
+          + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Check your selection</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;'>" + check.msg + "</div>";
+        return;
+      }
+      sql = normalizeSql(sql);
+      if (!sql || sql.length < 6) { showGuide(); return; }
+      var tableName = extractTableName(sql);
+      var ds = readPageDataSpace();
+      if (!ds) {
+        var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
+        var tableInSql = fromMatch ? fromMatch[1].replace(/"/g, "") : "";
+        var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
+        ds = dsCandidates[0] || "";
+      }
+      var countSql = "SELECT COUNT(*) AS cnt FROM (" + sql.replace(/;\s*$/, "") + ")";
+      countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
+      if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
+      card.style.display = "block";
+      cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+      ensureQueryContext(function (ready) {
+        if (!ready) {
+          countBtn.disabled = false; countBtn.textContent = "# Count";
+          cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Session needed</span></div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click <b>Run Highlighted Query</b> in SF's editor first (to establish a session), then click <b># Count</b> again.</div>";
+          return;
+        }
+        runRawSql(countSql, ds, 1).then(function (res) {
+          countBtn.disabled = false; countBtn.textContent = "# Count";
+          card.style.display = "block";
+          if (res.error) {
+            cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
+              + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + String(res.error).replace(/</g,"&lt;") + "</div>";
+            return;
+          }
+          var cnt = 0;
+          if (res.data && res.data.length > 0) {
+            var row = res.data[0];
+            cnt = row.cnt || row.CNT || row.count || row.COUNT || row[Object.keys(row)[0]] || 0;
+          }
+          cardBody.innerHTML = ""
+            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
+            + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
+            + "<span style='font:600 14px -apple-system,sans-serif;'>Count result</span></div>"
+            + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
+            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
+            + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
+            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>";
+        }).catch(function (err) {
+          countBtn.disabled = false; countBtn.textContent = "# Count";
+          card.style.display = "block";
+          cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
+            + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
+        });
+      });
+    };
+
+    runBtn.onclick = () => {
+      var highlighted = getHighlightedSql();
       _savedSelection = "";
       var sql;
       if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
@@ -10224,13 +10288,13 @@
 
       ensureQueryContext(function (ready) {
         if (!ready) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
+          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
             + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Session needed</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
-            + "Click <b>Run Highlighted Query</b> in SF's editor first (to establish a session), then click our <b>Run & Export</b> again.</div>"
+            + "Click <b>Run Highlighted Query</b> in SF's editor first (to establish a session), then click our <b>Fetch & Export</b> again.</div>"
             + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'>"
             + "The bookmarklet needs SF to fire one query so it can capture the session. After that, all exports work automatically.</div>";
           return;
@@ -10256,7 +10320,7 @@
           cardBody.appendChild(cancelBtn);
         }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
+          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           if (res.totalRows === 0) {
             _lastResult = null;
@@ -10288,7 +10352,7 @@
             + "</div>";
           downloadBtn.style.display = "inline-block";
         }).catch(function (err) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Run & Export";
+          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           var errMsg = String(err && err.message || err);
           // Handle cancel gracefully
@@ -10332,7 +10396,7 @@
     var _dragMoved = false;
     btnRow.style.cursor = "grab";
     btnRow.addEventListener("pointerdown", function (e) {
-      if (e.target === runBtn || e.target === downloadBtn) return;
+      if (e.target === countBtn || e.target === runBtn || e.target === downloadBtn) return;
       e.preventDefault();
       btnRow.style.cursor = "grabbing";
       var startX = e.clientX, startY = e.clientY;
