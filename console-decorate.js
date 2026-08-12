@@ -10584,296 +10584,144 @@
   }
 
   // Show activation data in a modal
+  function renderActivationValue(val, depth) {
+    depth = depth || 0;
+    var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); };
+    if (val === null || val === undefined) return "<span style='color:#94a3b8;'>—</span>";
+    if (typeof val === "boolean") return "<span style='color:" + (val ? "#059669" : "#dc2626") + ";font-weight:600;'>" + val + "</span>";
+    if (typeof val === "number") return "<span style='color:#2563eb;'>" + val + "</span>";
+    if (typeof val === "string") {
+      if (val.length === 0) return "<span style='color:#94a3b8;'>—</span>";
+      return "<span style='color:#1f2937;'>" + esc(val) + "</span>";
+    }
+    if (Array.isArray(val)) {
+      if (val.length === 0) return "<span style='color:#94a3b8;'>Empty list</span>";
+      if (typeof val[0] === "object") {
+        var cols = [];
+        val.forEach(function(item) { if (item) Object.keys(item).forEach(function(k) { if (cols.indexOf(k) < 0) cols.push(k); }); });
+        var html = "<table style='width:100%;border-collapse:collapse;font-size:11px;margin:4px 0;'>";
+        html += "<thead><tr style='background:#f1f5f9;'>" + cols.map(function(c) { return "<th style='padding:5px 8px;border:1px solid #e2e8f0;font:600 10px system-ui;color:#475569;text-align:left;'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        val.forEach(function(item) {
+          html += "<tr>" + cols.map(function(c) {
+            var v = item ? item[c] : null;
+            if (v && typeof v === "object") return "<td style='padding:5px 8px;border:1px solid #e2e8f0;font-size:10px;color:#6b7280;'>" + esc(JSON.stringify(v)) + "</td>";
+            return "<td style='padding:5px 8px;border:1px solid #e2e8f0;'>" + renderActivationValue(v) + "</td>";
+          }).join("") + "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
+      }
+      return val.map(function(v) { return renderActivationValue(v, depth); }).join(", ");
+    }
+    if (typeof val === "object") {
+      var keys = Object.keys(val);
+      if (keys.length === 0) return "<span style='color:#94a3b8;'>Empty</span>";
+      var html2 = "<table style='width:100%;border-collapse:collapse;font-size:12px;margin:4px 0;" + (depth > 0 ? "background:#f9fafb;" : "") + "'>";
+      keys.forEach(function(k) {
+        html2 += "<tr><td style='padding:5px 10px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#374151;width:180px;vertical-align:top;font-size:11px;'>" + esc(k) + "</td><td style='padding:5px 10px;border-bottom:1px solid #f1f5f9;'>" + renderActivationValue(val[k], depth + 1) + "</td></tr>";
+      });
+      html2 += "</table>";
+      return html2;
+    }
+    return esc(String(val));
+  }
+
   function showActivationModal(data) {
-    // Remove any existing modal
     var existing = document.getElementById("dc-activation-modal");
     if (existing) { try { existing.remove(); } catch (e) {} }
 
+    var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); };
     var modal = document.createElement("div");
     modal.id = "dc-activation-modal";
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
 
     var box = document.createElement("div");
-    box.style.cssText = "background:#fff;border-radius:12px;width:90vw;max-width:1200px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);";
+    box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);";
 
     // Header
     var header = document.createElement("div");
-    header.style.cssText = "padding:20px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;";
+    header.style.cssText = "padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;gap:10px;";
 
+    var targetName = (data.activationTarget && (data.activationTarget.name || data.activationTargetName)) || data.name || "Activation";
     var title = document.createElement("h2");
-    title.style.cssText = "margin:0;font:600 18px/1.3 -apple-system,sans-serif;color:#111827;";
+    title.style.cssText = "margin:0;font:600 18px/1.3 -apple-system,sans-serif;color:#111827;flex:1;";
+    title.textContent = "Activation: " + targetName;
 
-    var targetName = "";
-    var targetPlatform = "";
-    var targetStatus = "";
-    try {
-      if (data.activationTarget) {
-        targetName = data.activationTarget.name || data.activationTargetName || "";
-        targetPlatform = data.activationTarget.platformName || data.activationTarget.platform || data.activationTarget.platformType || "";
-        targetStatus = data.activationTarget.status || data.status || "";
-      }
-    } catch (e) {}
+    var btnGroup = document.createElement("div");
+    btnGroup.style.cssText = "display:flex;gap:8px;align-items:center;";
 
-    title.textContent = "Activation Export: " + (targetName || "Unknown");
+    var viewMode = "formatted";
+    var contentEl;
+
+    var toggleBtn = document.createElement("button");
+    toggleBtn.textContent = "{ } Raw JSON";
+    toggleBtn.style.cssText = "border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#475569;";
+
+    var downloadBtn = document.createElement("button");
+    downloadBtn.textContent = "⬇ Download HTML";
+    downloadBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
 
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
-    closeBtn.style.cssText = "border:none;background:transparent;font:18px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
+    closeBtn.style.cssText = "border:none;background:transparent;font:20px/1 sans-serif;color:#6b7280;cursor:pointer;padding:4px 8px;";
     closeBtn.onclick = function () { modal.remove(); };
 
-    var rawBtn = document.createElement("button");
-    rawBtn.textContent = "{ } Raw JSON";
-    rawBtn.style.cssText = "border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 12px;cursor:pointer;font:11px system-ui;color:#475569;margin-right:8px;";
-    rawBtn.onclick = function() {
-      var rawModal = document.createElement("div");
-      rawModal.style.cssText = "position:fixed;top:5%;left:5%;right:5%;bottom:5%;z-index:2147483648;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:auto;padding:20px;";
-      rawModal.innerHTML = "<div style='display:flex;justify-content:space-between;margin-bottom:12px;'><b>Raw API Response</b><button onclick='this.parentElement.parentElement.remove()' style='border:none;background:none;cursor:pointer;font-size:18px;'>✕</button></div><pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;'>" + JSON.stringify(data, null, 2).replace(/</g,"&lt;") + "</pre>";
-      document.body.appendChild(rawModal);
+    btnGroup.appendChild(toggleBtn);
+    btnGroup.appendChild(downloadBtn);
+    btnGroup.appendChild(closeBtn);
+    header.appendChild(title);
+    header.appendChild(btnGroup);
+
+    // Content area (scrollable) — two views: formatted + raw JSON
+    contentEl = document.createElement("div");
+    contentEl.style.cssText = "overflow-y:auto;flex:1;padding:24px;";
+
+    // Render formatted view dynamically from ALL data
+    function renderFormattedView() {
+      return "<div style='font:13px/1.6 -apple-system,sans-serif;'>" + renderActivationValue(data, 0) + "</div>";
+    }
+    function renderRawView() {
+      return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+    }
+    contentEl.innerHTML = renderFormattedView();
+
+    toggleBtn.onclick = function() {
+      if (viewMode === "formatted") {
+        contentEl.innerHTML = renderRawView();
+        toggleBtn.textContent = "◻ Formatted View";
+        toggleBtn.style.background = "#1e293b";
+        toggleBtn.style.color = "#e2e8f0";
+        toggleBtn.style.borderColor = "#1e293b";
+        viewMode = "raw";
+      } else {
+        contentEl.innerHTML = renderFormattedView();
+        toggleBtn.textContent = "{ } Raw JSON";
+        toggleBtn.style.background = "#f1f5f9";
+        toggleBtn.style.color = "#475569";
+        toggleBtn.style.borderColor = "#94a3b8";
+        viewMode = "formatted";
+      }
     };
 
-    header.appendChild(title);
-    header.appendChild(rawBtn);
-    header.appendChild(closeBtn);
-
-    // Content area (scrollable)
-    var content = document.createElement("div");
-    content.style.cssText = "padding:24px;overflow-y:auto;flex:1;";
-
-    // Metadata section
-    var metaSection = document.createElement("div");
-    metaSection.style.cssText = "margin-bottom:24px;padding:16px;background:#f9fafb;border-radius:8px;";
-
-    var subjectEntity = "";
-    try {
-      if (data.activationTargetSubjectConfig) {
-        subjectEntity = data.activationTargetSubjectConfig.masterLabel || data.activationTargetSubjectConfig.developerName || data.activationTargetSubjectConfig.entityName || "";
-      }
-    } catch (e) {}
-
-    var contactPoints = [];
-    try {
-      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints) {
-        contactPoints = data.contactPointsConfig.contactPoints.map(function (cp) {
-          var cpLabel = cp.type || cp.contactPointType || cp.masterLabel || "Unknown";
-          var cpDetail = cp.fieldName || cp.developerName || cp.emailAddress || cp.name || "";
-          return cpLabel + (cpDetail ? ": " + cpDetail : "");
-        });
-      } else if (data.contactPointsConfig) {
-        var cpKeys = Object.keys(data.contactPointsConfig);
-        contactPoints = cpKeys.filter(function(k) { return k !== "id"; }).map(function(k) {
-          var v = data.contactPointsConfig[k];
-          return k + (typeof v === "string" ? ": " + v : typeof v === "object" ? " (configured)" : "");
-        });
-      }
-    } catch (e) {}
-    console.log("[DC Activation] contactPointsConfig:", JSON.stringify(data.contactPointsConfig));
-    console.log("[DC Activation] Full response keys:", Object.keys(data));
-
-    // Extract all available metadata from the response
-    var activationType = data.activationType || data.refreshType || "";
-    var refreshSchedule = data.publishSchedule || data.refreshSchedule || "";
-    var segmentName = "";
-    try { segmentName = data.marketSegmentName || data.segmentName || (data.activationTargetSubjectConfig && data.activationTargetSubjectConfig.masterLabel) || ""; } catch(e2) {}
-    var activationName = data.name || data.masterLabel || targetName || "";
-    var dataSpaceName = data.dataSpaceName || "";
-    var createdDate = data.createdDate || "";
-    var lastModified = data.lastModifiedDate || "";
-
-    var metaHtml = "<div style='font:600 15px/1.4 -apple-system,sans-serif;color:#111827;margin-bottom:12px;'>Activation Configuration</div>";
-    metaHtml += "<table style='width:100%;border-collapse:collapse;font:13px/1.6 -apple-system,sans-serif;'>";
-    var metaRows = [
-      ["Activation Name", activationName],
-      ["Platform", targetPlatform],
-      ["Target", targetName],
-      ["Status", targetStatus],
-      ["Type", activationType],
-      ["Subject Entity (Base DMO)", subjectEntity],
-      ["Segment", segmentName],
-      ["Data Space", dataSpaceName],
-      ["Contact Points", contactPoints.length > 0 ? contactPoints.join(", ") : "None configured"],
-      ["Publish Schedule", refreshSchedule || "Not set"],
-      ["Created", createdDate],
-      ["Last Modified", lastModified]
-    ];
-    metaRows.forEach(function(row) {
-      if (row[1]) metaHtml += "<tr><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#374151;width:200px;vertical-align:top;'>" + row[0] + "</td><td style='padding:6px 12px;border-bottom:1px solid #f1f5f9;color:#1f2937;'>" + row[1] + "</td></tr>";
-    });
-    metaHtml += "</table>";
-    metaSection.innerHTML = metaHtml;
-
-    content.appendChild(metaSection);
-
-    // Attributes section
-    var attrsTitle = document.createElement("div");
-    attrsTitle.style.cssText = "font:600 16px/1.4 -apple-system,sans-serif;color:#111827;margin-bottom:12px;";
-    attrsTitle.textContent = "Mapped Attributes";
-    content.appendChild(attrsTitle);
-
-    // Group attributes by source entity
-    var attrsByEntity = {};
-    var attributes = [];
-    try {
-      if (data.attributesConfig && data.attributesConfig.attributes) {
-        attributes = data.attributesConfig.attributes;
-      }
-    } catch (e) {}
-
-    for (var i = 0; i < attributes.length; i++) {
-      var attr = attributes[i];
-      var entityName = (attr.entityName || "Unknown");
-      if (!attrsByEntity[entityName]) attrsByEntity[entityName] = [];
-      attrsByEntity[entityName].push(attr);
-    }
-
-    // Render attributes grouped by entity
-    var entityNames = Object.keys(attrsByEntity).sort();
-    for (var e = 0; e < entityNames.length; e++) {
-      var eName = entityNames[e];
-      var entityAttrs = attrsByEntity[eName];
-
-      var entityHeader = document.createElement("div");
-      entityHeader.style.cssText = "font:600 14px/1.4 -apple-system,sans-serif;color:#1f2937;margin:16px 0 8px;padding:8px 12px;background:#f3f4f6;border-radius:6px;";
-      entityHeader.textContent = "DMO: " + eName + " (" + entityAttrs.length + " attribute" + (entityAttrs.length === 1 ? "" : "s") + ")";
-      content.appendChild(entityHeader);
-
-      // Table for this entity's attributes
-      var table = document.createElement("table");
-      table.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:12px;font:400 12px/1.5 'SF Mono',Menlo,Consolas,monospace;";
-
-      var thead = document.createElement("thead");
-      thead.innerHTML = "<tr style='background:#f9fafb;'>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Label</th>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Preferred Name</th>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>API Name</th>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Type</th>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Source</th>" +
-        "<th style='text-align:left;padding:8px;border:1px solid #e5e7eb;font-weight:600;'>Join Path</th>" +
-        "</tr>";
-      table.appendChild(thead);
-
-      var tbody = document.createElement("tbody");
-      for (var a = 0; a < entityAttrs.length; a++) {
-        var attr2 = entityAttrs[a];
-        var label = attr2.label || attr2.attributeLabel || "";
-        var preferredName = attr2.preferredName || "";
-        var name = attr2.name || "";
-        var dataType = attr2.dataSourceType || attr2.type || "";
-        var source = attr2.source || "";
-
-        var joinPath = "";
-        try {
-          if (attr2.queryPathConfig && attr2.queryPathConfig.configs && attr2.queryPathConfig.configs.length > 0) {
-            var paths = [];
-            for (var c = 0; c < attr2.queryPathConfig.configs.length; c++) {
-              var cfg = attr2.queryPathConfig.configs[c];
-              if (cfg.queryPath && cfg.queryPath.length > 0) {
-                var steps = cfg.queryPath.map(function(step) {
-                  return (step.objectName || "").replace(/__dlm$|__cio$/g, "") + "." + (step.fieldName || "");
-                });
-                paths.push(steps.join(" → "));
-              }
-            }
-            joinPath = paths.join("; ");
-          }
-        } catch (e2) {}
-        if (!joinPath && source === "DIRECT") joinPath = "(direct)";
-
-        var row = document.createElement("tr");
-        row.style.cssText = "border:1px solid #e5e7eb;";
-        row.innerHTML = "<td style='padding:8px;border:1px solid #e5e7eb;'>" + label + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;color:#059669;font-style:italic;font-size:11px;'>" + preferredName + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;color:#4a6fa5;font:11px SF Mono,Consolas,monospace;'>" + name + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;'>" + dataType + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;'>" + source + "</td>" +
-          "<td style='padding:8px;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;'>" + joinPath + "</td>";
-        tbody.appendChild(row);
-      }
-      table.appendChild(tbody);
-      content.appendChild(table);
-    }
-
-    box.appendChild(header);
-    box.appendChild(content);
-
-    // Footer with download button
-    var footer = document.createElement("div");
-    footer.style.cssText = "padding:16px 24px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:12px;flex-shrink:0;";
-
-    var downloadBtn = document.createElement("button");
-    downloadBtn.textContent = "Download as HTML";
-    downloadBtn.style.cssText = "padding:8px 16px;border:none;border-radius:6px;background:#0d6efd;color:#fff;font:600 13px/1 -apple-system,sans-serif;cursor:pointer;";
-    downloadBtn.onclick = function () {
-      var htmlContent = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation Export: " + targetName + "</title>" +
-        "<style>body{font:14px/1.6 -apple-system,sans-serif;padding:40px;max-width:1200px;margin:0 auto;background:#fff;color:#111827;}" +
-        "h1{font-size:24px;margin-bottom:8px;}h2{font-size:18px;margin:24px 0 12px;}" +
-        ".meta{background:#f9fafb;padding:16px;border-radius:8px;margin-bottom:24px;}" +
-        ".meta div{margin:4px 0;}table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12px;}" +
-        "th,td{padding:8px;border:1px solid #e5e7eb;text-align:left;}" +
-        "th{background:#f9fafb;font-weight:600;}.entity-header{font-weight:600;background:#f3f4f6;padding:8px 12px;border-radius:6px;margin:16px 0 8px;}" +
-        "</style></head><body>" +
-        "<h1>Activation Export: " + (activationName || targetName) + "</h1>" +
-        "<div class='meta'>" +
-        "<div><strong>Platform:</strong> " + (targetPlatform || "N/A") + "</div>" +
-        "<div><strong>Target:</strong> " + (targetName || "N/A") + "</div>" +
-        "<div><strong>Status:</strong> " + (targetStatus || "N/A") + "</div>" +
-        "<div><strong>Type:</strong> " + (activationType || "N/A") + "</div>" +
-        "<div><strong>Subject Entity (Base DMO):</strong> " + (subjectEntity || "N/A") + "</div>" +
-        "<div><strong>Segment:</strong> " + (segmentName || "N/A") + "</div>" +
-        "<div><strong>Data Space:</strong> " + (dataSpaceName || "N/A") + "</div>" +
-        "<div><strong>Contact Points:</strong> " + (contactPoints.length > 0 ? contactPoints.join(", ") : "None") + "</div>" +
-        "<div><strong>Publish Schedule:</strong> " + (refreshSchedule || "Not set") + "</div>" +
-        "</div><h2>Mapped Attributes (" + attributes.length + ")</h2>";
-
-      for (var e2 = 0; e2 < entityNames.length; e2++) {
-        var eName2 = entityNames[e2];
-        var entityAttrs2 = attrsByEntity[eName2];
-        htmlContent += "<div class='entity-header'>DMO: " + eName2 + " (" + entityAttrs2.length + " attribute" + (entityAttrs2.length === 1 ? "" : "s") + ")</div>";
-        htmlContent += "<table><thead><tr><th>Label</th><th>Preferred Name</th><th>API Name</th><th>Type</th><th>Source</th><th>Join Path</th></tr></thead><tbody>";
-
-        for (var a2 = 0; a2 < entityAttrs2.length; a2++) {
-          var attr3 = entityAttrs2[a2];
-          var joinPath2 = "";
-          try {
-            if (attr3.queryPathConfig && attr3.queryPathConfig.configs && attr3.queryPathConfig.configs.length > 0) {
-              var paths2 = [];
-              for (var c2 = 0; c2 < attr3.queryPathConfig.configs.length; c2++) {
-                var cfg2 = attr3.queryPathConfig.configs[c2];
-                if (cfg2.queryPath && cfg2.queryPath.length > 0) {
-                  var steps2 = cfg2.queryPath.map(function(step) {
-                    return (step.objectName || "").replace(/__dlm$|__cio$/g, "") + "." + (step.fieldName || "");
-                  });
-                  paths2.push(steps2.join(" → "));
-                }
-              }
-              joinPath2 = paths2.join("; ");
-            }
-          } catch (e3) {}
-          if (!joinPath2 && attr3.source === "DIRECT") joinPath2 = "(direct)";
-
-          htmlContent += "<tr><td>" + (attr3.label || attr3.attributeLabel || "") + "</td><td>" + (attr3.preferredName || "") + "</td><td>" + (attr3.name || "") + "</td>" +
-            "<td>" + (attr3.dataSourceType || attr3.type || "") + "</td><td>" + (attr3.source || "") + "</td>" +
-            "<td>" + joinPath2 + "</td></tr>";
-        }
-        htmlContent += "</tbody></table>";
-      }
-
-      htmlContent += "</body></html>";
-
-      var blob = new Blob([htmlContent], { type: "text/html" });
+    downloadBtn.onclick = function() {
+      var htmlDoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation: " + esc(targetName) + "</title>" +
+        "<style>body{font:13px/1.6 -apple-system,sans-serif;padding:30px;max-width:1200px;margin:0 auto;color:#111827;}table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left;vertical-align:top;}th{background:#f9fafb;font-weight:600;}h1{font-size:20px;margin-bottom:16px;}</style></head><body>" +
+        "<h1>Activation: " + esc(targetName) + "</h1><p style='color:#64748b;font-size:12px;'>Generated: " + new Date().toISOString().slice(0,10) + "</p>" +
+        renderActivationValue(data, 0) +
+        "</body></html>";
+      var blob = new Blob([htmlDoc], { type: "text/html" });
       var url = URL.createObjectURL(blob);
       var a = document.createElement("a");
       a.href = url;
-      a.download = "activation-export-" + (targetName || "unknown").replace(/[^a-z0-9]/gi, "-") + ".html";
+      a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g, "-") + "-" + new Date().toISOString().slice(0,10) + ".html";
       a.click();
       URL.revokeObjectURL(url);
     };
 
-    footer.appendChild(downloadBtn);
-    box.appendChild(footer);
-
+    box.appendChild(header);
+    box.appendChild(contentEl);
     modal.appendChild(box);
     modal.onclick = function (e) { if (e.target === modal) modal.remove(); };
-
     document.body.appendChild(modal);
   }
 
