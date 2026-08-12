@@ -10990,53 +10990,69 @@ processJSON();
     }
 
     // Build tab content
-    // TAB 1: Studio UI
-    var tab1 = "";
+    // TAB 1: Studio UI (with sidebar)
+    var tab1Main = "";
+    var tab1Sidebar = "";
     // Overview grid
-    tab1 += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;margin-bottom:16px;'>";
+    tab1Main += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;margin-bottom:16px;'>";
     var ovFields = [["Name", data.name],["Status", data.status],["Platform", target.platformName],["Target", data.activationTargetName],["Type", data.activationType],["Data Space", data.dataSpaceName],["Segment", data.segmentApiName],["Refresh", data.refreshType],["Processing", data.processingType],["Last Publish", data.lastPublishStatus]];
-    ovFields.forEach(function(f) { if (f[1]) tab1 += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 12px system-ui;color:#1e293b;margin-top:2px;'>" + esc(String(f[1])) + "</div></div>"; });
-    tab1 += "</div>";
+    ovFields.forEach(function(f) { if (f[1]) tab1Main += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 12px system-ui;color:#1e293b;margin-top:2px;'>" + esc(String(f[1])) + "</div></div>"; });
+    tab1Main += "</div>";
     // Membership
-    tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:4px;'>Activation Membership</div><div style='font:600 12px system-ui;color:#0176d3;'>" + esc(sub.masterLabel || data.membershipName || "") + "</div><div style='font:400 11px system-ui;color:#64748b;'>" + esc(sub.developerName || "") + "</div></div>";
+    tab1Main += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:4px;'>Activation Membership</div><div style='font:600 12px system-ui;color:#0176d3;'>" + esc(sub.masterLabel || data.membershipName || "") + "</div><div style='font:400 11px system-ui;color:#64748b;'>" + esc(sub.developerName || "") + "</div></div>";
     // Contact Points
     if (cps.length > 0) {
-      tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Contact Points</div>";
+      tab1Main += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Contact Points</div>";
       cps.forEach(function(cp) {
-        tab1 += "<div style='padding:10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;margin-bottom:8px;'>";
-        tab1 += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:4px;'>Channel: " + esc(cp.type || "") + " — " + esc(cp.contactPointEntityName || "") + "</div>";
+        tab1Main += "<div style='padding:10px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;margin-bottom:8px;'>";
+        tab1Main += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:4px;'>Channel: " + esc(cp.type || "") + " — " + esc(cp.contactPointEntityName || "") + "</div>";
         if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
-          cp.fieldConfig.contactPointFields.forEach(function(f) { tab1 += "<div style='font-size:11px;color:#1e293b;'>Field: <b>" + esc(f.label) + "</b> (" + esc(f.name) + ")</div>"; });
+          cp.fieldConfig.contactPointFields.forEach(function(f) { tab1Main += "<div style='font-size:11px;color:#1e293b;'>Field: <b>" + esc(f.label) + "</b> (" + esc(f.name) + ")</div>"; });
         }
-        if (cp.queryPathConfig && cp.queryPathConfig.configs) tab1 += renderPath(cp.queryPathConfig.configs);
-        tab1 += "</div>";
+        if (cp.queryPathConfig && cp.queryPathConfig.configs) tab1Main += renderPath(cp.queryPathConfig.configs);
+        tab1Main += "</div>";
       });
-      tab1 += "</div>";
+      tab1Main += "</div>";
     }
     // Attributes grouped
-    tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Mapped Attributes (" + attrs.length + ")</div>";
+    tab1Main += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Mapped Attributes (" + attrs.length + ")</div>";
     var byEntity = {};
     attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
     Object.keys(byEntity).sort().forEach(function(en) {
       var ea = byEntity[en];
       var objType = en.endsWith("__dlm") ? "DMO" : en.endsWith("__cio") ? "CIO" : "Custom";
       var tagStyle = objType === "DMO" ? "background:#e0f2fe;color:#0369a1;" : objType === "CIO" ? "background:#f3e8ff;color:#6b21a8;" : "background:#f3f4f6;color:#374151;";
-      tab1 += "<div style='font:600 12px system-ui;color:#1e293b;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin:10px 0 4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + ea.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagStyle + "'>" + objType + "</span></div>";
-      tab1 += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:5px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
+      tab1Main += "<div style='font:600 12px system-ui;color:#1e293b;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin:10px 0 4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + ea.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagStyle + "'>" + objType + "</span></div>";
+      tab1Main += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:5px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
       ea.forEach(function(a, i) {
         var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
-        tab1 += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
+        tab1Main += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
       });
-      tab1 += "</tbody></table>";
+      tab1Main += "</tbody></table>";
     });
-    tab1 += "</div>";
+    tab1Main += "</div>";
     // Campaign
     if (staticData.length > 0) {
-      tab1 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Campaign Data</div>";
-      tab1 += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
-      staticData.forEach(function(sd) { tab1 += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;'>" + esc(sd.value) + "</td></tr>"; });
-      tab1 += "</tbody></table></div>";
+      tab1Main += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:8px;'>Campaign Data</div>";
+      tab1Main += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
+      staticData.forEach(function(sd) { tab1Main += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;'>" + esc(sd.value) + "</td></tr>"; });
+      tab1Main += "</tbody></table></div>";
     }
+
+    // Sidebar: Activation Overview + Attributes Included
+    tab1Sidebar += "<div style='font:700 13px system-ui;color:#374151;margin-bottom:12px;border-bottom:1px solid #e5e7eb;padding-bottom:8px;'>Activation Overview</div>";
+    tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;'><div style='width:24px;height:24px;border-radius:50%;background:#e06e00;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>DS</div><div><b>" + esc(data.dataSpaceName || "") + "</b><div style='font-size:10px;color:#64748b;'>Data Space</div></div></div>";
+    tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;'><div style='width:24px;height:24px;border-radius:50%;background:#0176d3;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>A</div><div><b style='color:#0176d3;'>" + esc(data.name || "") + "</b><div style='font-size:10px;color:#64748b;'>Status: <span style='background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;'>" + esc(data.status || "") + "</span></div><div style='font-size:10px;color:#64748b;'>Refresh: " + esc(data.refreshType || "") + "</div></div></div>";
+    tab1Sidebar += "<div style='display:flex;align-items:flex-start;gap:10px;margin-bottom:14px;'><div style='width:24px;height:24px;border-radius:50%;background:#c23934;color:#fff;display:flex;align-items:center;justify-content:center;font:bold 9px system-ui;flex-shrink:0;'>MC</div><div><b>" + esc(target.name || data.activationTargetName || "") + "</b><div style='font-size:10px;color:#64748b;'>" + esc(target.platformName || "") + "</div></div></div>";
+    tab1Sidebar += "<div style='border-top:1px solid #e5e7eb;padding-top:12px;'><div style='font:700 12px system-ui;color:#374151;margin-bottom:8px;'>Attributes Included (" + attrs.length + ")</div><div style='max-height:350px;overflow-y:auto;'>";
+    attrs.forEach(function(a, idx) {
+      var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
+      tab1Sidebar += "<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:11px;'><div style='display:flex;justify-content:space-between;align-items:center;'><b>" + (idx+1) + ". " + esc(a.label || a.name) + "</b><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></div><div style='font-size:10px;color:#64748b;'>From: <code style='font-size:9px;'>" + esc((a.entityName || "").replace(/__dlm$|__cio$/g,"")) + "</code></div></div>";
+    });
+    tab1Sidebar += "</div></div>";
+
+    // Combine: main + sidebar layout
+    var tab1 = "<div style='display:flex;gap:16px;align-items:flex-start;'><div style='flex:1;min-width:0;'>" + tab1Main + "</div><div style='width:320px;flex-shrink:0;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px;position:sticky;top:0;'>" + tab1Sidebar + "</div></div>";
 
     // TAB 2: Filters
     var tab2 = "";
@@ -11090,10 +11106,28 @@ processJSON();
     var dlHtmlBtn = document.createElement("button");
     dlHtmlBtn.textContent = "⬇ HTML"; dlHtmlBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     dlHtmlBtn.onclick = function() { var b = new Blob([generateRichDashboardHTML(data, targetName)], {type:"text/html"}); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".html"; a.click(); };
+    var dlExcelBtn = document.createElement("button");
+    dlExcelBtn.textContent = "⬇ Excel"; dlExcelBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    dlExcelBtn.onclick = function() {
+      var csvRows = [];
+      var addRow = function() { csvRows.push(Array.prototype.slice.call(arguments).map(function(v) { var s = String(v == null ? "" : v); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g,'""') + '"' : s; }).join(",")); };
+      addRow("ACTIVATION OVERVIEW"); addRow("Field","Value");
+      [["Name",data.name],["Status",data.status],["Platform",target.platformName],["Target",data.activationTargetName],["Type",data.activationType],["Data Space",data.dataSpaceName],["Segment",data.segmentApiName],["Refresh",data.refreshType],["Processing",data.processingType],["Subject",sub.masterLabel],["Created",data.createdDate],["Modified",data.lastModifiedDate],["Last Publish",data.lastPublishDate],["Publish Status",data.lastPublishStatus]].forEach(function(r) { if (r[1]) addRow(r[0],r[1]); });
+      addRow(""); addRow("ATTRIBUTES"); addRow("#","Label","Preferred Name","API Name","Entity","Type","Source");
+      attrs.forEach(function(a,i) { addRow(i+1, a.label||a.name, a.preferredName||"", a.name, a.entityName||"", a.dataSourceType||"", a.source||a.type||""); });
+      addRow(""); addRow("CONTACT POINTS"); addRow("Type","Entity","Field","Field Name");
+      cps.forEach(function(cp) { var fields = (cp.fieldConfig && cp.fieldConfig.contactPointFields) || []; fields.forEach(function(f) { addRow(cp.type, cp.contactPointEntityName, f.label, f.name); }); });
+      addRow(""); addRow("CAMPAIGN DATA"); addRow("Name","Value");
+      staticData.forEach(function(sd) { addRow(sd.name, sd.value); });
+      addRow(""); addRow("FILTERS"); addRow("Entity","Field","Operator","Value","Max Records","Sort");
+      filters.forEach(function(f) { var c = (f.entityFilter && f.entityFilter.condition) || {}; var s = c.subject || {}; var lim = f.filterLimit || {}; addRow(f.entityName, s.fieldName, c.operator, (c.firstBoundValue != null ? c.firstBoundValue + "-" + c.secondBoundValue : ""), lim.maxNumberOfValues, lim.attributeName + " " + (lim.order||"")); });
+      var blob = new Blob([csvRows.join("\n")], {type:"text/csv"});
+      var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".csv"; a.click();
+    };
     var closeX = document.createElement("button");
     closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
     closeX.onclick = function() { modal.remove(); };
-    hdr.appendChild(dlHtmlBtn); hdr.appendChild(closeX);
+    hdr.appendChild(dlHtmlBtn); hdr.appendChild(dlExcelBtn); hdr.appendChild(closeX);
 
     // Tabs
     var tabBar = document.createElement("div");
