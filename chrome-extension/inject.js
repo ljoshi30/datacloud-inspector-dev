@@ -11261,15 +11261,27 @@
         html += "</div>";
       }
 
-      // Relationships for this entity (deduplicated, show unique targets only)
+      // Relationships for this entity — show as per-card Mermaid snippet with copy button
       var entityRels = relsByEntity[entity.masterLabel] || [];
       var uniqueTargets = {};
       entityRels.forEach(function(r) { if (!uniqueTargets[r.target]) uniqueTargets[r.target] = r; });
       var uniqueRelList = Object.keys(uniqueTargets).map(function(k) { return uniqueTargets[k]; });
       if (uniqueRelList.length > 0) {
-        html += "<div style='padding:6px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;font:11px -apple-system,sans-serif;'>";
-        html += "<b style='color:#1e40af;'>Related to:</b> ";
-        html += uniqueRelList.map(function(r) { return "<span style='color:#1e293b;'>" + esc(r.target) + "</span>"; }).join(", ");
+        var cleanN = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
+        var entityClean = cleanN(entity.masterLabel);
+        var cardMermaid = "erDiagram\n";
+        uniqueRelList.forEach(function(r) {
+          var targetClean = cleanN(r.target);
+          var card = /Latest/i.test(r.target) ? "||--||" : "||--o{";
+          cardMermaid += "    " + entityClean + " " + card + " " + targetClean + " : \"" + (r.label ? r.label.replace(/__c$|__dlm$/g,"") : "relates") + "\"\n";
+        });
+        var mermaidId = "dc-mermaid-" + entity.id;
+        html += "<div style='padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;position:relative;'>";
+        html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>";
+        html += "<span style='font:600 10px system-ui;color:#94a3b8;'>Relationships (" + uniqueRelList.length + ")</span>";
+        html += "<button onclick='navigator.clipboard.writeText(document.getElementById(\"" + mermaidId + "\").textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy\"},1200)})' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:4px;padding:2px 8px;cursor:pointer;font:600 9px system-ui;'>Copy</button>";
+        html += "</div>";
+        html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;max-height:80px;overflow:auto;'>" + esc(cardMermaid) + "</pre>";
         html += "</div>";
       }
 
