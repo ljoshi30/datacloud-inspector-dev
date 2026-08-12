@@ -10983,6 +10983,46 @@
     return edges;
   }
 
+  function generateMermaidERD(entities, relationships) {
+    var lines = ["erDiagram"];
+    // Build a set of unique directional relationships (dedupe A->B and B->A into one)
+    var seen = {};
+    var dedupedRels = [];
+    relationships.forEach(function(rel) {
+      var key = [rel.from, rel.to].sort().join("|||");
+      if (seen[key]) return;
+      seen[key] = true;
+      dedupedRels.push(rel);
+    });
+    // Clean entity names for Mermaid (replace spaces/special chars with underscores)
+    var cleanName = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
+    // Infer cardinality from entity names and KQ_ fields
+    dedupedRels.forEach(function(rel) {
+      var fromClean = cleanName(rel.from);
+      var toClean = cleanName(rel.to);
+      var linkField = rel.label ? rel.label.replace(/__c$|__dlm$/g, "") : "";
+      // Heuristic: "Unified" or "Latest" entities are 1:1, Contact Points are 1:N
+      var cardinality = "||--o{";
+      if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) cardinality = "}o--o{";
+      else if (/Latest/i.test(rel.from) || /Latest/i.test(rel.to)) cardinality = "||--||";
+      else if (rel.from === rel.to) return;
+      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + (linkField || "relates") + "\"");
+    });
+    // Add entity definitions with key fields
+    entities.forEach(function(entity) {
+      var name = cleanName(entity.masterLabel);
+      var pks = entity.attributes.filter(function(a) { return a.isPrimaryKey; });
+      var bizFields = entity.attributes.filter(function(a) { return !a.isPrimaryKey && _systemFields.indexOf(a.developerName) < 0; }).slice(0, 5);
+      if (pks.length > 0 || bizFields.length > 0) {
+        lines.push("    " + name + " {");
+        pks.forEach(function(pk) { lines.push("        string " + cleanName(pk.developerName) + " PK"); });
+        bizFields.forEach(function(f) { lines.push("        " + (f.dataType || "string").toLowerCase() + " " + cleanName(f.developerName)); });
+        lines.push("    }");
+      }
+    });
+    return lines.join("\n");
+  }
+
   function showERDModal() {
     if (!_dataModelCache.graphData) {
       alert("No Data Model graph data captured yet. Please refresh the Data Model page (click the ↻ refresh icon), then try again.");
@@ -11174,6 +11214,16 @@
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
     var html = "";
 
+    // ── Mermaid ERD Diagram (copyable) ──
+    var mermaidCode = generateMermaidERD(entities, relationships);
+    html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;position:relative;'>";
+    html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
+    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Mermaid ERD — paste into Lucidchart, draw.io, Confluence, or any Mermaid renderer</span>";
+    html += "<button onclick='navigator.clipboard.writeText(this.parentElement.nextElementSibling.textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy\"},1500)})' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
+    html += "</div>";
+    html += "<pre style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
+    html += "</div>";
+
     // Build per-entity relationship lookup
     var relsByEntity = {};
     relationships.forEach(function(rel) {
@@ -11327,6 +11377,13 @@
       if (!relsByEntity2[rel.to]) relsByEntity2[rel.to] = [];
       relsByEntity2[rel.to].push(rel.from);
     });
+
+    // Mermaid ERD block
+    var mermaidCode2 = generateMermaidERD(entities, relationships);
+    html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;'>\n";
+    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Mermaid ERD — paste into Lucidchart, draw.io, Confluence, or any Mermaid renderer</div>\n";
+    html += "<pre style='font:11px/1.6 monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;margin:0;'>" + esc(mermaidCode2) + "</pre>\n";
+    html += "</div>\n";
 
     html += "<div class='grid'>\n";
 
