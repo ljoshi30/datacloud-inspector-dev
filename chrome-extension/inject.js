@@ -11276,12 +11276,13 @@
           cardMermaid += "    " + entityClean + " " + card + " " + targetClean + " : \"" + (r.label ? r.label.replace(/__c$|__dlm$/g,"") : "relates") + "\"\n";
         });
         var mermaidId = "dc-mermaid-" + entity.id;
-        html += "<div style='padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;position:relative;'>";
-        html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>";
-        html += "<span style='font:600 10px system-ui;color:#94a3b8;'>Relationships (" + uniqueRelList.length + ")</span>";
-        html += "<button onclick='navigator.clipboard.writeText(document.getElementById(\"" + mermaidId + "\").textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy\"},1200)})' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:4px;padding:2px 8px;cursor:pointer;font:600 9px system-ui;'>Copy</button>";
+        var toggleId = "dc-mermaid-toggle-" + entity.id;
+        html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
+        html += "<button onclick='var el=document.getElementById(\"" + toggleId + "\");if(el.style.display===\"none\"){el.style.display=\"block\";this.textContent=\"Hide Relationships (" + uniqueRelList.length + ")\"}else{el.style.display=\"none\";this.textContent=\"Show Relationships (" + uniqueRelList.length + ")\"}' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>Show Relationships (" + uniqueRelList.length + ")</button>";
+        html += "<button onclick='navigator.clipboard.writeText(document.getElementById(\"" + mermaidId + "\").textContent).then(function(){event.target.textContent=\"Copied!\";setTimeout(function(){event.target.textContent=\"Copy Mermaid\"},1200)})' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Mermaid</button>";
         html += "</div>";
-        html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;max-height:80px;overflow:auto;'>" + esc(cardMermaid) + "</pre>";
+        html += "<div id='" + toggleId + "' style='display:none;padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;'>";
+        html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;'>" + esc(cardMermaid) + "</pre>";
         html += "</div>";
       }
 
