@@ -10608,9 +10608,9 @@
     var targetStatus = "";
     try {
       if (data.activationTarget) {
-        targetName = data.activationTarget.name || "";
-        targetPlatform = data.activationTarget.platform || "";
-        targetStatus = data.activationTarget.status || "";
+        targetName = data.activationTarget.name || data.activationTargetName || "";
+        targetPlatform = data.activationTarget.platformName || data.activationTarget.platform || data.activationTarget.platformType || "";
+        targetStatus = data.activationTarget.status || data.status || "";
       }
     } catch (e) {}
 
@@ -10634,8 +10634,8 @@
 
     var subjectEntity = "";
     try {
-      if (data.activationTargetSubjectConfig && data.activationTargetSubjectConfig.entityName) {
-        subjectEntity = data.activationTargetSubjectConfig.entityName;
+      if (data.activationTargetSubjectConfig) {
+        subjectEntity = data.activationTargetSubjectConfig.masterLabel || data.activationTargetSubjectConfig.developerName || data.activationTargetSubjectConfig.entityName || "";
       }
     } catch (e) {}
 
@@ -10720,7 +10720,10 @@
             for (var c = 0; c < attr2.queryPathConfig.configs.length; c++) {
               var cfg = attr2.queryPathConfig.configs[c];
               if (cfg.queryPath && cfg.queryPath.length > 0) {
-                paths.push(cfg.queryPath.join(" → "));
+                var steps = cfg.queryPath.map(function(step) {
+                  return (step.objectName || "").replace(/__dlm$|__cio$/g, "") + "." + (step.fieldName || "");
+                });
+                paths.push(steps.join(" → "));
               }
             }
             joinPath = paths.join("; ");
@@ -10783,7 +10786,10 @@
               for (var c2 = 0; c2 < attr3.queryPathConfig.configs.length; c2++) {
                 var cfg2 = attr3.queryPathConfig.configs[c2];
                 if (cfg2.queryPath && cfg2.queryPath.length > 0) {
-                  paths2.push(cfg2.queryPath.join(" → "));
+                  var steps2 = cfg2.queryPath.map(function(step) {
+                    return (step.objectName || "").replace(/__dlm$|__cio$/g, "") + "." + (step.fieldName || "");
+                  });
+                  paths2.push(steps2.join(" → "));
                 }
               }
               joinPath2 = paths2.join("; ");
@@ -11147,21 +11153,14 @@
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
     var html = "";
 
-    // ── Relationships section ──
-    if (relationships.length > 0) {
-      html += "<div style='background:#fff;border:2px solid #3b82f6;border-radius:8px;padding:16px 20px;margin-bottom:24px;box-shadow:0 2px 8px rgba(0,0,0,.06);'>";
-      html += "<div style='font:700 14px -apple-system,sans-serif;color:#1e40af;margin-bottom:12px;'>Relationships (" + relationships.length + ")</div>";
-      html += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:8px;'>";
-      relationships.forEach(function(rel) {
-        html += "<div style='padding:6px 10px;background:#eff6ff;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;display:flex;align-items:center;gap:6px;'>";
-        html += "<b>" + esc(rel.from) + "</b>";
-        html += "<span style='color:#3b82f6;'>→</span>";
-        html += "<b>" + esc(rel.to) + "</b>";
-        if (rel.label) html += "<span style='color:#64748b;font-size:10px;margin-left:4px;'>(" + esc(rel.label.replace(/__c$|__dlm$/g,"")) + ")</span>";
-        html += "</div>";
-      });
-      html += "</div></div>";
-    }
+    // Build per-entity relationship lookup
+    var relsByEntity = {};
+    relationships.forEach(function(rel) {
+      if (!relsByEntity[rel.from]) relsByEntity[rel.from] = [];
+      relsByEntity[rel.from].push({ target: rel.to, label: rel.label, direction: "out" });
+      if (!relsByEntity[rel.to]) relsByEntity[rel.to] = [];
+      relsByEntity[rel.to].push({ target: rel.from, label: rel.label, direction: "in" });
+    });
 
     // ── Entity cards ──
     html += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px;'>";
@@ -11188,6 +11187,18 @@
         html += "<div style='padding:8px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font:11px -apple-system,sans-serif;color:#475569;'>";
         if (src.dataStream.length > 0) html += "<div><b style='color:#64748b;'>Source:</b> " + src.dataStream.map(esc).join(", ") + "</div>";
         if (src.dataLakeObject.length > 0) html += "<div><b style='color:#64748b;'>DLO:</b> " + src.dataLakeObject.map(esc).join(", ") + "</div>";
+        html += "</div>";
+      }
+
+      // Relationships for this entity (deduplicated, show unique targets only)
+      var entityRels = relsByEntity[entity.masterLabel] || [];
+      var uniqueTargets = {};
+      entityRels.forEach(function(r) { if (!uniqueTargets[r.target]) uniqueTargets[r.target] = r; });
+      var uniqueRelList = Object.keys(uniqueTargets).map(function(k) { return uniqueTargets[k]; });
+      if (uniqueRelList.length > 0) {
+        html += "<div style='padding:6px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;font:11px -apple-system,sans-serif;'>";
+        html += "<b style='color:#1e40af;'>Related to:</b> ";
+        html += uniqueRelList.map(function(r) { return "<span style='color:#1e293b;'>" + esc(r.target) + "</span>"; }).join(", ");
         html += "</div>";
       }
 
@@ -11287,16 +11298,14 @@
     html += "<h1>Data Model ERD</h1>\n";
     html += "<div class='subtitle'>" + entities.length + " entities &bull; " + relationships.length + " relationships &bull; Generated " + new Date().toISOString().slice(0, 10) + "</div>\n";
 
-    // Relationships
-    if (relationships.length > 0) {
-      html += "<div class='rel-section'>\n<div class='rel-title'>Relationships</div>\n<div class='rel-grid'>\n";
-      relationships.forEach(function(rel) {
-        html += "<div class='rel-item'><b>" + esc(rel.from) + "</b> → <b>" + esc(rel.to) + "</b>";
-        if (rel.label) html += " <span style='color:#64748b;font-size:10px'>(" + esc(rel.label.replace(/__c$|__dlm$/g,"")) + ")</span>";
-        html += "</div>\n";
-      });
-      html += "</div>\n</div>\n";
-    }
+    // Build per-entity relationship lookup for download
+    var relsByEntity2 = {};
+    relationships.forEach(function(rel) {
+      if (!relsByEntity2[rel.from]) relsByEntity2[rel.from] = [];
+      relsByEntity2[rel.from].push(rel.to);
+      if (!relsByEntity2[rel.to]) relsByEntity2[rel.to] = [];
+      relsByEntity2[rel.to].push(rel.from);
+    });
 
     html += "<div class='grid'>\n";
 
@@ -11318,6 +11327,13 @@
         if (src.dataStream.length > 0) html += "<div><b>Source:</b> " + src.dataStream.map(esc).join(", ") + "</div>";
         if (src.dataLakeObject.length > 0) html += "<div><b>DLO:</b> " + src.dataLakeObject.map(esc).join(", ") + "</div>";
         html += "</div>\n";
+      }
+
+      // Related entities
+      var entityRels2 = relsByEntity2[entity.masterLabel] || [];
+      var uniqueRels2 = entityRels2.filter(function(v, i, a) { return a.indexOf(v) === i; });
+      if (uniqueRels2.length > 0) {
+        html += "<div class='card-source' style='background:#eff6ff;border-color:#bfdbfe;'><b style='color:#1e40af;'>Related to:</b> " + uniqueRels2.map(esc).join(", ") + "</div>\n";
       }
 
       var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.foreignKey; });
