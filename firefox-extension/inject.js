@@ -10537,14 +10537,338 @@
   }
   /* @strip:end */
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // ERD Diagram feature for Data Model page
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  var _dataModelCache = { graphData: null, dataModels: null };
+
+  function isDataModelPage() {
+    return /standard-DataModel/i.test(window.location.href);
+  }
+
+  function ensureDataModelLauncher() {
+    if (document.getElementById("dc-erd-bar")) return;
+
+    // Install XHR interceptor to capture Data Model responses
+    try {
+      var originalXHRSend = XMLHttpRequest.prototype.send;
+      var originalXHROpen = XMLHttpRequest.prototype.open;
+
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this.__derdUrl = url;
+        return originalXHROpen.apply(this, arguments);
+      };
+
+      XMLHttpRequest.prototype.send = function(body) {
+        var xhr = this;
+        var originalOnLoad = xhr.onload;
+
+        xhr.addEventListener("load", function() {
+          try {
+            var url = xhr.__derdUrl || "";
+            if (/DataModeling\.getDataModelGraph/i.test(url)) {
+              try {
+                var resp = JSON.parse(xhr.responseText);
+                if (resp && resp.actions && resp.actions[0] && resp.actions[0].returnValue) {
+                  _dataModelCache.graphData = resp.actions[0].returnValue.data;
+                  console.log("[DC ERD] Captured getDataModelGraph data");
+                }
+              } catch (e) {}
+            } else if (/DataModeling\.getDataModels/i.test(url)) {
+              try {
+                var resp = JSON.parse(xhr.responseText);
+                if (resp && resp.actions && resp.actions[0] && resp.actions[0].returnValue) {
+                  _dataModelCache.dataModels = resp.actions[0].returnValue;
+                  console.log("[DC ERD] Captured getDataModels data");
+                }
+              } catch (e) {}
+            }
+          } catch (e) {}
+        });
+
+        return originalXHRSend.apply(this, arguments);
+      };
+    } catch (e) {
+      console.error("[DC ERD] Failed to install XHR interceptor:", e);
+    }
+
+    // Create launcher button
+    var wrap = document.createElement("div");
+    wrap.id = "dc-erd-bar";
+    wrap.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;";
+
+    var btn = document.createElement("button");
+    btn.textContent = "📊 ERD Diagram";
+    btn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
+    btn.onmouseenter = function() { btn.style.transform = "scale(1.03)"; btn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
+    btn.onmouseleave = function() { btn.style.transform = "scale(1)"; btn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
+    btn.onclick = function() { showERDModal(); };
+
+    wrap.appendChild(btn);
+    document.body.appendChild(wrap);
+  }
+
+  function showERDModal() {
+    if (!_dataModelCache.graphData) {
+      alert("No Data Model graph data captured yet. Please refresh the Data Model page (or switch views) to load the graph data, then try again.");
+      return;
+    }
+
+    // Parse DOT graph format
+    var entities = parseDOTGraph(_dataModelCache.graphData);
+    if (!entities || entities.length === 0) {
+      alert("Failed to parse Data Model graph. Please try refreshing the page.");
+      return;
+    }
+
+    // Create modal
+    var modal = document.createElement("div");
+    modal.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;";
+
+    var content = document.createElement("div");
+    content.style.cssText = "width:95vw;height:95vh;background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;";
+
+    // Header
+    var header = document.createElement("div");
+    header.style.cssText = "display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:2px solid #e2e8f0;background:linear-gradient(135deg,#f8f9fa,#e9ecef);";
+
+    var title = document.createElement("div");
+    title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
+    title.textContent = "Data Model ERD";
+
+    var downloadBtn = document.createElement("button");
+    downloadBtn.textContent = "⬇ Download HTML";
+    downloadBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
+    downloadBtn.onclick = function() { downloadERDAsHTML(entities); };
+
+    var closeBtn = document.createElement("button");
+    closeBtn.textContent = "×";
+    closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:24px;color:#64748b;padding:0 8px;";
+    closeBtn.onclick = function() { modal.remove(); };
+
+    header.appendChild(title);
+    header.appendChild(downloadBtn);
+    header.appendChild(closeBtn);
+
+    // Body (scrollable container)
+    var body = document.createElement("div");
+    body.style.cssText = "flex:1;overflow:auto;padding:20px;background:#f8fafc;";
+    body.innerHTML = renderERDCards(entities);
+
+    content.appendChild(header);
+    content.appendChild(body);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    // Close on outside click
+    modal.addEventListener("click", function(e) {
+      if (e.target === modal) modal.remove();
+    });
+  }
+
+  function parseDOTGraph(dotString) {
+    var entities = [];
+    var entityMap = {}; // id -> entity
+
+    // Extract node definitions: 1 [ label="DevName__dlm" entity="{...}" ]
+    // The entity JSON can contain nested structures, so we need to match until the closing quote of the entity attribute
+    var nodeRegex = /(\d+)\s*\[\s*label="([^"]+)"\s+entity="((?:[^"\\]|\\.)*)"\s*\]/g;
+    var match;
+
+    while ((match = nodeRegex.exec(dotString)) !== null) {
+      var nodeId = match[1];
+      var devName = match[2];
+      var entityJsonStr = match[3];
+
+      try {
+        // Unescape the JSON (backslash-escaped quotes, newlines, backslashes)
+        var unescaped = entityJsonStr.replace(/\\"/g, '"').replace(/\\n/g, '').replace(/\\\\/g, '\\');
+        var entityData = JSON.parse(unescaped);
+
+        var entity = {
+          id: nodeId,
+          developerName: entityData.developerName || devName,
+          masterLabel: entityData.masterLabel || devName,
+          category: getCategoryName(entityData.dataEntityCategoryId),
+          categoryId: entityData.dataEntityCategoryId,
+          attributes: (entityData.attributes || []).map(function(attr) {
+            return {
+              masterLabel: attr.masterLabel || attr.developerName || "",
+              developerName: attr.developerName || "",
+              dataType: attr.dataType || "",
+              isPrimaryKey: (attr.primaryIndexOrder != null) || (attr.keyQualifierName && attr.keyQualifierName.startsWith("KQ")),
+              foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
+              isRequired: attr.dataRequired || false
+            };
+          })
+        };
+
+        entities.push(entity);
+        entityMap[nodeId] = entity;
+      } catch (e) {
+        console.error("[DC ERD] Failed to parse entity " + nodeId, e);
+      }
+    }
+
+    return entities;
+  }
+
+  function getCategoryName(categoryId) {
+    if (!categoryId) return "OTHER";
+    var upper = String(categoryId).toUpperCase();
+    if (upper === "PROFILE" || upper === "1") return "PROFILE";
+    if (upper === "ENGAGEMENT" || upper === "2") return "ENGAGEMENT";
+    return "OTHER";
+  }
+
+  function renderERDCards(entities) {
+    var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
+
+    var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:20px;'>";
+
+    entities.forEach(function(entity) {
+      var categoryColor = entity.category === "PROFILE" ? "#10b981"
+        : entity.category === "ENGAGEMENT" ? "#f59e0b"
+        : "#6b7280";
+
+      html += "<div style='background:#fff;border:2px solid " + categoryColor + ";border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);'>";
+
+      // Card header
+      html += "<div style='background:" + categoryColor + ";color:#fff;padding:12px 14px;'>";
+      html += "<div style='font:700 14px -apple-system,sans-serif'>" + esc(entity.masterLabel) + "</div>";
+      html += "<div style='font:600 10px SF Mono,Consolas,monospace;opacity:0.9;margin-top:2px'>" + esc(entity.developerName) + "</div>";
+      html += "<div style='font:600 9px system-ui;opacity:0.8;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px'>" + esc(entity.category) + "</div>";
+      html += "</div>";
+
+      // Fields table
+      if (entity.attributes.length > 0) {
+        html += "<div style='overflow-x:auto;'>";
+        html += "<table style='width:100%;border-collapse:collapse;font:11px -apple-system,sans-serif;'>";
+        html += "<thead><tr style='background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
+        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>Field Name</th>";
+        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>API Name</th>";
+        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>Type</th>";
+        html += "<th style='text-align:center;padding:8px 6px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>PK</th>";
+        html += "<th style='text-align:left;padding:8px 10px;font:600 10px system-ui;color:#64748b;text-transform:uppercase'>FK</th>";
+        html += "</tr></thead>";
+        html += "<tbody>";
+
+        entity.attributes.forEach(function(attr, idx) {
+          var rowBg = idx % 2 === 0 ? "#fff" : "#f9fafb";
+          html += "<tr style='background:" + rowBg + ";border-bottom:1px solid #f1f5f9;'>";
+          html += "<td style='padding:8px 10px;color:#1e293b'>" + esc(attr.masterLabel) + "</td>";
+          html += "<td style='padding:8px 10px;font:600 10px SF Mono,Consolas,monospace;color:#475569'>" + esc(attr.developerName) + "</td>";
+          html += "<td style='padding:8px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
+          html += "<td style='padding:8px 6px;text-align:center;color:#10b981;font-size:12px'>" + (attr.isPrimaryKey ? "✓" : "") + "</td>";
+          html += "<td style='padding:8px 10px;font:600 10px SF Mono,Consolas,monospace;color:#7c3aed'>" + (attr.foreignKey ? esc(attr.foreignKey) : "") + "</td>";
+          html += "</tr>";
+        });
+
+        html += "</tbody></table>";
+        html += "</div>";
+      } else {
+        html += "<div style='padding:16px;color:#94a3b8;text-align:center;font:12px system-ui'>No attributes</div>";
+      }
+
+      html += "</div>";
+    });
+
+    html += "</div>";
+    return html;
+  }
+
+  function downloadERDAsHTML(entities) {
+    var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); };
+
+    var html = "<!DOCTYPE html>\n<html>\n<head>\n";
+    html += "<meta charset='UTF-8'>\n";
+    html += "<title>Data Model ERD</title>\n";
+    html += "<style>\n";
+    html += "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f8fafc; }\n";
+    html += "h1 { color: #1e293b; margin-bottom: 24px; }\n";
+    html += ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 20px; }\n";
+    html += ".card { background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }\n";
+    html += ".card-header { color: #fff; padding: 12px 14px; }\n";
+    html += ".card-title { font-weight: 700; font-size: 14px; }\n";
+    html += ".card-api { font: 600 10px 'SF Mono', Consolas, monospace; opacity: 0.9; margin-top: 2px; }\n";
+    html += ".card-category { font: 600 9px system-ui; opacity: 0.8; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }\n";
+    html += "table { width: 100%; border-collapse: collapse; font-size: 11px; }\n";
+    html += "thead { background: #f8fafc; border-bottom: 1px solid #e2e8f0; }\n";
+    html += "th { text-align: left; padding: 8px 10px; font: 600 10px system-ui; color: #64748b; text-transform: uppercase; }\n";
+    html += "th.center { text-align: center; }\n";
+    html += "tbody tr:nth-child(even) { background: #f9fafb; }\n";
+    html += "tbody tr { border-bottom: 1px solid #f1f5f9; }\n";
+    html += "td { padding: 8px 10px; color: #1e293b; }\n";
+    html += "td.api { font: 600 10px 'SF Mono', Consolas, monospace; color: #475569; }\n";
+    html += "td.type { color: #64748b; font-size: 10px; }\n";
+    html += "td.pk { text-align: center; color: #10b981; font-size: 12px; }\n";
+    html += "td.fk { font: 600 10px 'SF Mono', Consolas, monospace; color: #7c3aed; }\n";
+    html += ".profile { border: 2px solid #10b981; } .profile .card-header { background: #10b981; }\n";
+    html += ".engagement { border: 2px solid #f59e0b; } .engagement .card-header { background: #f59e0b; }\n";
+    html += ".other { border: 2px solid #6b7280; } .other .card-header { background: #6b7280; }\n";
+    html += "</style>\n";
+    html += "</head>\n<body>\n";
+    html += "<h1>Data Model ERD</h1>\n";
+    html += "<div class='grid'>\n";
+
+    entities.forEach(function(entity) {
+      var categoryClass = entity.category === "PROFILE" ? "profile"
+        : entity.category === "ENGAGEMENT" ? "engagement"
+        : "other";
+
+      html += "<div class='card " + categoryClass + "'>\n";
+      html += "<div class='card-header'>\n";
+      html += "<div class='card-title'>" + esc(entity.masterLabel) + "</div>\n";
+      html += "<div class='card-api'>" + esc(entity.developerName) + "</div>\n";
+      html += "<div class='card-category'>" + esc(entity.category) + "</div>\n";
+      html += "</div>\n";
+
+      if (entity.attributes.length > 0) {
+        html += "<table>\n<thead>\n<tr>\n";
+        html += "<th>Field Name</th><th>API Name</th><th>Type</th><th class='center'>PK</th><th>FK</th>\n";
+        html += "</tr>\n</thead>\n<tbody>\n";
+
+        entity.attributes.forEach(function(attr) {
+          html += "<tr>\n";
+          html += "<td>" + esc(attr.masterLabel) + "</td>\n";
+          html += "<td class='api'>" + esc(attr.developerName) + "</td>\n";
+          html += "<td class='type'>" + esc(attr.dataType) + "</td>\n";
+          html += "<td class='pk'>" + (attr.isPrimaryKey ? "✓" : "") + "</td>\n";
+          html += "<td class='fk'>" + (attr.foreignKey ? esc(attr.foreignKey) : "") + "</td>\n";
+          html += "</tr>\n";
+        });
+
+        html += "</tbody>\n</table>\n";
+      }
+
+      html += "</div>\n";
+    });
+
+    html += "</div>\n</body>\n</html>";
+
+    // Download
+    var blob = new Blob([html], { type: "text/html" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "data-model-erd-" + new Date().toISOString().slice(0, 10) + ".html";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+
   // In the public build the Data Explorer / Segment code is stripped, so guard the
   // calls with typeof. detectDetailPageType() never returns "Segment" there either.
   // PRIORITY: Segment before DataExplore (segment pages may contain record-list components).
   const onTransformPage = (typeof isTransformPage === "function") && isTransformPage();
   const onQueryEditorPage = (typeof isQueryEditorPage === "function") && isQueryEditorPage();
+  const onDataModelPage = (typeof isDataModelPage === "function") && isDataModelPage();
   const onSegmentPage = detectDetailPageType() === "Segment";
   const detailPageType = onTransformPage ? "Transform"
     : onQueryEditorPage ? "QueryEditor"
+    : onDataModelPage ? "DataModel"
     : onSegmentPage ? "Segment"
     : ((typeof isDataExplorePage === "function" && isDataExplorePage()) ? "DataExplore" : detectDetailPageType());
   if (detailPageType === "Transform" && typeof ensureTransformLauncher === "function") {
@@ -10552,6 +10876,8 @@
   } else if (detailPageType === "QueryEditor" && typeof ensureQueryEditorLauncher === "function") {
     ensureQueryEditorLauncher();
     watchNavigation();
+  } else if (detailPageType === "DataModel" && typeof ensureDataModelLauncher === "function") {
+    ensureDataModelLauncher();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
