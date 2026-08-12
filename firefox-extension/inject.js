@@ -11236,12 +11236,33 @@ processJSON();
     var closeX = document.createElement("button");
     closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
     closeX.onclick = function() { modal.remove(); };
-    hdr.appendChild(dlHtmlBtn); hdr.appendChild(dlExcelBtn); hdr.appendChild(closeX);
+    var jsonBtn = document.createElement("button");
+    jsonBtn.textContent = "{ } JSON"; jsonBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    var jsonShowing = false;
+    jsonBtn.onclick = function() {
+      if (jsonShowing) {
+        var ov = box.querySelector("#dc-json-overlay"); if (ov) ov.remove();
+        jsonBtn.textContent = "{ } JSON"; jsonShowing = false;
+      } else {
+        var overlay = document.createElement("div");
+        overlay.id = "dc-json-overlay";
+        overlay.style.cssText = "position:absolute;inset:0;z-index:10;background:#fff;display:flex;flex-direction:column;border-radius:12px;";
+        overlay.innerHTML = "<div style='padding:10px 16px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;'><b style='font-size:13px;'>Raw JSON Response</b><button id='dc-json-copy' style='border:1px solid #0176d3;background:#fff;color:#0176d3;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy JSON</button></div><pre style='flex:1;overflow:auto;padding:16px;margin:0;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+        box.style.position = "relative";
+        box.appendChild(overlay);
+        overlay.querySelector("#dc-json-copy").onclick = function() {
+          var ta = document.createElement("textarea"); ta.value = JSON.stringify(data, null, 2); document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+          this.textContent = "Copied!"; var self = this; setTimeout(function() { self.textContent = "Copy JSON"; }, 1500);
+        };
+        jsonBtn.textContent = "✕ Close JSON"; jsonShowing = true;
+      }
+    };
+    hdr.appendChild(jsonBtn); hdr.appendChild(dlHtmlBtn); hdr.appendChild(dlExcelBtn); hdr.appendChild(closeX);
 
     // Tabs
     var tabBar = document.createElement("div");
     tabBar.style.cssText = "display:flex;border-bottom:2px solid #e5e7eb;background:#f9fafb;flex-shrink:0;";
-    var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"],["rawjson","Raw JSON"]];
+    var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"]];
     tabs.forEach(function(t, i) {
       var tb = document.createElement("div");
       tb.setAttribute("data-actab", t[0]);
@@ -11256,8 +11277,7 @@ processJSON();
     contentWrap.innerHTML = tab1;
 
     // Tab switching via event delegation
-    var tab5 = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;background:#f8fafc;padding:16px;border-radius:6px;border:1px solid #e2e8f0;max-height:none;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
-    var tabContents = { studio: tab1, filters: tab2, schema: tab3, audit: tab4, rawjson: tab5 };
+    var tabContents = { studio: tab1, filters: tab2, schema: tab3, audit: tab4 };
     tabBar.addEventListener("click", function(e) {
       var t = e.target; if (!t.getAttribute("data-actab")) return;
       var key = t.getAttribute("data-actab");
