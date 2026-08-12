@@ -10543,13 +10543,19 @@
 
   // Detect if we're on an Activation page
   function isActivationPage() {
-    return /marketSegmentActivation/i.test(window.location.href);
+    return /marketSegmentActivation/i.test(window.location.href) || /\/r\/MarketSegmentActivation\//i.test(window.location.href);
   }
 
-  // Get the activation ID from the URL query params
+  // Get the activation ID from URL (supports both wizard and record view)
   function getActivationIdFromUrl() {
+    // Wizard: ?runtime_cdp__recordId=85RKh000000oLlmMAE
     var params = new URLSearchParams(window.location.search);
-    return params.get("runtime_cdp__recordId") || "";
+    var fromParam = params.get("runtime_cdp__recordId");
+    if (fromParam) return fromParam;
+    // Record view: /r/MarketSegmentActivation/85RKh000000oLlwMAE/view
+    var pathMatch = window.location.pathname.match(/\/r\/MarketSegmentActivation\/([a-zA-Z0-9]{15,18})/i);
+    if (pathMatch) return pathMatch[1];
+    return "";
   }
 
   // Fetch activation data via extension bridge
