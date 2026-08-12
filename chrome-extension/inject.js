@@ -11194,48 +11194,35 @@ processJSON();
         }
         var schema = typeof schemaStr === "string" ? JSON.parse(schemaStr) : schemaStr;
 
-        if (schema.fields && Array.isArray(schema.fields)) {
+        // Schema is an object where keys are field names (except "type" which is the root type)
+        var schemaKeys = Object.keys(schema).filter(function(k) { return k !== "type"; });
+        if (schemaKeys.length > 0) {
           tab3 += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;font-size:11px;margin-bottom:20px;'>";
-          tab3 += "<thead><tr style='background:#f1f5f9;'><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>#</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Field Name</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Type</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Data Cloud Type</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:center;'>Nullable</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Source Object</th></tr></thead><tbody>";
-
-          schema.fields.forEach(function(field, i) {
-            var fieldType = field.type || field.dataType || "";
-            var dcType = field.dataCloudType || "";
-            var nullable = field.nullable != null ? (field.nullable ? "Yes" : "No") : "";
-            var sourceObj = field.sourceObject || "";
-
-            // Handle nested array types (like TDI_InsurancePolicy)
-            var typeDisplay = fieldType;
-            if (fieldType === "array" && field.items && field.items.fields) {
-              typeDisplay = "array[" + field.items.fields.length + " fields]";
-            }
-
-            tab3 += "<tr>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#64748b;text-align:center;'>" + (i+1) + "</td>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-weight:600;'>" + esc(field.name || field.fieldName || "") + "</td>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#475569;'>" + esc(typeDisplay) + "</td>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#6b21a8;'>" + esc(dcType) + "</td>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#475569;text-align:center;'>" + esc(nullable) + "</td>";
-            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#059669;font-size:10px;'>" + esc(sourceObj) + "</td>";
-            tab3 += "</tr>";
-
-            // If it's an array type with nested fields, show them
-            if (fieldType === "array" && field.items && field.items.fields && field.items.fields.length > 0) {
-              tab3 += "<tr><td colspan='6' style='padding:0;border:1px solid #e2e8f0;'>";
-              tab3 += "<div style='background:#fafafa;padding:8px 12px;margin:0;'>";
-              tab3 += "<div style='font:600 10px system-ui;color:#64748b;margin-bottom:4px;'>Nested fields in " + esc(field.name) + ":</div>";
-              field.items.fields.forEach(function(nf, ni) {
-                tab3 += "<div style='font-size:10px;color:#475569;margin-left:12px;'>" + (ni+1) + ". <code style='color:#0369a1;'>" + esc(nf.name || "") + "</code> <span style='color:#64748b;'>(" + esc(nf.type || "") + ")</span></div>";
+          tab3 += "<thead><tr style='background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;'><th style='padding:8px;border:1px solid #cbd5e1;'>#</th><th style='padding:8px;border:1px solid #cbd5e1;'>Payload Key</th><th style='padding:8px;border:1px solid #cbd5e1;'>Label</th><th style='padding:8px;border:1px solid #cbd5e1;'>Field API</th><th style='padding:8px;border:1px solid #cbd5e1;'>Source Object</th><th style='padding:8px;border:1px solid #cbd5e1;'>Type</th><th style='padding:8px;border:1px solid #cbd5e1;'>DC Type</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:center;'>Nullable</th></tr></thead><tbody>";
+          var rowNum = 0;
+          schemaKeys.forEach(function(key) {
+            var field = schema[key];
+            if (!field || typeof field !== "object") return;
+            rowNum++;
+            if (field.type === "array" && field.items) {
+              // Array type — show parent row + nested child fields
+              tab3 += "<tr style='background:#eff6ff;'><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#1e40af;font-weight:700;text-align:center;'>" + rowNum + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-weight:700;color:#1e40af;'>" + esc(key) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#1e40af;'>" + esc(field.items.label || key) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>—</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-size:10px;color:#059669;'>" + esc((field.items.objectApiName || "").replace(/__dlm$|__cio$/g,"")) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#1e40af;'>array</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>—</td><td style='padding:6px 8px;border:1px solid #e2e8f0;text-align:center;'>—</td></tr>";
+              // Nested fields
+              Object.keys(field.items).forEach(function(childKey) {
+                if (childKey === "type" || childKey === "objectApiName" || childKey === "label") return;
+                var childField = field.items[childKey];
+                if (!childField || typeof childField !== "object") return;
+                rowNum++;
+                tab3 += "<tr style='background:#f8fafc;'><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#64748b;text-align:center;font-size:10px;'>" + rowNum + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#475569;padding-left:24px;'>↳ " + esc(childKey) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>" + esc(childField.label || childKey) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#0369a1;'>" + esc(childField.fieldApiName || "") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-size:10px;color:#059669;'>" + esc((childField.objectApiName || "").replace(/__dlm$|__cio$/g,"")) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>" + esc(childField.type || "") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#6b21a8;'>" + esc(childField.dataCloudDataType || "") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;text-align:center;'>" + (childField.nullable ? "<span style='color:#059669;'>Yes</span>" : "<span style='color:#dc2626;font-weight:600;'>Required</span>") + "</td></tr>";
               });
-              tab3 += "</div></td></tr>";
+            } else {
+              // Regular field
+              tab3 += "<tr><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#64748b;text-align:center;'>" + rowNum + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;color:#1e293b;font-weight:600;'>" + esc(key) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>" + esc(field.label || key) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#0369a1;'>" + esc(field.fieldApiName || "—") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;font-size:10px;color:#059669;'>" + esc((field.objectApiName || "—").replace(/__dlm$|__cio$/g,"")) + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;'>" + esc(field.type || "") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;color:#6b21a8;'>" + esc(field.dataCloudDataType || "") + "</td><td style='padding:6px 8px;border:1px solid #e2e8f0;text-align:center;'>" + (field.nullable ? "<span style='color:#059669;'>Yes</span>" : "<span style='color:#dc2626;font-weight:600;'>Required</span>") + "</td></tr>";
             }
           });
-
           tab3 += "</tbody></table></div>";
         } else {
-          tab3 += "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:20px;'>";
-          tab3 += "<pre style='margin:0;font-size:10px;color:#1e293b;overflow-x:auto;'>" + esc(JSON.stringify(schema, null, 2)) + "</pre>";
-          tab3 += "</div>";
+          tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>Schema has no field definitions</div>";
         }
       } catch (e) {
         tab3 += "<div style='background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px;margin-bottom:20px;'>";
