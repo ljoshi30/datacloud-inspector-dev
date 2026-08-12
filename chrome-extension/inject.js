@@ -11186,11 +11186,13 @@ processJSON();
     function renderRawView() {
       return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
     }
-    // Render rich dashboard in iframe
+    // Render rich dashboard in iframe using blob URL (bypasses CSP srcdoc restrictions)
     var dashboardHtml = generateRichDashboardHTML(data, targetName);
+    var dashboardBlob = new Blob([dashboardHtml], { type: "text/html" });
+    var dashboardUrl = URL.createObjectURL(dashboardBlob);
     var iframe = document.createElement("iframe");
     iframe.style.cssText = "width:100%;height:100%;border:none;";
-    iframe.srcdoc = dashboardHtml;
+    iframe.src = dashboardUrl;
     contentEl.appendChild(iframe);
 
     toggleBtn.onclick = function() {
@@ -11209,7 +11211,7 @@ processJSON();
         contentEl.innerHTML = "";
         var iframe2 = document.createElement("iframe");
         iframe2.style.cssText = "width:100%;height:100%;border:none;";
-        iframe2.srcdoc = dashboardHtml;
+        iframe2.src = dashboardUrl;
         contentEl.appendChild(iframe2);
         toggleBtn.textContent = "{ } Raw JSON";
         toggleBtn.style.background = "#f1f5f9";
