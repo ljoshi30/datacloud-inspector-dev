@@ -10676,9 +10676,122 @@
     contentEl = document.createElement("div");
     contentEl.style.cssText = "overflow-y:auto;flex:1;padding:24px;";
 
-    // Render formatted view dynamically from ALL data
+    // Render structured view matching SF's activation detail layout
     function renderFormattedView() {
-      return "<div style='font:13px/1.6 -apple-system,sans-serif;'>" + renderActivationValue(data, 0) + "</div>";
+      var h = "";
+      var section = function(title, content) { return "<div style='margin-bottom:20px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;'><div style='background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e2e8f0;font:600 14px -apple-system,sans-serif;color:#1e293b;'>" + title + "</div><div style='padding:16px;'>" + content + "</div></div>"; };
+      var kv = function(label, value) { return value ? "<div style='display:flex;gap:12px;padding:4px 0;'><span style='font-weight:600;color:#475569;min-width:180px;font-size:12px;'>" + label + "</span><span style='color:#1f2937;font-size:12px;'>" + esc(String(value)) + "</span></div>" : ""; };
+
+      // 1. Overview
+      var overview = "";
+      overview += kv("Name", data.name || data.activationTargetName);
+      overview += kv("Status", data.status);
+      overview += kv("Type", data.activationType);
+      overview += kv("Platform", data.activationTarget && data.activationTarget.platformName);
+      overview += kv("Target", data.activationTargetName);
+      overview += kv("Data Space", data.dataSpaceName);
+      overview += kv("Segment", data.segmentApiName);
+      overview += kv("Refresh Type", data.refreshType);
+      overview += kv("Processing Type", data.processingType);
+      overview += kv("Enabled", data.isEnabled || data.enabled);
+      overview += kv("Last Publish Date", data.lastPublishDate);
+      overview += kv("Last Publish Status", data.lastPublishStatus);
+      overview += kv("Created", data.createdDate);
+      overview += kv("Last Modified", data.lastModifiedDate);
+      overview += kv("Developer Name", data.developerName);
+      h += section("Overview", overview);
+
+      // 2. Activation Membership
+      var membership = "";
+      if (data.activationTargetSubjectConfig) {
+        var sub = data.activationTargetSubjectConfig;
+        membership += kv("Subject Entity", sub.masterLabel || sub.developerName);
+        membership += kv("Developer Name", sub.developerName);
+        membership += kv("Membership Name", data.membershipName);
+      }
+      h += section("Activation Membership", membership || "<span style='color:#94a3b8;'>No membership configured</span>");
+
+      // 3. Contact Points
+      var cpHtml = "";
+      if (data.contactPointsConfig && data.contactPointsConfig.contactPoints && data.contactPointsConfig.contactPoints.length > 0) {
+        data.contactPointsConfig.contactPoints.forEach(function(cp) {
+          cpHtml += "<div style='margin-bottom:12px;padding:10px 14px;background:#f0f9ff;border:1px solid #bfdbfe;border-radius:6px;'>";
+          cpHtml += "<div style='font:600 12px system-ui;color:#1e40af;margin-bottom:6px;'>Type: " + esc(cp.type || "Unknown") + "</div>";
+          cpHtml += kv("Entity", cp.contactPointEntityName);
+          if (cp.fieldConfig && cp.fieldConfig.contactPointFields) {
+            cp.fieldConfig.contactPointFields.forEach(function(f) {
+              cpHtml += kv("Field", f.label + " (" + f.name + ")");
+            });
+          }
+          cpHtml += "</div>";
+        });
+      } else {
+        cpHtml = "<span style='color:#94a3b8;'>No contact points configured</span>";
+      }
+      h += section("Contact Points", cpHtml);
+
+      // 4. Attributes — grouped by source DMO
+      var attrsHtml = "";
+      if (data.attributesConfig && data.attributesConfig.attributes && data.attributesConfig.attributes.length > 0) {
+        var attrs = data.attributesConfig.attributes;
+        var byEntity = {};
+        attrs.forEach(function(a) { var en = a.entityName || "Unknown"; if (!byEntity[en]) byEntity[en] = []; byEntity[en].push(a); });
+        Object.keys(byEntity).sort().forEach(function(en) {
+          var eAttrs = byEntity[en];
+          attrsHtml += "<div style='margin-bottom:14px;'>";
+          attrsHtml += "<div style='font:600 12px system-ui;color:#1f2937;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin-bottom:6px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + eAttrs.length + ")</div>";
+          attrsHtml += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>#</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Label</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Preferred Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>API Name</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Type</th><th style='padding:6px 10px;border:1px solid #e5e7eb;text-align:left;'>Source</th></tr></thead><tbody>";
+          eAttrs.forEach(function(a, i) {
+            attrsHtml += "<tr><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#6b7280;'>" + (i+1) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.label) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;color:#059669;font-style:italic;'>" + esc(a.preferredName || "") + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;font:11px SF Mono,Consolas,monospace;color:#4a6fa5;'>" + esc(a.name) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.dataSourceType) + "</td><td style='padding:6px 10px;border:1px solid #e5e7eb;'>" + esc(a.source) + "</td></tr>";
+          });
+          attrsHtml += "</tbody></table></div>";
+        });
+      }
+      h += section("Attributes (" + (data.attributesConfig && data.attributesConfig.attributes ? data.attributesConfig.attributes.length : 0) + ")", attrsHtml || "<span style='color:#94a3b8;'>No attributes</span>");
+
+      // 5. Campaign Data (staticDataConfig)
+      var campaignHtml = "";
+      if (data.staticDataConfig && data.staticDataConfig.staticData && data.staticDataConfig.staticData.length > 0) {
+        campaignHtml += "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#f9fafb;'><th style='padding:8px 12px;border:1px solid #e5e7eb;'>Name</th><th style='padding:8px 12px;border:1px solid #e5e7eb;'>Value</th></tr></thead><tbody>";
+        data.staticDataConfig.staticData.forEach(function(sd) {
+          campaignHtml += "<tr><td style='padding:8px 12px;border:1px solid #e5e7eb;font-weight:600;'>" + esc(sd.name) + "</td><td style='padding:8px 12px;border:1px solid #e5e7eb;'>" + esc(sd.value) + "</td></tr>";
+        });
+        campaignHtml += "</tbody></table>";
+      } else {
+        campaignHtml = "<span style='color:#94a3b8;'>No campaign data</span>";
+      }
+      h += section("Campaign Data", campaignHtml);
+
+      // 6. Filters
+      var filtersHtml = "";
+      if (data.relatedDmoFiltersConfig && data.relatedDmoFiltersConfig.filters && data.relatedDmoFiltersConfig.filters.length > 0) {
+        data.relatedDmoFiltersConfig.filters.forEach(function(f) {
+          filtersHtml += "<div style='padding:8px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;margin-bottom:8px;font-size:12px;'>";
+          filtersHtml += "<b>Entity:</b> " + esc(f.entityName || "") + "<br>";
+          if (f.entityFilter && f.entityFilter.condition) {
+            var cond = f.entityFilter.condition;
+            filtersHtml += "<b>Condition:</b> " + esc((cond.subject && cond.subject.fieldName) || "") + " " + esc(cond.operator || "") + " " + (cond.firstBoundValue != null ? esc(cond.firstBoundValue + " - " + cond.secondBoundValue) : esc((cond.values || []).join(", "))) + "<br>";
+          }
+          if (f.filterLimit) filtersHtml += "<b>Limit:</b> Max " + f.filterLimit.maxNumberOfValues + " values, order " + esc(f.filterLimit.order) + "<br>";
+          filtersHtml += "</div>";
+        });
+      }
+      if (data.directDmoFiltersConfig && data.directDmoFiltersConfig.filters && data.directDmoFiltersConfig.filters.length > 0) {
+        filtersHtml += "<div style='font:600 11px system-ui;color:#475569;margin-bottom:4px;'>Direct Filters:</div>";
+        filtersHtml += "<div style='color:#6b7280;font-size:11px;'>" + esc(JSON.stringify(data.directDmoFiltersConfig.filters)) + "</div>";
+      }
+      h += section("Filters", filtersHtml || "<span style='color:#94a3b8;'>No filters configured</span>");
+
+      // 7. Audience DMOs
+      var audienceHtml = "";
+      audienceHtml += kv("History Audience DMO", data.historyAudienceDmoLabel);
+      audienceHtml += kv("History Audience API", data.historyAudienceDmoApiName);
+      audienceHtml += kv("Latest Audience DMO", data.latestAudienceDmoLabel);
+      audienceHtml += kv("Latest Audience API", data.latestAudienceDmoApiName);
+      audienceHtml += kv("Last Run", data.latestAudienceDmoLastRunTimestamp);
+      h += section("Audience DMOs", audienceHtml);
+
+      return "<div style='font:13px/1.6 -apple-system,sans-serif;'>" + h + "</div>";
     }
     function renderRawView() {
       return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
@@ -10705,9 +10818,9 @@
 
     downloadBtn.onclick = function() {
       var htmlDoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation: " + esc(targetName) + "</title>" +
-        "<style>body{font:13px/1.6 -apple-system,sans-serif;padding:30px;max-width:1200px;margin:0 auto;color:#111827;}table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left;vertical-align:top;}th{background:#f9fafb;font-weight:600;}h1{font-size:20px;margin-bottom:16px;}</style></head><body>" +
+        "<style>body{font:13px/1.6 -apple-system,sans-serif;padding:30px;max-width:1200px;margin:0 auto;color:#111827;}table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;}th,td{padding:6px 10px;border:1px solid #e5e7eb;text-align:left;vertical-align:top;}th{background:#f9fafb;font-weight:600;}h1{font-size:20px;margin-bottom:16px;}@media print{body{padding:10px;}}</style></head><body>" +
         "<h1>Activation: " + esc(targetName) + "</h1><p style='color:#64748b;font-size:12px;'>Generated: " + new Date().toISOString().slice(0,10) + "</p>" +
-        renderActivationValue(data, 0) +
+        renderFormattedView() +
         "</body></html>";
       var blob = new Blob([htmlDoc], { type: "text/html" });
       var url = URL.createObjectURL(blob);
