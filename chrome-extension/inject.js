@@ -11118,20 +11118,89 @@ processJSON();
     var dlExcelBtn = document.createElement("button");
     dlExcelBtn.textContent = "⬇ Excel"; dlExcelBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     dlExcelBtn.onclick = function() {
-      var csvRows = [];
-      var addRow = function() { csvRows.push(Array.prototype.slice.call(arguments).map(function(v) { var s = String(v == null ? "" : v); return s.indexOf(",") >= 0 || s.indexOf('"') >= 0 || s.indexOf("\n") >= 0 ? '"' + s.replace(/"/g,'""') + '"' : s; }).join(",")); };
-      addRow("ACTIVATION OVERVIEW"); addRow("Field","Value");
-      [["Name",data.name],["Status",data.status],["Platform",target.platformName],["Target",data.activationTargetName],["Type",data.activationType],["Data Space",data.dataSpaceName],["Segment",data.segmentApiName],["Refresh",data.refreshType],["Processing",data.processingType],["Subject",sub.masterLabel],["Created",data.createdDate],["Modified",data.lastModifiedDate],["Last Publish",data.lastPublishDate],["Publish Status",data.lastPublishStatus]].forEach(function(r) { if (r[1]) addRow(r[0],r[1]); });
-      addRow(""); addRow("ATTRIBUTES"); addRow("#","Label","Preferred Name","API Name","Entity","Type","Source");
-      attrs.forEach(function(a,i) { addRow(i+1, a.label||a.name, a.preferredName||"", a.name, a.entityName||"", a.dataSourceType||"", a.source||a.type||""); });
-      addRow(""); addRow("CONTACT POINTS"); addRow("Type","Entity","Field","Field Name");
-      cps.forEach(function(cp) { var fields = (cp.fieldConfig && cp.fieldConfig.contactPointFields) || []; fields.forEach(function(f) { addRow(cp.type, cp.contactPointEntityName, f.label, f.name); }); });
-      addRow(""); addRow("CAMPAIGN DATA"); addRow("Name","Value");
-      staticData.forEach(function(sd) { addRow(sd.name, sd.value); });
-      addRow(""); addRow("FILTERS"); addRow("Entity","Field","Operator","Value","Max Records","Sort");
-      filters.forEach(function(f) { var c = (f.entityFilter && f.entityFilter.condition) || {}; var s = c.subject || {}; var lim = f.filterLimit || {}; addRow(f.entityName, s.fieldName, c.operator, (c.firstBoundValue != null ? c.firstBoundValue + "-" + c.secondBoundValue : ""), lim.maxNumberOfValues, lim.attributeName + " " + (lim.order||"")); });
-      var blob = new Blob([csvRows.join("\n")], {type:"text/csv"});
-      var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".csv"; a.click();
+      if (typeof MiniXLSX === "undefined") { alert("Excel builder not available"); return; }
+      var wb = new MiniXLSX.Workbook();
+      var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF667eea" } };
+      var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+      var boldFont = { bold: true, size: 11 };
+
+      // Sheet 1: Overview
+      var ws1 = wb.addWorksheet("Overview");
+      ws1.getColumn(1).width = 22; ws1.getColumn(2).width = 45;
+      ws1.getCell(1,1).value = "ACTIVATION: " + (targetName || ""); ws1.getCell(1,1).font = { bold: true, size: 14, color: { argb: "FF667eea" } };
+      ws1.getRow(1).height = 22;
+      var ovRows = [["Name",data.name],["Status",data.status],["Platform",target.platformName],["Target",data.activationTargetName],["Type",data.activationType],["Data Space",data.dataSpaceName],["Segment",data.segmentApiName],["Refresh Type",data.refreshType],["Processing",data.processingType],["Subject Entity",sub.masterLabel || sub.developerName],["Developer Name",data.developerName],["Created",data.createdDate],["Last Modified",data.lastModifiedDate],["Last Publish",data.lastPublishDate],["Publish Status",data.lastPublishStatus],["Activation ID",data.id]];
+      var r1 = 3;
+      ovRows.forEach(function(row) {
+        if (!row[1]) return;
+        ws1.getCell(r1,1).value = row[0]; ws1.getCell(r1,1).font = boldFont;
+        ws1.getCell(r1,2).value = String(row[1]);
+        r1++;
+      });
+
+      // Sheet 2: Attributes
+      var ws2 = wb.addWorksheet("Attributes");
+      ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 25; ws2.getColumn(3).width = 22; ws2.getColumn(4).width = 30; ws2.getColumn(5).width = 35; ws2.getColumn(6).width = 10; ws2.getColumn(7).width = 14;
+      var attrHeaders = ["#","Label","Preferred Name","API Name","Source Entity","Type","Source"];
+      attrHeaders.forEach(function(h,i) { ws2.getCell(1,i+1).value = h; ws2.getCell(1,i+1).font = hdrFont; ws2.getCell(1,i+1).fill = hdrFill; });
+      attrs.forEach(function(a,i) {
+        var r = i + 2;
+        ws2.getCell(r,1).value = i+1;
+        ws2.getCell(r,2).value = a.label || a.name || "";
+        ws2.getCell(r,3).value = a.preferredName || "";
+        ws2.getCell(r,4).value = a.name || "";
+        ws2.getCell(r,5).value = a.entityName || "";
+        ws2.getCell(r,6).value = a.dataSourceType || "";
+        ws2.getCell(r,7).value = a.source || a.type || "";
+      });
+
+      // Sheet 3: Contact Points
+      var ws3 = wb.addWorksheet("Contact Points");
+      ws3.getColumn(1).width = 10; ws3.getColumn(2).width = 35; ws3.getColumn(3).width = 20; ws3.getColumn(4).width = 25; ws3.getColumn(5).width = 50;
+      ["Type","Entity","Field Label","Field API","Path"].forEach(function(h,i) { ws3.getCell(1,i+1).value = h; ws3.getCell(1,i+1).font = hdrFont; ws3.getCell(1,i+1).fill = hdrFill; });
+      var r3 = 2;
+      cps.forEach(function(cp) {
+        var fields = (cp.fieldConfig && cp.fieldConfig.contactPointFields) || [];
+        var pathStr = "";
+        if (cp.queryPathConfig && cp.queryPathConfig.configs) {
+          pathStr = cp.queryPathConfig.configs.map(function(cfg) { return (cfg.queryPath || []).map(function(s) { return (s.objectLabel || s.objectName || "").replace(/__dlm$/,"") + "." + (s.fieldLabel || s.fieldName || ""); }).join(" → "); }).join(" | ");
+        }
+        fields.forEach(function(f) {
+          ws3.getCell(r3,1).value = cp.type || "";
+          ws3.getCell(r3,2).value = cp.contactPointEntityName || "";
+          ws3.getCell(r3,3).value = f.label || "";
+          ws3.getCell(r3,4).value = f.name || "";
+          ws3.getCell(r3,5).value = pathStr;
+          r3++;
+        });
+        if (fields.length === 0) { ws3.getCell(r3,1).value = cp.type || ""; ws3.getCell(r3,2).value = cp.contactPointEntityName || ""; ws3.getCell(r3,5).value = pathStr; r3++; }
+      });
+
+      // Sheet 4: Campaign Data
+      var ws4 = wb.addWorksheet("Campaign Data");
+      ws4.getColumn(1).width = 25; ws4.getColumn(2).width = 50;
+      ["Name","Value"].forEach(function(h,i) { ws4.getCell(1,i+1).value = h; ws4.getCell(1,i+1).font = hdrFont; ws4.getCell(1,i+1).fill = hdrFill; });
+      staticData.forEach(function(sd,i) { ws4.getCell(i+2,1).value = sd.name; ws4.getCell(i+2,2).value = sd.value; });
+
+      // Sheet 5: Filters
+      var ws5 = wb.addWorksheet("Filters");
+      ws5.getColumn(1).width = 30; ws5.getColumn(2).width = 22; ws5.getColumn(3).width = 12; ws5.getColumn(4).width = 15; ws5.getColumn(5).width = 12; ws5.getColumn(6).width = 20;
+      ["Entity","Field","Operator","Value","Max Records","Sort"].forEach(function(h,i) { ws5.getCell(1,i+1).value = h; ws5.getCell(1,i+1).font = hdrFont; ws5.getCell(1,i+1).fill = hdrFill; });
+      filters.forEach(function(f,i) {
+        var c = (f.entityFilter && f.entityFilter.condition) || {}; var s = c.subject || {}; var lim = f.filterLimit || {};
+        ws5.getCell(i+2,1).value = f.entityName || "";
+        ws5.getCell(i+2,2).value = s.fieldName || "";
+        ws5.getCell(i+2,3).value = c.operator || "";
+        ws5.getCell(i+2,4).value = c.firstBoundValue != null ? c.firstBoundValue + " – " + c.secondBoundValue : "";
+        ws5.getCell(i+2,5).value = lim.maxNumberOfValues || "";
+        ws5.getCell(i+2,6).value = (lim.attributeName || "") + " " + (lim.order || "");
+      });
+
+      // Build and download
+      wb.xlsx.writeBuffer().then(function(buf) {
+        var blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".xlsx"; a.click();
+      });
     };
     var closeX = document.createElement("button");
     closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
