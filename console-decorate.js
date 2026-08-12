@@ -11509,7 +11509,12 @@ processJSON();
       fetchActivationViaBridge(activationId).then(function (data) {
         btn.disabled = false;
         btn.textContent = "📋 Export Activation";
-        showActivationModal(data);
+        // Open rich dashboard in a new tab (bypasses CSP)
+        var targetName = (data.activationTarget && data.activationTarget.name) || data.activationTargetName || data.name || "Activation";
+        var dashHtml = generateRichDashboardHTML(data, targetName);
+        var blob = new Blob([dashHtml], { type: "text/html" });
+        var url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
       }).catch(function (err) {
         btn.disabled = false;
         btn.textContent = "📋 Export Activation";
