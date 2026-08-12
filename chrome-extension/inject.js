@@ -10628,7 +10628,7 @@
 
   function generateRichDashboardHTML(data, targetName) {
     var esc = function(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); };
-    var jsonStr = JSON.stringify(data).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    var jsonStr = JSON.stringify(JSON.stringify(data));
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -10697,7 +10697,7 @@ pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 6px; ov
 </div>
 
 <script>
-const embeddedData = JSON.parse('${jsonStr}');
+const embeddedData = JSON.parse(${jsonStr});
 
 // Tab switching
 document.querySelectorAll('.tab').forEach(tab => {
