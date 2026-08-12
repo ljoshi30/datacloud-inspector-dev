@@ -11096,7 +11096,12 @@ processJSON();
 
     // TAB 2: Filters
     var tab2 = "";
+    var hasAnyFilters = false;
+
+    // 1. Related DMO Filters
+    tab2 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin-bottom:14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Related DMO Filters</h3></div>";
     if (filters.length > 0) {
+      hasAnyFilters = true;
       filters.forEach(function(f, idx) {
         var ef = f.entityFilter || {};
         var cond = ef.condition || {};
@@ -11111,19 +11116,214 @@ processJSON();
         }
         tab2 += "</div>";
       });
-    } else { tab2 = "<div style='color:#94a3b8;padding:20px;text-align:center;'>No filters configured</div>"; }
+    } else {
+      tab2 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No related DMO filters configured</div>";
+    }
+
+    // 2. Contact Point Filters
+    tab2 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin:20px 0 14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Contact Point Filters</h3></div>";
+    var cpFilterCount = 0;
+    if (cps.length > 0) {
+      cps.forEach(function(cp, cpIdx) {
+        if (cp.filterExpression && cp.filterExpression.contactPointDmoFilters && cp.filterExpression.contactPointDmoFilters.length > 0) {
+          hasAnyFilters = true;
+          cpFilterCount++;
+          var cpFilters = cp.filterExpression.contactPointDmoFilters;
+          tab2 += "<div style='background:#fef3c7;border-left:4px solid #f59e0b;border-radius:0 6px 6px 0;padding:14px;margin-bottom:12px;'>";
+          tab2 += "<div style='font:600 13px system-ui;color:#d97706;margin-bottom:8px;'>Contact Point: " + esc(cp.type || "Unknown") + " – " + esc(cp.contactPointEntityName || "") + "</div>";
+
+          cpFilters.forEach(function(f, idx) {
+            var ef = f.entityFilter || {};
+            var cond = ef.condition || {};
+            var subj = cond.subject || {};
+            var limit = f.filterLimit || {};
+            tab2 += "<div style='background:#fffbeb;border:1px solid #fbbf24;border-radius:4px;padding:10px;margin-bottom:8px;'>";
+            tab2 += "<div style='font:600 12px system-ui;color:#92400e;margin-bottom:4px;'>Filter #" + (idx+1) + ": " + esc(f.entityName || "") + "</div>";
+            tab2 += "<div style='font-size:11px;color:#1e293b;'><b>Condition:</b> <code>" + esc(subj.fieldName || "") + "</code> <b>" + esc(cond.operator || "") + "</b>";
+            if (cond.firstBoundValue != null) {
+              tab2 += " <b>" + esc(cond.firstBoundValue) + "</b> – <b>" + esc(cond.secondBoundValue) + "</b>";
+            } else if (cond.values && cond.values.length > 0) {
+              tab2 += " <b>" + esc(cond.values.join(", ")) + "</b>";
+            }
+            tab2 += "</div>";
+            if (limit && limit.maxNumberOfValues) {
+              tab2 += "<div style='font-size:10px;color:#475569;margin-top:3px;'><b>Limit:</b> Max " + esc(limit.maxNumberOfValues) + " values";
+              if (limit.attributeName) tab2 += ", sort <code>" + esc(limit.attributeName) + "</code> " + esc(limit.order || "");
+              tab2 += "</div>";
+            }
+            if (f.queryPathConfigForActivateOnToContainer && f.queryPathConfigForActivateOnToContainer.configs) {
+              tab2 += "<div style='margin-top:6px;font-size:10px;font-weight:600;color:#475569;'>Resolution Path:</div>" + renderPath(f.queryPathConfigForActivateOnToContainer.configs);
+            }
+            tab2 += "</div>";
+          });
+          tab2 += "</div>";
+        }
+      });
+    }
+    if (cpFilterCount === 0) {
+      tab2 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No contact point filters configured</div>";
+    }
+
+    // 3. Direct DMO Filters
+    tab2 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin:20px 0 14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Direct DMO Filters</h3></div>";
+    var directFilters = (data.directDmoFiltersConfig && data.directDmoFiltersConfig.filters) || [];
+    if (directFilters.length > 0) {
+      hasAnyFilters = true;
+      tab2 += "<div style='background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:12px;'>";
+      tab2 += "<pre style='margin:0;font-size:11px;color:#1e293b;overflow-x:auto;'>" + esc(JSON.stringify(directFilters, null, 2)) + "</pre>";
+      tab2 += "</div>";
+    } else {
+      tab2 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No direct DMO filters configured</div>";
+    }
+
+    if (!hasAnyFilters) {
+      tab2 = "<div style='color:#94a3b8;padding:40px 20px;text-align:center;font-size:14px;'>No filters configured for this activation</div>";
+    }
 
     // TAB 3: Schema & Paths
     var tab3 = "";
+
+    // 1. Activation Record Schema
+    tab3 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin-bottom:14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Activation Record Schema</h3></div>";
+    if (data.activationRecordSchema) {
+      try {
+        var schemaStr = data.activationRecordSchema;
+        // Decode HTML entities if present
+        if (typeof schemaStr === "string" && schemaStr.indexOf("&quot;") !== -1) {
+          schemaStr = schemaStr.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        }
+        var schema = typeof schemaStr === "string" ? JSON.parse(schemaStr) : schemaStr;
+
+        if (schema.fields && Array.isArray(schema.fields)) {
+          tab3 += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;font-size:11px;margin-bottom:20px;'>";
+          tab3 += "<thead><tr style='background:#f1f5f9;'><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>#</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Field Name</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Type</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Data Cloud Type</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:center;'>Nullable</th><th style='padding:8px;border:1px solid #cbd5e1;text-align:left;'>Source Object</th></tr></thead><tbody>";
+
+          schema.fields.forEach(function(field, i) {
+            var fieldType = field.type || field.dataType || "";
+            var dcType = field.dataCloudType || "";
+            var nullable = field.nullable != null ? (field.nullable ? "Yes" : "No") : "";
+            var sourceObj = field.sourceObject || "";
+
+            // Handle nested array types (like TDI_InsurancePolicy)
+            var typeDisplay = fieldType;
+            if (fieldType === "array" && field.items && field.items.fields) {
+              typeDisplay = "array[" + field.items.fields.length + " fields]";
+            }
+
+            tab3 += "<tr>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#64748b;text-align:center;'>" + (i+1) + "</td>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-weight:600;'>" + esc(field.name || field.fieldName || "") + "</td>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#475569;'>" + esc(typeDisplay) + "</td>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#6b21a8;'>" + esc(dcType) + "</td>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#475569;text-align:center;'>" + esc(nullable) + "</td>";
+            tab3 += "<td style='padding:6px 8px;border:1px solid #e2e8f0;color:#059669;font-size:10px;'>" + esc(sourceObj) + "</td>";
+            tab3 += "</tr>";
+
+            // If it's an array type with nested fields, show them
+            if (fieldType === "array" && field.items && field.items.fields && field.items.fields.length > 0) {
+              tab3 += "<tr><td colspan='6' style='padding:0;border:1px solid #e2e8f0;'>";
+              tab3 += "<div style='background:#fafafa;padding:8px 12px;margin:0;'>";
+              tab3 += "<div style='font:600 10px system-ui;color:#64748b;margin-bottom:4px;'>Nested fields in " + esc(field.name) + ":</div>";
+              field.items.fields.forEach(function(nf, ni) {
+                tab3 += "<div style='font-size:10px;color:#475569;margin-left:12px;'>" + (ni+1) + ". <code style='color:#0369a1;'>" + esc(nf.name || "") + "</code> <span style='color:#64748b;'>(" + esc(nf.type || "") + ")</span></div>";
+              });
+              tab3 += "</div></td></tr>";
+            }
+          });
+
+          tab3 += "</tbody></table></div>";
+        } else {
+          tab3 += "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px;margin-bottom:20px;'>";
+          tab3 += "<pre style='margin:0;font-size:10px;color:#1e293b;overflow-x:auto;'>" + esc(JSON.stringify(schema, null, 2)) + "</pre>";
+          tab3 += "</div>";
+        }
+      } catch (e) {
+        tab3 += "<div style='background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px;margin-bottom:20px;'>";
+        tab3 += "<div style='font:600 11px system-ui;color:#991b1b;margin-bottom:6px;'>Failed to parse schema JSON: " + esc(e.message) + "</div>";
+        tab3 += "<pre style='margin:0;font-size:10px;color:#7f1d1d;overflow-x:auto;'>" + esc(String(data.activationRecordSchema).substring(0, 500)) + "...</pre>";
+        tab3 += "</div>";
+      }
+    } else {
+      tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;margin-bottom:20px;'>No activation record schema available</div>";
+    }
+
+    // 2. Contact Point Query Paths (multi-hop joins)
+    tab3 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin:20px 0 14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Contact Point Query Paths</h3></div>";
+    var cpPathCount = 0;
+    if (cps.length > 0) {
+      cps.forEach(function(cp) {
+        if (cp.queryPathConfig && cp.queryPathConfig.configs && cp.queryPathConfig.configs.length > 0) {
+          var hasValidPath = false;
+          cp.queryPathConfig.configs.forEach(function(cfg) {
+            if (cfg.queryPath && cfg.queryPath.length > 0) hasValidPath = true;
+          });
+          if (hasValidPath) {
+            cpPathCount++;
+            tab3 += "<div style='border:1px solid #bae6fd;border-radius:6px;padding:12px;margin-bottom:12px;background:#f0f9ff;'>";
+            tab3 += "<div style='font:600 12px system-ui;color:#0369a1;margin-bottom:8px;'>Channel: " + esc(cp.type || "Unknown") + " – " + esc(cp.contactPointEntityName || "") + "</div>";
+            tab3 += renderPath(cp.queryPathConfig.configs);
+            tab3 += "</div>";
+          }
+        }
+      });
+    }
+    if (cpPathCount === 0) {
+      tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No contact point query paths configured</div>";
+    }
+
+    // 3. Attribute Query Paths (related attributes)
+    tab3 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin:20px 0 14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Attribute Query Paths</h3></div>";
+    var attrPathCount = 0;
     attrs.forEach(function(a) {
       if (a.queryPathConfig && a.queryPathConfig.configs && a.queryPathConfig.configs.length > 0 && a.queryPathConfig.configs[0].queryPath && a.queryPathConfig.configs[0].queryPath.length > 0) {
+        attrPathCount++;
         tab3 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:10px 14px;margin-bottom:10px;'>";
         tab3 += "<div style='font:600 11px system-ui;color:#1e293b;margin-bottom:4px;'>" + esc(a.label || a.name) + " <span style='color:#64748b;font-weight:400;'>(" + esc(a.entityName || "") + ")</span></div>";
         tab3 += renderPath(a.queryPathConfig.configs);
         tab3 += "</div>";
       }
     });
-    if (!tab3) tab3 = "<div style='color:#94a3b8;padding:20px;text-align:center;'>No multi-hop paths (all attributes are DIRECT)</div>";
+    if (attrPathCount === 0) {
+      tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No attribute query paths (all attributes are DIRECT)</div>";
+    }
+
+    // 4. Filter Resolution Paths
+    tab3 += "<div style='border-bottom:2px solid #e2e8f0;padding-bottom:10px;margin:20px 0 14px;'><h3 style='font:700 14px system-ui;color:#1e293b;margin:0;'>Filter Resolution Paths</h3></div>";
+    var filterPathCount = 0;
+
+    // Check related DMO filters
+    if (filters.length > 0) {
+      filters.forEach(function(f, idx) {
+        if (f.queryPathConfigForActivateOnToContainer && f.queryPathConfigForActivateOnToContainer.configs && f.queryPathConfigForActivateOnToContainer.configs.length > 0) {
+          filterPathCount++;
+          tab3 += "<div style='border:1px solid #ddd6fe;border-radius:6px;padding:10px 14px;margin-bottom:10px;background:#faf5ff;'>";
+          tab3 += "<div style='font:600 11px system-ui;color:#6b21a8;margin-bottom:4px;'>Related Filter #" + (idx+1) + ": " + esc(f.entityName || "") + "</div>";
+          tab3 += renderPath(f.queryPathConfigForActivateOnToContainer.configs);
+          tab3 += "</div>";
+        }
+      });
+    }
+
+    // Check contact point filters
+    if (cps.length > 0) {
+      cps.forEach(function(cp) {
+        if (cp.filterExpression && cp.filterExpression.contactPointDmoFilters && cp.filterExpression.contactPointDmoFilters.length > 0) {
+          cp.filterExpression.contactPointDmoFilters.forEach(function(f, idx) {
+            if (f.queryPathConfigForActivateOnToContainer && f.queryPathConfigForActivateOnToContainer.configs && f.queryPathConfigForActivateOnToContainer.configs.length > 0) {
+              filterPathCount++;
+              tab3 += "<div style='border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:10px;background:#fefce8;'>";
+              tab3 += "<div style='font:600 11px system-ui;color:#92400e;margin-bottom:4px;'>Contact Point Filter #" + (idx+1) + " (" + esc(cp.type || "") + "): " + esc(f.entityName || "") + "</div>";
+              tab3 += renderPath(f.queryPathConfigForActivateOnToContainer.configs);
+              tab3 += "</div>";
+            }
+          });
+        }
+      });
+    }
+
+    if (filterPathCount === 0) {
+      tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No filter resolution paths configured</div>";
+    }
 
     // TAB 4: Audit
     var tab4 = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;'>";
