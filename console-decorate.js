@@ -10702,11 +10702,12 @@
               category: getCategoryName(entityData.dataEntityCategoryId),
               categoryId: entityData.dataEntityCategoryId,
               attributes: (entityData.attributes || []).map(function(attr) {
+                var dn = attr.developerName || "";
                 return {
-                  masterLabel: attr.masterLabel || attr.developerName || "",
-                  developerName: attr.developerName || "",
-                  dataType: attr.dataType || "",
-                  isPrimaryKey: (attr.primaryIndexOrder != null) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
+                  masterLabel: attr.masterLabel || dn || "",
+                  developerName: dn,
+                  dataType: attr.dataType || attr.businessType || "",
+                  isPrimaryKey: (attr.primaryIndexOrder != null) || (dn.indexOf("KQ_") === 0) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
                   foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
                   isRequired: attr.dataRequired || false
                 };
@@ -10741,11 +10742,12 @@
           category: getCategoryName(entityData.dataEntityCategoryId),
           categoryId: entityData.dataEntityCategoryId,
           attributes: (entityData.attributes || []).map(function(attr) {
+            var dn = attr.developerName || "";
             return {
-              masterLabel: attr.masterLabel || attr.developerName || "",
-              developerName: attr.developerName || "",
-              dataType: attr.dataType || "",
-              isPrimaryKey: (attr.primaryIndexOrder != null) || (attr.keyQualifierName && attr.keyQualifierName.startsWith("KQ")),
+              masterLabel: attr.masterLabel || dn || "",
+              developerName: dn,
+              dataType: attr.dataType || attr.businessType || "",
+              isPrimaryKey: (attr.primaryIndexOrder != null) || (dn.indexOf("KQ_") === 0) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
               foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
               isRequired: attr.dataRequired || false
             };
