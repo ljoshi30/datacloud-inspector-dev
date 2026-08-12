@@ -11312,11 +11312,45 @@ processJSON();
       tab3 += "<div style='color:#94a3b8;padding:12px 0;font-size:12px;'>No filter resolution paths configured</div>";
     }
 
-    // TAB 4: Audit
-    var tab4 = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:14px;background:#fafafa;border:1px solid #eee;border-radius:6px;'>";
-    var auditFields = [["Activation ID", data.id],["Definition ID", data.activationDefinitionId],["Developer Name", data.developerName],["Segment ID", data.segmentId || data.marketSegmentId],["Segment API", data.segmentApiName],["Target ID", data.activationTargetId],["Platform", target.platformType],["Created By", data.createdBy && data.createdBy.id],["Created", data.createdDate],["Modified By", data.lastModifiedBy && data.lastModifiedBy.id],["Modified", data.lastModifiedDate],["Last Publish", data.lastPublishDate],["Publish Status", data.lastPublishStatus],["History DMO", data.historyAudienceDmoLabel],["Latest DMO", data.latestAudienceDmoLabel],["Last Run", data.latestAudienceDmoLastRunTimestamp],["Enabled", data.isEnabled],["Exclude Deletes", data.shouldExcludeDeletes],["Exclude Updates", data.shouldExcludeUpdates]];
-    auditFields.forEach(function(f) { if (f[1] != null) tab4 += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 11px system-ui;color:#1e293b;margin-top:2px;word-break:break-all;'>" + esc(String(f[1])) + "</div></div>"; });
-    tab4 += "</div>";
+    // TAB 4: Audit + Catch-All (ALL remaining fields)
+    var tab4 = "";
+
+    // Known fields rendered in structured tabs
+    var renderedKeys = ["activationTarget","activationTargetId","activationTargetName","activationTargetSubjectConfig","activationType","attributesConfig","contactPointsConfig","staticDataConfig","relatedDmoFiltersConfig","directDmoFiltersConfig","dataSourcesConfig","activationRecordSchema","waterfallSelectedChildSegmentsConfig"];
+
+    // System & audit fields
+    tab4 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:14px 16px;margin-bottom:16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:10px;'>System Identifiers & Audit</div>";
+    tab4 += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:12px;background:#fafafa;border:1px solid #eee;border-radius:4px;'>";
+    var auditFields = [["Activation ID", data.id],["Definition ID", data.activationDefinitionId],["Developer Name", data.developerName],["Name", data.name],["Segment ID", data.segmentId || data.marketSegmentId],["Segment API", data.segmentApiName],["Target ID", data.activationTargetId],["Platform Type", (data.activationTarget && data.activationTarget.platformType)],["Created By", data.createdBy && data.createdBy.id],["Created Date", data.createdDate],["Modified By", data.lastModifiedBy && data.lastModifiedBy.id],["Modified Date", data.lastModifiedDate],["Last Publish Date", data.lastPublishDate],["Last Publish Status", data.lastPublishStatus],["History Audience DMO", data.historyAudienceDmoApiName],["History Audience Label", data.historyAudienceDmoLabel],["Latest Audience DMO", data.latestAudienceDmoApiName],["Latest Audience Label", data.latestAudienceDmoLabel],["Last Run Timestamp", data.latestAudienceDmoLastRunTimestamp],["Enabled", data.enabled],["Is Enabled", data.isEnabled],["Exclude Deletes", data.shouldExcludeDeletes],["Exclude Updates", data.shouldExcludeUpdates],["Processing Type", data.processingType],["Refresh Type", data.refreshType],["Status", data.status],["Data Space", data.dataSpaceName],["Membership Name", data.membershipName],["Market Segment ID", data.marketSegmentId]];
+    auditFields.forEach(function(f) { if (f[1] != null && f[1] !== "") tab4 += "<div><div style='font:700 9px system-ui;color:#64748b;text-transform:uppercase;'>" + f[0] + "</div><div style='font:500 11px system-ui;color:#1e293b;margin-top:2px;word-break:break-all;'>" + esc(String(f[1])) + "</div></div>"; });
+    tab4 += "</div></div>";
+
+    // Catch-all: render any API keys NOT already handled
+    var handledKeys = ["id","activationDefinitionId","developerName","name","segmentId","segmentApiName","activationTargetId","createdBy","createdDate","lastModifiedBy","lastModifiedDate","lastPublishDate","lastPublishStatus","historyAudienceDmoApiName","historyAudienceDmoLabel","latestAudienceDmoApiName","latestAudienceDmoLabel","latestAudienceDmoLastRunTimestamp","enabled","isEnabled","shouldExcludeDeletes","shouldExcludeUpdates","processingType","refreshType","status","dataSpaceName","membershipName","marketSegmentId","curatedEntity","queryPathConfig"];
+    var allHandled = renderedKeys.concat(handledKeys);
+    var remainingKeys = Object.keys(data).filter(function(k) { return allHandled.indexOf(k) < 0; });
+
+    if (remainingKeys.length > 0) {
+      tab4 += "<div style='border:1px solid #fcd34d;border-radius:6px;padding:14px 16px;margin-bottom:16px;background:#fffbeb;'><div style='font:700 13px system-ui;color:#92400e;margin-bottom:10px;'>Additional Fields (" + remainingKeys.length + " not shown elsewhere)</div>";
+      tab4 += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#fef3c7;'><th style='padding:6px 10px;border:1px solid #fcd34d;text-align:left;'>Key</th><th style='padding:6px 10px;border:1px solid #fcd34d;text-align:left;'>Value</th></tr></thead><tbody>";
+      remainingKeys.forEach(function(k) {
+        var v = data[k];
+        var display = "";
+        if (v === null || v === undefined) display = "<span style='color:#94a3b8;'>null</span>";
+        else if (typeof v === "object") display = "<pre style='margin:0;font-size:10px;max-height:100px;overflow:auto;background:#fff;padding:4px;border-radius:3px;'>" + esc(JSON.stringify(v, null, 2)) + "</pre>";
+        else display = esc(String(v));
+        tab4 += "<tr><td style='padding:6px 10px;border:1px solid #fcd34d;font-weight:600;font-family:monospace;color:#92400e;vertical-align:top;width:200px;'>" + esc(k) + "</td><td style='padding:6px 10px;border:1px solid #fcd34d;'>" + display + "</td></tr>";
+      });
+      tab4 += "</tbody></table></div>";
+    }
+
+    // Empty object fields (curatedEntity, queryPathConfig etc.)
+    tab4 += "<div style='border:1px solid #e2e8f0;border-radius:6px;padding:14px 16px;'><div style='font:700 13px system-ui;color:#1e293b;margin-bottom:10px;'>Empty/Null Configurations</div><div style='font-size:11px;color:#64748b;'>";
+    if (data.curatedEntity && Object.keys(data.curatedEntity).length === 0) tab4 += "<div style='padding:2px 0;'>curatedEntity: <span style='color:#94a3b8;'>{} (empty)</span></div>";
+    if (data.queryPathConfig && data.queryPathConfig.configs && data.queryPathConfig.configs.length === 0) tab4 += "<div style='padding:2px 0;'>queryPathConfig: <span style='color:#94a3b8;'>no configs</span></div>";
+    if (data.dataSourcesConfig && data.dataSourcesConfig.dataSources && data.dataSourcesConfig.dataSources.length === 0) tab4 += "<div style='padding:2px 0;'>dataSourcesConfig: <span style='color:#94a3b8;'>no data sources</span></div>";
+    if (data.directDmoFiltersConfig && data.directDmoFiltersConfig.filters && data.directDmoFiltersConfig.filters.length === 0) tab4 += "<div style='padding:2px 0;'>directDmoFiltersConfig: <span style='color:#94a3b8;'>no filters</span></div>";
+    tab4 += "</div></div>";
 
     // Build modal
     var modal = document.createElement("div");
