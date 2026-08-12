@@ -10971,7 +10971,7 @@ processJSON();
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
 
     var box = document.createElement("div");
-    box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);";
+    box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);resize:both;overflow:hidden;min-width:600px;min-height:400px;";
 
     // Header
     var header = document.createElement("div");
@@ -11027,9 +11027,9 @@ processJSON();
     });
     document.addEventListener("mouseup", function() { isDragging = false; header.style.cursor = "grab"; });
 
-    // Content area (scrollable) — two views: formatted + raw JSON
+    // Content area — render full rich dashboard in an iframe
     contentEl = document.createElement("div");
-    contentEl.style.cssText = "overflow-y:auto;flex:1;padding:24px;";
+    contentEl.style.cssText = "flex:1;overflow:hidden;position:relative;";
 
     // Render structured view matching SF's activation detail layout
     function renderFormattedView() {
@@ -11186,18 +11186,31 @@ processJSON();
     function renderRawView() {
       return "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
     }
-    contentEl.innerHTML = renderFormattedView();
+    // Render rich dashboard in iframe
+    var dashboardHtml = generateRichDashboardHTML(data, targetName);
+    var iframe = document.createElement("iframe");
+    iframe.style.cssText = "width:100%;height:100%;border:none;";
+    iframe.srcdoc = dashboardHtml;
+    contentEl.appendChild(iframe);
 
     toggleBtn.onclick = function() {
       if (viewMode === "formatted") {
-        contentEl.innerHTML = renderRawView();
-        toggleBtn.textContent = "◻ Formatted View";
+        contentEl.innerHTML = "";
+        var rawDiv = document.createElement("div");
+        rawDiv.style.cssText = "overflow:auto;height:100%;padding:20px;";
+        rawDiv.innerHTML = "<pre style='font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#1e293b;margin:0;'>" + esc(JSON.stringify(data, null, 2)) + "</pre>";
+        contentEl.appendChild(rawDiv);
+        toggleBtn.textContent = "◻ Dashboard View";
         toggleBtn.style.background = "#1e293b";
         toggleBtn.style.color = "#e2e8f0";
         toggleBtn.style.borderColor = "#1e293b";
         viewMode = "raw";
       } else {
-        contentEl.innerHTML = renderFormattedView();
+        contentEl.innerHTML = "";
+        var iframe2 = document.createElement("iframe");
+        iframe2.style.cssText = "width:100%;height:100%;border:none;";
+        iframe2.srcdoc = dashboardHtml;
+        contentEl.appendChild(iframe2);
         toggleBtn.textContent = "{ } Raw JSON";
         toggleBtn.style.background = "#f1f5f9";
         toggleBtn.style.color = "#475569";
