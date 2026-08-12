@@ -7654,10 +7654,10 @@
       setTimeout(function () { btn.textContent = "Download Summary"; }, 2000);
     };
 
-    // ── AI Explain button (extension: direct bridge / bookmarklet: popup proxy with postMessage) ──
+    // ── AI Explain button (extension-only: bookmarklet can't call LLM due to CSP/size limits) ──
     var aiBtn = m.querySelector(".dc-xf-ai");
     var aiSettingsBtn = m.querySelector(".dc-xf-ai-settings");
-    if (aiBtn) {
+    if (aiBtn && extBridgePresent()) {
       aiBtn.style.display = "";
       if (aiSettingsBtn) aiSettingsBtn.style.display = "";
       aiBtn.title = "AI-powered explanation of this transform";
