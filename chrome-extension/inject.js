@@ -12690,7 +12690,7 @@ processJSON();
           window.removeEventListener("message", onList);
           if (ev.data.ok && ev.data.resp) {
             // Response could be array of DMOs or object with array
-            var dmos = Array.isArray(ev.data.resp) ? ev.data.resp : (ev.data.resp.dataModelObjects || ev.data.resp.objects || []);
+            var dmos = Array.isArray(ev.data.resp) ? ev.data.resp : (ev.data.resp.dataModelObject || ev.data.resp.dataModelObjects || ev.data.resp.objects || []);
             dmos.forEach(function(d) {
               var label = d.label || d.masterLabel || "";
               var name = d.name || d.developerName || "";
