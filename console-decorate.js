@@ -10576,49 +10576,65 @@
 
   function scrapeActivationDOM() {
     var result = { attributes: [], contactPoints: [], segmentOn: "", publishSchedule: "", platform: "", businessUnit: "", attrCount: 0 };
+    var foundAttrList = false;
     function walkShadow(root, depth) {
       if (depth > 10) return;
       root.querySelectorAll("*").forEach(function(el) {
-        // Get li items for attributes (filter out nav/menu items)
-        if (el.tagName === "LI" && !el.querySelector("li")) {
-          var txt = el.textContent.trim();
-          if (txt.length > 1 && txt.length < 80 && !/Open menu|Favorites|Global Action|Guidance|Setup|Notification|View profile|Edit|Copy|Delete|Details|Insights|More|Post|Question|New/i.test(txt)) {
-            // Skip contact point descriptions
-            if (!/^Email.*Adds the|^Phone.*Adds the/i.test(txt)) {
-              result.attributes.push(txt);
+        // PRECISE: Find "Attributes Included" heading → get sibling <ul> → <li> items
+        if (!foundAttrList && el.tagName === "H4" && /Attributes Included/i.test(el.textContent.trim())) {
+          var m = el.textContent.trim().match(/\((\d+)\)/);
+          if (m) result.attrCount = parseInt(m[1], 10);
+          // Find the <ul> list — check siblings and parent's children
+          var parent = el.parentElement;
+          if (parent) {
+            var lists = parent.querySelectorAll("ul, ol");
+            for (var li = 0; li < lists.length; li++) {
+              var items = lists[li].querySelectorAll("li");
+              if (items.length >= 3) {
+                Array.from(items).forEach(function(item) {
+                  var txt = item.textContent.trim();
+                  if (txt.length > 0 && txt.length < 80) result.attributes.push(txt);
+                });
+                foundAttrList = true;
+                break;
+              }
             }
           }
         }
-        // Contact points (Email, Phone)
-        if (el.textContent && /^Email.*Adds the Email/i.test(el.textContent.trim()) && el.textContent.trim().length < 150) {
-          result.contactPoints.push({ type: "EMAIL", desc: el.textContent.trim() });
+        // Contact points — find by section heading "Select contact points" area
+        if (el.tagName === "H2" || el.tagName === "H3" || el.tagName === "DIV") {
+          var elTxt = el.textContent.trim();
+          if (/^Email$/i.test(elTxt) && el.nextElementSibling && /Selected/i.test(el.nextElementSibling.textContent || "")) {
+            if (result.contactPoints.indexOf("EMAIL") < 0) result.contactPoints.push({ type: "EMAIL", desc: "Email (Selected)" });
+          }
         }
-        if (el.textContent && /^Phone.*Adds the Phone/i.test(el.textContent.trim()) && el.textContent.trim().length < 150) {
-          result.contactPoints.push({ type: "SMS", desc: el.textContent.trim() });
-        }
-        // Sidebar info
-        if (el.textContent && /^Segment On:/i.test(el.textContent.trim()) && el.textContent.trim().length < 80) {
-          result.segmentOn = el.textContent.trim().replace(/^Segment On:\s*/i, "").split("Publish")[0].trim();
-        }
-        if (el.textContent && /^Publish Schedule:/i.test(el.textContent.trim()) && el.textContent.trim().length < 60) {
-          result.publishSchedule = el.textContent.trim().replace(/^Publish Schedule:\s*/i, "");
-        }
-        if (el.textContent && /^Platform:/i.test(el.textContent.trim()) && el.textContent.trim().length < 100 && !/Business Units/.test(el.textContent)) {
-          result.platform = el.textContent.trim().replace(/^Platform:\s*/i, "");
-        }
-        if (el.textContent && /^Business Units:/i.test(el.textContent.trim()) && el.textContent.trim().length < 80) {
-          result.businessUnit = el.textContent.trim().replace(/^Business Units:\s*/i, "");
-        }
-        if (el.textContent && /^Attributes Included \((\d+)\)/i.test(el.textContent.trim())) {
-          var m = el.textContent.trim().match(/\((\d+)\)/);
-          if (m) result.attrCount = parseInt(m[1], 10);
+        // Sidebar specific fields (target elements with lwc-20hmoda60ll attribute for precision)
+        if (el.textContent && el.children && el.children.length < 5) {
+          var txt2 = el.textContent.trim();
+          if (/^Segment On:/.test(txt2) && txt2.length < 60 && !result.segmentOn) {
+            result.segmentOn = txt2.replace(/^Segment On:\s*/i, "").replace(/Publish Schedule.*/, "").trim();
+          }
+          if (/^Publish Schedule:/.test(txt2) && txt2.length < 40 && !result.publishSchedule) {
+            result.publishSchedule = txt2.replace(/^Publish Schedule:\s*/i, "").trim();
+          }
+          if (/^Platform:/.test(txt2) && txt2.length < 60 && !/Business/.test(txt2) && !result.platform) {
+            result.platform = txt2.replace(/^Platform:\s*/i, "").trim();
+          }
+          if (/^Business Units:/.test(txt2) && txt2.length < 60 && !result.businessUnit) {
+            result.businessUnit = txt2.replace(/^Business Units:\s*/i, "").trim();
+          }
         }
         if (el.shadowRoot) walkShadow(el.shadowRoot, depth + 1);
       });
     }
     walkShadow(document, 0);
-    // Dedupe attributes
-    result.attributes = result.attributes.filter(function(v, i, a) { return a.indexOf(v) === i; });
+    // If sidebar only gave ~10, also try scraping from wizard main area (full attribute list)
+    if (!foundAttrList || result.attributes.length < 5) {
+      // Fallback: look for li items in the Activation Summary section
+      walkShadow(document, 0);
+    }
+    // Dedupe + filter empty
+    result.attributes = result.attributes.filter(function(v, i, a) { return v && v.length > 0 && a.indexOf(v) === i; });
     return result;
   }
 
