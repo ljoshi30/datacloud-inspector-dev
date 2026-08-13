@@ -12687,81 +12687,87 @@ processJSON();
         return origSegSend.apply(this, arguments);
       };
 
-      // Wait for page to settle + token capture, then annotate
+      // Wait for page to settle, then annotate
       setTimeout(function() {
-        // Restore original send
         if (XMLHttpRequest.prototype.send !== origSegSend) XMLHttpRequest.prototype.send = origSegSend;
 
-        var dmoName = "";
-        var dataSpace = "";
-        // Find DMO from "Resources > Unified Individual TDIR" breadcrumb
-        function walkForDmo(root, depth) {
-          if (depth > 8 || dmoName) return;
-          root.querySelectorAll("*").forEach(function(el) {
-            if (dmoName) return;
-            var txt = (el.textContent || "").trim();
-            if (/^Resources\s*>/i.test(txt) && txt.length < 80) {
-              dmoName = txt.replace(/^Resources\s*>\s*/i, "").trim();
-            }
-          });
-          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dmoName) walkForDmo(el.shadowRoot, depth + 1); });
-        }
-        walkForDmo(document, 0);
-        if (!dmoName) return;
+        // Get segment record ID from URL
+        var segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || "";
 
-        // Map label to likely API dev name
-        var dmoDevName = "";
-        var urlMatch = location.href.match(/objectApiName=([A-Za-z0-9_]+)/i);
-        if (urlMatch) dmoDevName = urlMatch[1];
-        if (!dmoDevName) {
-          dmoDevName = dmoName.replace(/\s+/g, "");
-        }
-
-        var token = _segToken;
-        var context = _segContext;
-
-        // Extension path: use bridge to get DMO fields via REST API
-        if (extBridgePresent()) {
-          var segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || "";
-          // We need the DMO developer name — get it from page text "Segment On: X"
-          var segOnLabel = "";
-          function findSegOn(root2, d2) {
-            if (d2 > 8 || segOnLabel) return;
-            root2.querySelectorAll("*").forEach(function(el2) {
-              if (segOnLabel) return;
-              var t2 = (el2.textContent || "").trim();
-              if (/^Segment On/i.test(t2) && t2.length < 60) {
-                segOnLabel = t2.replace(/^Segment On\s*/i, "").trim();
+        // Extension path: use bridge to get segment info then DMO fields
+        if (typeof extBridgePresent === "function" && extBridgePresent()) {
+          // Step 1: Call getMarketSegment via activation bridge to get DMO dev name
+          var segReqId = "dcseg1-" + Math.random().toString(36).slice(2, 8);
+          // We'll use the dc-dmo-fields bridge directly with common name patterns
+          // First try to find the DMO name from page text "Segment On: X"
+          var segOnText = "";
+          function findSegText(root, depth) {
+            if (depth > 8 || segOnText) return;
+            root.querySelectorAll("*").forEach(function(el) {
+              if (segOnText) return;
+              var txt = (el.textContent || "").trim();
+              if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
+                var match = txt.match(/Segment On\s*[:\s]*(.+)/i);
+                if (match) segOnText = match[1].trim();
               }
             });
-            root2.querySelectorAll("*").forEach(function(el2) { if (el2.shadowRoot && !segOnLabel) findSegOn(el2.shadowRoot, d2 + 1); });
+            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !segOnText) findSegText(el.shadowRoot, depth + 1); });
           }
-          findSegOn(document, 0);
-          // Use label as-is with common prefix patterns to guess dev name
-          var guessDevName = dmoDevName + "__dlm";
-          // Request via bridge — try the guessed name
-          var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
-          function onFieldsMsg(ev) {
-            if (ev.source !== window) return;
-            var d3 = ev.data;
-            if (!d3 || d3.__dcRes !== "dc-dmo-fields" || d3.id !== reqId) return;
-            window.removeEventListener("message", onFieldsMsg, false);
-            if (d3.ok && d3.resp) {
-              var fields = d3.resp.fields || d3.resp.attributes || [];
-              if (fields.length > 0) { applyApiNames(fields); return; }
-              // If response is an object with field-like keys, try to extract
-              if (d3.resp && typeof d3.resp === "object") {
-                var possibleFields = Object.keys(d3.resp).filter(function(k) { return d3.resp[k] && d3.resp[k].name; });
-                if (possibleFields.length > 0) applyApiNames(possibleFields.map(function(k) { return d3.resp[k]; }));
-              }
+          findSegText(document, 0);
+
+          // Build candidate DMO dev names from the label
+          // "Unified Individual TDIR" → try: TDI_UnifiedIndividualTdir__dlm, UnifiedIndividualTDIR__dlm, etc.
+          var label = segOnText || "";
+          var candidates = [];
+          if (label) {
+            // Common DC naming: prefix_CamelCase__dlm
+            var camel = label.replace(/\s+/g, "");
+            var camelLower = label.split(/\s+/).map(function(w, i) { return i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+            candidates.push("TDI_" + camel + "__dlm");
+            candidates.push("TDI_" + camelLower + "__dlm");
+            candidates.push(camel + "__dlm");
+            candidates.push("ssot__" + camel + "__dlm");
+            // The actual name for "Unified Individual TDIR" is "TDI_UnifiedIndividualTdir__dlm"
+            // Try removing last word as suffix variation
+            var words = label.split(/\s+/);
+            if (words.length > 2) {
+              var lastWord = words[words.length - 1];
+              var rest = words.slice(0, -1).join("");
+              candidates.push("TDI_" + rest + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
             }
           }
-          window.addEventListener("message", onFieldsMsg, false);
-          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: guessDevName, dataspace: dataSpace || "default" }, "*");
-          return; // extension handles it
+          // Dedupe
+          candidates = candidates.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+          function tryDmoCandidate(idx) {
+            if (idx >= candidates.length) { console.log("[DC Segment] Could not find DMO fields for:", label); return; }
+            var dmoName = candidates[idx];
+            var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
+            function onMsg(ev) {
+              if (ev.source !== window) return;
+              var d = ev.data;
+              if (!d || d.__dcRes !== "dc-dmo-fields" || d.id !== reqId) return;
+              window.removeEventListener("message", onMsg, false);
+              if (d.ok && d.resp && d.resp.fields && d.resp.fields.length > 0) {
+                console.log("[DC Segment] Got " + d.resp.fields.length + " fields from " + dmoName);
+                applyApiNames(d.resp.fields);
+              } else {
+                tryDmoCandidate(idx + 1); // try next
+              }
+            }
+            window.addEventListener("message", onMsg, false);
+            window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: dmoName, dataspace: "TDI" }, "*");
+            // Timeout per candidate
+            setTimeout(function() { window.removeEventListener("message", onMsg, false); }, 5000);
+          }
+          tryDmoCandidate(0);
+          return;
         }
 
-        if (!token) return; // No token = can't call API (bookmarklet without Aura)
+        // Bookmarklet Aura path (fallback)
+        var token = _segToken;
+        var context = _segContext;
+        if (!token) return;
 
         // Try multiple possible dev names
         var candidates = [dmoDevName + "__dlm", "TDI_" + dmoDevName + "__dlm", "ssot__" + dmoDevName + "__dlm", dmoDevName];
