@@ -11864,10 +11864,18 @@ processJSON();
 
   function generateMermaidERD(entities, relationships) {
     var lines = ["erDiagram"];
-    // Build entity lookup by label for FK inference
+    var cleanName = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
+
+    // Build entity lookup by label AND by id for edge resolution
     var entityByLabel = {};
-    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
-    // Build a set of unique directional relationships (dedupe A->B and B->A into one)
+    var entityById = {};
+    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; entityById[ent.id] = ent; });
+
+    // Build relationship table from KQ fields + edges
+    // Logic: For each edge A→B, find the FK field on A that points to B
+    // KQ_<FieldName>__c where FieldName != "Id" = foreign key
+    // KQ_Id__c = primary key (self-identifier)
+    // The entity that holds the FK (non-Id KQ) is the "many" side
     var seen = {};
     var dedupedRels = [];
     relationships.forEach(function(rel) {
@@ -11876,42 +11884,73 @@ processJSON();
       seen[key] = true;
       dedupedRels.push(rel);
     });
-    var cleanName = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
-    // Infer linking field from KQ_ fields on the "from" entity
-    function inferLinkField(fromLabel, toLabel) {
-      var fromEnt = entityByLabel[fromLabel];
-      if (!fromEnt) return "";
-      // Look for KQ_ fields that reference the target (e.g. KQ_PartyId → Individual has PartyId)
-      var kqFields = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0; });
-      for (var i = 0; i < kqFields.length; i++) {
-        var fieldHint = kqFields[i].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-        // If field hint contains a reference to the target entity (e.g. "PartyId" for Individual, "InsurancePolicyId" for Insurance Policy)
-        var targetWords = toLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
-        if (fieldHint.toLowerCase().indexOf(targetWords.slice(0, 6)) >= 0 || fieldHint.toLowerCase().indexOf("party") >= 0 || fieldHint.toLowerCase().indexOf("id") >= 0) {
-          return fieldHint;
-        }
-      }
-      // Fallback: check non-KQ fields ending in Id that might reference target
-      var idFields = fromEnt.attributes.filter(function(a) { return !a.isPrimaryKey && /Id__c$|Id_c$/.test(a.developerName); });
-      for (var j = 0; j < idFields.length; j++) {
-        var fn = idFields[j].developerName.replace(/__c$/, "").replace(/^ssot__/, "");
-        return fn;
-      }
-      return "";
-    }
+
+    // For each relationship, determine: FK field, cardinality, direction
     dedupedRels.forEach(function(rel) {
+      var fromEnt = entityByLabel[rel.from];
+      var toEnt = entityByLabel[rel.to];
+      if (!fromEnt || !toEnt) return;
+      if (rel.from === rel.to) return;
+
       var fromClean = cleanName(rel.from);
       var toClean = cleanName(rel.to);
-      var linkField = rel.label ? rel.label.replace(/__c$|__dlm$/g, "") : "";
-      if (!linkField) linkField = inferLinkField(rel.from, rel.to) || inferLinkField(rel.to, rel.from);
-      if (!linkField) linkField = "FK";
-      // Heuristic cardinality
-      var cardinality = "||--o{";
-      if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) cardinality = "}o--o{";
-      else if (/Latest/i.test(rel.from) || /Latest/i.test(rel.to)) cardinality = "||--||";
-      else if (rel.from === rel.to) return;
-      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + linkField + "\"");
+
+      // Find FK: look for KQ_ fields on "from" that are NOT KQ_Id (those are FKs)
+      var fkField = "";
+      var fkOnFrom = false;
+      var fromFKs = fromEnt.attributes.filter(function(a) {
+        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id/i.test(a.developerName) && !/^KQ_Key_Qualifier/i.test(a.developerName);
+      });
+      var toFKs = toEnt.attributes.filter(function(a) {
+        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id/i.test(a.developerName) && !/^KQ_Key_Qualifier/i.test(a.developerName);
+      });
+
+      // Check if "from" has a FK pointing to "to"
+      fromFKs.forEach(function(fk) {
+        var hint = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "").toLowerCase();
+        // Does this FK name relate to the target entity?
+        var toName = toEnt.masterLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
+        var toDev = (toEnt.developerName || "").replace(/__dlm$|__cio$/g, "").replace(/^.*_/g, "").toLowerCase();
+        if (hint.indexOf("party") >= 0 || hint.indexOf(toName.slice(0, 5)) >= 0 || hint.indexOf(toDev.slice(0, 5)) >= 0 || hint.indexOf("insured") >= 0 || hint.indexOf("account") >= 0 || hint.indexOf("policy") >= 0 || hint.indexOf("source") >= 0) {
+          fkField = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+          fkOnFrom = true;
+        }
+      });
+
+      // If not found on "from", check if "to" has FK pointing to "from"
+      if (!fkField) {
+        toFKs.forEach(function(fk) {
+          var hint = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "").toLowerCase();
+          var fromName = fromEnt.masterLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
+          var fromDev = (fromEnt.developerName || "").replace(/__dlm$|__cio$/g, "").replace(/^.*_/g, "").toLowerCase();
+          if (hint.indexOf("party") >= 0 || hint.indexOf(fromName.slice(0, 5)) >= 0 || hint.indexOf(fromDev.slice(0, 5)) >= 0 || hint.indexOf("insured") >= 0 || hint.indexOf("account") >= 0 || hint.indexOf("policy") >= 0 || hint.indexOf("source") >= 0) {
+            fkField = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+            fkOnFrom = false;
+          }
+        });
+      }
+
+      // If still not found, use first non-Id KQ from either side
+      if (!fkField && fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); fkOnFrom = true; }
+      if (!fkField && toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); fkOnFrom = false; }
+      if (!fkField) fkField = "FK";
+
+      // Determine cardinality based on which side has the FK
+      // Entity with FK (non-Id KQ) = "many" side → ManyToOne to the other
+      var cardinality;
+      if (/Latest/i.test(rel.from) || /Latest/i.test(rel.to)) {
+        cardinality = "||--||"; // 1:1 for Latest snapshots
+      } else if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) {
+        cardinality = "}o--o{"; // Many-to-Many for link tables
+      } else if (fkOnFrom) {
+        cardinality = "}o--||"; // from has FK → from is Many, to is One
+      } else {
+        cardinality = "||--o{"; // to has FK → to is Many, from is One
+      }
+
+      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + fkField + "\"");
     });
+
     // Add entity definitions with key fields
     entities.forEach(function(entity) {
       var name = cleanName(entity.masterLabel);
@@ -12303,6 +12342,37 @@ processJSON();
     html += "</div>";
     html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
     html += "</div>";
+
+    // Build entity lookup for relationship table
+    var entityByLabel = {};
+    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
+
+    // ── Relationship Table (Object | FK Field | KQ | Cardinality | Related Object) ──
+    html += "<div style='border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:24px;'>";
+    html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Relationship Table</div>";
+    html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Key Qualifier</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related PK</th></tr></thead><tbody>";
+    var relTableSeen = {};
+    relationships.forEach(function(rel) {
+      var key = [rel.from, rel.to].sort().join("|||");
+      if (relTableSeen[key]) return;
+      relTableSeen[key] = true;
+      var fromEnt = entityByLabel[rel.from];
+      var toEnt = entityByLabel[rel.to];
+      if (!fromEnt || !toEnt || rel.from === rel.to) return;
+      // Find the FK side (entity with non-Id KQ pointing to the other)
+      var fkSide = fromEnt;
+      var pkSide = toEnt;
+      var fkField = "", kqField = "", pkField = "KQ_Id__c";
+      var fkLabel = rel.from, pkLabel = rel.to;
+      var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+      var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+      if (fromFKs.length > 0) { kqField = fromFKs[0].developerName; fkField = kqField.replace(/^KQ_/, "").replace(/__c$/, ""); }
+      else if (toFKs.length > 0) { fkSide = toEnt; pkSide = fromEnt; fkLabel = rel.to; pkLabel = rel.from; kqField = toFKs[0].developerName; fkField = kqField.replace(/^KQ_/, "").replace(/__c$/, ""); }
+      else { fkField = "—"; kqField = "—"; }
+      var card = /Latest/i.test(fkLabel) || /Latest/i.test(pkLabel) ? "OneToOne" : /Link/i.test(fkLabel) || /Link/i.test(pkLabel) ? "ManyToMany" : "ManyToOne";
+      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(fkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>" + esc(kqField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + (card === "ManyToOne" ? "#fef3c7" : card === "OneToOne" ? "#dcfce7" : "#e0f2fe") + ";color:" + (card === "ManyToOne" ? "#92400e" : card === "OneToOne" ? "#166534" : "#0369a1") + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + card + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(pkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>KQ_Id__c</td></tr>";
+    });
+    html += "</tbody></table></div></div>";
 
     // Build per-entity relationship lookup
     var relsByEntity = {};
