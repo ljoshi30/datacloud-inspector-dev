@@ -12736,11 +12736,14 @@ processJSON();
         var labelMap = {};
         fields.forEach(function(f) { labelMap[f.label.toLowerCase()] = f.name; });
         function annotate(root, depth) {
-          if (depth > 10) return;
-          root.querySelectorAll("[data-tid='attr-row']").forEach(function(row) {
-            if (row.querySelector(".dc-api-name")) return;
+          if (depth > 12) return;
+          var rows = root.querySelectorAll("[data-tid]");
+          for (var ri = 0; ri < rows.length; ri++) {
+            var row = rows[ri];
+            if (row.getAttribute("data-tid") !== "attr-row") continue;
+            if (row.querySelector(".dc-api-name")) continue;
             var nameDiv = row.querySelector(".name");
-            if (!nameDiv) return;
+            if (!nameDiv) continue;
             var label = nameDiv.textContent.trim();
             var apiName = labelMap[label.toLowerCase()];
             if (apiName) {
@@ -12750,8 +12753,9 @@ processJSON();
               badge.textContent = apiName;
               nameDiv.appendChild(badge);
             }
-          });
-          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) annotate(el.shadowRoot, depth + 1); });
+          }
+          var allEls = root.querySelectorAll("*");
+          for (var i = 0; i < allEls.length; i++) { if (allEls[i].shadowRoot) annotate(allEls[i].shadowRoot, depth + 1); }
         }
         annotate(document, 0);
         new MutationObserver(function() { annotate(document, 0); }).observe(document.body, { childList: true, subtree: true });
