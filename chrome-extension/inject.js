@@ -11968,13 +11968,26 @@ processJSON();
     panelHeader.appendChild(panelClose);
 
     var controls = document.createElement("div");
-    controls.style.cssText = "padding:12px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:10px;";
+    controls.style.cssText = "padding:12px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;";
+    var searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Search DMOs...";
+    searchInput.style.cssText = "flex:1;min-width:180px;padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;font:13px -apple-system,sans-serif;outline:none;";
+    searchInput.addEventListener("input", function() {
+      var q = searchInput.value.toLowerCase();
+      var items = listWrap.querySelectorAll("[data-dmo-item]");
+      items.forEach(function(item) {
+        var name = item.getAttribute("data-dmo-item").toLowerCase();
+        item.style.display = (!q || name.indexOf(q) >= 0) ? "flex" : "none";
+      });
+    });
     var selectAllBtn = document.createElement("button");
     selectAllBtn.textContent = "Select All";
-    selectAllBtn.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    selectAllBtn.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;white-space:nowrap;";
     var deselectAllBtn = document.createElement("button");
     deselectAllBtn.textContent = "Deselect All";
-    deselectAllBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    deselectAllBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;white-space:nowrap;";
+    controls.appendChild(searchInput);
     controls.appendChild(selectAllBtn);
     controls.appendChild(deselectAllBtn);
 
@@ -11986,6 +11999,7 @@ processJSON();
 
     allEntities.forEach(function(ent) {
       var item = document.createElement("label");
+      item.setAttribute("data-dmo-item", ent.masterLabel + " " + ent.developerName + " " + ent.category);
       item.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;transition:background .1s;";
       item.onmouseenter = function() { item.style.background = "#f8fafc"; };
       item.onmouseleave = function() { item.style.background = "transparent"; };
