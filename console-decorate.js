@@ -12710,8 +12710,12 @@ processJSON();
               fieldsByDmo[label] = {};
               ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
               fetchingDmos[label] = false;
+              console.log("[DC Seg] Fetched " + ev.data.resp.fields.length + " fields for '" + label + "' from " + candidates[idx]);
               callback();
-            } else { tryNext(idx + 1); }
+            } else {
+              console.log("[DC Seg] Candidate " + candidates[idx] + " failed for '" + label + "', trying next...");
+              tryNext(idx + 1);
+            }
           }
           window.addEventListener("message", handler);
           window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: candidates[idx], dataspace: "TDI" }, "*");
@@ -12768,6 +12772,7 @@ processJSON();
       // Main check: detect DMO, fetch if needed, apply tooltips
       function checkAndAnnotate() {
         var dmo = detectCurrentDmo();
+        console.log("[DC Seg] checkAndAnnotate: detected DMO =", dmo, "| current =", currentDmo, "| cached:", Object.keys(fieldsByDmo).join(", "));
         if (!dmo) {
           // Fallback: try "Segment On" text for initial load
           function findSegOn(root, depth) {
@@ -12818,7 +12823,7 @@ processJSON();
     })();
   }
 
-  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Segment" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation") {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation") {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar")) return;
       const wrap = document.createElement("div");
