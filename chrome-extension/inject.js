@@ -10574,6 +10574,54 @@
   var _activationAuraToken = "";
   var _activationAuraContext = "";
 
+  function scrapeActivationDOM() {
+    var result = { attributes: [], contactPoints: [], segmentOn: "", publishSchedule: "", platform: "", businessUnit: "", attrCount: 0 };
+    function walkShadow(root, depth) {
+      if (depth > 10) return;
+      root.querySelectorAll("*").forEach(function(el) {
+        // Get li items for attributes (filter out nav/menu items)
+        if (el.tagName === "LI" && !el.querySelector("li")) {
+          var txt = el.textContent.trim();
+          if (txt.length > 1 && txt.length < 80 && !/Open menu|Favorites|Global Action|Guidance|Setup|Notification|View profile|Edit|Copy|Delete|Details|Insights|More|Post|Question|New/i.test(txt)) {
+            // Skip contact point descriptions
+            if (!/^Email.*Adds the|^Phone.*Adds the/i.test(txt)) {
+              result.attributes.push(txt);
+            }
+          }
+        }
+        // Contact points (Email, Phone)
+        if (el.textContent && /^Email.*Adds the Email/i.test(el.textContent.trim()) && el.textContent.trim().length < 150) {
+          result.contactPoints.push({ type: "EMAIL", desc: el.textContent.trim() });
+        }
+        if (el.textContent && /^Phone.*Adds the Phone/i.test(el.textContent.trim()) && el.textContent.trim().length < 150) {
+          result.contactPoints.push({ type: "SMS", desc: el.textContent.trim() });
+        }
+        // Sidebar info
+        if (el.textContent && /^Segment On:/i.test(el.textContent.trim()) && el.textContent.trim().length < 80) {
+          result.segmentOn = el.textContent.trim().replace(/^Segment On:\s*/i, "").split("Publish")[0].trim();
+        }
+        if (el.textContent && /^Publish Schedule:/i.test(el.textContent.trim()) && el.textContent.trim().length < 60) {
+          result.publishSchedule = el.textContent.trim().replace(/^Publish Schedule:\s*/i, "");
+        }
+        if (el.textContent && /^Platform:/i.test(el.textContent.trim()) && el.textContent.trim().length < 100 && !/Business Units/.test(el.textContent)) {
+          result.platform = el.textContent.trim().replace(/^Platform:\s*/i, "");
+        }
+        if (el.textContent && /^Business Units:/i.test(el.textContent.trim()) && el.textContent.trim().length < 80) {
+          result.businessUnit = el.textContent.trim().replace(/^Business Units:\s*/i, "");
+        }
+        if (el.textContent && /^Attributes Included \((\d+)\)/i.test(el.textContent.trim())) {
+          var m = el.textContent.trim().match(/\((\d+)\)/);
+          if (m) result.attrCount = parseInt(m[1], 10);
+        }
+        if (el.shadowRoot) walkShadow(el.shadowRoot, depth + 1);
+      });
+    }
+    walkShadow(document, 0);
+    // Dedupe attributes
+    result.attributes = result.attributes.filter(function(v, i, a) { return a.indexOf(v) === i; });
+    return result;
+  }
+
   function fetchActivationViaAura(activationId) {
     return new Promise(function(resolve, reject) {
       // Capture Aura token by intercepting XHR (same approach as our successful probes)
@@ -10600,7 +10648,20 @@
         var token = _activationAuraToken;
         var context = _activationAuraContext;
         if (!token || !context) {
-          reject(new Error("No session captured yet. Click Edit on the activation (or scroll the page) to trigger a request, then click Export Activation again."));
+          // No Aura token — try DOM-only scrape
+          var domOnly = scrapeActivationDOM();
+          if (domOnly.attributes.length > 0) {
+            var merged = { _source: "bookmarklet (DOM scrape only)", name: "", status: "Unknown" };
+            merged.attributesConfig = { attributes: domOnly.attributes.map(function(label) { return { label: label, name: "", source: "DOM", dataSourceType: "" }; }) };
+            if (domOnly.contactPoints.length > 0) merged.contactPointsConfig = { contactPoints: domOnly.contactPoints.map(function(cp) { return { type: cp.type, contactPointEntityName: cp.desc }; }) };
+            if (domOnly.segmentOn) merged.activationTargetSubjectConfig = { masterLabel: domOnly.segmentOn };
+            if (domOnly.publishSchedule) merged.publishSchedule = domOnly.publishSchedule;
+            if (domOnly.platform) merged.activationTarget = { name: "", platformName: domOnly.platform, status: "" };
+            if (domOnly.businessUnit) merged.businessUnit = domOnly.businessUnit;
+            resolve(merged);
+            return;
+          }
+          reject(new Error("No session captured and no data visible in DOM. Navigate to the activation wizard (step 2) then try again."));
           return;
         }
         // Call getActivationStatusProperties + getRecord in parallel
@@ -10634,8 +10695,23 @@
               merged.lastPublishStatus = rec.LastPublishStatus;
               merged.developerName = rec.DeveloperName;
             }
+            // Enrich with DOM scraping (attributes, contact points, sidebar)
+            var domData = scrapeActivationDOM();
+            if (domData.attributes.length > 0) {
+              merged.attributesConfig = { attributes: domData.attributes.map(function(label) { return { label: label, name: "", source: "DOM", dataSourceType: "" }; }) };
+            }
+            if (domData.contactPoints.length > 0) {
+              merged.contactPointsConfig = { contactPoints: domData.contactPoints.map(function(cp) { return { type: cp.type, contactPointEntityName: cp.desc }; }) };
+            }
+            if (domData.segmentOn) merged.activationTargetSubjectConfig = { masterLabel: domData.segmentOn };
+            if (domData.publishSchedule) merged.publishSchedule = domData.publishSchedule;
+            if (domData.platform) merged.activationTarget = Object.assign(merged.activationTarget || {}, { platformName: domData.platform });
+            if (domData.businessUnit) merged.businessUnit = domData.businessUnit;
+            if (domData.attrCount) merged._attrCount = domData.attrCount;
+            merged._source = "bookmarklet (Aura + DOM scrape)";
+
             if (Object.keys(merged).length === 0) {
-              reject(new Error("Could not read activation data via Aura."));
+              reject(new Error("Could not read activation data."));
               return;
             }
             resolve(merged);
