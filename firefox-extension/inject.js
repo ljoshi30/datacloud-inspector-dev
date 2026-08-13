@@ -11885,7 +11885,7 @@ processJSON();
       dedupedRels.push(rel);
     });
 
-    // For each relationship, determine: FK field, cardinality, direction
+    // For each relationship (from DOT graph edges), determine FK field and cardinality
     dedupedRels.forEach(function(rel) {
       var fromEnt = entityByLabel[rel.from];
       var toEnt = entityByLabel[rel.to];
@@ -11895,57 +11895,38 @@ processJSON();
       var fromClean = cleanName(rel.from);
       var toClean = cleanName(rel.to);
 
-      // Find FK: look for KQ_ fields on "from" that are NOT KQ_Id (those are FKs)
-      var fkField = "";
-      var fkOnFrom = false;
+      // Get non-Id KQ fields from both sides (these are FKs)
       var fromFKs = fromEnt.attributes.filter(function(a) {
-        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id/i.test(a.developerName) && !/^KQ_Key_Qualifier/i.test(a.developerName);
+        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
       });
       var toFKs = toEnt.attributes.filter(function(a) {
-        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id/i.test(a.developerName) && !/^KQ_Key_Qualifier/i.test(a.developerName);
+        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
       });
 
-      // Check if "from" has a FK pointing to "to"
-      fromFKs.forEach(function(fk) {
-        var hint = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "").toLowerCase();
-        // Does this FK name relate to the target entity?
-        var toName = toEnt.masterLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
-        var toDev = (toEnt.developerName || "").replace(/__dlm$|__cio$/g, "").replace(/^.*_/g, "").toLowerCase();
-        if (hint.indexOf("party") >= 0 || hint.indexOf(toName.slice(0, 5)) >= 0 || hint.indexOf(toDev.slice(0, 5)) >= 0 || hint.indexOf("insured") >= 0 || hint.indexOf("account") >= 0 || hint.indexOf("policy") >= 0 || hint.indexOf("source") >= 0) {
-          fkField = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-          fkOnFrom = true;
-        }
-      });
+      // Determine which side is the FK side:
+      // The entity with MORE non-Id KQ fields is likely the "many" side (has FKs to others)
+      var fkField = "";
+      var fkOnFrom = fromFKs.length >= toFKs.length;
 
-      // If not found on "from", check if "to" has FK pointing to "from"
-      if (!fkField) {
-        toFKs.forEach(function(fk) {
-          var hint = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "").toLowerCase();
-          var fromName = fromEnt.masterLabel.replace(/[^a-zA-Z]/g, "").toLowerCase();
-          var fromDev = (fromEnt.developerName || "").replace(/__dlm$|__cio$/g, "").replace(/^.*_/g, "").toLowerCase();
-          if (hint.indexOf("party") >= 0 || hint.indexOf(fromName.slice(0, 5)) >= 0 || hint.indexOf(fromDev.slice(0, 5)) >= 0 || hint.indexOf("insured") >= 0 || hint.indexOf("account") >= 0 || hint.indexOf("policy") >= 0 || hint.indexOf("source") >= 0) {
-            fkField = fk.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-            fkOnFrom = false;
-          }
-        });
+      if (fkOnFrom && fromFKs.length > 0) {
+        fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+      } else if (toFKs.length > 0) {
+        fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+        fkOnFrom = false;
+      } else {
+        fkField = "FK";
       }
 
-      // If still not found, use first non-Id KQ from either side
-      if (!fkField && fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); fkOnFrom = true; }
-      if (!fkField && toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); fkOnFrom = false; }
-      if (!fkField) fkField = "FK";
-
-      // Determine cardinality based on which side has the FK
-      // Entity with FK (non-Id KQ) = "many" side → ManyToOne to the other
+      // Cardinality
       var cardinality;
-      if (/Latest/i.test(rel.from) || /Latest/i.test(rel.to)) {
-        cardinality = "||--||"; // 1:1 for Latest snapshots
+      if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) {
+        cardinality = "||--||";
       } else if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) {
-        cardinality = "}o--o{"; // Many-to-Many for link tables
+        cardinality = "}o--o{";
       } else if (fkOnFrom) {
-        cardinality = "}o--||"; // from has FK → from is Many, to is One
+        cardinality = "}o--||";
       } else {
-        cardinality = "||--o{"; // to has FK → to is Many, from is One
+        cardinality = "||--o{";
       }
 
       lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + fkField + "\"");
