@@ -12671,158 +12671,150 @@ processJSON();
     ensureExploreLauncher();
     watchNavigation();
 
-  // Segment page: annotate attributes with API names (extension-only)
-  if (detailPageType === "Segment") {
-    setTimeout(function() {
-      // Find "Segment On" text to determine the DMO label
-      var segOnText = "";
-      function findSegOn(root, depth) {
-        if (depth > 8 || segOnText) return;
-        root.querySelectorAll("*").forEach(function(el) {
-          if (segOnText) return;
-          var txt = (el.textContent || "").trim();
-          if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
-            var m = txt.match(/Segment On\s*[:\s]*(.+)/i);
-            if (m) segOnText = m[1].trim();
-          }
-        });
-        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !segOnText) findSegOn(el.shadowRoot, depth + 1); });
-      }
-      findSegOn(document, 0);
-      if (!segOnText) return;
+  // Segment page: show API names on hover (extension-only, per-DMO tracking)
+  if (detailPageType === "Segment" && typeof extBridgePresent === "function" && extBridgePresent()) {
+    (function() {
+      var fieldsByDmo = {};   // "Individual" → { "contact type": "TDI_Contact_Type__c", ... }
+      var fetchingDmos = {};  // track in-flight requests
+      var currentDmo = "";    // currently displayed DMO label
 
-      // Build candidate DMO dev names
-      var words = segOnText.split(/\s+/);
-      var titleCase = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
-      var underscored = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join("_");
-      var asIs = words.join("");
-      var candidates = [
-        "TDI_" + underscored + "__dlm",
-        "TDI_" + titleCase + "__dlm",
-        "TDI_" + asIs + "__dlm",
-        underscored + "__dlm",
-        titleCase + "__dlm",
-        asIs + "__dlm",
-        "ssot__" + titleCase + "__dlm",
-        "ssot__" + underscored + "__dlm"
-      ];
-      if (words.length >= 2) {
-        var rest = words.slice(0, -1).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
-        var last = words[words.length - 1];
-        candidates.push("TDI_" + rest + last.charAt(0).toUpperCase() + last.slice(1).toLowerCase() + "__dlm");
-        candidates.push("TDI_" + rest + last + "__dlm");
+      // Generate candidate API names from a DMO label
+      function buildCandidates(label) {
+        var w = label.split(/\s+/);
+        var tc = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase(); }).join("");
+        var us = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1); }).join("_");
+        var asIs = w.join("");
+        return [
+          "TDI_" + us + "__dlm", "TDI_" + tc + "__dlm", "TDI_" + asIs + "__dlm",
+          "TDI_TDI_" + us + "__dlm", "TDI_TDI_" + tc + "__dlm",
+          us + "__dlm", tc + "__dlm", asIs + "__dlm",
+          "ssot__" + tc + "__dlm", "ssot__" + us + "__dlm"
+        ].filter(function(v, i, a) { return a.indexOf(v) === i; });
       }
-      candidates = candidates.filter(function(v, i, a) { return a.indexOf(v) === i; });
 
-      // Try each candidate via bridge
-      function tryCandidate(idx) {
-        if (idx >= candidates.length) return;
-        var dmoName = candidates[idx];
-        var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
-        var handled = false;
-        function onMsg(ev) {
-          if (handled) return;
-          if (!ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
-          handled = true;
-          window.removeEventListener("message", onMsg, false);
-          if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
-            annotateWithFields(ev.data.resp.fields);
-          } else {
-            tryCandidate(idx + 1);
+      // Fetch DMO fields via extension bridge
+      function fetchDmo(label, callback) {
+        if (fieldsByDmo[label]) { callback(); return; }
+        if (fetchingDmos[label]) return;
+        fetchingDmos[label] = true;
+        var candidates = buildCandidates(label);
+        function tryNext(idx) {
+          if (idx >= candidates.length) { fetchingDmos[label] = false; return; }
+          var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
+          var done = false;
+          function handler(ev) {
+            if (done || !ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
+            done = true; window.removeEventListener("message", handler);
+            if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
+              fieldsByDmo[label] = {};
+              ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
+              fetchingDmos[label] = false;
+              callback();
+            } else { tryNext(idx + 1); }
           }
+          window.addEventListener("message", handler);
+          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: candidates[idx], dataspace: "TDI" }, "*");
+          setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); tryNext(idx + 1); } }, 3000);
         }
-        window.addEventListener("message", onMsg, false);
-        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: dmoName, dataspace: "TDI" }, "*");
-        setTimeout(function() { if (!handled) { handled = true; window.removeEventListener("message", onMsg, false); tryCandidate(idx + 1); } }, 3000);
+        tryNext(0);
       }
 
-      // Global label→API map (accumulates across multiple DMOs)
-      var _segLabelMap = {};
-      var _segFetchedDmos = {};
-
-      function annotateWithFields(fields) {
-        fields.forEach(function(f) { _segLabelMap[f.label.toLowerCase()] = f.name + " (" + f.type + ")"; });
-        applyAnnotations();
-      }
-
-      function applyAnnotations() {
+      // Apply tooltips using ONLY the current DMO's field map
+      function applyTooltips() {
+        var map = fieldsByDmo[currentDmo];
+        if (!map) return;
         function walk(root, depth) {
           if (depth > 12) return;
           var rows = root.querySelectorAll("[data-tid]");
-          for (var ri = 0; ri < rows.length; ri++) {
-            var row = rows[ri];
-            if (row.getAttribute("data-tid") !== "attr-row") continue;
-            var nameDiv = row.querySelector(".name");
-            if (!nameDiv || nameDiv.getAttribute("data-dc-titled")) continue;
+          for (var i = 0; i < rows.length; i++) {
+            if (rows[i].getAttribute("data-tid") !== "attr-row") continue;
+            var nameDiv = rows[i].querySelector(".name");
+            if (!nameDiv) continue;
             var label = nameDiv.textContent.trim();
-            var apiName = _segLabelMap[label.toLowerCase()];
-            if (apiName) {
-              nameDiv.title = apiName;
-              nameDiv.setAttribute("data-dc-titled", "1");
-              // Also add a subtle visual indicator that tooltip is available
+            var api = map[label.toLowerCase()];
+            if (api) {
+              nameDiv.title = api;
               nameDiv.style.cursor = "help";
+            } else {
+              nameDiv.title = "";
+              nameDiv.style.cursor = "";
             }
           }
-          var allEls = root.querySelectorAll("*");
-          for (var i = 0; i < allEls.length; i++) { if (allEls[i].shadowRoot) walk(allEls[i].shadowRoot, depth + 1); }
+          var els = root.querySelectorAll("*");
+          for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) walk(els[j].shadowRoot, depth + 1); }
         }
         walk(document, 0);
       }
 
-      // Watch for new DMO panels loading (when user clicks related DMOs)
-      function watchForNewDmos() {
-        var observer = new MutationObserver(function() {
-          // Check if there's a heading like "Attributes in X" that indicates a new DMO loaded
-          function findCurrentDmo(root, depth) {
-            if (depth > 8) return "";
-            var heading = "";
-            root.querySelectorAll("*").forEach(function(el) {
-              if (heading) return;
-              var txt = (el.textContent || "").trim();
-              if (/^Attributes in /i.test(txt) && txt.length < 60) {
-                heading = txt.replace(/^Attributes in\s*/i, "").trim();
-              }
-            });
-            if (!heading) {
-              root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !heading) heading = findCurrentDmo(el.shadowRoot, depth + 1); });
+      // Detect which DMO is currently shown from "Attributes in X" heading
+      function detectCurrentDmo() {
+        var found = "";
+        function walk(root, depth) {
+          if (depth > 8 || found) return;
+          root.querySelectorAll("*").forEach(function(el) {
+            if (found) return;
+            var txt = (el.textContent || "").trim();
+            if (/^Attributes in /i.test(txt) && txt.length < 60) {
+              found = txt.replace(/^Attributes in\s*/i, "").trim();
             }
-            return heading;
-          }
-          var currentDmo = findCurrentDmo(document, 0);
-          if (currentDmo && !_segFetchedDmos[currentDmo]) {
-            _segFetchedDmos[currentDmo] = true;
-            // Build candidates for this DMO and fetch
-            var w = currentDmo.split(/\s+/);
-            var tc = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase(); }).join("");
-            var us = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1); }).join("_");
-            var cands = ["TDI_" + us + "__dlm", "TDI_" + tc + "__dlm", us + "__dlm", tc + "__dlm", "ssot__" + tc + "__dlm", "TDI_" + w.join("") + "__dlm"];
-            function tryNext(ci) {
-              if (ci >= cands.length) return;
-              var rid = "dcrel-" + Math.random().toString(36).slice(2, 8);
-              var done = false;
-              function onM(ev) {
-                if (done) return;
-                if (!ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== rid) return;
-                done = true; window.removeEventListener("message", onM, false);
-                if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
-                  annotateWithFields(ev.data.resp.fields);
-                } else { tryNext(ci + 1); }
-              }
-              window.addEventListener("message", onM, false);
-              window.postMessage({ __dcReq: "dc-dmo-fields", id: rid, dmoName: cands[ci], dataspace: "TDI" }, "*");
-              setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", onM, false); tryNext(ci + 1); } }, 3000);
-            }
-            tryNext(0);
-          }
-          // Re-apply annotations to any new rows
-          applyAnnotations();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
+          });
+          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !found) walk(el.shadowRoot, depth + 1); });
+        }
+        walk(document, 0);
+        return found;
       }
 
-      tryCandidate(0);
-      watchForNewDmos();
-    }, 4000);
+      // Main check: detect DMO, fetch if needed, apply tooltips
+      function checkAndAnnotate() {
+        var dmo = detectCurrentDmo();
+        if (!dmo) {
+          // Fallback: try "Segment On" text for initial load
+          function findSegOn(root, depth) {
+            if (depth > 8 || dmo) return;
+            root.querySelectorAll("*").forEach(function(el) {
+              if (dmo) return;
+              var txt = (el.textContent || "").trim();
+              if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
+                var m = txt.match(/Segment On\s*[:\s]*(.+)/i);
+                if (m) dmo = m[1].trim();
+              }
+            });
+            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dmo) findSegOn(el.shadowRoot, depth + 1); });
+          }
+          findSegOn(document, 0);
+        }
+        if (!dmo) return;
+
+        if (dmo !== currentDmo) {
+          currentDmo = dmo;
+          // Clear old tooltips (they belong to previous DMO)
+          function clearTitles(root, depth) {
+            if (depth > 12) return;
+            var rows = root.querySelectorAll("[data-tid]");
+            for (var i = 0; i < rows.length; i++) {
+              if (rows[i].getAttribute("data-tid") !== "attr-row") continue;
+              var nd = rows[i].querySelector(".name");
+              if (nd) { nd.title = ""; nd.style.cursor = ""; }
+            }
+            var els = root.querySelectorAll("*");
+            for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) clearTitles(els[j].shadowRoot, depth + 1); }
+          }
+          clearTitles(document, 0);
+        }
+
+        fetchDmo(currentDmo, applyTooltips);
+      }
+
+      // Run on initial load
+      setTimeout(checkAndAnnotate, 4000);
+
+      // Watch for DOM changes (user navigates between DMOs)
+      var debounceTimer = null;
+      new MutationObserver(function() {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(checkAndAnnotate, 500);
+      }).observe(document.body, { childList: true, subtree: true });
+    })();
   }
 
   } else if (detailPageType && detailPageType !== "DataExplore") {
