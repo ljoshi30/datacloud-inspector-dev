@@ -172,6 +172,28 @@ async function runDcTransform(req) {
     return { ok: true, data: j };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
+// Read DMO field metadata (for segment API name annotations). READ-only.
+async function runDcDmoFields(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
+    let url = "https://" + got.coreHost + "/services/data/v67.0/ssot/data-model-objects/" + encodeURIComponent(req.dmoName || "");
+    if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
+        return { ok: false, sessionExpired: true, error: "Session expired — refresh and retry." };
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
+    }
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
 // Read an Activation definition (documented GET, sid-cookie auth). READ-only.
 async function runDcActivation(req) {
   try {
@@ -352,6 +374,10 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "dcActivation") {
     runDcActivation({ activationId: msg.activationId, host: tabHost || msg.host }).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcDmoFields") {
+    runDcDmoFields({ dmoName: msg.dmoName, dataspace: msg.dataspace, host: tabHost || msg.host }).then(sendResponse);
     return true;
   }
   if (msg && msg.type === "dcFetchPage") {

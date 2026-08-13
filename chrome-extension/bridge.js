@@ -101,6 +101,16 @@
         );
         return;
       }
+      if (d.__dcReq === "dc-dmo-fields") {
+        api.runtime.sendMessage(
+          { type: "dcDmoFields", dmoName: d.dmoName, dataspace: d.dataspace, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-dmo-fields", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+          }
+        );
+        return;
+      }
     } catch (e) {
       try { window.postMessage({ __dcRes: (ev.data && ev.data.__dcReq === "dc-transform") ? "dc-transform" : "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, "*"); } catch (_) {}
     }

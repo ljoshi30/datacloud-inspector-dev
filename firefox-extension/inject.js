@@ -12719,7 +12719,49 @@ processJSON();
 
         var token = _segToken;
         var context = _segContext;
-        if (!token) return; // No token = can't call API
+
+        // Extension path: use bridge to get DMO fields via REST API
+        if (extBridgePresent()) {
+          var segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || "";
+          // We need the DMO developer name — get it from page text "Segment On: X"
+          var segOnLabel = "";
+          function findSegOn(root2, d2) {
+            if (d2 > 8 || segOnLabel) return;
+            root2.querySelectorAll("*").forEach(function(el2) {
+              if (segOnLabel) return;
+              var t2 = (el2.textContent || "").trim();
+              if (/^Segment On/i.test(t2) && t2.length < 60) {
+                segOnLabel = t2.replace(/^Segment On\s*/i, "").trim();
+              }
+            });
+            root2.querySelectorAll("*").forEach(function(el2) { if (el2.shadowRoot && !segOnLabel) findSegOn(el2.shadowRoot, d2 + 1); });
+          }
+          findSegOn(document, 0);
+          // Use label as-is with common prefix patterns to guess dev name
+          var guessDevName = dmoDevName + "__dlm";
+          // Request via bridge — try the guessed name
+          var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
+          function onFieldsMsg(ev) {
+            if (ev.source !== window) return;
+            var d3 = ev.data;
+            if (!d3 || d3.__dcRes !== "dc-dmo-fields" || d3.id !== reqId) return;
+            window.removeEventListener("message", onFieldsMsg, false);
+            if (d3.ok && d3.resp) {
+              var fields = d3.resp.fields || d3.resp.attributes || [];
+              if (fields.length > 0) { applyApiNames(fields); return; }
+              // If response is an object with field-like keys, try to extract
+              if (d3.resp && typeof d3.resp === "object") {
+                var possibleFields = Object.keys(d3.resp).filter(function(k) { return d3.resp[k] && d3.resp[k].name; });
+                if (possibleFields.length > 0) applyApiNames(possibleFields.map(function(k) { return d3.resp[k]; }));
+              }
+            }
+          }
+          window.addEventListener("message", onFieldsMsg, false);
+          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: guessDevName, dataspace: dataSpace || "default" }, "*");
+          return; // extension handles it
+        }
+
+        if (!token) return; // No token = can't call API (bookmarklet without Aura)
 
         // Try multiple possible dev names
         var candidates = [dmoDevName + "__dlm", "TDI_" + dmoDevName + "__dlm", "ssot__" + dmoDevName + "__dlm", dmoDevName];
