@@ -12694,13 +12694,17 @@ processJSON();
       // Build candidate DMO dev names
       var words = segOnText.split(/\s+/);
       var titleCase = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+      var underscored = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join("_");
       var asIs = words.join("");
       var candidates = [
+        "TDI_" + underscored + "__dlm",
         "TDI_" + titleCase + "__dlm",
         "TDI_" + asIs + "__dlm",
+        underscored + "__dlm",
         titleCase + "__dlm",
         asIs + "__dlm",
-        "ssot__" + titleCase + "__dlm"
+        "ssot__" + titleCase + "__dlm",
+        "ssot__" + underscored + "__dlm"
       ];
       if (words.length >= 2) {
         var rest = words.slice(0, -1).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
@@ -12756,7 +12760,6 @@ processJSON();
               nameDiv.title = apiName;
               nameDiv.setAttribute("data-dc-titled", "1");
               // Also add a subtle visual indicator that tooltip is available
-              nameDiv.style.borderBottom = "1px dotted #6366f1";
               nameDiv.style.cursor = "help";
             }
           }
@@ -12791,7 +12794,8 @@ processJSON();
             // Build candidates for this DMO and fetch
             var w = currentDmo.split(/\s+/);
             var tc = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase(); }).join("");
-            var cands = ["TDI_" + tc + "__dlm", tc + "__dlm", "ssot__" + tc + "__dlm", "TDI_" + w.join("") + "__dlm"];
+            var us = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1); }).join("_");
+            var cands = ["TDI_" + us + "__dlm", "TDI_" + tc + "__dlm", us + "__dlm", tc + "__dlm", "ssot__" + tc + "__dlm", "TDI_" + w.join("") + "__dlm"];
             function tryNext(ci) {
               if (ci >= cands.length) return;
               var rid = "dcrel-" + Math.random().toString(36).slice(2, 8);
