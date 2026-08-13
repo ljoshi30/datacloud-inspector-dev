@@ -12720,20 +12720,25 @@ processJSON();
           var label = segOnText || "";
           var candidates = [];
           if (label) {
-            // Common DC naming: prefix_CamelCase__dlm
-            var camel = label.replace(/\s+/g, "");
-            var camelLower = label.split(/\s+/).map(function(w, i) { return i === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
-            candidates.push("TDI_" + camel + "__dlm");
-            candidates.push("TDI_" + camelLower + "__dlm");
-            candidates.push(camel + "__dlm");
-            candidates.push("ssot__" + camel + "__dlm");
-            // The actual name for "Unified Individual TDIR" is "TDI_UnifiedIndividualTdir__dlm"
-            // Try removing last word as suffix variation
             var words = label.split(/\s+/);
-            if (words.length > 2) {
+            // Build CamelCase: each word title-cased (first upper, rest lower)
+            var titleCase = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+            // Build as-is joined
+            var asIs = words.join("");
+            // Common prefixes
+            candidates.push("TDI_" + titleCase + "__dlm");
+            candidates.push("TDI_" + asIs + "__dlm");
+            candidates.push(titleCase + "__dlm");
+            candidates.push(asIs + "__dlm");
+            candidates.push("ssot__" + titleCase + "__dlm");
+            candidates.push("ssot__" + asIs + "__dlm");
+            // Also try with last word variations (TDIR→Tdir, APP1→App1)
+            if (words.length >= 2) {
               var lastWord = words[words.length - 1];
-              var rest = words.slice(0, -1).join("");
-              candidates.push("TDI_" + rest + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
+              var restTitle = words.slice(0, -1).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+              candidates.push("TDI_" + restTitle + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
+              candidates.push("TDI_" + restTitle + lastWord + "__dlm");
+              candidates.push(restTitle + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
             }
           }
           // Dedupe
