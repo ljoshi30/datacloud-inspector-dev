@@ -12670,6 +12670,98 @@ processJSON();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
+
+  // Segment page: annotate attributes with API names
+  if (detailPageType === "Segment") {
+    (function annotateSegmentAttributes() {
+      try { installAuraSniffer(); } catch(e) {}
+      // Wait for page to settle, then find DMO name and fetch field metadata
+      setTimeout(function() {
+        var dmoName = "";
+        var dataSpace = "";
+        // Find DMO from "Resources > Unified Individual TDIR" breadcrumb
+        function walkForDmo(root, depth) {
+          if (depth > 8 || dmoName) return;
+          root.querySelectorAll("*").forEach(function(el) {
+            if (dmoName) return;
+            var txt = (el.textContent || "").trim();
+            if (/^Resources\s*>/i.test(txt) && txt.length < 80) {
+              dmoName = txt.replace(/^Resources\s*>\s*/i, "").trim();
+            }
+          });
+          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dmoName) walkForDmo(el.shadowRoot, depth + 1); });
+        }
+        walkForDmo(document, 0);
+        if (!dmoName) return;
+
+        // Map label to likely API dev name (try common patterns)
+        var dmoDevName = "";
+        // Try to find dev name from URL or known mappings
+        var urlMatch = location.href.match(/objectApiName=([A-Za-z0-9_]+)/i);
+        if (urlMatch) dmoDevName = urlMatch[1];
+        if (!dmoDevName) {
+          // Guess from label: "Unified Individual TDIR" → "TDI_UnifiedIndividualTdir__dlm"
+          dmoDevName = dmoName.replace(/\s+/g, "");
+        }
+
+        // Try calling getDataModelDetails via Aura
+        var token = _auraSniff && _auraSniff.token;
+        var context = _auraSniff && _auraSniff.context;
+        if (!token) return; // No token = can't call API
+
+        // Try multiple possible dev names
+        var candidates = [dmoDevName + "__dlm", "TDI_" + dmoDevName + "__dlm", "ssot__" + dmoDevName + "__dlm", dmoDevName];
+        function tryCandidate(idx) {
+          if (idx >= candidates.length) return;
+          var name = candidates[idx];
+          var act = { id: "dc-seg;a", descriptor: "serviceComponent://ui.cdp.components.controllers.datastreams.DataModeling/ACTION$getDataModelDetails", callingDescriptor: "UNKNOWN", params: { objectName: name, dataSpaceName: dataSpace || "default" } };
+          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + encodeURIComponent(context) + "&aura.token=" + encodeURIComponent(token);
+          fetch("/aura?r=556&getDataModelDetails=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+            .then(function(r) { return r.json(); }).then(function(j) {
+              var a = j.actions && j.actions[0];
+              if (a && a.state === "SUCCESS" && a.returnValue && a.returnValue.fields) {
+                applyApiNames(a.returnValue.fields);
+              } else {
+                tryCandidate(idx + 1); // Try next candidate
+              }
+            }).catch(function() { tryCandidate(idx + 1); });
+        }
+        tryCandidate(0);
+
+        function applyApiNames(fields) {
+          // Build label → API name map
+          var labelMap = {};
+          fields.forEach(function(f) { labelMap[f.label.toLowerCase()] = f.name; });
+
+          // Find all attribute rows and inject API name
+          function annotate(root, depth) {
+            if (depth > 10) return;
+            root.querySelectorAll('[data-tid="attr-row"]').forEach(function(row) {
+              if (row.querySelector(".dc-api-name")) return; // Already annotated
+              var nameDiv = row.querySelector(".name");
+              if (!nameDiv) return;
+              var label = nameDiv.textContent.trim();
+              var apiName = labelMap[label.toLowerCase()];
+              if (apiName) {
+                var badge = document.createElement("div");
+                badge.className = "dc-api-name";
+                badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.8;margin-top:1px;max-width:100%;overflow:hidden;text-overflow:ellipsis;";
+                badge.textContent = apiName;
+                nameDiv.appendChild(badge);
+              }
+            });
+            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) annotate(el.shadowRoot, depth + 1); });
+          }
+          annotate(document, 0);
+          console.log("[DC] Annotated segment attributes with API names (" + fields.length + " fields)");
+
+          // Re-annotate when DOM changes (user scrolls, switches tabs)
+          var observer = new MutationObserver(function() { annotate(document, 0); });
+          observer.observe(document.body, { childList: true, subtree: true });
+        }
+      }, 3000); // Wait 3s for page to load and sniffer to capture token
+    })();
+  }
   } else if (detailPageType && detailPageType !== "DataExplore") {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar")) return;
