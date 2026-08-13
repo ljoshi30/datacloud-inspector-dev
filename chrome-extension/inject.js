@@ -12094,7 +12094,32 @@ processJSON();
 
   function showERDModal() {
     if (!_dataModelCache.graphData) {
-      alert("No Data Model graph data captured yet. Please refresh the Data Model page (click the ↻ refresh icon), then try again.");
+      // Try to click the page's refresh button automatically
+      var refreshClicked = false;
+      function findRefreshBtn(root, depth) {
+        if (depth > 8 || refreshClicked) return;
+        root.querySelectorAll("button, lightning-button-icon, [role='button']").forEach(function(el) {
+          if (refreshClicked) return;
+          var title = (el.title || el.getAttribute("aria-label") || "").toLowerCase();
+          if (/refresh|reload/i.test(title)) {
+            el.click(); refreshClicked = true;
+            console.log("[DC ERD] Auto-clicked refresh button");
+          }
+        });
+        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) findRefreshBtn(el.shadowRoot, depth + 1); });
+      }
+      findRefreshBtn(document, 0);
+      if (refreshClicked) {
+        // Wait for data to load after refresh, then retry
+        var retries = 0;
+        var waitInterval = setInterval(function() {
+          retries++;
+          if (_dataModelCache.graphData) { clearInterval(waitInterval); showERDModal(); }
+          else if (retries > 20) { clearInterval(waitInterval); alert("Could not load graph data. Please click the refresh (↻) icon on the page manually, then try again."); }
+        }, 500);
+        return;
+      }
+      alert("No graph data captured. Please click the refresh (↻) icon on the Data Model page, then click ERD Diagram again.");
       return;
     }
 
