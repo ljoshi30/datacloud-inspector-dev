@@ -10561,13 +10561,39 @@
     return "";
   }
 
-  // Fetch activation data via extension bridge
+  // Fetch activation data — tries direct same-origin fetch first (bookmarklet), falls back to extension bridge
   function fetchActivationViaBridge(activationId) {
     return new Promise(function (resolve, reject) {
-      if (!extBridgePresent()) {
-        reject(new Error("Reading an activation needs the browser extension (the page can't reach the API directly)."));
-        return;
-      }
+      // Try direct same-origin REST call first (works on lightning domain without extension)
+      fetch("/services/data/v67.0/ssot/activations/" + encodeURIComponent(activationId), {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+        credentials: "include"
+      }).then(function(r) {
+        if (r.status === 200) return r.json();
+        // 401 = session not valid on this domain, try extension
+        return null;
+      }).then(function(j) {
+        if (j && !j.errorCode) { resolve(j); return; }
+        // Direct call failed — try extension bridge
+        if (!extBridgePresent()) {
+          reject(new Error("Could not fetch activation. Direct API returned: " + (j && j.message ? j.message : "no session") + ". Install the extension for full support."));
+          return;
+        }
+        fetchActivationViaExtension(activationId).then(resolve).catch(reject);
+      }).catch(function(err) {
+        // Fetch itself failed (CSP or network) — try extension
+        if (!extBridgePresent()) {
+          reject(new Error("Direct API call failed (" + err.message + "). Install the extension for activation export."));
+          return;
+        }
+        fetchActivationViaExtension(activationId).then(resolve).catch(reject);
+      });
+    });
+  }
+
+  function fetchActivationViaExtension(activationId) {
+    return new Promise(function (resolve, reject) {
       var id = "dca-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
       var done = false;
       function onMsg(ev) {
@@ -11527,7 +11553,7 @@ processJSON();
 
   // Create the activation launcher button (extension-only)
   function ensureActivationLauncher() {
-    if (!extBridgePresent()) return; // Extension-only feature
+    // Works via both direct fetch (bookmarklet) and extension bridge
     if (document.getElementById("dc-activation-bar")) return;
 
     var wrap = document.createElement("div");
