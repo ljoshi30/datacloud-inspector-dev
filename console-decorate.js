@@ -12734,9 +12734,10 @@ processJSON();
             console.log("[DC Seg] Failed to get fields for '" + label + "' (" + devName + ")");
             fetchingDmos[label] = false;
           }
-          window.addEventListener("message", handler);
-          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, "*");
-          setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); fetchingDmos[label] = false; } }, 5000);
+        }
+        window.addEventListener("message", handler);
+        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, "*");
+        setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); fetchingDmos[label] = false; } }, 5000);
       }
 
       // Apply tooltips using ONLY the current DMO's field map
