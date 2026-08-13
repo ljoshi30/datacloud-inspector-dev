@@ -12671,162 +12671,96 @@ processJSON();
     ensureExploreLauncher();
     watchNavigation();
 
-  // Segment page: annotate attributes with API names
+  // Segment page: annotate attributes with API names (extension-only)
   if (detailPageType === "Segment") {
-    (function annotateSegmentAttributes() {
-      // Capture Aura token by hooking XHR (self-contained, no dependency on installAuraSniffer)
-      var _segToken = "", _segContext = "";
-      var origSegSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.send = function(body) {
-        if (body && /aura\.token/.test(String(body))) {
-          var tm = String(body).match(/aura\.token=([^&]+)/);
-          var cm = String(body).match(/aura\.context=([^&]+)/);
-          if (tm && !_segToken) _segToken = decodeURIComponent(tm[1]);
-          if (cm && !_segContext) _segContext = decodeURIComponent(cm[1]);
-        }
-        return origSegSend.apply(this, arguments);
-      };
-
-      // Wait for page to settle, then annotate
-      setTimeout(function() {
-        if (XMLHttpRequest.prototype.send !== origSegSend) XMLHttpRequest.prototype.send = origSegSend;
-
-        // Get segment record ID from URL
-        var segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || "";
-
-        // Extension path: use bridge to get segment info then DMO fields
-        if (typeof extBridgePresent === "function" && extBridgePresent()) {
-          // Step 1: Call getMarketSegment via activation bridge to get DMO dev name
-          var segReqId = "dcseg1-" + Math.random().toString(36).slice(2, 8);
-          // We'll use the dc-dmo-fields bridge directly with common name patterns
-          // First try to find the DMO name from page text "Segment On: X"
-          var segOnText = "";
-          function findSegText(root, depth) {
-            if (depth > 8 || segOnText) return;
-            root.querySelectorAll("*").forEach(function(el) {
-              if (segOnText) return;
-              var txt = (el.textContent || "").trim();
-              if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
-                var match = txt.match(/Segment On\s*[:\s]*(.+)/i);
-                if (match) segOnText = match[1].trim();
-              }
-            });
-            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !segOnText) findSegText(el.shadowRoot, depth + 1); });
+    setTimeout(function() {
+      // Find "Segment On" text to determine the DMO label
+      var segOnText = "";
+      function findSegOn(root, depth) {
+        if (depth > 8 || segOnText) return;
+        root.querySelectorAll("*").forEach(function(el) {
+          if (segOnText) return;
+          var txt = (el.textContent || "").trim();
+          if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
+            var m = txt.match(/Segment On\s*[:\s]*(.+)/i);
+            if (m) segOnText = m[1].trim();
           }
-          findSegText(document, 0);
+        });
+        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !segOnText) findSegOn(el.shadowRoot, depth + 1); });
+      }
+      findSegOn(document, 0);
+      if (!segOnText) return;
 
-          // Build candidate DMO dev names from the label
-          // "Unified Individual TDIR" → try: TDI_UnifiedIndividualTdir__dlm, UnifiedIndividualTDIR__dlm, etc.
-          var label = segOnText || "";
-          var candidates = [];
-          if (label) {
-            var words = label.split(/\s+/);
-            // Build CamelCase: each word title-cased (first upper, rest lower)
-            var titleCase = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
-            // Build as-is joined
-            var asIs = words.join("");
-            // Common prefixes
-            candidates.push("TDI_" + titleCase + "__dlm");
-            candidates.push("TDI_" + asIs + "__dlm");
-            candidates.push(titleCase + "__dlm");
-            candidates.push(asIs + "__dlm");
-            candidates.push("ssot__" + titleCase + "__dlm");
-            candidates.push("ssot__" + asIs + "__dlm");
-            // Also try with last word variations (TDIR→Tdir, APP1→App1)
-            if (words.length >= 2) {
-              var lastWord = words[words.length - 1];
-              var restTitle = words.slice(0, -1).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
-              candidates.push("TDI_" + restTitle + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
-              candidates.push("TDI_" + restTitle + lastWord + "__dlm");
-              candidates.push(restTitle + lastWord.charAt(0).toUpperCase() + lastWord.slice(1).toLowerCase() + "__dlm");
+      // Build candidate DMO dev names
+      var words = segOnText.split(/\s+/);
+      var titleCase = words.map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+      var asIs = words.join("");
+      var candidates = [
+        "TDI_" + titleCase + "__dlm",
+        "TDI_" + asIs + "__dlm",
+        titleCase + "__dlm",
+        asIs + "__dlm",
+        "ssot__" + titleCase + "__dlm"
+      ];
+      if (words.length >= 2) {
+        var rest = words.slice(0, -1).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }).join("");
+        var last = words[words.length - 1];
+        candidates.push("TDI_" + rest + last.charAt(0).toUpperCase() + last.slice(1).toLowerCase() + "__dlm");
+        candidates.push("TDI_" + rest + last + "__dlm");
+      }
+      candidates = candidates.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+      // Try each candidate via bridge
+      function tryCandidate(idx) {
+        if (idx >= candidates.length) return;
+        var dmoName = candidates[idx];
+        var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
+        var handled = false;
+        function onMsg(ev) {
+          if (handled) return;
+          if (!ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
+          handled = true;
+          window.removeEventListener("message", onMsg, false);
+          if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
+            annotateWithFields(ev.data.resp.fields);
+          } else {
+            tryCandidate(idx + 1);
+          }
+        }
+        window.addEventListener("message", onMsg, false);
+        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: dmoName, dataspace: "TDI" }, "*");
+        setTimeout(function() { if (!handled) { handled = true; window.removeEventListener("message", onMsg, false); tryCandidate(idx + 1); } }, 3000);
+      }
+
+      function annotateWithFields(fields) {
+        var labelMap = {};
+        fields.forEach(function(f) { labelMap[f.label.toLowerCase()] = f.name; });
+        function annotate(root, depth) {
+          if (depth > 10) return;
+          root.querySelectorAll("[data-tid='attr-row']").forEach(function(row) {
+            if (row.querySelector(".dc-api-name")) return;
+            var nameDiv = row.querySelector(".name");
+            if (!nameDiv) return;
+            var label = nameDiv.textContent.trim();
+            var apiName = labelMap[label.toLowerCase()];
+            if (apiName) {
+              var badge = document.createElement("div");
+              badge.className = "dc-api-name";
+              badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.85;margin-top:2px;";
+              badge.textContent = apiName;
+              nameDiv.appendChild(badge);
             }
-          }
-          // Dedupe
-          candidates = candidates.filter(function(v, i, a) { return a.indexOf(v) === i; });
-
-          function tryDmoCandidate(idx) {
-            if (idx >= candidates.length) { console.log("[DC Segment] Could not find DMO fields for:", label); return; }
-            var dmoName = candidates[idx];
-            var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
-            function onMsg(ev) {
-              if (ev.source !== window) return;
-              var d = ev.data;
-              if (!d || d.__dcRes !== "dc-dmo-fields" || d.id !== reqId) return;
-              window.removeEventListener("message", onMsg, false);
-              if (d.ok && d.resp && d.resp.fields && d.resp.fields.length > 0) {
-                console.log("[DC Segment] Got " + d.resp.fields.length + " fields from " + dmoName);
-                applyApiNames(d.resp.fields);
-              } else {
-                tryDmoCandidate(idx + 1); // try next
-              }
-            }
-            window.addEventListener("message", onMsg, false);
-            window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: dmoName, dataspace: "TDI" }, "*");
-            // Timeout per candidate
-            setTimeout(function() { window.removeEventListener("message", onMsg, false); }, 5000);
-          }
-          tryDmoCandidate(0);
-          return;
+          });
+          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) annotate(el.shadowRoot, depth + 1); });
         }
+        annotate(document, 0);
+        new MutationObserver(function() { annotate(document, 0); }).observe(document.body, { childList: true, subtree: true });
+      }
 
-        // Bookmarklet Aura path (fallback)
-        var token = _segToken;
-        var context = _segContext;
-        if (!token) return;
-
-        // Try multiple possible dev names
-        var candidates = [dmoDevName + "__dlm", "TDI_" + dmoDevName + "__dlm", "ssot__" + dmoDevName + "__dlm", dmoDevName];
-        function tryCandidate(idx) {
-          if (idx >= candidates.length) return;
-          var name = candidates[idx];
-          var act = { id: "dc-seg;a", descriptor: "serviceComponent://ui.cdp.components.controllers.datastreams.DataModeling/ACTION$getDataModelDetails", callingDescriptor: "UNKNOWN", params: { objectName: name, dataSpaceName: dataSpace || "default" } };
-          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + encodeURIComponent(context) + "&aura.token=" + encodeURIComponent(token);
-          fetch("/aura?r=556&getDataModelDetails=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
-            .then(function(r) { return r.json(); }).then(function(j) {
-              var a = j.actions && j.actions[0];
-              if (a && a.state === "SUCCESS" && a.returnValue && a.returnValue.fields) {
-                applyApiNames(a.returnValue.fields);
-              } else {
-                tryCandidate(idx + 1); // Try next candidate
-              }
-            }).catch(function() { tryCandidate(idx + 1); });
-        }
-        tryCandidate(0);
-
-        function applyApiNames(fields) {
-          // Build label → API name map
-          var labelMap = {};
-          fields.forEach(function(f) { labelMap[f.label.toLowerCase()] = f.name; });
-
-          // Find all attribute rows and inject API name
-          function annotate(root, depth) {
-            if (depth > 10) return;
-            root.querySelectorAll('[data-tid="attr-row"]').forEach(function(row) {
-              if (row.querySelector(".dc-api-name")) return; // Already annotated
-              var nameDiv = row.querySelector(".name");
-              if (!nameDiv) return;
-              var label = nameDiv.textContent.trim();
-              var apiName = labelMap[label.toLowerCase()];
-              if (apiName) {
-                var badge = document.createElement("div");
-                badge.className = "dc-api-name";
-                badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.8;margin-top:1px;max-width:100%;overflow:hidden;text-overflow:ellipsis;";
-                badge.textContent = apiName;
-                nameDiv.appendChild(badge);
-              }
-            });
-            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) annotate(el.shadowRoot, depth + 1); });
-          }
-          annotate(document, 0);
-          console.log("[DC] Annotated segment attributes with API names (" + fields.length + " fields)");
-
-          // Re-annotate when DOM changes (user scrolls, switches tabs)
-          var observer = new MutationObserver(function() { annotate(document, 0); });
-          observer.observe(document.body, { childList: true, subtree: true });
-        }
-      }, 3000); // Wait 3s for page to load and sniffer to capture token
-    })();
+      tryCandidate(0);
+    }, 4000);
   }
+
   } else if (detailPageType && detailPageType !== "DataExplore") {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar")) return;
