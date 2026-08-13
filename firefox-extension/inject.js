@@ -12747,11 +12747,12 @@ processJSON();
             var label = nameDiv.textContent.trim();
             var apiName = labelMap[label.toLowerCase()];
             if (apiName) {
+              // Insert after .name div (not inside — parent has overflow:hidden + fixed height)
               var badge = document.createElement("div");
               badge.className = "dc-api-name";
-              badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.85;margin-top:2px;";
+              badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.85;margin-top:1px;padding-left:0;";
               badge.textContent = apiName;
-              nameDiv.appendChild(badge);
+              nameDiv.parentElement.insertBefore(badge, nameDiv.nextSibling);
             }
           }
           var allEls = root.querySelectorAll("*");
