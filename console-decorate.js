@@ -12732,37 +12732,92 @@ processJSON();
         setTimeout(function() { if (!handled) { handled = true; window.removeEventListener("message", onMsg, false); tryCandidate(idx + 1); } }, 3000);
       }
 
+      // Global label→API map (accumulates across multiple DMOs)
+      var _segLabelMap = {};
+      var _segFetchedDmos = {};
+
       function annotateWithFields(fields) {
-        var labelMap = {};
-        fields.forEach(function(f) { labelMap[f.label.toLowerCase()] = f.name; });
-        function annotate(root, depth) {
+        fields.forEach(function(f) { _segLabelMap[f.label.toLowerCase()] = f.name + " (" + f.type + ")"; });
+        applyAnnotations();
+      }
+
+      function applyAnnotations() {
+        function walk(root, depth) {
           if (depth > 12) return;
           var rows = root.querySelectorAll("[data-tid]");
           for (var ri = 0; ri < rows.length; ri++) {
             var row = rows[ri];
             if (row.getAttribute("data-tid") !== "attr-row") continue;
-            if (row.querySelector(".dc-api-name")) continue;
             var nameDiv = row.querySelector(".name");
-            if (!nameDiv) continue;
+            if (!nameDiv || nameDiv.getAttribute("data-dc-titled")) continue;
             var label = nameDiv.textContent.trim();
-            var apiName = labelMap[label.toLowerCase()];
+            var apiName = _segLabelMap[label.toLowerCase()];
             if (apiName) {
-              // Insert after .name div (not inside — parent has overflow:hidden + fixed height)
-              var badge = document.createElement("div");
-              badge.className = "dc-api-name";
-              badge.style.cssText = "font:500 9px SF Mono,Consolas,monospace;color:#6366f1;opacity:0.85;margin-top:1px;padding-left:0;";
-              badge.textContent = apiName;
-              nameDiv.parentElement.insertBefore(badge, nameDiv.nextSibling);
+              nameDiv.title = apiName;
+              nameDiv.setAttribute("data-dc-titled", "1");
+              // Also add a subtle visual indicator that tooltip is available
+              nameDiv.style.borderBottom = "1px dotted #6366f1";
+              nameDiv.style.cursor = "help";
             }
           }
           var allEls = root.querySelectorAll("*");
-          for (var i = 0; i < allEls.length; i++) { if (allEls[i].shadowRoot) annotate(allEls[i].shadowRoot, depth + 1); }
+          for (var i = 0; i < allEls.length; i++) { if (allEls[i].shadowRoot) walk(allEls[i].shadowRoot, depth + 1); }
         }
-        annotate(document, 0);
-        new MutationObserver(function() { annotate(document, 0); }).observe(document.body, { childList: true, subtree: true });
+        walk(document, 0);
+      }
+
+      // Watch for new DMO panels loading (when user clicks related DMOs)
+      function watchForNewDmos() {
+        var observer = new MutationObserver(function() {
+          // Check if there's a heading like "Attributes in X" that indicates a new DMO loaded
+          function findCurrentDmo(root, depth) {
+            if (depth > 8) return "";
+            var heading = "";
+            root.querySelectorAll("*").forEach(function(el) {
+              if (heading) return;
+              var txt = (el.textContent || "").trim();
+              if (/^Attributes in /i.test(txt) && txt.length < 60) {
+                heading = txt.replace(/^Attributes in\s*/i, "").trim();
+              }
+            });
+            if (!heading) {
+              root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !heading) heading = findCurrentDmo(el.shadowRoot, depth + 1); });
+            }
+            return heading;
+          }
+          var currentDmo = findCurrentDmo(document, 0);
+          if (currentDmo && !_segFetchedDmos[currentDmo]) {
+            _segFetchedDmos[currentDmo] = true;
+            // Build candidates for this DMO and fetch
+            var w = currentDmo.split(/\s+/);
+            var tc = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase(); }).join("");
+            var cands = ["TDI_" + tc + "__dlm", tc + "__dlm", "ssot__" + tc + "__dlm", "TDI_" + w.join("") + "__dlm"];
+            function tryNext(ci) {
+              if (ci >= cands.length) return;
+              var rid = "dcrel-" + Math.random().toString(36).slice(2, 8);
+              var done = false;
+              function onM(ev) {
+                if (done) return;
+                if (!ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== rid) return;
+                done = true; window.removeEventListener("message", onM, false);
+                if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
+                  annotateWithFields(ev.data.resp.fields);
+                } else { tryNext(ci + 1); }
+              }
+              window.addEventListener("message", onM, false);
+              window.postMessage({ __dcReq: "dc-dmo-fields", id: rid, dmoName: cands[ci], dataspace: "TDI" }, "*");
+              setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", onM, false); tryNext(ci + 1); } }, 3000);
+            }
+            tryNext(0);
+          }
+          // Re-apply annotations to any new rows
+          applyAnnotations();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
       }
 
       tryCandidate(0);
+      watchForNewDmos();
     }, 4000);
   }
 
