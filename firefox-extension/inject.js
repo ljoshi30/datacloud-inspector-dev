@@ -10571,18 +10571,36 @@
     return fetchActivationViaAura(activationId);
   }
 
+  var _activationAuraToken = "";
+  var _activationAuraContext = "";
+
   function fetchActivationViaAura(activationId) {
     return new Promise(function(resolve, reject) {
-      // Need Aura token — install sniffer and wait for interaction
-      if (!_auraSniff || !_auraSniff.token) {
-        try { installAuraSniffer(); } catch(e) {}
+      // Capture Aura token by intercepting XHR (same approach as our successful probes)
+      if (!_activationAuraToken) {
+        var origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(body) {
+          if (body && /aura\.token/.test(String(body))) {
+            var tm = String(body).match(/aura\.token=([^&]+)/);
+            var cm = String(body).match(/aura\.context=([^&]+)/);
+            if (tm) _activationAuraToken = decodeURIComponent(tm[1]);
+            if (cm) _activationAuraContext = decodeURIComponent(cm[1]);
+            XMLHttpRequest.prototype.send = origSend; // restore after capture
+          }
+          return origSend.apply(this, arguments);
+        };
       }
-      // Try to get token from sniffer
+      // Also try from _auraSniff
+      if (!_activationAuraToken && _auraSniff && _auraSniff.token) {
+        _activationAuraToken = _auraSniff.token;
+        _activationAuraContext = _auraSniff.context;
+      }
+
       function tryWithToken() {
-        var token = _auraSniff && _auraSniff.token;
-        var context = _auraSniff && _auraSniff.context;
+        var token = _activationAuraToken;
+        var context = _activationAuraContext;
         if (!token || !context) {
-          reject(new Error("No session captured yet. Interact with the page (scroll, click) then try again."));
+          reject(new Error("No session captured yet. Click Edit on the activation (or scroll the page) to trigger a request, then click Export Activation again."));
           return;
         }
         // Call getActivationStatusProperties + getRecord in parallel
@@ -10643,8 +10661,18 @@
           }).catch(function() { checkDone(); });
       }
 
-      // Give sniffer a moment to capture from any pending XHR
-      setTimeout(tryWithToken, 500);
+      // If token already captured, try immediately; otherwise wait for next XHR
+      if (_activationAuraToken) {
+        tryWithToken();
+      } else {
+        // Wait for user interaction to trigger an Aura XHR
+        setTimeout(function() {
+          // Check again after a brief delay
+          if (_activationAuraToken) { tryWithToken(); return; }
+          // Still no token — tell user to interact
+          reject(new Error("No session captured yet. Click Edit on the activation (or navigate to another tab and back) to trigger a request, then click Export Activation again."));
+        }, 2000);
+      }
     });
   }
 
