@@ -12670,9 +12670,10 @@ processJSON();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
+  }
 
-  // Segment page: show API names on hover (extension-only, per-DMO tracking)
-  if (detailPageType === "Segment" && typeof extBridgePresent === "function" && extBridgePresent()) {
+  // Segment page: show API names on hover (per-DMO tracking) — SEPARATE from if/else chain
+  if (detailPageType === "Segment") {
     (function() {
       var fieldsByDmo = {};   // "Individual" → { "contact type": "TDI_Contact_Type__c", ... }
       var fetchingDmos = {};  // track in-flight requests
@@ -12817,7 +12818,7 @@ processJSON();
     })();
   }
 
-  } else if (detailPageType && detailPageType !== "DataExplore") {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Segment" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation") {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar")) return;
       const wrap = document.createElement("div");
