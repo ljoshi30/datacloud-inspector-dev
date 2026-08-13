@@ -10561,8 +10561,94 @@
     return "";
   }
 
-  // Fetch activation data via extension bridge (extension-only — no Aura/session on activation pages)
+  // Fetch activation data — extension bridge (full) OR Aura fallback (basic)
   function fetchActivationViaBridge(activationId) {
+    // If extension is present, use it (full Connect API data)
+    if (extBridgePresent()) {
+      return fetchActivationViaExtension(activationId);
+    }
+    // Bookmarklet fallback: use Aura actions for basic info
+    return fetchActivationViaAura(activationId);
+  }
+
+  function fetchActivationViaAura(activationId) {
+    return new Promise(function(resolve, reject) {
+      // Need Aura token — install sniffer and wait for interaction
+      if (!_auraSniff || !_auraSniff.token) {
+        try { installAuraSniffer(); } catch(e) {}
+      }
+      // Try to get token from sniffer
+      function tryWithToken() {
+        var token = _auraSniff && _auraSniff.token;
+        var context = _auraSniff && _auraSniff.context;
+        if (!token || !context) {
+          reject(new Error("No session captured yet. Interact with the page (scroll, click) then try again."));
+          return;
+        }
+        // Call getActivationStatusProperties + getRecord in parallel
+        var results = {};
+        var pending = 2;
+        function checkDone() {
+          pending--;
+          if (pending <= 0) {
+            // Merge results into a combined object
+            var merged = {};
+            if (results.status) {
+              var rv = results.status;
+              merged.name = rv.Name; merged.status = rv.ActivationStatus;
+              merged.activationType = rv.ActivationFlowType;
+              merged.refreshType = rv.ActivationRefreshType;
+              merged.dataSpaceName = rv.DataSpace && rv.DataSpace.Name;
+              merged.activationTargetName = rv.ActivationTarget && rv.ActivationTarget.MasterLabel;
+              merged.activationTarget = { name: rv.ActivationTarget && rv.ActivationTarget.MasterLabel, platformName: rv.PlatformName || "", status: rv.ActivationStatus };
+              merged.marketSegmentId = rv.MarketSegmentId;
+              merged.activationTargetSubjectConfig = { masterLabel: rv.ActivationObjectName };
+              merged.createdDate = rv.CreatedDate;
+              merged.lastModifiedDate = rv.LastModifiedDate;
+              merged.id = rv.Id;
+              merged.membershipName = rv.ActivationObjectName;
+              merged._source = "bookmarklet-aura (basic view)";
+            }
+            if (results.record) {
+              var rec = results.record;
+              if (!merged.name && rec.Name) merged.name = rec.Name;
+              merged.processingType = rec.ActivationProcessingType;
+              merged.lastPublishStatus = rec.LastPublishStatus;
+              merged.developerName = rec.DeveloperName;
+            }
+            if (Object.keys(merged).length === 0) {
+              reject(new Error("Could not read activation data via Aura."));
+              return;
+            }
+            resolve(merged);
+          }
+        }
+
+        // Action 1: getActivationStatusProperties
+        var act1 = { id: "dca-1;a", descriptor: "serviceComponent://ui.cdp.components.controllers.MarketSegmentActivationController/ACTION$getActivationStatusProperties", callingDescriptor: "UNKNOWN", params: { recordId: activationId } };
+        var form1 = "message=" + encodeURIComponent(JSON.stringify({ actions: [act1] })) + "&aura.context=" + encodeURIComponent(context) + "&aura.token=" + encodeURIComponent(token);
+        fetch("/aura?r=881&getActivationStatusProperties=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form1, credentials: "include" })
+          .then(function(r) { return r.json(); }).then(function(j) {
+            if (j.actions && j.actions[0] && j.actions[0].state === "SUCCESS") results.status = j.actions[0].returnValue;
+            checkDone();
+          }).catch(function() { checkDone(); });
+
+        // Action 2: getRecord (DetailController)
+        var act2 = { id: "dca-2;a", descriptor: "serviceComponent://ui.force.components.controllers.detail.DetailController/ACTION$getRecord", callingDescriptor: "UNKNOWN", params: { recordId: activationId } };
+        var form2 = "message=" + encodeURIComponent(JSON.stringify({ actions: [act2] })) + "&aura.context=" + encodeURIComponent(context) + "&aura.token=" + encodeURIComponent(token);
+        fetch("/aura?r=882&getRecord=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form2, credentials: "include" })
+          .then(function(r) { return r.json(); }).then(function(j) {
+            if (j.actions && j.actions[0] && j.actions[0].state === "SUCCESS") results.record = j.actions[0].returnValue && j.actions[0].returnValue.record || j.actions[0].returnValue;
+            checkDone();
+          }).catch(function() { checkDone(); });
+      }
+
+      // Give sniffer a moment to capture from any pending XHR
+      setTimeout(tryWithToken, 500);
+    });
+  }
+
+  function fetchActivationViaExtension(activationId) {
     return new Promise(function (resolve, reject) {
       var id = "dca-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
       var done = false;
@@ -11523,7 +11609,7 @@ processJSON();
 
   // Create the activation launcher button (extension-only)
   function ensureActivationLauncher() {
-    if (!extBridgePresent()) return; // Extension-only — activation pages have no Aura token and lightning domain has no valid sid cookie for REST API
+    // Works via extension (full) or Aura fallback (basic overview)
     if (document.getElementById("dc-activation-bar")) return;
 
     var wrap = document.createElement("div");
