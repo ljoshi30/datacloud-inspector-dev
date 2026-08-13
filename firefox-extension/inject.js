@@ -10561,14 +10561,9 @@
     return "";
   }
 
-  // Fetch activation data — extension bridge (full) OR Aura fallback (basic)
+  // Fetch activation data — extension-only (reliable Connect API)
   function fetchActivationViaBridge(activationId) {
-    // If extension is present, use it (full Connect API data)
-    if (extBridgePresent()) {
-      return fetchActivationViaExtension(activationId);
-    }
-    // Bookmarklet fallback: use Aura actions for basic info
-    return fetchActivationViaAura(activationId);
+    return fetchActivationViaExtension(activationId);
   }
 
   var _activationAuraToken = "";
@@ -11729,7 +11724,8 @@ processJSON();
 
   // Create the activation launcher button (extension-only)
   function ensureActivationLauncher() {
-    // Works via extension (full) or Aura fallback (basic overview)
+    // Extension-only feature
+    if (!extBridgePresent()) return;
     if (document.getElementById("dc-activation-bar")) return;
 
     var wrap = document.createElement("div");
@@ -11787,7 +11783,8 @@ processJSON();
   var _dataModelCache = { graphData: null, dataModels: null };
 
   function isDataModelPage() {
-    return /standard-DataModel/i.test(window.location.href);
+    // Only match the Data Model graph view page, NOT DMO detail pages
+    return /standard-DataModel/i.test(window.location.href) && !/\/r\/DataModelObject\//i.test(window.location.href);
   }
 
   function ensureDataModelLauncher() {
@@ -11930,6 +11927,137 @@ processJSON();
     return lines.join("\n");
   }
 
+  function showDMOSelector(allEntities, allRelationships, sourceMap, bodyContainer, titleElement) {
+    // Create overlay with checkbox list
+    var overlay = document.createElement("div");
+    overlay.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:10;";
+
+    var panel = document.createElement("div");
+    panel.style.cssText = "background:#fff;border-radius:12px;width:600px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 60px rgba(0,0,0,.5);";
+
+    var panelHeader = document.createElement("div");
+    panelHeader.style.cssText = "padding:16px 20px;border-bottom:2px solid #e2e8f0;background:#f8f9fa;display:flex;justify-content:space-between;align-items:center;";
+    var panelTitle = document.createElement("div");
+    panelTitle.textContent = "Select DMOs to Include in ERD";
+    panelTitle.style.cssText = "font:700 15px -apple-system,sans-serif;color:#1e293b;";
+    var panelClose = document.createElement("button");
+    panelClose.textContent = "×";
+    panelClose.style.cssText = "border:none;background:none;cursor:pointer;font-size:24px;color:#64748b;padding:0;";
+    panelClose.onclick = function() { overlay.remove(); };
+    panelHeader.appendChild(panelTitle);
+    panelHeader.appendChild(panelClose);
+
+    var controls = document.createElement("div");
+    controls.style.cssText = "padding:12px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:10px;";
+    var selectAllBtn = document.createElement("button");
+    selectAllBtn.textContent = "Select All";
+    selectAllBtn.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    var deselectAllBtn = document.createElement("button");
+    deselectAllBtn.textContent = "Deselect All";
+    deselectAllBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    controls.appendChild(selectAllBtn);
+    controls.appendChild(deselectAllBtn);
+
+    var listWrap = document.createElement("div");
+    listWrap.style.cssText = "flex:1;overflow:auto;padding:16px 20px;";
+
+    var selectedSet = {};
+    allEntities.forEach(function(ent) { selectedSet[ent.developerName] = true; });
+
+    allEntities.forEach(function(ent) {
+      var item = document.createElement("label");
+      item.style.cssText = "display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;transition:background .1s;";
+      item.onmouseenter = function() { item.style.background = "#f8fafc"; };
+      item.onmouseleave = function() { item.style.background = "transparent"; };
+
+      var checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.style.cssText = "width:18px;height:18px;cursor:pointer;";
+      checkbox.onchange = function() {
+        if (checkbox.checked) {
+          selectedSet[ent.developerName] = true;
+        } else {
+          delete selectedSet[ent.developerName];
+        }
+      };
+
+      var labelText = document.createElement("div");
+      labelText.style.cssText = "flex:1;";
+      var mainLabel = document.createElement("div");
+      mainLabel.textContent = ent.masterLabel;
+      mainLabel.style.cssText = "font:600 13px -apple-system,sans-serif;color:#1e293b;";
+      var apiLabel = document.createElement("div");
+      apiLabel.textContent = ent.developerName;
+      apiLabel.style.cssText = "font:500 11px SF Mono,Consolas,monospace;color:#64748b;";
+      labelText.appendChild(mainLabel);
+      labelText.appendChild(apiLabel);
+
+      var categoryBadge = document.createElement("span");
+      categoryBadge.textContent = ent.category;
+      categoryBadge.style.cssText = "font:600 9px system-ui;text-transform:uppercase;padding:3px 8px;border-radius:4px;background:" + (ent.category === "PROFILE" ? "#d1fae5" : ent.category === "ENGAGEMENT" ? "#fed7aa" : "#e5e7eb") + ";color:" + (ent.category === "PROFILE" ? "#065f46" : ent.category === "ENGAGEMENT" ? "#92400e" : "#374151") + ";";
+
+      item.appendChild(checkbox);
+      item.appendChild(labelText);
+      item.appendChild(categoryBadge);
+      listWrap.appendChild(item);
+    });
+
+    selectAllBtn.onclick = function() {
+      listWrap.querySelectorAll("input[type=checkbox]").forEach(function(cb) {
+        cb.checked = true;
+        var devName = allEntities[Array.from(listWrap.children).indexOf(cb.parentElement)].developerName;
+        selectedSet[devName] = true;
+      });
+    };
+
+    deselectAllBtn.onclick = function() {
+      listWrap.querySelectorAll("input[type=checkbox]").forEach(function(cb) {
+        cb.checked = false;
+      });
+      selectedSet = {};
+    };
+
+    var footer = document.createElement("div");
+    footer.style.cssText = "padding:14px 20px;border-top:2px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;background:#f8f9fa;";
+    var cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
+    cancelBtn.onclick = function() { overlay.remove(); };
+    var applyBtn = document.createElement("button");
+    applyBtn.textContent = "Generate ERD";
+    applyBtn.style.cssText = "border:1px solid #8b5cf6;background:#8b5cf6;color:#fff;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
+    applyBtn.onclick = function() {
+      var selectedKeys = Object.keys(selectedSet);
+      if (selectedKeys.length === 0) {
+        alert("Please select at least one DMO.");
+        return;
+      }
+      var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
+      var filteredRelationships = allRelationships.filter(function(r) {
+        var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
+        var toEnt = allEntities.find(function(e) { return e.masterLabel === r.to; });
+        return fromEnt && toEnt && selectedSet[fromEnt.developerName] && selectedSet[toEnt.developerName];
+      });
+      bodyContainer.innerHTML = renderERDCards(filteredEntities, filteredRelationships, sourceMap);
+      titleElement.textContent = "Data Model ERD — " + filteredEntities.length + " entities, " + filteredRelationships.length + " relationships (filtered)";
+      overlay.remove();
+    };
+    footer.appendChild(cancelBtn);
+    footer.appendChild(applyBtn);
+
+    panel.appendChild(panelHeader);
+    panel.appendChild(controls);
+    panel.appendChild(listWrap);
+    panel.appendChild(footer);
+    overlay.appendChild(panel);
+    bodyContainer.parentElement.appendChild(overlay);
+
+    overlay.addEventListener("click", function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+  }
+
   function showERDModal() {
     if (!_dataModelCache.graphData) {
       alert("No Data Model graph data captured yet. Please refresh the Data Model page (click the ↻ refresh icon), then try again.");
@@ -11983,6 +12111,11 @@ processJSON();
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
     title.textContent = "Data Model ERD — " + entities.length + " entities, " + relationships.length + " relationships";
 
+    var selectBtn = document.createElement("button");
+    selectBtn.textContent = "🎯 Select DMOs";
+    selectBtn.style.cssText = "border:1px solid #8b5cf6;background:#fff;color:#8b5cf6;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
+    selectBtn.onclick = function() { showDMOSelector(entities, relationships, sourceMap, body, title); };
+
     var downloadBtn = document.createElement("button");
     downloadBtn.textContent = "⬇ Download HTML";
     downloadBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
@@ -11994,6 +12127,7 @@ processJSON();
     closeBtn.onclick = function() { modal.remove(); };
 
     header.appendChild(title);
+    header.appendChild(selectBtn);
     header.appendChild(downloadBtn);
     header.appendChild(closeBtn);
 
@@ -12001,6 +12135,45 @@ processJSON();
     var body = document.createElement("div");
     body.style.cssText = "flex:1;overflow:auto;padding:20px;background:#f8fafc;";
     body.innerHTML = renderERDCards(entities, relationships, sourceMap);
+
+    // Event delegation for copy and toggle buttons (CSP-safe)
+    body.addEventListener("click", function(e) {
+      var target = e.target;
+
+      // Handle copy buttons
+      if (target.getAttribute("data-copy-id")) {
+        var sourceId = target.getAttribute("data-copy-id");
+        var sourceEl = body.querySelector("#" + sourceId);
+        if (sourceEl) {
+          var ta = document.createElement("textarea");
+          ta.value = sourceEl.textContent;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          var originalText = target.textContent;
+          var copyLabel = target.getAttribute("data-copy-label") || "Copy";
+          target.textContent = "Copied!";
+          setTimeout(function() { target.textContent = copyLabel; }, 1500);
+        }
+      }
+
+      // Handle toggle buttons
+      if (target.getAttribute("data-toggle-id")) {
+        var toggleId = target.getAttribute("data-toggle-id");
+        var panel = body.querySelector("#" + toggleId);
+        var count = target.getAttribute("data-count");
+        if (panel) {
+          if (panel.style.display === "none") {
+            panel.style.display = "block";
+            target.textContent = "Hide Connections (" + count + ")";
+          } else {
+            panel.style.display = "none";
+            target.textContent = "View Connections (" + count + ")";
+          }
+        }
+      }
+    });
 
     content.appendChild(header);
     content.appendChild(body);
@@ -12126,9 +12299,9 @@ processJSON();
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
     html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</span>";
-    html += "<button onclick='var t=this.parentElement.nextElementSibling.textContent;var ta=document.createElement(\"textarea\");ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand(\"copy\");document.body.removeChild(ta);this.textContent=\"Copied!\";var btn=this;setTimeout(function(){btn.textContent=\"Copy\"},1500)' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
+    html += "<button data-copy-id='dc-mermaid-main' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
     html += "</div>";
-    html += "<pre style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
+    html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
     html += "</div>";
 
     // Build per-entity relationship lookup
@@ -12195,8 +12368,8 @@ processJSON();
         var mermaidId = "dc-mermaid-" + entity.id;
         var toggleId = "dc-mermaid-toggle-" + entity.id;
         html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
-        html += "<button onclick='var el=document.getElementById(\"" + toggleId + "\");if(el.style.display===\"none\"){el.style.display=\"block\";this.textContent=\"Hide Connections (" + uniqueRelList.length + ")\"}else{el.style.display=\"none\";this.textContent=\"View Connections (" + uniqueRelList.length + ")\"}' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + uniqueRelList.length + ")</button>";
-        html += "<button onclick='var t=document.getElementById(\"" + mermaidId + "\").textContent;var ta=document.createElement(\"textarea\");ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand(\"copy\");document.body.removeChild(ta);this.textContent=\"Copied!\";var btn=this;setTimeout(function(){btn.textContent=\"Copy Diagram Code\"},1200)' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Diagram Code</button>";
+        html += "<button data-toggle-id='" + toggleId + "' data-count='" + uniqueRelList.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + uniqueRelList.length + ")</button>";
+        html += "<button data-copy-id='" + mermaidId + "' data-copy-label='Copy Diagram Code' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Diagram Code</button>";
         html += "</div>";
         html += "<div id='" + toggleId + "' style='display:none;padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;'>";
         html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;'>" + esc(cardMermaid) + "</pre>";
