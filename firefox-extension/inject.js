@@ -12674,9 +12674,24 @@ processJSON();
   // Segment page: annotate attributes with API names
   if (detailPageType === "Segment") {
     (function annotateSegmentAttributes() {
-      try { installAuraSniffer(); } catch(e) {}
-      // Wait for page to settle, then find DMO name and fetch field metadata
+      // Capture Aura token by hooking XHR (self-contained, no dependency on installAuraSniffer)
+      var _segToken = "", _segContext = "";
+      var origSegSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function(body) {
+        if (body && /aura\.token/.test(String(body))) {
+          var tm = String(body).match(/aura\.token=([^&]+)/);
+          var cm = String(body).match(/aura\.context=([^&]+)/);
+          if (tm && !_segToken) _segToken = decodeURIComponent(tm[1]);
+          if (cm && !_segContext) _segContext = decodeURIComponent(cm[1]);
+        }
+        return origSegSend.apply(this, arguments);
+      };
+
+      // Wait for page to settle + token capture, then annotate
       setTimeout(function() {
+        // Restore original send
+        if (XMLHttpRequest.prototype.send !== origSegSend) XMLHttpRequest.prototype.send = origSegSend;
+
         var dmoName = "";
         var dataSpace = "";
         // Find DMO from "Resources > Unified Individual TDIR" breadcrumb
@@ -12694,19 +12709,16 @@ processJSON();
         walkForDmo(document, 0);
         if (!dmoName) return;
 
-        // Map label to likely API dev name (try common patterns)
+        // Map label to likely API dev name
         var dmoDevName = "";
-        // Try to find dev name from URL or known mappings
         var urlMatch = location.href.match(/objectApiName=([A-Za-z0-9_]+)/i);
         if (urlMatch) dmoDevName = urlMatch[1];
         if (!dmoDevName) {
-          // Guess from label: "Unified Individual TDIR" → "TDI_UnifiedIndividualTdir__dlm"
           dmoDevName = dmoName.replace(/\s+/g, "");
         }
 
-        // Try calling getDataModelDetails via Aura
-        var token = _auraSniff && _auraSniff.token;
-        var context = _auraSniff && _auraSniff.context;
+        var token = _segToken;
+        var context = _segContext;
         if (!token) return; // No token = can't call API
 
         // Try multiple possible dev names
