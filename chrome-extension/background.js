@@ -172,6 +172,26 @@ async function runDcTransform(req) {
     return { ok: true, data: j };
   } catch (e) { return { ok: false, error: String(e) }; }
 }
+// List all DMOs (label + dev name). Used to build label→devName lookup.
+async function runDcDmoList(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No session cookie" };
+    let url = "https://" + got.coreHost + "/services/data/v67.0/ssot/data-model-objects";
+    if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em };
+    }
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
 // Read DMO field metadata (for segment API name annotations). READ-only.
 async function runDcDmoFields(req) {
   try {
@@ -374,6 +394,10 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "dcActivation") {
     runDcActivation({ activationId: msg.activationId, host: tabHost || msg.host }).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcDmoList") {
+    runDcDmoList({ dataspace: msg.dataspace, host: tabHost || msg.host }).then(sendResponse);
     return true;
   }
   if (msg && msg.type === "dcDmoFields") {

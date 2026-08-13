@@ -12678,50 +12678,65 @@ processJSON();
       var fieldsByDmo = {};   // "Individual" → { "contact type": "TDI_Contact_Type__c", ... }
       var fetchingDmos = {};  // track in-flight requests
       var currentDmo = "";    // currently displayed DMO label
+      var labelToDevName = {}; // "Individual Additional Information" → "TDI_TDI_GI_Individual_Additional__dlm"
+      var dmoListLoaded = false;
 
-      // Generate candidate API names from a DMO label
-      function buildCandidates(label) {
-        var w = label.split(/\s+/);
-        var tc = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1).toLowerCase(); }).join("");
-        var us = w.map(function(x) { return x.charAt(0).toUpperCase() + x.slice(1); }).join("_");
-        var asIs = w.join("");
-        return [
-          "TDI_" + us + "__dlm", "TDI_" + tc + "__dlm", "TDI_" + asIs + "__dlm",
-          "TDI_TDI_" + us + "__dlm", "TDI_TDI_" + tc + "__dlm",
-          us + "__dlm", tc + "__dlm", asIs + "__dlm",
-          "ssot__" + tc + "__dlm", "ssot__" + us + "__dlm"
-        ].filter(function(v, i, a) { return a.indexOf(v) === i; });
+      // Step 1: Fetch ALL DMO names (label→devName map) — one API call
+      function loadDmoList(callback) {
+        if (dmoListLoaded) { callback(); return; }
+        var reqId = "dclist-" + Math.random().toString(36).slice(2, 8);
+        function onList(ev) {
+          if (!ev.data || ev.data.__dcRes !== "dc-dmo-list" || ev.data.id !== reqId) return;
+          window.removeEventListener("message", onList);
+          if (ev.data.ok && ev.data.resp) {
+            // Response could be array of DMOs or object with array
+            var dmos = Array.isArray(ev.data.resp) ? ev.data.resp : (ev.data.resp.dataModelObjects || ev.data.resp.objects || []);
+            dmos.forEach(function(d) {
+              var label = d.label || d.masterLabel || "";
+              var name = d.name || d.developerName || "";
+              if (label && name) labelToDevName[label.toLowerCase()] = name;
+            });
+            dmoListLoaded = true;
+            console.log("[DC Seg] Loaded DMO list: " + Object.keys(labelToDevName).length + " DMOs");
+          } else {
+            console.log("[DC Seg] DMO list failed:", ev.data.error || "unknown error");
+          }
+          callback();
+        }
+        window.addEventListener("message", onList);
+        window.postMessage({ __dcReq: "dc-dmo-list", id: reqId, dataspace: "TDI" }, "*");
+        setTimeout(function() { window.removeEventListener("message", onList); callback(); }, 8000);
       }
 
-      // Fetch DMO fields via extension bridge
+      // Fetch DMO fields using exact dev name from lookup
       function fetchDmo(label, callback) {
         if (fieldsByDmo[label]) { callback(); return; }
         if (fetchingDmos[label]) return;
         fetchingDmos[label] = true;
-        var candidates = buildCandidates(label);
-        function tryNext(idx) {
-          if (idx >= candidates.length) { fetchingDmos[label] = false; return; }
-          var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
-          var done = false;
-          function handler(ev) {
-            if (done || !ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
-            done = true; window.removeEventListener("message", handler);
-            if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
-              fieldsByDmo[label] = {};
-              ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
-              fetchingDmos[label] = false;
-              console.log("[DC Seg] Fetched " + ev.data.resp.fields.length + " fields for '" + label + "' from " + candidates[idx]);
-              callback();
-            } else {
-              console.log("[DC Seg] Candidate " + candidates[idx] + " failed for '" + label + "', trying next...");
-              tryNext(idx + 1);
-            }
+        var devName = labelToDevName[label.toLowerCase()];
+        if (!devName) {
+          console.log("[DC Seg] No dev name found for '" + label + "' in DMO list");
+          fetchingDmos[label] = false;
+          return;
+        }
+        var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
+        var done = false;
+        function handler(ev) {
+          if (done || !ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
+          done = true; window.removeEventListener("message", handler);
+          if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
+            fieldsByDmo[label] = {};
+            ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
+            fetchingDmos[label] = false;
+            console.log("[DC Seg] Fetched " + ev.data.resp.fields.length + " fields for '" + label + "' from " + devName);
+            callback();
+          } else {
+            console.log("[DC Seg] Failed to get fields for '" + label + "' (" + devName + ")");
+            fetchingDmos[label] = false;
           }
           window.addEventListener("message", handler);
-          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: candidates[idx], dataspace: "TDI" }, "*");
-          setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); tryNext(idx + 1); } }, 3000);
-        }
-        tryNext(0);
+          window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, "*");
+          setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); fetchingDmos[label] = false; } }, 5000);
       }
 
       // Apply tooltips using ONLY the current DMO's field map
@@ -12811,8 +12826,8 @@ processJSON();
         fetchDmo(currentDmo, applyTooltips);
       }
 
-      // Run on initial load
-      setTimeout(checkAndAnnotate, 4000);
+      // Run on initial load — first get ALL DMO names, then annotate
+      setTimeout(function() { loadDmoList(checkAndAnnotate); }, 3000);
 
       // Watch for DOM changes (user navigates between DMOs)
       var debounceTimer = null;
