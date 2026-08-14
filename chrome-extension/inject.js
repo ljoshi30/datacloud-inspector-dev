@@ -12283,17 +12283,17 @@ processJSON();
         var waitInterval = setInterval(function() {
           retries++;
           if (_dataModelCache.graphData) { clearInterval(waitInterval); showERDModal(); }
-          else if (retries > 20) { clearInterval(waitInterval); alert("Could not load graph data. Please click the refresh (↻) icon on the page manually, then try again."); }
+          else if (retries > 20) { clearInterval(waitInterval); var msg = document.createElement("div"); msg.style.cssText = "position:fixed;bottom:80px;left:20px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:8px;font:12px system-ui;z-index:2147483646;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,.15);"; msg.textContent = "Change the Data Space dropdown or click refresh (↻) to load graph data, then click ERD again."; document.body.appendChild(msg); setTimeout(function() { msg.remove(); }, 8000); }
         }, 500);
         return;
       }
-      alert("No graph data captured. Please click the refresh (↻) icon on the Data Model page, then click ERD Diagram again.");
+      var msg2 = document.createElement("div"); msg2.style.cssText = "position:fixed;bottom:80px;left:20px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:8px;font:12px system-ui;z-index:2147483646;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,.15);"; msg2.textContent = "Change the Data Space dropdown or click refresh (↻) to load graph data, then click ERD again."; document.body.appendChild(msg2); setTimeout(function() { msg2.remove(); }, 8000);
       return;
     }
 
     var entities = parseDOTGraph(_dataModelCache.graphData);
     if (!entities || entities.length === 0) {
-      alert("Failed to parse Data Model graph. Please try refreshing the page.");
+      var msg3 = document.createElement("div"); msg3.style.cssText = "position:fixed;bottom:80px;left:20px;background:#fee2e2;border:1px solid #ef4444;color:#991b1b;padding:12px 16px;border-radius:8px;font:12px system-ui;z-index:2147483646;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,.15);"; msg3.textContent = "Failed to parse graph data. Try changing the Data Space dropdown or refreshing."; document.body.appendChild(msg3); setTimeout(function() { msg3.remove(); }, 8000);
       return;
     }
 
@@ -12336,7 +12336,8 @@ processJSON();
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    title.textContent = "Data Model ERD — " + entities.length + " entities, " + relationships.length + " relationships";
+    var dsName = (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0] && _dataModelCache.dataModels.dataModels[0].dataSpaceName) || "";
+    title.textContent = "Data Model ERD" + (dsName ? " [" + dsName + "]" : "") + " — " + entities.length + " entities, " + relationships.length + " relationships";
 
     var selectBtn = document.createElement("button");
     selectBtn.textContent = "🎯 Select DMOs";
@@ -13044,9 +13045,9 @@ processJSON();
     })();
   }
 
-  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation") {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/standard-DataModel/i.test(window.location.href)) {
     function ensureDetailLauncher() {
-      if (document.getElementById("dc-bar")) return;
+      if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar")) return;
       const wrap = document.createElement("div");
       wrap.id = "dc-bar";
       wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none";
