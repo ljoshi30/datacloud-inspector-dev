@@ -12260,16 +12260,21 @@ processJSON();
       // Try to click the page's refresh button automatically
       var refreshClicked = false;
       function findRefreshBtn(root, depth) {
-        if (depth > 8 || refreshClicked) return;
+        if (depth > 12 || refreshClicked) return;
         root.querySelectorAll("button, lightning-button-icon, [role='button']").forEach(function(el) {
           if (refreshClicked) return;
           var title = (el.title || el.getAttribute("aria-label") || "").toLowerCase();
-          if (/refresh|reload/i.test(title)) {
+          if (/refresh data|refresh/i.test(title)) {
+            // For lightning-button-icon, click the inner button in shadow root
+            if (el.shadowRoot) {
+              var innerBtn = el.shadowRoot.querySelector("button");
+              if (innerBtn) { innerBtn.click(); refreshClicked = true; console.log("[DC ERD] Clicked inner button of", el.tagName); return; }
+            }
             el.click(); refreshClicked = true;
-            console.log("[DC ERD] Auto-clicked refresh button");
+            console.log("[DC ERD] Auto-clicked refresh:", el.tagName, title);
           }
         });
-        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot) findRefreshBtn(el.shadowRoot, depth + 1); });
+        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !refreshClicked) findRefreshBtn(el.shadowRoot, depth + 1); });
       }
       findRefreshBtn(document, 0);
       if (refreshClicked) {
