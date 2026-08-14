@@ -11862,20 +11862,82 @@ processJSON();
     return edges;
   }
 
+  // Verify if a relationship between two entities is real based on KQ fields
+  // Returns: { verified: boolean, fkField: string, fkSide: "from"|"to", cardinality: string } or null
+  function verifyRelationship(fromEnt, toEnt) {
+    if (!fromEnt || !toEnt || fromEnt.masterLabel === toEnt.masterLabel) return null;
+
+    // Get non-Id KQ fields from both sides (these are potential FKs)
+    var fromFKs = fromEnt.attributes.filter(function(a) {
+      return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
+    });
+    var toFKs = toEnt.attributes.filter(function(a) {
+      return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
+    });
+
+    // Get all identifiers from both entities (for matching)
+    var fromIdentifiers = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey; }).map(function(a) {
+      return a.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+    });
+    var toIdentifiers = toEnt.attributes.filter(function(a) { return a.isPrimaryKey; }).map(function(a) {
+      return a.developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+    });
+
+    // Check if FROM has a KQ field that matches TO's identifier
+    for (var i = 0; i < fromFKs.length; i++) {
+      var fkName = fromFKs[i].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+      // Check if this FK field name matches any of TO's identifiers
+      for (var j = 0; j < toIdentifiers.length; j++) {
+        if (fkName.toLowerCase() === toIdentifiers[j].toLowerCase() ||
+            toIdentifiers[j].toLowerCase().indexOf(fkName.toLowerCase()) >= 0 ||
+            fkName.toLowerCase().indexOf(toIdentifiers[j].toLowerCase()) >= 0) {
+          // FROM has FK to TO → FROM is "many" side
+          var card;
+          if (/Latest|_SM_/i.test(fromEnt.masterLabel) || /Latest|_SM_/i.test(toEnt.masterLabel)) {
+            card = "||--||";
+          } else if (/Unified.*Link|Link/i.test(fromEnt.masterLabel) || /Unified.*Link|Link/i.test(toEnt.masterLabel)) {
+            card = "}o--o{";
+          } else {
+            card = "}o--||"; // Many FROM to One TO
+          }
+          return { verified: true, fkField: fkName, kqField: fromFKs[i].developerName, fkSide: "from", cardinality: card };
+        }
+      }
+    }
+
+    // Check if TO has a KQ field that matches FROM's identifier
+    for (var k = 0; k < toFKs.length; k++) {
+      var fkName2 = toFKs[k].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
+      for (var l = 0; l < fromIdentifiers.length; l++) {
+        if (fkName2.toLowerCase() === fromIdentifiers[l].toLowerCase() ||
+            fromIdentifiers[l].toLowerCase().indexOf(fkName2.toLowerCase()) >= 0 ||
+            fkName2.toLowerCase().indexOf(fromIdentifiers[l].toLowerCase()) >= 0) {
+          // TO has FK to FROM → TO is "many" side
+          var card2;
+          if (/Latest|_SM_/i.test(fromEnt.masterLabel) || /Latest|_SM_/i.test(toEnt.masterLabel)) {
+            card2 = "||--||";
+          } else if (/Unified.*Link|Link/i.test(fromEnt.masterLabel) || /Unified.*Link|Link/i.test(toEnt.masterLabel)) {
+            card2 = "}o--o{";
+          } else {
+            card2 = "||--o{"; // One FROM to Many TO
+          }
+          return { verified: true, fkField: fkName2, kqField: toFKs[k].developerName, fkSide: "to", cardinality: card2 };
+        }
+      }
+    }
+
+    return null; // No verified relationship found
+  }
+
   function generateMermaidERD(entities, relationships) {
     var lines = ["erDiagram"];
     var cleanName = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
 
-    // Build entity lookup by label AND by id for edge resolution
+    // Build entity lookup by label
     var entityByLabel = {};
-    var entityById = {};
-    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; entityById[ent.id] = ent; });
+    entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
 
-    // Build relationship table from KQ fields + edges
-    // Logic: For each edge A→B, find the FK field on A that points to B
-    // KQ_<FieldName>__c where FieldName != "Id" = foreign key
-    // KQ_Id__c = primary key (self-identifier)
-    // The entity that holds the FK (non-Id KQ) is the "many" side
+    // Deduplicate relationships
     var seen = {};
     var dedupedRels = [];
     relationships.forEach(function(rel) {
@@ -11885,51 +11947,17 @@ processJSON();
       dedupedRels.push(rel);
     });
 
-    // For each relationship (from DOT graph edges), determine FK field and cardinality
+    // Only include VERIFIED relationships (those with matching KQ fields)
     dedupedRels.forEach(function(rel) {
       var fromEnt = entityByLabel[rel.from];
       var toEnt = entityByLabel[rel.to];
-      if (!fromEnt || !toEnt) return;
-      if (rel.from === rel.to) return;
+      var verified = verifyRelationship(fromEnt, toEnt);
 
-      var fromClean = cleanName(rel.from);
-      var toClean = cleanName(rel.to);
-
-      // Get non-Id KQ fields from both sides (these are FKs)
-      var fromFKs = fromEnt.attributes.filter(function(a) {
-        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
-      });
-      var toFKs = toEnt.attributes.filter(function(a) {
-        return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
-      });
-
-      // Determine which side is the FK side:
-      // The entity with MORE non-Id KQ fields is likely the "many" side (has FKs to others)
-      var fkField = "";
-      var fkOnFrom = fromFKs.length >= toFKs.length;
-
-      if (fkOnFrom && fromFKs.length > 0) {
-        fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-      } else if (toFKs.length > 0) {
-        fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-        fkOnFrom = false;
-      } else {
-        fkField = "FK";
+      if (verified && verified.verified) {
+        var fromClean = cleanName(rel.from);
+        var toClean = cleanName(rel.to);
+        lines.push("    " + fromClean + " " + verified.cardinality + " " + toClean + " : \"" + verified.fkField + "\"");
       }
-
-      // Cardinality
-      var cardinality;
-      if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) {
-        cardinality = "||--||";
-      } else if (/Unified.*Link|Link/i.test(rel.from) || /Unified.*Link|Link/i.test(rel.to)) {
-        cardinality = "}o--o{";
-      } else if (fkOnFrom) {
-        cardinality = "}o--||";
-      } else {
-        cardinality = "||--o{";
-      }
-
-      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + fkField + "\"");
     });
 
     // Add entity definitions with key fields
@@ -12067,15 +12095,116 @@ processJSON();
         alert("Please select at least one DMO.");
         return;
       }
-      var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
-      var filteredRelationships = allRelationships.filter(function(r) {
-        var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
-        var toEnt = allEntities.find(function(e) { return e.masterLabel === r.to; });
-        return fromEnt && toEnt && selectedSet[fromEnt.developerName] && selectedSet[toEnt.developerName];
+
+      // Find related unselected DMOs based on VERIFIED relationships
+      var selectedEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
+      var unselectedEntities = allEntities.filter(function(e) { return !selectedSet[e.developerName]; });
+      var relatedUnselected = {};
+
+      selectedEntities.forEach(function(selEnt) {
+        unselectedEntities.forEach(function(unselEnt) {
+          var verified = verifyRelationship(selEnt, unselEnt);
+          if (verified && verified.verified) {
+            relatedUnselected[unselEnt.developerName] = unselEnt;
+          }
+        });
       });
-      bodyContainer.innerHTML = renderERDCards(filteredEntities, filteredRelationships, sourceMap);
-      titleElement.textContent = "Data Model ERD — " + filteredEntities.length + " entities, " + filteredRelationships.length + " relationships (filtered)";
-      overlay.remove();
+
+      var relatedList = Object.keys(relatedUnselected);
+      if (relatedList.length > 0) {
+        // Show suggestion dialog
+        var suggestOverlay = document.createElement("div");
+        suggestOverlay.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:11;";
+
+        var suggestPanel = document.createElement("div");
+        suggestPanel.style.cssText = "background:#fff;border-radius:8px;padding:20px;max-width:500px;box-shadow:0 12px 40px rgba(0,0,0,.3);";
+
+        var suggestTitle = document.createElement("div");
+        suggestTitle.textContent = "Related DMOs Found";
+        suggestTitle.style.cssText = "font:700 15px -apple-system,sans-serif;color:#1e293b;margin-bottom:10px;";
+
+        var suggestMsg = document.createElement("div");
+        suggestMsg.textContent = selectedKeys.length + " selected DMO" + (selectedKeys.length > 1 ? "s have" : " has") + " verified relationships with " + relatedList.length + " unselected DMO" + (relatedList.length > 1 ? "s" : "") + ":";
+        suggestMsg.style.cssText = "font:13px -apple-system,sans-serif;color:#475569;margin-bottom:12px;";
+
+        var suggestListDiv = document.createElement("div");
+        suggestListDiv.style.cssText = "max-height:200px;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:16px;";
+        relatedList.forEach(function(devName) {
+          var ent = relatedUnselected[devName];
+          var item = document.createElement("div");
+          item.textContent = "• " + ent.masterLabel + " (" + ent.developerName + ")";
+          item.style.cssText = "font:12px -apple-system,sans-serif;color:#1e293b;padding:3px 0;";
+          suggestListDiv.appendChild(item);
+        });
+
+        var suggestFooter = document.createElement("div");
+        suggestFooter.style.cssText = "display:flex;justify-content:flex-end;gap:10px;";
+
+        var skipBtn = document.createElement("button");
+        skipBtn.textContent = "Skip";
+        skipBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
+        skipBtn.onclick = function() {
+          suggestOverlay.remove();
+          // Proceed with original selection
+          var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
+          var filteredRelationships = allRelationships.filter(function(r) {
+            var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
+            var toEnt = allEntities.find(function(e) { return e.masterLabel === r.to; });
+            return fromEnt && toEnt && selectedSet[fromEnt.developerName] && selectedSet[toEnt.developerName];
+          });
+          bodyContainer.innerHTML = renderERDCards(filteredEntities, filteredRelationships, sourceMap);
+          titleElement.textContent = "Data Model ERD — " + filteredEntities.length + " entities, " + filteredRelationships.length + " relationships (filtered)";
+          overlay.remove();
+        };
+
+        var addBtn = document.createElement("button");
+        addBtn.textContent = "Add Related DMOs";
+        addBtn.style.cssText = "border:1px solid #8b5cf6;background:#8b5cf6;color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
+        addBtn.onclick = function() {
+          // Add related DMOs to selection
+          relatedList.forEach(function(devName) { selectedSet[devName] = true; });
+          suggestOverlay.remove();
+          // Update checkboxes
+          var allCheckboxes = listWrap.querySelectorAll("input[type=checkbox]");
+          allCheckboxes.forEach(function(cb, idx) {
+            var ent = allEntities[idx];
+            if (ent && selectedSet[ent.developerName]) {
+              cb.checked = true;
+            }
+          });
+          // Regenerate
+          var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
+          var filteredRelationships = allRelationships.filter(function(r) {
+            var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
+            var toEnt = allEntities.find(function(e) { return e.masterLabel === r.to; });
+            return fromEnt && toEnt && selectedSet[fromEnt.developerName] && selectedSet[toEnt.developerName];
+          });
+          bodyContainer.innerHTML = renderERDCards(filteredEntities, filteredRelationships, sourceMap);
+          titleElement.textContent = "Data Model ERD — " + filteredEntities.length + " entities, " + filteredRelationships.length + " relationships (filtered)";
+          overlay.remove();
+        };
+
+        suggestFooter.appendChild(skipBtn);
+        suggestFooter.appendChild(addBtn);
+
+        suggestPanel.appendChild(suggestTitle);
+        suggestPanel.appendChild(suggestMsg);
+        suggestPanel.appendChild(suggestListDiv);
+        suggestPanel.appendChild(suggestFooter);
+        suggestOverlay.appendChild(suggestPanel);
+        panel.appendChild(suggestOverlay);
+      } else {
+        // No related DMOs, proceed directly
+        var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
+        var filteredRelationships = allRelationships.filter(function(r) {
+          var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
+          var toEnt = allEntities.find(function(e) { return e.masterLabel === r.to; });
+          return fromEnt && toEnt && selectedSet[fromEnt.developerName] && selectedSet[toEnt.developerName];
+        });
+        bodyContainer.innerHTML = renderERDCards(filteredEntities, filteredRelationships, sourceMap);
+        titleElement.textContent = "Data Model ERD — " + filteredEntities.length + " entities, " + filteredRelationships.length + " relationships (filtered)";
+        overlay.remove();
+      }
     };
     footer.appendChild(cancelBtn);
     footer.appendChild(applyBtn);
@@ -12355,7 +12484,7 @@ processJSON();
 
     // ── Mermaid ERD Diagram (copyable) ──
     var mermaidCode = generateMermaidERD(entities, relationships);
-    html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;position:relative;'>";
+    html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:12px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
     html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</span>";
     html += "<button data-copy-id='dc-mermaid-main' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
@@ -12363,13 +12492,23 @@ processJSON();
     html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
     html += "</div>";
 
+    // ── Cardinality Legend ──
+    html += "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 16px;margin-bottom:24px;'>";
+    html += "<div style='font:600 11px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;'>Relationship Symbols</div>";
+    html += "<div style='display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font:11px SF Mono,Consolas,monospace;color:#475569;'>";
+    html += "<code style='color:#0369a1;'>||--o{</code><span>One to Many (parent has one, child has many)</span>";
+    html += "<code style='color:#0369a1;'>}o--||</code><span>Many to One (this entity has FK to the other)</span>";
+    html += "<code style='color:#0369a1;'>||--||</code><span>One to One (e.g., Latest snapshot)</span>";
+    html += "<code style='color:#0369a1;'>}o--o{</code><span>Many to Many (link/junction table)</span>";
+    html += "</div></div>";
+
     // Build entity lookup for relationship table
     var entityByLabel = {};
     entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
 
     // ── Relationship Table (Object | FK Field | KQ | Cardinality | Related Object) ──
     html += "<div style='border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:24px;'>";
-    html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Relationship Table</div>";
+    html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Verified Relationships (KQ-based)</div>";
     html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Key Qualifier</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related PK</th></tr></thead><tbody>";
     var relTableSeen = {};
     relationships.forEach(function(rel) {
@@ -12379,18 +12518,20 @@ processJSON();
       var fromEnt = entityByLabel[rel.from];
       var toEnt = entityByLabel[rel.to];
       if (!fromEnt || !toEnt || rel.from === rel.to) return;
-      // Find the FK side (entity with non-Id KQ pointing to the other)
-      var fkSide = fromEnt;
-      var pkSide = toEnt;
-      var fkField = "", kqField = "", pkField = "KQ_Id__c";
-      var fkLabel = rel.from, pkLabel = rel.to;
-      var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
-      var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
-      if (fromFKs.length > 0) { kqField = fromFKs[0].developerName; fkField = kqField.replace(/^KQ_/, "").replace(/__c$/, ""); }
-      else if (toFKs.length > 0) { fkSide = toEnt; pkSide = fromEnt; fkLabel = rel.to; pkLabel = rel.from; kqField = toFKs[0].developerName; fkField = kqField.replace(/^KQ_/, "").replace(/__c$/, ""); }
-      else { fkField = "—"; kqField = "—"; }
-      var card = /Latest/i.test(fkLabel) || /Latest/i.test(pkLabel) ? "OneToOne" : /Link/i.test(fkLabel) || /Link/i.test(pkLabel) ? "ManyToMany" : "ManyToOne";
-      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(fkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>" + esc(kqField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + (card === "ManyToOne" ? "#fef3c7" : card === "OneToOne" ? "#dcfce7" : "#e0f2fe") + ";color:" + (card === "ManyToOne" ? "#92400e" : card === "OneToOne" ? "#166534" : "#0369a1") + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + card + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(pkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>KQ_Id__c</td></tr>";
+
+      // Use verified relationship logic
+      var verified = verifyRelationship(fromEnt, toEnt);
+      if (!verified || !verified.verified) return; // Skip unverified relationships
+
+      var fkLabel = verified.fkSide === "from" ? rel.from : rel.to;
+      var pkLabel = verified.fkSide === "from" ? rel.to : rel.from;
+      var kqField = verified.kqField;
+      var fkField = verified.fkField;
+      var cardName = verified.cardinality === "||--o{" ? "OneToMany" : verified.cardinality === "}o--||" ? "ManyToOne" : verified.cardinality === "||--||" ? "OneToOne" : "ManyToMany";
+      var cardColor = cardName === "ManyToOne" ? "#fef3c7" : cardName === "OneToOne" || cardName === "OneToMany" ? "#dcfce7" : "#e0f2fe";
+      var cardTextColor = cardName === "ManyToOne" ? "#92400e" : cardName === "OneToOne" || cardName === "OneToMany" ? "#166534" : "#0369a1";
+
+      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(fkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>" + esc(kqField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + cardColor + ";color:" + cardTextColor + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + cardName + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(pkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>KQ_Id__c</td></tr>";
     });
     html += "</tbody></table></div></div>";
 
@@ -12431,38 +12572,50 @@ processJSON();
         html += "</div>";
       }
 
-      // Relationships for this entity — show as per-card Mermaid snippet with copy button
+      // Relationships for this entity — show as readable list with verified relationships only
       var entityRels = relsByEntity[entity.masterLabel] || [];
       var uniqueTargets = {};
       entityRels.forEach(function(r) { if (!uniqueTargets[r.target]) uniqueTargets[r.target] = r; });
       var uniqueRelList = Object.keys(uniqueTargets).map(function(k) { return uniqueTargets[k]; });
-      if (uniqueRelList.length > 0) {
-        var cleanN = function(n) { return n.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, ""); };
-        var entityClean = cleanN(entity.masterLabel);
-        var cardMermaid = "erDiagram\n";
-        uniqueRelList.forEach(function(r) {
-          var targetClean = cleanN(r.target);
-          var card = /Latest/i.test(r.target) ? "||--||" : "||--o{";
-          // Infer linking field from KQ_ fields
-          var linkLabel = r.label ? r.label.replace(/__c$|__dlm$/g,"") : "";
-          if (!linkLabel) {
-            var kqs = entity.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0; });
-            for (var ki = 0; ki < kqs.length; ki++) {
-              var hint = kqs[ki].developerName.replace(/^KQ_/, "").replace(/__c$/, "");
-              if (hint !== "Id") { linkLabel = hint; break; }
-            }
-          }
-          if (!linkLabel) linkLabel = "FK";
-          cardMermaid += "    " + entityClean + " " + card + " " + targetClean + " : \"" + linkLabel + "\"\n";
-        });
-        var mermaidId = "dc-mermaid-" + entity.id;
-        var toggleId = "dc-mermaid-toggle-" + entity.id;
+
+      // Filter to only VERIFIED relationships
+      var verifiedRels = [];
+      uniqueRelList.forEach(function(r) {
+        var targetEnt = entityByLabel[r.target];
+        var verified = verifyRelationship(entity, targetEnt);
+        if (verified && verified.verified) {
+          var cardType = "";
+          if (verified.cardinality === "||--o{") cardType = "1:Many";
+          else if (verified.cardinality === "}o--||") cardType = "Many:1";
+          else if (verified.cardinality === "||--||") cardType = "1:1";
+          else if (verified.cardinality === "}o--o{") cardType = "Many:Many";
+
+          verifiedRels.push({
+            target: r.target,
+            fkField: verified.fkField,
+            cardType: cardType,
+            direction: verified.fkSide === "from" ? "out" : "in"
+          });
+        }
+      });
+
+      if (verifiedRels.length > 0) {
+        var toggleId = "dc-rels-toggle-" + entity.id;
         html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
-        html += "<button data-toggle-id='" + toggleId + "' data-count='" + uniqueRelList.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + uniqueRelList.length + ")</button>";
-        html += "<button data-copy-id='" + mermaidId + "' data-copy-label='Copy Diagram Code' style='border:1px solid #94a3b8;background:#f8fafc;color:#475569;border-radius:4px;padding:3px 8px;cursor:pointer;font:600 9px system-ui;'>Copy Diagram Code</button>";
+        html += "<button data-toggle-id='" + toggleId + "' data-count='" + verifiedRels.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + verifiedRels.length + ")</button>";
         html += "</div>";
-        html += "<div id='" + toggleId + "' style='display:none;padding:8px 14px;background:#1e293b;border-bottom:1px solid #334155;'>";
-        html += "<pre id='" + mermaidId + "' style='font:10px/1.5 SF Mono,Consolas,monospace;color:#a5b4fc;margin:0;white-space:pre-wrap;'>" + esc(cardMermaid) + "</pre>";
+        html += "<div id='" + toggleId + "' style='display:none;padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
+        html += "<div style='font:600 10px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;'>Relationships</div>";
+        verifiedRels.forEach(function(rel) {
+          var arrow = rel.direction === "out" ? "←" : "→";
+          var arrowColor = rel.direction === "out" ? "#8b5cf6" : "#3b82f6";
+          html += "<div style='font:11px -apple-system,sans-serif;color:#1e293b;padding:4px 0;display:flex;align-items:center;gap:6px;'>";
+          html += "<span style='color:" + arrowColor + ";font-weight:700;font-size:14px;'>" + arrow + "</span>";
+          html += "<span style='font-weight:600;'>" + esc(rel.target) + "</span>";
+          html += "<span style='color:#64748b;'>(via <code style='font:600 10px SF Mono,Consolas,monospace;color:#0369a1;background:#e0f2fe;padding:1px 4px;border-radius:3px;'>" + esc(rel.fkField) + "</code>)</span>";
+          html += "<span style='color:#64748b;'>- " + rel.cardType + "</span>";
+          html += "</div>";
+        });
         html += "</div>";
       }
 
