@@ -12336,8 +12336,28 @@ processJSON();
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    var dsName = (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0] && _dataModelCache.dataModels.dataModels[0].dataSpaceName) || "";
-    title.textContent = "Data Model ERD" + (dsName ? " [" + dsName + "]" : "") + " — " + entities.length + " entities, " + relationships.length + " relationships";
+    // Get dataspace from: 1) cached data, 2) page dropdown, 3) entity data
+    var dsName = "";
+    if (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) dsName = _dataModelCache.dataModels.dataModels[0].dataSpaceName || "";
+    if (!dsName) {
+      // Try reading from page's dataspace dropdown button
+      (function findDs(root, depth) {
+        if (depth > 8 || dsName) return;
+        root.querySelectorAll("button, [role='combobox']").forEach(function(el) {
+          if (dsName) return;
+          var t = (el.title || "").toLowerCase();
+          if (t === "data space" || /data.?space/i.test(t)) {
+            dsName = (el.textContent || "").trim();
+          }
+        });
+        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dsName) findDs(el.shadowRoot, depth + 1); });
+      })(document, 0);
+    }
+    if (!dsName && entities.length > 0 && entities[0].categoryId) {
+      // Try from entity parsed data
+      dsName = entities[0].dataSpaceName || "";
+    }
+    title.textContent = "Data Model ERD" + (dsName ? " | Dataspace: " + dsName : "") + " — " + entities.length + " entities, " + relationships.length + " relationships";
 
     var selectBtn = document.createElement("button");
     selectBtn.textContent = "🎯 Select DMOs";
