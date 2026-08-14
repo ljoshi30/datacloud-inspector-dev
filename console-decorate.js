@@ -11947,17 +11947,32 @@ processJSON();
       dedupedRels.push(rel);
     });
 
-    // Only include VERIFIED relationships (those with matching KQ fields)
+    // Use DOT graph edges directly (source of truth from SF's own graph view)
     dedupedRels.forEach(function(rel) {
       var fromEnt = entityByLabel[rel.from];
       var toEnt = entityByLabel[rel.to];
-      var verified = verifyRelationship(fromEnt, toEnt);
+      if (!fromEnt || !toEnt || rel.from === rel.to) return;
 
+      var fromClean = cleanName(rel.from);
+      var toClean = cleanName(rel.to);
+
+      // Try to find FK field from KQ fields
+      var fkField = "FK";
+      var cardinality = "||--o{";
+      var verified = verifyRelationship(fromEnt, toEnt);
       if (verified && verified.verified) {
-        var fromClean = cleanName(rel.from);
-        var toClean = cleanName(rel.to);
-        lines.push("    " + fromClean + " " + verified.cardinality + " " + toClean + " : \"" + verified.fkField + "\"");
+        fkField = verified.fkField;
+        cardinality = verified.cardinality;
+      } else {
+        // Fallback: use first non-Id KQ from either side as label
+        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); cardinality = "}o--||"; }
+        else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); cardinality = "||--o{"; }
+        if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) cardinality = "||--||";
+        if (/Link/i.test(rel.from) || /Link/i.test(rel.to)) cardinality = "}o--o{";
       }
+      lines.push("    " + fromClean + " " + cardinality + " " + toClean + " : \"" + fkField + "\"");
     });
 
     // Add entity definitions with key fields
@@ -12096,56 +12111,79 @@ processJSON();
         return;
       }
 
-      // Find related unselected DMOs based on VERIFIED relationships
-      var selectedEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
-      var unselectedEntities = allEntities.filter(function(e) { return !selectedSet[e.developerName]; });
+      // Find related unselected DMOs using DOT graph edges (source of truth)
+      var selectedLabels = {};
+      allEntities.forEach(function(e) { if (selectedSet[e.developerName]) selectedLabels[e.masterLabel] = true; });
       var relatedUnselected = {};
-
-      selectedEntities.forEach(function(selEnt) {
-        unselectedEntities.forEach(function(unselEnt) {
-          var verified = verifyRelationship(selEnt, unselEnt);
-          if (verified && verified.verified) {
-            relatedUnselected[unselEnt.developerName] = unselEnt;
-          }
-        });
+      allRelationships.forEach(function(rel) {
+        if (selectedLabels[rel.from] && !selectedLabels[rel.to]) {
+          var ent = allEntities.find(function(e) { return e.masterLabel === rel.to; });
+          if (ent) relatedUnselected[ent.developerName] = ent;
+        }
+        if (selectedLabels[rel.to] && !selectedLabels[rel.from]) {
+          var ent2 = allEntities.find(function(e) { return e.masterLabel === rel.from; });
+          if (ent2) relatedUnselected[ent2.developerName] = ent2;
+        }
       });
 
       var relatedList = Object.keys(relatedUnselected);
       if (relatedList.length > 0) {
-        // Show suggestion dialog
+        // Show suggestion dialog with CHECKBOXES
         var suggestOverlay = document.createElement("div");
         suggestOverlay.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:11;";
 
         var suggestPanel = document.createElement("div");
-        suggestPanel.style.cssText = "background:#fff;border-radius:8px;padding:20px;max-width:500px;box-shadow:0 12px 40px rgba(0,0,0,.3);";
+        suggestPanel.style.cssText = "background:#fff;border-radius:10px;padding:20px;max-width:550px;width:90%;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.3);";
 
         var suggestTitle = document.createElement("div");
         suggestTitle.textContent = "Related DMOs Found";
-        suggestTitle.style.cssText = "font:700 15px -apple-system,sans-serif;color:#1e293b;margin-bottom:10px;";
+        suggestTitle.style.cssText = "font:700 15px -apple-system,sans-serif;color:#1e293b;margin-bottom:6px;";
 
         var suggestMsg = document.createElement("div");
-        suggestMsg.textContent = selectedKeys.length + " selected DMO" + (selectedKeys.length > 1 ? "s have" : " has") + " verified relationships with " + relatedList.length + " unselected DMO" + (relatedList.length > 1 ? "s" : "") + ":";
+        suggestMsg.textContent = "Your selected DMOs have connections to " + relatedList.length + " other DMO" + (relatedList.length > 1 ? "s" : "") + ". Select which ones to include:";
         suggestMsg.style.cssText = "font:13px -apple-system,sans-serif;color:#475569;margin-bottom:12px;";
 
+        // Select All / Deselect All
+        var suggestControls = document.createElement("div");
+        suggestControls.style.cssText = "display:flex;gap:8px;margin-bottom:8px;";
+        var selAllSuggest = document.createElement("button");
+        selAllSuggest.textContent = "Select All";
+        selAllSuggest.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:4px 10px;cursor:pointer;font:600 10px system-ui;";
+        var deselAllSuggest = document.createElement("button");
+        deselAllSuggest.textContent = "Deselect All";
+        deselAllSuggest.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:4px 10px;cursor:pointer;font:600 10px system-ui;";
+        suggestControls.appendChild(selAllSuggest);
+        suggestControls.appendChild(deselAllSuggest);
+
         var suggestListDiv = document.createElement("div");
-        suggestListDiv.style.cssText = "max-height:200px;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:16px;";
+        suggestListDiv.style.cssText = "flex:1;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:16px;";
+        var suggestChecks = [];
         relatedList.forEach(function(devName) {
           var ent = relatedUnselected[devName];
-          var item = document.createElement("div");
-          item.textContent = "• " + ent.masterLabel + " (" + ent.developerName + ")";
-          item.style.cssText = "font:12px -apple-system,sans-serif;color:#1e293b;padding:3px 0;";
+          var item = document.createElement("label");
+          item.style.cssText = "display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:pointer;font:12px -apple-system,sans-serif;border-bottom:1px solid #f1f5f9;";
+          var cb = document.createElement("input");
+          cb.type = "checkbox"; cb.checked = true;
+          cb.style.cssText = "width:16px;height:16px;cursor:pointer;";
+          suggestChecks.push({ cb: cb, devName: devName });
+          var label = document.createElement("span");
+          label.textContent = ent.masterLabel + " (" + ent.developerName.replace(/__dlm$/,"") + ")";
+          label.style.cssText = "color:#1e293b;";
+          item.appendChild(cb); item.appendChild(label);
           suggestListDiv.appendChild(item);
         });
+
+        selAllSuggest.onclick = function() { suggestChecks.forEach(function(sc) { sc.cb.checked = true; }); };
+        deselAllSuggest.onclick = function() { suggestChecks.forEach(function(sc) { sc.cb.checked = false; }); };
 
         var suggestFooter = document.createElement("div");
         suggestFooter.style.cssText = "display:flex;justify-content:flex-end;gap:10px;";
 
         var skipBtn = document.createElement("button");
-        skipBtn.textContent = "Skip";
+        skipBtn.textContent = "Skip — use my selection only";
         skipBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
         skipBtn.onclick = function() {
           suggestOverlay.remove();
-          // Proceed with original selection
           var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
           var filteredRelationships = allRelationships.filter(function(r) {
             var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
@@ -12158,21 +12196,17 @@ processJSON();
         };
 
         var addBtn = document.createElement("button");
-        addBtn.textContent = "Add Related DMOs";
+        addBtn.textContent = "Add Selected & Generate";
         addBtn.style.cssText = "border:1px solid #8b5cf6;background:#8b5cf6;color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
         addBtn.onclick = function() {
-          // Add related DMOs to selection
-          relatedList.forEach(function(devName) { selectedSet[devName] = true; });
+          // Add only CHECKED related DMOs
+          suggestChecks.forEach(function(sc) { if (sc.cb.checked) selectedSet[sc.devName] = true; });
           suggestOverlay.remove();
-          // Update checkboxes
           var allCheckboxes = listWrap.querySelectorAll("input[type=checkbox]");
-          allCheckboxes.forEach(function(cb, idx) {
+          allCheckboxes.forEach(function(cb2, idx) {
             var ent = allEntities[idx];
-            if (ent && selectedSet[ent.developerName]) {
-              cb.checked = true;
-            }
+            if (ent && selectedSet[ent.developerName]) cb2.checked = true;
           });
-          // Regenerate
           var filteredEntities = allEntities.filter(function(e) { return selectedSet[e.developerName]; });
           var filteredRelationships = allRelationships.filter(function(r) {
             var fromEnt = allEntities.find(function(e) { return e.masterLabel === r.from; });
@@ -12506,10 +12540,10 @@ processJSON();
     var entityByLabel = {};
     entities.forEach(function(ent) { entityByLabel[ent.masterLabel] = ent; });
 
-    // ── Relationship Table (Object | FK Field | KQ | Cardinality | Related Object) ──
+    // ── Relationship Table (all DOT graph edges — source of truth from SF graph view) ──
     html += "<div style='border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:24px;'>";
-    html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Verified Relationships (KQ-based)</div>";
-    html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Key Qualifier</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related Object</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Related PK</th></tr></thead><tbody>";
+    html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Relationships (" + relationships.length + " connections from Graph View)</div>";
+    html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>From</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>To</th></tr></thead><tbody>";
     var relTableSeen = {};
     relationships.forEach(function(rel) {
       var key = [rel.from, rel.to].sort().join("|||");
@@ -12519,19 +12553,26 @@ processJSON();
       var toEnt = entityByLabel[rel.to];
       if (!fromEnt || !toEnt || rel.from === rel.to) return;
 
-      // Use verified relationship logic
+      // Try to get FK info from verifyRelationship, fallback to basic KQ scan
+      var fkField = "—";
+      var cardName = "Related";
       var verified = verifyRelationship(fromEnt, toEnt);
-      if (!verified || !verified.verified) return; // Skip unverified relationships
+      if (verified && verified.verified) {
+        fkField = verified.fkField;
+        cardName = verified.cardinality === "||--o{" ? "OneToMany" : verified.cardinality === "}o--||" ? "ManyToOne" : verified.cardinality === "||--||" ? "OneToOne" : "ManyToMany";
+      } else {
+        // Fallback: show first non-Id KQ as field hint
+        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
+        else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
+        if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) cardName = "OneToOne";
+        if (/Link/i.test(rel.from) || /Link/i.test(rel.to)) cardName = "ManyToMany";
+      }
+      var cardColor = cardName === "ManyToOne" ? "#fef3c7" : cardName === "OneToOne" || cardName === "OneToMany" ? "#dcfce7" : cardName === "ManyToMany" ? "#e0f2fe" : "#f3f4f6";
+      var cardTextColor = cardName === "ManyToOne" ? "#92400e" : cardName === "OneToOne" || cardName === "OneToMany" ? "#166534" : cardName === "ManyToMany" ? "#0369a1" : "#374151";
 
-      var fkLabel = verified.fkSide === "from" ? rel.from : rel.to;
-      var pkLabel = verified.fkSide === "from" ? rel.to : rel.from;
-      var kqField = verified.kqField;
-      var fkField = verified.fkField;
-      var cardName = verified.cardinality === "||--o{" ? "OneToMany" : verified.cardinality === "}o--||" ? "ManyToOne" : verified.cardinality === "||--||" ? "OneToOne" : "ManyToMany";
-      var cardColor = cardName === "ManyToOne" ? "#fef3c7" : cardName === "OneToOne" || cardName === "OneToMany" ? "#dcfce7" : "#e0f2fe";
-      var cardTextColor = cardName === "ManyToOne" ? "#92400e" : cardName === "OneToOne" || cardName === "OneToMany" ? "#166534" : "#0369a1";
-
-      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(fkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>" + esc(kqField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + cardColor + ";color:" + cardTextColor + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + cardName + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(pkLabel) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;font-size:10px;color:#6b7280;'>KQ_Id__c</td></tr>";
+      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.from) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + cardColor + ";color:" + cardTextColor + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + cardName + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.to) + "</td></tr>";
     });
     html += "</tbody></table></div></div>";
 
