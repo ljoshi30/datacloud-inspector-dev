@@ -12624,35 +12624,41 @@ processJSON();
       entityRels.forEach(function(r) { if (!uniqueTargets[r.target]) uniqueTargets[r.target] = r; });
       var uniqueRelList = Object.keys(uniqueTargets).map(function(k) { return uniqueTargets[k]; });
 
-      // Filter to only VERIFIED relationships
-      var verifiedRels = [];
+      // Show ALL relationships from DOT graph (source of truth)
+      var displayRels = [];
       uniqueRelList.forEach(function(r) {
         var targetEnt = entityByLabel[r.target];
+        if (!targetEnt) return;
+        var fkField = "FK";
+        var cardType = "Related";
+        // Try verification for FK field + cardinality info
         var verified = verifyRelationship(entity, targetEnt);
         if (verified && verified.verified) {
-          var cardType = "";
+          fkField = verified.fkField;
           if (verified.cardinality === "||--o{") cardType = "1:Many";
           else if (verified.cardinality === "}o--||") cardType = "Many:1";
           else if (verified.cardinality === "||--||") cardType = "1:1";
           else if (verified.cardinality === "}o--o{") cardType = "Many:Many";
-
-          verifiedRels.push({
-            target: r.target,
-            fkField: verified.fkField,
-            cardType: cardType,
-            direction: verified.fkSide === "from" ? "out" : "in"
-          });
+        } else {
+          // Fallback: use first non-Id KQ from either side
+          var fromFKs = entity.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+          var toFKs = targetEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+          if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "Many:1"; }
+          else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "1:Many"; }
+          if (/Latest|_SM_/i.test(r.target)) cardType = "1:1";
+          if (/Link/i.test(r.target) || /Link/i.test(entity.masterLabel)) cardType = "Many:Many";
         }
+        displayRels.push({ target: r.target, fkField: fkField, cardType: cardType, direction: r.direction });
       });
 
-      if (verifiedRels.length > 0) {
+      if (displayRels.length > 0) {
         var toggleId = "dc-rels-toggle-" + entity.id;
         html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
-        html += "<button data-toggle-id='" + toggleId + "' data-count='" + verifiedRels.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + verifiedRels.length + ")</button>";
+        html += "<button data-toggle-id='" + toggleId + "' data-count='" + displayRels.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + displayRels.length + ")</button>";
         html += "</div>";
         html += "<div id='" + toggleId + "' style='display:none;padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
         html += "<div style='font:600 10px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;'>Relationships</div>";
-        verifiedRels.forEach(function(rel) {
+        displayRels.forEach(function(rel) {
           var arrow = rel.direction === "out" ? "←" : "→";
           var arrowColor = rel.direction === "out" ? "#8b5cf6" : "#3b82f6";
           html += "<div style='font:11px -apple-system,sans-serif;color:#1e293b;padding:4px 0;display:flex;align-items:center;gap:6px;'>";

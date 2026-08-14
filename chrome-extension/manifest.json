@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Data 360 Inspector",
-  "version": "1.2.226",
+  "version": "1.2.227",
   "description": "Inspects Data Cloud / Data 360 mappings and segment rules. Shows API names on the mapping canvas, exports segment conditions to HTML or Sheets. Read-only; nothing leaves your browser.",
   "icons": {
     "16": "icons/icon16.png",
