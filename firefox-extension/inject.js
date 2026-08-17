@@ -11783,8 +11783,8 @@ processJSON();
   var _dataModelCache = { graphData: null, dataModels: null };
 
   function isDataModelPage() {
-    // Only match the Data Model graph view page, NOT DMO detail pages
-    return /standard-DataModel/i.test(window.location.href) && !/\/r\/DataModelObject\//i.test(window.location.href);
+    // Only match the Data Model GRAPH view page
+    return /standard-DataModel/i.test(window.location.href) && /displayType=graph|c__displayType=graph/i.test(window.location.href) && !/\/r\/DataModelObject\//i.test(window.location.href);
   }
 
   function ensureDataModelLauncher() {
