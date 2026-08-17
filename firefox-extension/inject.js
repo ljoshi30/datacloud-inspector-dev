@@ -13072,9 +13072,9 @@ processJSON();
     })();
   }
 
-  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && detailPageType !== "Segment" && !/standard-DataModel|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && detailPageType !== "Segment" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
-      if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /standard-DataModel/i.test(window.location.href)) return;
+      if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /displayType=graph/i.test(window.location.href)) return;
       const wrap = document.createElement("div");
       wrap.id = "dc-bar";
       wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none";
@@ -13188,7 +13188,7 @@ processJSON();
     }
     ensureDetailLauncher();
     watchNavigation();
-  } else if (!/standard-DataModel|marketSegmentActivation|\/r\/MarketSegmentActivation|segmentWizard/i.test(window.location.href)) {
+  } else if (!/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation|segmentWizard/i.test(window.location.href)) {
     // Only show the mapping launcher if the mapping canvas component is actually on this page.
     // On unsupported pages, show a brief toast telling the user which pages work.
     // Skip this entirely for Data Model, Activation, and Segment pages (they have their own launchers)
