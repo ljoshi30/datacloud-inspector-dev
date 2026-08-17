@@ -11802,6 +11802,7 @@ processJSON();
 
       XMLHttpRequest.prototype.send = function(body) {
         var xhr = this;
+        xhr._dcBody = body;
         var originalOnLoad = xhr.onload;
 
         xhr.addEventListener("load", function() {
@@ -11812,7 +11813,12 @@ processJSON();
                 var resp = JSON.parse(xhr.responseText);
                 if (resp && resp.actions && resp.actions[0] && resp.actions[0].returnValue) {
                   _dataModelCache.graphData = resp.actions[0].returnValue.data;
-                  console.log("[DC ERD] Captured getDataModelGraph data");
+                  // Capture dataspace at the moment of graph load (from XHR body or page state)
+                  try {
+                    var dsMatch = String(xhr._dcBody || "").match(/dataspace['":\s]+([a-zA-Z0-9_]+)/i);
+                    if (dsMatch) _dataModelCache.capturedDataspace = dsMatch[1];
+                  } catch(e2) {}
+                  console.log("[DC ERD] Captured getDataModelGraph data" + (_dataModelCache.capturedDataspace ? " [" + _dataModelCache.capturedDataspace + "]" : ""));
                 }
               } catch (e) {}
             } else if (/DataModeling\.getDataModels/i.test(url)) {
@@ -12336,10 +12342,9 @@ processJSON();
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    // Get dataspace from: 1) page dropdown (most reliable), 2) cached data, 3) entity data
-    var dsName = "";
-    // Try page dropdown FIRST
-    {
+    // Get dataspace from: 1) captured at XHR time, 2) page dropdown, 3) cached data
+    var dsName = _dataModelCache.capturedDataspace || "";
+    if (!dsName) {
       // Read from the combobox button that has title="data space" nearby
       // The button has class slds-combobox__input and its SPAN child has the value
       (function findDs(root, depth) {
