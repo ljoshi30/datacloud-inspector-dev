@@ -12336,10 +12336,10 @@ processJSON();
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    // Get dataspace from: 1) cached data, 2) page dropdown, 3) entity data
+    // Get dataspace from: 1) page dropdown (most reliable), 2) cached data, 3) entity data
     var dsName = "";
-    if (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) dsName = _dataModelCache.dataModels.dataModels[0].dataSpaceName || "";
-    if (!dsName) {
+    // Try page dropdown FIRST
+    {
       // Read from the combobox button that has title="data space" nearby
       // The button has class slds-combobox__input and its SPAN child has the value
       (function findDs(root, depth) {
@@ -12364,8 +12364,15 @@ processJSON();
         root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dsName) findDs(el.shadowRoot, depth + 1); });
       })(document, 0);
     }
+    if (!dsName && _dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) {
+      // Fallback to cached data — but use the most common dataspace, not the first
+      var dsCounts = {};
+      _dataModelCache.dataModels.dataModels.forEach(function(dm) { var ds = dm.dataSpaceName || "default"; dsCounts[ds] = (dsCounts[ds] || 0) + 1; });
+      var maxDs = ""; var maxCount = 0;
+      Object.keys(dsCounts).forEach(function(k) { if (dsCounts[k] > maxCount) { maxCount = dsCounts[k]; maxDs = k; } });
+      dsName = maxDs;
+    }
     if (!dsName && entities.length > 0 && entities[0].categoryId) {
-      // Try from entity parsed data
       dsName = entities[0].dataSpaceName || "";
     }
     title.textContent = "Data Model ERD" + (dsName ? " | Dataspace: " + dsName : "") + " — " + entities.length + " entities, " + relationships.length + " relationships";
