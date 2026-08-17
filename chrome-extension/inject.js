@@ -12552,7 +12552,7 @@ processJSON();
     var mermaidCode = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:12px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
-    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (Lucidchart, draw.io, GitHub, Notion — Confluence needs Mermaid plugin)</span>";
+    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (Lucidchart, draw.io, GitHub — Confluence needs Mermaid plugin)</span>";
     html += "<button data-copy-id='dc-mermaid-main' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
     html += "</div>";
     html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
@@ -12809,7 +12809,7 @@ processJSON();
     // Mermaid ERD block
     var mermaidCode2 = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;'>\n";
-    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Diagram Code (Lucidchart, draw.io, GitHub, Notion — Confluence needs Mermaid plugin)</div>\n";
+    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Diagram Code (Lucidchart, draw.io, GitHub — Confluence needs Mermaid plugin)</div>\n";
     html += "<pre style='font:11px/1.6 monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;margin:0;'>" + esc(mermaidCode2) + "</pre>\n";
     html += "</div>\n";
 
