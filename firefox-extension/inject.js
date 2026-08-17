@@ -12340,14 +12340,22 @@ processJSON();
     var dsName = "";
     if (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) dsName = _dataModelCache.dataModels.dataModels[0].dataSpaceName || "";
     if (!dsName) {
-      // Try reading from page's dataspace dropdown button
+      // Read from the combobox button next to "Data Space" label
       (function findDs(root, depth) {
         if (depth > 8 || dsName) return;
-        root.querySelectorAll("button, [role='combobox']").forEach(function(el) {
+        root.querySelectorAll("button.slds-combobox__input, button[class*='combobox__input']").forEach(function(el) {
           if (dsName) return;
-          var t = (el.title || "").toLowerCase();
-          if (t === "data space" || /data.?space/i.test(t)) {
-            dsName = (el.textContent || "").trim();
+          var txt = (el.textContent || "").trim();
+          if (txt && txt.length < 30 && /^[a-zA-Z0-9_ -]+$/.test(txt)) {
+            // Verify it's the Data Space combobox by checking nearby label
+            var parent = el.parentElement;
+            for (var i = 0; i < 5 && parent; i++) {
+              if (/Data Space/i.test(parent.textContent || "") && parent.textContent.length < 100) {
+                dsName = txt;
+                break;
+              }
+              parent = parent.parentElement;
+            }
           }
         });
         root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dsName) findDs(el.shadowRoot, depth + 1); });
