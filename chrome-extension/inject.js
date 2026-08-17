@@ -11813,12 +11813,14 @@ processJSON();
                 var resp = JSON.parse(xhr.responseText);
                 if (resp && resp.actions && resp.actions[0] && resp.actions[0].returnValue) {
                   _dataModelCache.graphData = resp.actions[0].returnValue.data;
-                  // Capture dataspace at the moment of graph load (from XHR body or page state)
+                  // Capture dataspace from the Aura action params in the request body
                   try {
-                    var dsMatch = String(xhr._dcBody || "").match(/dataspace['":\s]+([a-zA-Z0-9_]+)/i);
+                    var bodyStr = String(xhr._dcBody || "");
+                    var decodedBody = decodeURIComponent(bodyStr.replace(/\+/g, " "));
+                    var dsMatch = decodedBody.match(/"dataSpaceName"\s*:\s*"([^"]+)"/i) || decodedBody.match(/"dataspace"\s*:\s*"([^"]+)"/i);
                     if (dsMatch) _dataModelCache.capturedDataspace = dsMatch[1];
                   } catch(e2) {}
-                  console.log("[DC ERD] Captured getDataModelGraph data" + (_dataModelCache.capturedDataspace ? " [" + _dataModelCache.capturedDataspace + "]" : ""));
+                  console.log("[DC ERD] Captured getDataModelGraph data" + (_dataModelCache.capturedDataspace ? " [ds=" + _dataModelCache.capturedDataspace + "]" : ""));
                 }
               } catch (e) {}
             } else if (/DataModeling\.getDataModels/i.test(url)) {
@@ -12263,37 +12265,15 @@ processJSON();
 
   function showERDModal() {
     if (!_dataModelCache.graphData) {
-      // Try to click the page's refresh button automatically
-      var refreshClicked = false;
-      function findRefreshBtn(root, depth) {
-        if (depth > 12 || refreshClicked) return;
-        root.querySelectorAll("button, lightning-button-icon, [role='button']").forEach(function(el) {
-          if (refreshClicked) return;
-          var title = (el.title || el.getAttribute("aria-label") || "").toLowerCase();
-          if (/refresh data|refresh/i.test(title)) {
-            // For lightning-button-icon, click the inner button in shadow root
-            if (el.shadowRoot) {
-              var innerBtn = el.shadowRoot.querySelector("button");
-              if (innerBtn) { innerBtn.click(); refreshClicked = true; console.log("[DC ERD] Clicked inner button of", el.tagName); return; }
-            }
-            el.click(); refreshClicked = true;
-            console.log("[DC ERD] Auto-clicked refresh:", el.tagName, title);
-          }
-        });
-        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !refreshClicked) findRefreshBtn(el.shadowRoot, depth + 1); });
-      }
-      findRefreshBtn(document, 0);
-      if (refreshClicked) {
-        // Wait for data to load after refresh, then retry
-        var retries = 0;
-        var waitInterval = setInterval(function() {
-          retries++;
-          if (_dataModelCache.graphData) { clearInterval(waitInterval); showERDModal(); }
-          else if (retries > 20) { clearInterval(waitInterval); var msg = document.createElement("div"); msg.style.cssText = "position:fixed;bottom:80px;left:20px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:8px;font:12px system-ui;z-index:2147483646;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,.15);"; msg.textContent = "Change the Data Space dropdown or click refresh (↻) to load graph data, then click ERD again."; document.body.appendChild(msg); setTimeout(function() { msg.remove(); }, 8000); }
-        }, 500);
-        return;
-      }
-      var msg2 = document.createElement("div"); msg2.style.cssText = "position:fixed;bottom:80px;left:20px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:8px;font:12px system-ui;z-index:2147483646;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,.15);"; msg2.textContent = "Change the Data Space dropdown or click refresh (↻) to load graph data, then click ERD again."; document.body.appendChild(msg2); setTimeout(function() { msg2.remove(); }, 8000);
+      // Simple: show a non-blocking message near the button. No auto-clicking.
+      var existing = document.getElementById("dc-erd-msg");
+      if (existing) existing.remove();
+      var msg = document.createElement("div");
+      msg.id = "dc-erd-msg";
+      msg.style.cssText = "position:fixed;bottom:60px;left:20px;background:#fff;border:1px solid #f59e0b;color:#92400e;padding:14px 18px;border-radius:8px;font:13px/1.5 -apple-system,sans-serif;z-index:2147483646;max-width:320px;box-shadow:0 4px 16px rgba(0,0,0,.15);";
+      msg.innerHTML = "<b>No graph data yet</b><br>Select a Data Space from the dropdown above — the graph will load and ERD will work on the next click.";
+      document.body.appendChild(msg);
+      setTimeout(function() { if (msg.parentElement) msg.remove(); }, 10000);
       return;
     }
 
@@ -13088,9 +13068,9 @@ processJSON();
     })();
   }
 
-  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/standard-DataModel/i.test(window.location.href)) {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && detailPageType !== "Segment" && !/standard-DataModel|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
-      if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar")) return;
+      if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /standard-DataModel/i.test(window.location.href)) return;
       const wrap = document.createElement("div");
       wrap.id = "dc-bar";
       wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none";
