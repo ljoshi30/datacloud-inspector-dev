@@ -12340,21 +12340,24 @@ processJSON();
     var dsName = "";
     if (_dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) dsName = _dataModelCache.dataModels.dataModels[0].dataSpaceName || "";
     if (!dsName) {
-      // Read from the combobox button next to "Data Space" label
+      // Read from the combobox button that has title="data space" nearby
+      // The button has class slds-combobox__input and its SPAN child has the value
       (function findDs(root, depth) {
         if (depth > 8 || dsName) return;
-        root.querySelectorAll("button.slds-combobox__input, button[class*='combobox__input']").forEach(function(el) {
+        // Find the label "*Data Space" first, then find the combobox near it
+        root.querySelectorAll("label, span").forEach(function(lbl) {
           if (dsName) return;
-          var txt = (el.textContent || "").trim();
-          if (txt && txt.length < 30 && /^[a-zA-Z0-9_ -]+$/.test(txt)) {
-            // Verify it's the Data Space combobox by checking nearby label
-            var parent = el.parentElement;
-            for (var i = 0; i < 5 && parent; i++) {
-              if (/Data Space/i.test(parent.textContent || "") && parent.textContent.length < 100) {
-                dsName = txt;
+          if (/^\*?Data Space$/i.test((lbl.textContent || "").trim())) {
+            // Found the label — now find the combobox button in the same container
+            var container = lbl.parentElement;
+            for (var i = 0; i < 4 && container; i++) {
+              var btn = container.querySelector("button.slds-combobox__input, button[class*='combobox__input']");
+              if (btn) {
+                var span = btn.querySelector("span.slds-truncate");
+                dsName = span ? span.textContent.trim() : btn.textContent.trim();
                 break;
               }
-              parent = parent.parentElement;
+              container = container.parentElement;
             }
           }
         });
