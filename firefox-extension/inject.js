@@ -12271,7 +12271,7 @@ processJSON();
       var msg = document.createElement("div");
       msg.id = "dc-erd-msg";
       msg.style.cssText = "position:fixed;bottom:60px;left:20px;background:#fff;border:1px solid #f59e0b;color:#92400e;padding:14px 18px;border-radius:8px;font:13px/1.5 -apple-system,sans-serif;z-index:2147483646;max-width:320px;box-shadow:0 4px 16px rgba(0,0,0,.15);";
-      msg.innerHTML = "<b>No graph data yet</b><br>Select a Data Space from the dropdown above — the graph will load and ERD will work on the next click.";
+      msg.innerHTML = "<b>No graph data yet</b><br>Switch the Data Space dropdown (or re-select the current one) to trigger a graph reload. Then click ERD again.";
       document.body.appendChild(msg);
       setTimeout(function() { if (msg.parentElement) msg.remove(); }, 10000);
       return;
@@ -13184,9 +13184,10 @@ processJSON();
     }
     ensureDetailLauncher();
     watchNavigation();
-  } else {
+  } else if (!/standard-DataModel|marketSegmentActivation|\/r\/MarketSegmentActivation|segmentWizard/i.test(window.location.href)) {
     // Only show the mapping launcher if the mapping canvas component is actually on this page.
     // On unsupported pages, show a brief toast telling the user which pages work.
+    // Skip this entirely for Data Model, Activation, and Segment pages (they have their own launchers)
     var hasMappingCanvas = findByTag(TAGGING_CMP).length > 0;
     if (hasMappingCanvas) {
       ensureLauncher();
