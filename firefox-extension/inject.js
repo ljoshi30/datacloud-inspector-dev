@@ -11877,10 +11877,10 @@ processJSON();
 
     // Get non-Id KQ fields from both sides (these are potential FKs)
     var fromFKs = fromEnt.attributes.filter(function(a) {
-      return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
+      return a.isForeignKey;
     });
     var toFKs = toEnt.attributes.filter(function(a) {
-      return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(a.developerName);
+      return a.isForeignKey;
     });
 
     // Get all identifiers from both entities (for matching)
@@ -11973,8 +11973,8 @@ processJSON();
         cardinality = verified.cardinality;
       } else {
         // Fallback: use first non-Id KQ from either side as label
-        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
-        var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isForeignKey; });
+        var toFKs = toEnt.attributes.filter(function(a) { return a.isForeignKey; });
         if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); cardinality = "}o--||"; }
         else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/, "").replace(/__c$/, ""); cardinality = "||--o{"; }
         if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) cardinality = "||--||";
@@ -12519,7 +12519,8 @@ processJSON();
               masterLabel: attr.masterLabel || dn || "",
               developerName: dn,
               dataType: attr.dataType || attr.businessType || "",
-              isPrimaryKey: (attr.primaryIndexOrder != null) || (dn.indexOf("KQ_") === 0) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
+              isPrimaryKey: (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+              isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
               foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
               isRequired: attr.dataRequired || false
             };
@@ -12594,8 +12595,8 @@ processJSON();
         cardName = verified.cardinality === "||--o{" ? "OneToMany" : verified.cardinality === "}o--||" ? "ManyToOne" : verified.cardinality === "||--||" ? "OneToOne" : "ManyToMany";
       } else {
         // Fallback: show first non-Id KQ as field hint
-        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
-        var toFKs = toEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isForeignKey; });
+        var toFKs = toEnt.attributes.filter(function(a) { return a.isForeignKey; });
         if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
         else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
         if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) cardName = "OneToOne";
@@ -12667,9 +12668,9 @@ processJSON();
           else if (verified.cardinality === "||--||") cardType = "1:1";
           else if (verified.cardinality === "}o--o{") cardType = "Many:Many";
         } else {
-          // Fallback: use first non-Id KQ from either side
-          var fromFKs = entity.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
-          var toFKs = targetEnt.attributes.filter(function(a) { return a.isPrimaryKey && a.developerName.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual/i.test(a.developerName); });
+          // Fallback: use isForeignKey fields from either side
+          var fromFKs = entity.attributes.filter(function(a) { return a.isForeignKey; });
+          var toFKs = targetEnt.attributes.filter(function(a) { return a.isForeignKey; });
           if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "Many:1"; }
           else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "1:Many"; }
           if (/Latest|_SM_/i.test(r.target)) cardType = "1:1";
@@ -12699,7 +12700,7 @@ processJSON();
       }
 
       // Filter fields: show PKs, FKs, and business fields (hide system fields)
-      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.foreignKey; });
+      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
       var bizFields = entity.attributes.filter(function(a) {
         if (a.isPrimaryKey || a.foreignKey) return false;
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
@@ -12842,7 +12843,7 @@ processJSON();
         html += "<div class='card-source' style='background:#eff6ff;border-color:#bfdbfe;'><b style='color:#1e40af;'>Related to:</b> " + uniqueRels2.map(esc).join(", ") + "</div>\n";
       }
 
-      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.foreignKey; });
+      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
       var bizFields = entity.attributes.filter(function(a) {
         if (a.isPrimaryKey || a.foreignKey) return false;
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
