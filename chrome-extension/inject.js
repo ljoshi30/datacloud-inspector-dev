@@ -12668,13 +12668,11 @@ processJSON();
           else if (verified.cardinality === "||--||") cardType = "1:1";
           else if (verified.cardinality === "}o--o{") cardType = "Many:Many";
         } else {
-          // Fallback: use isForeignKey fields from either side
-          var fromFKs = entity.attributes.filter(function(a) { return a.isForeignKey; });
-          var toFKs = targetEnt.attributes.filter(function(a) { return a.isForeignKey; });
-          if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "Many:1"; }
-          else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardType = "1:Many"; }
+          // Don't guess FK field — just show cardinality based on entity type
+          fkField = "";
           if (/Latest|_SM_/i.test(r.target)) cardType = "1:1";
-          if (/Link/i.test(r.target) || /Link/i.test(entity.masterLabel)) cardType = "Many:Many";
+          else if (/Link/i.test(r.target) || /Link/i.test(entity.masterLabel)) cardType = "Many:Many";
+          else cardType = "Connected";
         }
         displayRels.push({ target: r.target, fkField: fkField, cardType: cardType, direction: r.direction });
       });
@@ -12685,15 +12683,12 @@ processJSON();
         html += "<button data-toggle-id='" + toggleId + "' data-count='" + displayRels.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + displayRels.length + ")</button>";
         html += "</div>";
         html += "<div id='" + toggleId + "' style='display:none;padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
-        html += "<div style='font:600 10px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;'>Relationships</div>";
+        html += "<div style='font:600 10px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;'>Connected To</div>";
         displayRels.forEach(function(rel) {
-          var arrow = rel.direction === "out" ? "←" : "→";
-          var arrowColor = rel.direction === "out" ? "#8b5cf6" : "#3b82f6";
-          html += "<div style='font:11px -apple-system,sans-serif;color:#1e293b;padding:4px 0;display:flex;align-items:center;gap:6px;'>";
-          html += "<span style='color:" + arrowColor + ";font-weight:700;font-size:14px;'>" + arrow + "</span>";
+          html += "<div style='font:12px -apple-system,sans-serif;color:#1e293b;padding:4px 0;border-bottom:1px dashed #e2e8f0;'>";
           html += "<span style='font-weight:600;'>" + esc(rel.target) + "</span>";
-          html += "<span style='color:#64748b;'>(via <code style='font:600 10px SF Mono,Consolas,monospace;color:#0369a1;background:#e0f2fe;padding:1px 4px;border-radius:3px;'>" + esc(rel.fkField) + "</code>)</span>";
-          html += "<span style='color:#64748b;'>- " + rel.cardType + "</span>";
+          if (rel.fkField) html += " <span style='color:#64748b;font-size:10px;'>via " + esc(rel.fkField) + "</span>";
+          if (rel.cardType && rel.cardType !== "Connected") html += " <span style='background:#f1f5f9;color:#475569;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;'>" + rel.cardType + "</span>";
           html += "</div>";
         });
         html += "</div>";
