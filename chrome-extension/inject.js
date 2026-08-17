@@ -11987,10 +11987,12 @@ processJSON();
     entities.forEach(function(entity) {
       var name = cleanName(entity.masterLabel);
       var pks = entity.attributes.filter(function(a) { return a.isPrimaryKey; });
-      var bizFields = entity.attributes.filter(function(a) { return !a.isPrimaryKey && _systemFields.indexOf(a.developerName) < 0; }).slice(0, 5);
-      if (pks.length > 0 || bizFields.length > 0) {
+      var fks = entity.attributes.filter(function(a) { return a.isForeignKey; });
+      var bizFields = entity.attributes.filter(function(a) { return !a.isPrimaryKey && !a.isForeignKey && _systemFields.indexOf(a.developerName) < 0; }).slice(0, 5);
+      if (pks.length > 0 || fks.length > 0 || bizFields.length > 0) {
         lines.push("    " + name + " {");
         pks.forEach(function(pk) { lines.push("        string " + cleanName(pk.developerName) + " PK"); });
+        fks.forEach(function(fk) { lines.push("        string " + cleanName(fk.developerName) + " FK"); });
         bizFields.forEach(function(f) { lines.push("        " + (f.dataType || "string").toLowerCase() + " " + cleanName(f.developerName)); });
         lines.push("    }");
       }
@@ -12476,7 +12478,8 @@ processJSON();
                   masterLabel: attr.masterLabel || dn || "",
                   developerName: dn,
                   dataType: attr.dataType || attr.businessType || "",
-                  isPrimaryKey: (attr.primaryIndexOrder != null) || (dn.indexOf("KQ_") === 0) || (attr.keyQualifierName && attr.keyQualifierName.indexOf("KQ") === 0),
+                  isPrimaryKey: (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+                  isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
                   foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
                   isRequired: attr.dataRequired || false
                 };
@@ -12549,7 +12552,7 @@ processJSON();
     var mermaidCode = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:12px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
-    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</span>";
+    html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (Lucidchart, draw.io, GitHub, Notion — Confluence needs Mermaid plugin)</span>";
     html += "<button data-copy-id='dc-mermaid-main' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
     html += "</div>";
     html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
@@ -12706,6 +12709,7 @@ processJSON();
       // Fields table
       if (keyFields.length > 0 || bizFields.length > 0) {
         html += "<div style='overflow-x:auto;'>";
+        html += "<div style='font:500 9px system-ui;color:#94a3b8;padding:4px 10px;'>Key fields from graph view (subset)</div>";
         html += "<table style='width:100%;border-collapse:collapse;font:11px -apple-system,sans-serif;'>";
         html += "<thead><tr style='background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
         html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Field</th>";
@@ -12720,7 +12724,7 @@ processJSON();
           html += "<td style='padding:6px 10px;color:#166534;font-weight:600'>" + esc(attr.masterLabel) + "</td>";
           html += "<td style='padding:6px 10px;font:600 10px SF Mono,Consolas,monospace;color:#166534'>" + esc(attr.developerName) + "</td>";
           html += "<td style='padding:6px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
-          html += "<td style='padding:6px 4px;text-align:center;font:600 10px system-ui;'>" + (attr.isPrimaryKey ? "<span style='color:#10b981'>PK</span>" : "") + (attr.foreignKey ? "<span style='color:#7c3aed'>FK</span>" : "") + "</td>";
+          html += "<td style='padding:6px 4px;text-align:center;font:600 10px system-ui;'>" + (attr.isPrimaryKey ? "<span style='color:#10b981'>PK</span>" : "") + (attr.isForeignKey ? "<span style='color:#f59e0b'>FK</span>" : "") + "</td>";
           html += "</tr>";
         });
 
@@ -12805,7 +12809,7 @@ processJSON();
     // Mermaid ERD block
     var mermaidCode2 = generateMermaidERD(entities, relationships);
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:24px;'>\n";
-    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Diagram Code (paste into Lucidchart, draw.io, Confluence, or GitHub)</div>\n";
+    html += "<div style='font:700 13px -apple-system,sans-serif;color:#94a3b8;margin-bottom:10px;'>Diagram Code (Lucidchart, draw.io, GitHub, Notion — Confluence needs Mermaid plugin)</div>\n";
     html += "<pre style='font:11px/1.6 monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;margin:0;'>" + esc(mermaidCode2) + "</pre>\n";
     html += "</div>\n";
 
