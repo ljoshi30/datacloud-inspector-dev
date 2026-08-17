@@ -12271,7 +12271,7 @@ processJSON();
       var msg = document.createElement("div");
       msg.id = "dc-erd-msg";
       msg.style.cssText = "position:fixed;bottom:60px;left:20px;background:#fff;border:1px solid #f59e0b;color:#92400e;padding:14px 18px;border-radius:8px;font:13px/1.5 -apple-system,sans-serif;z-index:2147483646;max-width:320px;box-shadow:0 4px 16px rgba(0,0,0,.15);";
-      msg.innerHTML = "<b>No graph data yet</b><br>Switch to a different Data Space from the dropdown, or click the refresh (↻) icon next to it. Then click ERD again.";
+      msg.innerHTML = "<b>No graph data yet</b><br>Switch to a different Data Space from the dropdown to load the graph. Then click ERD again.";
       document.body.appendChild(msg);
       setTimeout(function() { if (msg.parentElement) msg.remove(); }, 10000);
       return;
