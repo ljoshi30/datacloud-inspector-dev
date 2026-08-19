@@ -12037,9 +12037,11 @@ processJSON();
     var selectAllBtn = document.createElement("button");
     selectAllBtn.textContent = "Select All";
     selectAllBtn.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;white-space:nowrap;";
+    selectAllBtn.title = "Check all entities";
     var deselectAllBtn = document.createElement("button");
     deselectAllBtn.textContent = "Deselect All";
     deselectAllBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;white-space:nowrap;";
+    deselectAllBtn.title = "Uncheck all entities";
     controls.appendChild(searchInput);
     controls.appendChild(selectAllBtn);
     controls.appendChild(deselectAllBtn);
@@ -12090,6 +12092,7 @@ processJSON();
       });
       updateCheckboxes();
     });
+    profileBtn.title = "Select only Profile category entities (Individual, Contact Points)";
 
     // Preset: Engagement only
     var engagementBtn = createPresetBtn("Engagement only", "#f59e0b", function() {
@@ -12099,6 +12102,7 @@ processJSON();
       });
       updateCheckboxes();
     });
+    engagementBtn.title = "Select only Engagement category entities (Sales Order, Insurance)";
 
     // Preset: Individual + connections
     var individualBtn = createPresetBtn("Individual + connections", "#8b5cf6", function() {
@@ -12114,6 +12118,7 @@ processJSON();
       }
       updateCheckboxes();
     });
+    individualBtn.title = "Select Individual and all entities directly connected to it";
 
     // Preset: Exclude Unified/Latest
     var excludeBtn = createPresetBtn("Exclude Unified/Latest", "#6366f1", function() {
@@ -12125,6 +12130,7 @@ processJSON();
       });
       updateCheckboxes();
     });
+    excludeBtn.title = "Select all except Unified and Latest snapshot entities (reduces clutter)";
 
     presetsRow.appendChild(profileBtn);
     presetsRow.appendChild(engagementBtn);
@@ -12148,6 +12154,7 @@ processJSON();
 
     var centerSelect = document.createElement("select");
     centerSelect.style.cssText = "padding:4px 8px;border:1px solid #d1d5db;border-radius:4px;font:12px -apple-system,sans-serif;outline:none;cursor:pointer;";
+    centerSelect.title = "Pick a center entity to focus the diagram around";
     var defaultOpt = document.createElement("option");
     defaultOpt.value = "";
     defaultOpt.textContent = "— Choose entity —";
@@ -12166,12 +12173,14 @@ processJSON();
     var hop1Btn = document.createElement("button");
     hop1Btn.textContent = "1 hop";
     hop1Btn.style.cssText = "border:1px solid #f59e0b;background:#fff;color:#f59e0b;border-radius:4px;padding:4px 12px;cursor:pointer;font:600 10px system-ui;transition:all .15s;";
+    hop1Btn.title = "Show only entities directly connected to the center entity";
     hop1Btn.onmouseenter = function() { hop1Btn.style.background = "#f59e0b"; hop1Btn.style.color = "#fff"; };
     hop1Btn.onmouseleave = function() { hop1Btn.style.background = "#fff"; hop1Btn.style.color = "#f59e0b"; };
 
     var hop2Btn = document.createElement("button");
     hop2Btn.textContent = "2 hops";
     hop2Btn.style.cssText = "border:1px solid #f59e0b;background:#fff;color:#f59e0b;border-radius:4px;padding:4px 12px;cursor:pointer;font:600 10px system-ui;transition:all .15s;";
+    hop2Btn.title = "Show entities within 2 connections of the center entity";
     hop2Btn.onmouseenter = function() { hop2Btn.style.background = "#f59e0b"; hop2Btn.style.color = "#fff"; };
     hop2Btn.onmouseleave = function() { hop2Btn.style.background = "#fff"; hop2Btn.style.color = "#f59e0b"; };
 
@@ -12287,6 +12296,7 @@ processJSON();
     var applyBtn = document.createElement("button");
     applyBtn.textContent = "Generate ERD";
     applyBtn.style.cssText = "border:1px solid #8b5cf6;background:#8b5cf6;color:#fff;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
+    applyBtn.title = "Generate the diagram with selected entities";
     applyBtn.onclick = function() {
       var selectedKeys = Object.keys(selectedSet);
       if (selectedKeys.length === 0) {
@@ -12554,10 +12564,50 @@ processJSON();
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:24px;color:#64748b;padding:0 8px;";
     closeBtn.onclick = function() { modal.remove(); };
 
+    selectBtn.title = "Choose which Data Model Objects to include in the diagram";
+    downloadBtn.title = "Download the ERD as a standalone HTML file";
+
     header.appendChild(title);
     header.appendChild(selectBtn);
     header.appendChild(downloadBtn);
     header.appendChild(closeBtn);
+
+    // Collapsible help guide
+    var helpContainer = document.createElement("div");
+    helpContainer.style.cssText = "border-bottom:1px solid #e2e8f0;background:#f8fafc;";
+
+    var helpToggle = document.createElement("div");
+    helpToggle.style.cssText = "padding:10px 18px;cursor:pointer;display:flex;align-items:center;gap:8px;font:600 12px -apple-system,sans-serif;color:#3b82f6;";
+    helpToggle.textContent = "ℹ How to use";
+
+    var helpContent = document.createElement("div");
+    helpContent.style.cssText = "display:none;padding:0 18px 12px 18px;font:13px/1.6 -apple-system,sans-serif;color:#475569;";
+    helpContent.innerHTML =
+      "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:12px 14px;'>" +
+      "<div style='font:600 13px -apple-system,sans-serif;color:#1e293b;margin-bottom:8px;'>How to use this ERD tool:</div>" +
+      "<ul style='margin:0;padding-left:20px;'>" +
+      "<li>The diagram shows your Data Model Objects and how they connect to each other</li>" +
+      "<li>Click \"Select DMOs\" to choose which objects to include (fewer = cleaner diagram)</li>" +
+      "<li>Use presets for quick selections:<ul style='margin:4px 0;'>" +
+      "<li>\"Profile only\" — core customer entities</li>" +
+      "<li>\"Individual + connections\" — one entity and its neighbors</li></ul></li>" +
+      "<li>Use \"Quick Focus\" to pick one entity and see 1 or 2 levels of connections</li>" +
+      "<li>Copy the diagram code and paste into Lucidchart or draw.io to get a visual diagram</li>" +
+      "<li><b>Tip:</b> Select 3-8 entities for the cleanest, most readable output</li>" +
+      "</ul></div>";
+
+    helpToggle.addEventListener("click", function() {
+      if (helpContent.style.display === "none") {
+        helpContent.style.display = "block";
+        helpToggle.textContent = "ℹ Hide help";
+      } else {
+        helpContent.style.display = "none";
+        helpToggle.textContent = "ℹ How to use";
+      }
+    });
+
+    helpContainer.appendChild(helpToggle);
+    helpContainer.appendChild(helpContent);
 
     // Body (scrollable container)
     var body = document.createElement("div");
@@ -12604,6 +12654,7 @@ processJSON();
     });
 
     content.appendChild(header);
+    content.appendChild(helpContainer);
     content.appendChild(body);
     modal.appendChild(content);
     document.body.appendChild(modal);
@@ -12729,7 +12780,7 @@ processJSON();
     html += "<div style='background:#1e293b;border-radius:10px;padding:16px 20px;margin-bottom:12px;position:relative;'>";
     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'>";
     html += "<span style='font:700 13px -apple-system,sans-serif;color:#94a3b8;'>Diagram Code (Lucidchart, draw.io, GitHub — Confluence needs Mermaid plugin)</span>";
-    html += "<button data-copy-id='dc-mermaid-main' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
+    html += "<button data-copy-id='dc-mermaid-main' title='Copy diagram code to clipboard' style='border:1px solid #475569;background:#334155;color:#e2e8f0;border-radius:5px;padding:4px 12px;cursor:pointer;font:600 11px system-ui;'>Copy</button>";
     html += "</div>";
     html += "<pre id='dc-mermaid-main' style='font:11px/1.6 SF Mono,Consolas,monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto;margin:0;'>" + esc(mermaidCode) + "</pre>";
     html += "</div>";
@@ -12866,7 +12917,7 @@ processJSON();
       if (displayRels.length > 0) {
         var toggleId = "dc-rels-toggle-" + entity.id;
         html += "<div style='padding:6px 14px;background:#f0f9ff;border-bottom:1px solid #bfdbfe;display:flex;align-items:center;gap:8px;'>";
-        html += "<button data-toggle-id='" + toggleId + "' data-count='" + displayRels.length + "' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + displayRels.length + ")</button>";
+        html += "<button data-toggle-id='" + toggleId + "' data-count='" + displayRels.length + "' title='Show which other entities this DMO is connected to' style='border:1px solid #3b82f6;background:#fff;color:#2563eb;border-radius:4px;padding:3px 10px;cursor:pointer;font:600 10px system-ui;'>View Connections (" + displayRels.length + ")</button>";
         html += "</div>";
         html += "<div id='" + toggleId + "' style='display:none;padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
         html += "<div style='font:600 10px -apple-system,sans-serif;color:#64748b;margin-bottom:6px;text-transform:uppercase;'>Connected To</div>";
