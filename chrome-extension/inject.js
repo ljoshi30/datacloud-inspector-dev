@@ -12044,6 +12044,179 @@ processJSON();
     controls.appendChild(selectAllBtn);
     controls.appendChild(deselectAllBtn);
 
+    // Smart presets section
+    var presetsWrap = document.createElement("div");
+    presetsWrap.style.cssText = "padding:10px 20px;border-bottom:1px solid #e2e8f0;background:#f8fafc;";
+    var presetsLabel = document.createElement("div");
+    presetsLabel.textContent = "Smart Presets";
+    presetsLabel.style.cssText = "font:600 10px system-ui;color:#64748b;text-transform:uppercase;margin-bottom:6px;letter-spacing:0.5px;";
+    var presetsRow = document.createElement("div");
+    presetsRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+
+    var createPresetBtn = function(label, color, onClick) {
+      var btn = document.createElement("button");
+      btn.textContent = label;
+      btn.style.cssText = "border:1px solid " + color + ";background:#fff;color:" + color + ";border-radius:4px;padding:4px 10px;cursor:pointer;font:600 10px system-ui;white-space:nowrap;transition:all .15s;";
+      btn.onmouseenter = function() { btn.style.background = color; btn.style.color = "#fff"; };
+      btn.onmouseleave = function() { btn.style.background = "#fff"; btn.style.color = color; };
+      btn.onclick = onClick;
+      return btn;
+    };
+
+    // Build relationship graph for hop selector
+    var relGraph = {};
+    allRelationships.forEach(function(rel) {
+      if (!relGraph[rel.from]) relGraph[rel.from] = [];
+      if (!relGraph[rel.to]) relGraph[rel.to] = [];
+      relGraph[rel.from].push(rel.to);
+      relGraph[rel.to].push(rel.from);
+    });
+
+    var updateCheckboxes = function() {
+      var checkboxes = listWrap.querySelectorAll("input[type=checkbox]");
+      checkboxes.forEach(function(cb, idx) {
+        var ent = allEntities[idx];
+        if (ent) {
+          cb.checked = selectedSet[ent.developerName] || false;
+        }
+      });
+    };
+
+    // Preset: Profile only
+    var profileBtn = createPresetBtn("Profile only", "#10b981", function() {
+      selectedSet = {};
+      allEntities.forEach(function(ent) {
+        if (ent.category === "PROFILE") selectedSet[ent.developerName] = true;
+      });
+      updateCheckboxes();
+    });
+
+    // Preset: Engagement only
+    var engagementBtn = createPresetBtn("Engagement only", "#f59e0b", function() {
+      selectedSet = {};
+      allEntities.forEach(function(ent) {
+        if (ent.category === "ENGAGEMENT") selectedSet[ent.developerName] = true;
+      });
+      updateCheckboxes();
+    });
+
+    // Preset: Individual + connections
+    var individualBtn = createPresetBtn("Individual + connections", "#8b5cf6", function() {
+      selectedSet = {};
+      var individualEnt = allEntities.find(function(e) { return e.masterLabel === "Individual"; });
+      if (individualEnt) {
+        selectedSet[individualEnt.developerName] = true;
+        var connected = relGraph[individualEnt.masterLabel] || [];
+        connected.forEach(function(connLabel) {
+          var connEnt = allEntities.find(function(e) { return e.masterLabel === connLabel; });
+          if (connEnt) selectedSet[connEnt.developerName] = true;
+        });
+      }
+      updateCheckboxes();
+    });
+
+    // Preset: Exclude Unified/Latest
+    var excludeBtn = createPresetBtn("Exclude Unified/Latest", "#6366f1", function() {
+      selectedSet = {};
+      allEntities.forEach(function(ent) {
+        if (!/Unified|Latest/i.test(ent.masterLabel)) {
+          selectedSet[ent.developerName] = true;
+        }
+      });
+      updateCheckboxes();
+    });
+
+    presetsRow.appendChild(profileBtn);
+    presetsRow.appendChild(engagementBtn);
+    presetsRow.appendChild(individualBtn);
+    presetsRow.appendChild(excludeBtn);
+    presetsWrap.appendChild(presetsLabel);
+    presetsWrap.appendChild(presetsRow);
+
+    // Hop selector section
+    var hopWrap = document.createElement("div");
+    hopWrap.style.cssText = "padding:10px 20px;border-bottom:1px solid #e2e8f0;background:#fffbeb;";
+    var hopLabel = document.createElement("div");
+    hopLabel.textContent = "Quick Focus";
+    hopLabel.style.cssText = "font:600 10px system-ui;color:#92400e;text-transform:uppercase;margin-bottom:6px;letter-spacing:0.5px;";
+    var hopRow = document.createElement("div");
+    hopRow.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+
+    var hopLabelText = document.createElement("span");
+    hopLabelText.textContent = "Focus on:";
+    hopLabelText.style.cssText = "font:500 11px system-ui;color:#78716c;";
+
+    var centerSelect = document.createElement("select");
+    centerSelect.style.cssText = "padding:4px 8px;border:1px solid #d1d5db;border-radius:4px;font:12px -apple-system,sans-serif;outline:none;cursor:pointer;";
+    var defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "— Choose entity —";
+    centerSelect.appendChild(defaultOpt);
+    allEntities.forEach(function(ent) {
+      var opt = document.createElement("option");
+      opt.value = ent.masterLabel;
+      opt.textContent = ent.masterLabel + " (" + ent.category + ")";
+      centerSelect.appendChild(opt);
+    });
+
+    var withinText = document.createElement("span");
+    withinText.textContent = "within";
+    withinText.style.cssText = "font:500 11px system-ui;color:#78716c;";
+
+    var hop1Btn = document.createElement("button");
+    hop1Btn.textContent = "1 hop";
+    hop1Btn.style.cssText = "border:1px solid #f59e0b;background:#fff;color:#f59e0b;border-radius:4px;padding:4px 12px;cursor:pointer;font:600 10px system-ui;transition:all .15s;";
+    hop1Btn.onmouseenter = function() { hop1Btn.style.background = "#f59e0b"; hop1Btn.style.color = "#fff"; };
+    hop1Btn.onmouseleave = function() { hop1Btn.style.background = "#fff"; hop1Btn.style.color = "#f59e0b"; };
+
+    var hop2Btn = document.createElement("button");
+    hop2Btn.textContent = "2 hops";
+    hop2Btn.style.cssText = "border:1px solid #f59e0b;background:#fff;color:#f59e0b;border-radius:4px;padding:4px 12px;cursor:pointer;font:600 10px system-ui;transition:all .15s;";
+    hop2Btn.onmouseenter = function() { hop2Btn.style.background = "#f59e0b"; hop2Btn.style.color = "#fff"; };
+    hop2Btn.onmouseleave = function() { hop2Btn.style.background = "#fff"; hop2Btn.style.color = "#f59e0b"; };
+
+    var performHopSelection = function(hops) {
+      var centerLabel = centerSelect.value;
+      if (!centerLabel) {
+        alert("Please select a center entity first");
+        return;
+      }
+
+      selectedSet = {};
+      var visited = {};
+      var queue = [{ label: centerLabel, depth: 0 }];
+      visited[centerLabel] = true;
+
+      while (queue.length > 0) {
+        var current = queue.shift();
+        var ent = allEntities.find(function(e) { return e.masterLabel === current.label; });
+        if (ent) selectedSet[ent.developerName] = true;
+
+        if (current.depth < hops) {
+          var neighbors = relGraph[current.label] || [];
+          neighbors.forEach(function(neighborLabel) {
+            if (!visited[neighborLabel]) {
+              visited[neighborLabel] = true;
+              queue.push({ label: neighborLabel, depth: current.depth + 1 });
+            }
+          });
+        }
+      }
+
+      updateCheckboxes();
+    };
+
+    hop1Btn.onclick = function() { performHopSelection(1); };
+    hop2Btn.onclick = function() { performHopSelection(2); };
+
+    hopRow.appendChild(hopLabelText);
+    hopRow.appendChild(centerSelect);
+    hopRow.appendChild(withinText);
+    hopRow.appendChild(hop1Btn);
+    hopRow.appendChild(hop2Btn);
+    hopWrap.appendChild(hopLabel);
+    hopWrap.appendChild(hopRow);
+
     var listWrap = document.createElement("div");
     listWrap.style.cssText = "flex:1;overflow:auto;padding:16px 20px;";
 
@@ -12255,6 +12428,8 @@ processJSON();
 
     panel.appendChild(panelHeader);
     panel.appendChild(controls);
+    panel.appendChild(presetsWrap);
+    panel.appendChild(hopWrap);
     panel.appendChild(listWrap);
     panel.appendChild(footer);
     overlay.appendChild(panel);
@@ -12576,7 +12751,7 @@ processJSON();
     // ── Relationship Table (all DOT graph edges — source of truth from SF graph view) ──
     html += "<div style='border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:24px;'>";
     html += "<div style='background:#f8fafc;padding:10px 16px;border-bottom:1px solid #e2e8f0;font:600 13px -apple-system,sans-serif;color:#1e293b;'>Relationships (" + relationships.length + " connections from Graph View)</div>";
-    html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>From</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>To</th></tr></thead><tbody>";
+    html += "<div style='overflow-x:auto;padding:12px;'><table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f1f5f9;'><th style='padding:6px 10px;border:1px solid #e2e8f0;'>From</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Category</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>FK Field</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Cardinality</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>To</th><th style='padding:6px 10px;border:1px solid #e2e8f0;'>Category</th></tr></thead><tbody>";
     var relTableSeen = {};
     relationships.forEach(function(rel) {
       var key = [rel.from, rel.to].sort().join("|||");
@@ -12586,7 +12761,7 @@ processJSON();
       var toEnt = entityByLabel[rel.to];
       if (!fromEnt || !toEnt || rel.from === rel.to) return;
 
-      // Try to get FK info from verifyRelationship, fallback to basic KQ scan
+      // Try to get FK info from verifyRelationship — if it fails, show "—" for FK field
       var fkField = "—";
       var cardName = "Related";
       var verified = verifyRelationship(fromEnt, toEnt);
@@ -12594,18 +12769,29 @@ processJSON();
         fkField = verified.fkField;
         cardName = verified.cardinality === "||--o{" ? "OneToMany" : verified.cardinality === "}o--||" ? "ManyToOne" : verified.cardinality === "||--||" ? "OneToOne" : "ManyToMany";
       } else {
-        // Fallback: show first non-Id KQ as field hint
-        var fromFKs = fromEnt.attributes.filter(function(a) { return a.isForeignKey; });
-        var toFKs = toEnt.attributes.filter(function(a) { return a.isForeignKey; });
-        if (fromFKs.length > 0) { fkField = fromFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
-        else if (toFKs.length > 0) { fkField = toFKs[0].developerName.replace(/^KQ_/,"").replace(/__c$/,""); cardName = "ManyToOne"; }
+        // Don't guess FK field — keep it as "—"
+        // Guess cardinality based on entity type
         if (/Latest|_SM_/i.test(rel.from) || /Latest|_SM_/i.test(rel.to)) cardName = "OneToOne";
-        if (/Link/i.test(rel.from) || /Link/i.test(rel.to)) cardName = "ManyToMany";
+        else if (/Link/i.test(rel.from) || /Link/i.test(rel.to)) cardName = "ManyToMany";
+        else cardName = "Connected";
       }
       var cardColor = cardName === "ManyToOne" ? "#fef3c7" : cardName === "OneToOne" || cardName === "OneToMany" ? "#dcfce7" : cardName === "ManyToMany" ? "#e0f2fe" : "#f3f4f6";
       var cardTextColor = cardName === "ManyToOne" ? "#92400e" : cardName === "OneToOne" || cardName === "OneToMany" ? "#166534" : cardName === "ManyToMany" ? "#0369a1" : "#374151";
 
-      html += "<tr><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.from) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:#0369a1;font-size:10px;'>" + esc(fkField) + "</td><td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + cardColor + ";color:" + cardTextColor + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + cardName + "</span></td><td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.to) + "</td></tr>";
+      // Category badges
+      var fromCatColor = fromEnt.category === "PROFILE" ? "#d1fae5" : fromEnt.category === "ENGAGEMENT" ? "#fed7aa" : "#e5e7eb";
+      var fromCatText = fromEnt.category === "PROFILE" ? "#065f46" : fromEnt.category === "ENGAGEMENT" ? "#92400e" : "#374151";
+      var toCatColor = toEnt.category === "PROFILE" ? "#d1fae5" : toEnt.category === "ENGAGEMENT" ? "#fed7aa" : "#e5e7eb";
+      var toCatText = toEnt.category === "PROFILE" ? "#065f46" : toEnt.category === "ENGAGEMENT" ? "#92400e" : "#374151";
+
+      html += "<tr>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.from) + "</td>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + fromCatColor + ";color:" + fromCatText + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;text-transform:uppercase;'>" + fromEnt.category + "</span></td>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;font-family:monospace;color:" + (fkField === "—" ? "#94a3b8" : "#0369a1") + ";font-size:10px;'>" + esc(fkField) + "</td>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + cardColor + ";color:" + cardTextColor + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;'>" + cardName + "</span></td>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;font-weight:600;'>" + esc(rel.to) + "</td>";
+      html += "<td style='padding:5px 10px;border:1px solid #e2e8f0;text-align:center;'><span style='background:" + toCatColor + ";color:" + toCatText + ";padding:2px 6px;border-radius:3px;font-size:9px;font-weight:600;text-transform:uppercase;'>" + toEnt.category + "</span></td>";
+      html += "</tr>";
     });
     html += "</tbody></table></div></div>";
 
