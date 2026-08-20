@@ -13305,7 +13305,7 @@ processJSON();
     })();
   }
 
-  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && detailPageType !== "Segment" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
+  if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /displayType=graph/i.test(window.location.href)) return;
       const wrap = document.createElement("div");
