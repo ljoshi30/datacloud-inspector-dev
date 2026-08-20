@@ -260,5 +260,28 @@
 </script>
 <style>@keyframes dcpulse{0%,100%{border-color:#dc2626}50%{border-color:#fca5a5}}</style>
 <!-- Cloudflare Web Analytics --><script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0d6d64614a494f34a06fb61145f59228"}'></script><!-- End Cloudflare Web Analytics -->
+<script>
+// Track bookmarklet drag — fires when user mousedowns on bookmarklet link
+(function() {
+  var tracked = false;
+  var bmLink = document.querySelector('a.bm');
+  if (!bmLink) return;
+  bmLink.addEventListener('mousedown', function() {
+    if (tracked) return;
+    tracked = true;
+    // Count via image pixel (GitHub Pages will log this as a 404 request but
+    // Cloudflare will see it as a page view to /bookmarklet-dragged path)
+    var img = new Image();
+    img.src = '/datacloud-inspector-dev/bookmarklet-dragged?t=' + Date.now();
+  });
+  // Also track dragstart (more reliable for actual drag to bookmark bar)
+  bmLink.addEventListener('dragstart', function() {
+    if (tracked) return;
+    tracked = true;
+    var img = new Image();
+    img.src = '/datacloud-inspector-dev/bookmarklet-dragged?t=' + Date.now();
+  });
+})();
+</script>
 </body>
 </html>
