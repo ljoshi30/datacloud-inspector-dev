@@ -8,6 +8,15 @@
  * AUTO-DETECT: we stamp <html data-dc-ext="1"> so the MAIN-world tool knows the
  * documented path is available (extension mode). Absent = bookmarklet → tool uses its
  * existing same-origin /aura fallback. Only READ queries are relayed.
+ *
+ * ── SECURITY ──────────────────────────────────────────────────────────────────
+ * 1. Message source is validated: ev.source === window (same frame only).
+ * 2. Only messages with a recognized __dcReq type are forwarded — an allowlist
+ *    prevents a malicious page from triggering arbitrary runtime messages.
+ * 3. No sid/cookie values ever pass through this script; the background service
+ *    worker reads cookies directly via the cookies API.
+ * 4. Responses are posted back via postMessage with a correlation id; no
+ *    sensitive data (sid, keys) is included in any response payload.
  */
 (function () {
   var api = (typeof browser !== "undefined") ? browser : chrome;
@@ -15,11 +24,21 @@
   // 1) advertise extension presence to the MAIN-world tool (shared DOM attribute)
   try { document.documentElement.setAttribute("data-dc-ext", "1"); } catch (e) {}
 
+  // Allowlist of recognized request types — only these are forwarded to the
+  // background service worker. Prevents a malicious page from abusing the bridge.
+  var ALLOWED_REQ_TYPES = {
+    "dc-sql-query": 1, "dc-fetch-page": 1, "dc-ai-explain": 1,
+    "dc-save-ai-settings": 1, "dc-get-ai-settings": 1,
+    "dc-transform": 1, "dc-activation": 1, "dc-dmo-list": 1, "dc-dmo-fields": 1
+  };
+
   // 2) relay page → background → page, correlated by a request id
   window.addEventListener("message", function (ev) {
     try {
       if (ev.source !== window) return;
       var d = ev.data; if (!d || !d.id) return;
+      // Reject unknown message types early
+      if (!d.__dcReq || !ALLOWED_REQ_TYPES[d.__dcReq]) return;
       // (a) SQL query relay — passes the FULL response (incl. queryId/rowCount for pagination)
       if (d.__dcReq === "dc-sql-query") {
         api.runtime.sendMessage(

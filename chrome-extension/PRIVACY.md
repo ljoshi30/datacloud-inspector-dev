@@ -16,11 +16,19 @@ _Last updated: 2026-08-03_
   to **that same org's own documented API**. The cookie value is never stored and never
   sent anywhere except to your own Salesforce instance.
 
+## Optional AI-explain feature
+
+If you choose to use the "Explain this transform" feature, you provide your own API key
+(Anthropic, OpenAI, or Google Gemini). That key is stored locally in `chrome.storage.local`
+(encrypted at rest by the browser) and is sent **only** to the provider you chose, **only**
+when you click "Explain". The transform definition JSON is sent to that provider for
+analysis. No other data is sent. If you never configure this feature, no AI calls are made.
+
 ## What it does NOT do
 
 - **No data is collected, stored, or transmitted to the developer or any third party.**
-- **No external servers are contacted.** All network requests go only to your own
-  Salesforce org.
+- **No external servers are contacted** apart from your own Salesforce org and (optionally)
+  your chosen AI provider when you explicitly trigger it.
 - **No analytics, no tracking, no advertising.**
 - **No remote code** — all code ships inside the extension package.
 - It never modifies, creates, or deletes your Salesforce data (read-only).

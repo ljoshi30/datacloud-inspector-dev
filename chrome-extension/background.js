@@ -16,6 +16,18 @@
  *    manifest sets strict_min_version 128).
  *  - Bookmarks bar id differs (Chrome "1" vs Firefox "toolbar_____"), so we
  *    DISCOVER it from the tree instead of hardcoding.
+ *
+ * ── SECURITY POSTURE ──────────────────────────────────────────────────────────
+ * 1. The Salesforce session cookie (sid) is read ONLY to authorize API calls
+ *    back to the user's OWN Salesforce org. It is NEVER logged, stored, or
+ *    transmitted anywhere else.
+ * 2. ALL Salesforce API calls are READ-only (GET or SELECT-only POST to
+ *    /ssot/query-sql). No data is created, updated, or deleted.
+ * 3. Host parameters are validated against known Salesforce domain patterns
+ *    before any cookie read or fetch is attempted.
+ * 4. AI API keys (user-provided) are stored in chrome.storage.local (encrypted
+ *    at rest by the browser) and sent only to the user's chosen AI provider.
+ * 5. No eval(), no remote code loading, no dynamic script injection.
  */
 var api = (typeof browser !== "undefined") ? browser : chrome;
 
@@ -44,10 +56,23 @@ function pget(fn, arg) {
     catch (e) { res(undefined); }
   });
 }
+
+// ── Host validation ────────────────────────────────────────────────────────────
+// Only allow cookie reads / API calls to known Salesforce domains. This prevents
+// a compromised content script from tricking the background into leaking the sid
+// to an attacker-controlled host.
+// Allows multi-level subdomains (sandbox, scratch orgs) like org.sandbox.my.salesforce.com
+const SF_HOST_RE = /^[a-z0-9\-]+(\.[a-z0-9\-]+)*\.(lightning\.force\.com|my\.salesforce\.com|salesforce\.com|salesforce-setup\.com|force\.com|sfdc\.cl)$/i;
+function isValidSfHost(host) {
+  return typeof host === "string" && host.length > 0 && host.length < 256 && SF_HOST_RE.test(host);
+}
+
 async function readSid(host) {
+  if (!isValidSfHost(host)) return null;
   // Prefer the my.salesforce.com sid (valid for /services/data); fall back to the
   // lightning-host sid only if the other isn't present.
   const coreHost = host.replace(/\.lightning\.force\.com$/, ".my.salesforce.com");
+  if (!isValidSfHost(coreHost)) return null;
   const my = await pget((d, cb) => api.cookies.get(d, cb), { url: "https://" + coreHost, name: "sid" });
   if (my && my.value) return { sid: my.value, coreHost };
   const lt = await pget((d, cb) => api.cookies.get(d, cb), { url: "https://" + host, name: "sid" });
@@ -126,8 +151,18 @@ async function runDcSqlQuery(req) {
     return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0,
              queryId: queryId, rowCount: rowCount };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: safeError(e) };
   }
+}
+
+// Sanitize error messages: strip anything that looks like a session token to
+// prevent accidental sid leakage in error responses sent back to content scripts.
+function safeError(e) {
+  var msg = String(e && e.message ? e.message : e);
+  // Strip any Bearer token or sid-like hex string (40+ hex chars)
+  msg = msg.replace(/Bearer\s+[A-Za-z0-9!._+\-\/=]+/gi, "Bearer [REDACTED]");
+  msg = msg.replace(/\b[0-9a-f]{40,}\b/gi, "[REDACTED]");
+  return msg;
 }
 
 // Fetch a SINGLE page of rows from a previously-executed query (the pagination endpoint).
@@ -150,7 +185,7 @@ async function fetchQueryPage(req) {
       return { ok: false, error: em, status: r.status };
     }
     return { ok: true, data: (j && j.data) || [], metadata: (j && j.metadata) || [], returnedRows: (j && j.returnedRows) || 0 };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 // Read a Data Transform definition (documented GET, sid-cookie auth). READ-only.
 async function runDcTransform(req) {
@@ -170,7 +205,7 @@ async function runDcTransform(req) {
       return { ok: false, error: em, status: r.status };
     }
     return { ok: true, data: j };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 // List all DMOs (label + dev name). Used to build label→devName lookup.
 async function runDcDmoList(req) {
@@ -189,7 +224,7 @@ async function runDcDmoList(req) {
       return { ok: false, error: em };
     }
     return { ok: true, data: j };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 
 // Read DMO field metadata (for segment API name annotations). READ-only.
@@ -211,7 +246,7 @@ async function runDcDmoFields(req) {
       return { ok: false, error: em, status: r.status };
     }
     return { ok: true, data: j };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 
 // Read an Activation definition (documented GET, sid-cookie auth). READ-only.
@@ -232,7 +267,7 @@ async function runDcActivation(req) {
       return { ok: false, error: em, status: r.status };
     }
     return { ok: true, data: j };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 
 // ── AI Explain: call LLM API to explain a Data Transform ────────────────────
@@ -352,7 +387,7 @@ async function aiExplainTransform(req) {
     var content2 = (j2 && j2.content && j2.content[0] && j2.content[0].text) || "";
     return { ok: true, explanation: content2, provider: "anthropic" };
   } catch (e) {
-    return { ok: false, error: String(e) };
+    return { ok: false, error: safeError(e) };
   }
 }
 
@@ -382,7 +417,14 @@ async function getAiSettings() {
 }
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Security: only accept messages from our own extension's content scripts (same
+  // extension id). Reject messages from other extensions or external sources.
+  if (!sender || sender.id !== api.runtime.id) return;
+
   const tabHost = (sender && sender.tab && sender.tab.url) ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return null; } })() : null;
+
+  // For Salesforce API calls, prefer the verified tab URL host over any host
+  // value supplied in the message payload (defense-in-depth against spoofing).
   if (msg && msg.type === "dcSqlQuery") {
     const req = { sql: msg.sql, rowLimit: msg.rowLimit, dataspace: msg.dataspace, host: tabHost || msg.host };
     runDcSqlQuery(req).then(sendResponse);

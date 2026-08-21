@@ -27,7 +27,9 @@ No data leaves the browser except back to the user's own Salesforce.**
 | `scripting` | Inject the tool into the page's MAIN world on user click. | "Injects the inspector script when the user clicks the toolbar icon. MAIN world is required to read Salesforce Lightning component properties that hold the API names we display." |
 | `activeTab` | Act only on the tab the user clicked from. | "We only act on the current tab, and only when the user clicks the icon." |
 | `cookies` | Read the Salesforce session cookie to call the user's own org's **documented** Data Cloud Query API for the 'show all columns' feature. | "Reads only the Salesforce `sid` session cookie for the current org, used solely to authorize read-only queries to that same org's documented API (`/services/data/vXX/ssot/query-sql`). The cookie value is never stored or transmitted anywhere except back to the user's own Salesforce instance." |
+| `storage` | Persist the user's AI provider preference and API keys locally (encrypted at rest by the browser). | "Stores the user's chosen AI provider setting and their own API keys so they persist across browser restarts. Never synced or transmitted to us." |
 | host_permissions `*.salesforce.com`, `*.force.com`, `*.lightning.force.com`, `*.salesforce-setup.com` | Salesforce orgs live on these domains; the tool must run there and query the org's API. | "The tool only works on Salesforce Data Cloud pages, which are served from these domains. No other sites are accessed." |
+| host_permissions `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` | Optional AI-explain feature: user provides their own API key; calls go to their chosen provider. | "Used only when the user explicitly configures the AI-explain feature with their own API key. No calls are made without user action." |
 
 > If a reviewer questions the breadth of `*.force.com`: it is required because every
 > Salesforce customer org has its own subdomain under these roots; there is no single
@@ -62,7 +64,7 @@ No data leaves the browser except back to the user's own Salesforce.**
 ## 5. Pre-submit checklist
 
 - [ ] `node build.js` run; `chrome-extension/` and `firefox-extension/` regenerated.
-- [ ] Manifest permissions are exactly: `scripting`, `activeTab`, `cookies` (no `bookmarks`, no `<all_urls>` WAR).
+- [ ] Manifest permissions are exactly: `scripting`, `activeTab`, `cookies`, `storage` (no `bookmarks`, no `<all_urls>` WAR).
 - [ ] No `eval` / `new Function` / remote code (build asserts readable source).
 - [ ] Privacy policy URL is live (host PRIVACY.md somewhere public, e.g. the GitHub Pages repo).
 - [ ] Screenshots: launcher on a mapping page + the export modal.
