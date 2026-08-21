@@ -2949,7 +2949,11 @@
       operator:    item.operator,
       values:      item.values,
     }));
-    return { tree: { type: "set", join: "", items }, flat };
+    // Multiple rulesets in Rank & Limit are SEQUENTIAL — each outer ruleset
+    // operates on the results of the previous one (SF shows "Where X is in
+    // the results of" between them). Use "SEQ" as the join token.
+    var join = items.length > 1 ? "SEQ" : "";
+    return { tree: { type: "set", join: join, items }, flat };
   }
 
   // Returns a tree mirroring the SF canvas DOM structure.
@@ -4030,7 +4034,7 @@
       let s = ws.getCell(2, 1);
       s.value = "How to read: each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
               + "The three right-hand columns show the AND/OR logic at each level — 'Join in group' joins rows inside one block, 'Join groups' joins a group-of-groups like (A OR B), 'Join all blocks' is the top-level join across everything. "
-              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order).";
+              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = Sequential (Rank & Limit rulesets where each operates on the results of the previous one).";
       s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
       s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
       ws.getRow(2).height = 34;
@@ -4177,16 +4181,16 @@
 
       // ---- rails: one merged bar, single centered operator ----
       // THEN (waterfall hierarchy) reuses the blue-ish OR palette but its own color.
+      // SEQ (rank & limit sequential rulesets) uses grey.
       const THEN = "0B5CAB";
+      const SEQ_C = "6B7280";
       function paintBar(c, r0, r1, op, style, outer) {
         const f = op === "AND" ? (outer ? AND_OUTER : AND_BAR) : OR_BAR;
-        const rc = op === "AND" ? AND : op === "THEN" ? THEN : OR;
+        const rc = op === "AND" ? AND : op === "THEN" ? THEN : op === "SEQ" ? SEQ_C : OR;
         for (let rr = r0; rr <= r1; rr++) ws.getCell(rr, c).fill = fill(f);
         if (r0 !== r1) ws.mergeCells(r0, c, r1, c);
-        // SF's UI shows no "THEN" keyword — waterfall members are ranked by
-        // priority (the numbered tiers). Display "Priority" instead of the
-        // internal THEN token; AND/OR are shown verbatim as SF labels them.
-        const cell = ws.getCell(r0, c); cell.value = (op === "THEN" ? "Priority" : op);
+        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "Sequential" : op;
+        const cell = ws.getCell(r0, c); cell.value = label;
         cell.font = { bold: true, size: outer ? 12 : 10, color: { argb: "FF" + rc } };
         cell.alignment = { horizontal: "center", vertical: "middle" };
         boxRange(r0, r1, c, c, style, rc);
@@ -4377,6 +4381,7 @@
         if (joins.AND) rows.push(["AND (green)", "All joined items must match."]);
         if (joins.OR)  rows.push(["OR (orange)", "Any one of the joined items may match."]);
         if (joins.THEN) rows.push(["Priority (blue)", "Waterfall tier order — tiers are applied in priority sequence, not AND/OR'd."]);
+        if (joins.SEQ) rows.push(["Sequential (grey)", "Rank & Limit rulesets are applied in sequence — each ruleset filters the results of the previous one (not AND/OR)."]);
         rows.push(["Join columns", "The three right-hand columns show the join at each level (inside a group, across groups, across all blocks). A join only appears when it connects 2+ items."]);
       }
 
@@ -4502,10 +4507,10 @@
 
       // Map a join operator to its rail CSS modifier. AND=green, OR=orange,
       // THEN (waterfall hierarchy)=blue.
-      function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : "and"; }
-      // SF shows no "THEN" — waterfall tiers are ranked by priority. Display label
-      // for the rail text (internal token stays THEN for color/plumbing).
-      function railText(op) { return op === "THEN" ? "Priority" : op; }
+      function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : op === "SEQ" ? "seq" : "and"; }
+      // Display labels: THEN → "Priority" (waterfall tiers), SEQ → "Sequential"
+      // (rank & limit rulesets where each operates on the results of the previous).
+      function railText(op) { return op === "THEN" ? "Priority" : op === "SEQ" ? "Sequential" : op; }
 
       // stack children; if >1, add a right-side bracket rail carrying the operator
       function renderJoin(children, op, boxed, member) {
@@ -4577,6 +4582,7 @@
       .rail.and { --rc:#008000; }
       .rail.or  { --rc:#c55a11; }
       .rail.then { --rc:#0b5cab; }
+      .rail.seq { --rc:#6b7280; }
       .nested-seg .cont-head { display:flex; align-items:center; gap:8px; }
       .nested-seg .ns-badge { font:700 10px/1 system-ui; background:#0b5cab; color:#fff;
                               padding:2px 7px; border-radius:10px; letter-spacing:.05em; }
@@ -4691,7 +4697,8 @@
         case "rank":
           return "Rank & Limit rule on " + (node.entity || "") + ": " +
                  [node.rankType, node.rankField].filter(Boolean).join(" ") +
-                 (node.limit ? ", limit " + node.limit : "") + ".";
+                 (node.limit ? ", limit " + node.limit : "") +
+                 ". When multiple rulesets exist, each operates on the results of the previous one (sequential filtering).";
         default: return "";
       }
     }
@@ -4722,8 +4729,10 @@
     function segTreeToKit(toolTree, tab) {
       var isRank = /rank/i.test(tab || "");
       // Waterfall tiers are ordered/prioritised → THEN join (blue rail), not AND/OR.
-      // Rank & Limit blocks have no logical connector — join stays empty.
-      var join = (toolTree && toolTree.waterfall) ? "THEN" : (toolTree && toolTree.join) || (isRank ? "" : "AND");
+      // Rank & Limit rulesets are sequential (each operates on the results of the
+      // previous one) → SEQ join (grey rail with "results of" label).
+      var join = (toolTree && toolTree.waterfall) ? "THEN"
+               : (toolTree && toolTree.join) || (isRank ? "" : "AND");
       var root = { t: "root", tab: tab || "Include", join: join, children: [] };
       if (toolTree && toolTree.items) root.children = toolTree.items.map(function (c) { return conv(c, isRank); }).filter(Boolean);
       return root;
@@ -4849,15 +4858,17 @@
       DR.forEach(dr => {
         if (dr.kind === "inner") {
           const isOr = dr.label === "OR";
-          const jc   = isOr ? "#7c3aed" : "#0b5cab";
-          const jbg  = isOr ? "#f5f0ff" : "#edf4ff";
+          const isSeq = dr.label === "SEQ";
+          const jc   = isSeq ? "#6b7280" : isOr ? "#7c3aed" : "#0b5cab";
+          const jbg  = isSeq ? "#f3f4f6" : isOr ? "#f5f0ff" : "#edf4ff";
+          const jText = isSeq ? "↓ results of above" : dr.label;
 
           if (dr.isBetweenGroups) {
-            // Compact gap between groups — AND/OR pill on the right only
+            // Compact gap between groups — connector pill on the right only
             html += "<tr style='height:18px'>";
             for (let k = 0; k < TOTAL - 1; k++) html += "<td style='border:none;background:#f4f6fb'></td>";
             html += "<td style='border:none;background:#f4f6fb;text-align:right;padding:2px 10px'>" +
-              "<span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + jbg + ";padding:2px 10px;border-radius:10px;border:1px solid " + jc + "55;letter-spacing:.07em'>" + esc(dr.label) + "</span></td>";
+              "<span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + jbg + ";padding:2px 10px;border-radius:10px;border:1px solid " + jc + "55;letter-spacing:.07em'>" + esc(jText) + "</span></td>";
             html += "</tr>\n";
           } else {
             // Inner joiner within a group — thin divider row, AND/OR pill on right only
@@ -5178,6 +5189,7 @@
         "<div class='legend'>" +
         "<span><span class='legend-dot' style='background:#008000'></span>AND join</span>" +
         "<span><span class='legend-dot' style='background:#c55a11'></span>OR join</span>" +
+        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>Sequential (each ruleset filters results of the previous)</span>" : "") +
         "</div>\n" +
         rulesHtml + "\n</div>\n</body>\n</html>";
     }
