@@ -4526,9 +4526,19 @@
 
       function renderRoot(tree) {
         const kids = tree.children || [];
+        // SEQ: render connector BETWEEN blocks (centered, like SF), not as a side rail.
+        if (tree.join === "SEQ" && kids.length > 1) {
+          const parts = [];
+          kids.forEach((c, i) => {
+            parts.push(`<div class="toprow">${renderNode(c, false)}</div>`);
+            if (i < kids.length - 1) {
+              parts.push(`<div class="seq-connector"><div class="seq-line"></div><span class="seq-badge">${esc("Where " + (tree.seqEntity || "") + " is in the results of")}</span><div class="seq-line"></div></div>`);
+            }
+          });
+          return `<div class="root"><div class="root-body">${parts.join("\n")}</div></div>`;
+        }
         const blocks = kids.map((c) => `<div class="toprow">${renderNode(c, false)}</div>`).join("\n");
         // A single top-level block joins nothing — omit the outer rail entirely.
-        // No join (e.g. Rank & Limit with 1 block) — stack blocks without a connector rail.
         if (kids.length <= 1 || !tree.join) return `<div class="root"><div class="root-body">${blocks}</div></div>`;
         const op = tree.join;
         const railCls = "rail " + railMod(op) + " outer";
@@ -4583,6 +4593,9 @@
       .rail.or  { --rc:#c55a11; }
       .rail.then { --rc:#0b5cab; }
       .rail.seq { --rc:#6b7280; }
+      .seq-connector { display:flex; flex-direction:column; align-items:center; padding:12px 0; }
+      .seq-line { width:2px; height:16px; background:#94a3b8; }
+      .seq-badge { font:600 11px/1.3 -apple-system,BlinkMacSystemFont,sans-serif; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:16px; padding:5px 14px; white-space:nowrap; }
       .nested-seg .cont-head { display:flex; align-items:center; gap:8px; }
       .nested-seg .ns-badge { font:700 10px/1 system-ui; background:#0b5cab; color:#fff;
                               padding:2px 7px; border-radius:10px; letter-spacing:.05em; }
