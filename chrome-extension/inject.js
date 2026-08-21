@@ -2926,6 +2926,18 @@
         if (!objectLabel) objectLabel = t;
       }
 
+      // Try to extract API names from the LWC element's JS properties
+      const api = apiNamesFor(condEl, objectLabel, "");
+      // Also try to get the field API from the rankField label (e.g. "Unified Individual TDIR.Civic No")
+      const fieldPart = (rankField || "").replace(/\s+in (ascending|descending) order$/i, "").trim();
+      const dotIdx = fieldPart.indexOf(".");
+      const fieldLabelForApi = dotIdx > 0 ? fieldPart.slice(dotIdx + 1) : fieldPart;
+      if (!api.fieldApi && fieldLabelForApi) {
+        const api2 = apiNamesFor(condEl, objectLabel, fieldLabelForApi);
+        if (api2.fieldApi) api.fieldApi = api2.fieldApi;
+        if (api2.objApi && !api.objApi) api.objApi = api2.objApi;
+      }
+
       // Emit one structured row per block:
       //   objectLabel = DMO name, fieldLabel = rank type, operator = rank field, values = "Limit: N ..."
       if (rankType || rankField || limitVal || objectLabel) {
@@ -2934,10 +2946,12 @@
           fieldLabel:  rankType  || "",
           operator:    rankField || "",
           values:      limitVal  ? "Limit: " + limitVal : "",
+          objApi:      api.objApi || "",
+          fieldApi:    api.fieldApi || "",
         });
       } else if (uniq.length) {
         // Fallback: emit a single row with whatever text we found
-        rows.push({ objectLabel: uniq[0] || "", fieldLabel: uniq.slice(1).join(" · "), operator: "", values: "" });
+        rows.push({ objectLabel: uniq[0] || "", fieldLabel: uniq.slice(1).join(" · "), operator: "", values: "", objApi: api.objApi || "", fieldApi: api.fieldApi || "" });
       }
     });
 
@@ -4443,11 +4457,11 @@
         if (n.op === "Is Between") val = `<b>${esc(n.v1)}</b> <span class="op">AND</span> <b>${esc(n.v2)}</b>`;
         else if (n.v1) val = `<b>${esc(n.v1)}</b>`;
         const [light] = color(n.entity);
+        const apiLine = (n.fieldApi || n.objApi) ? `<span class="cond-api">${esc((n.objApi || "") + (n.fieldApi ? "." + n.fieldApi : ""))}</span>` : "";
         const inner = `<span class="entity">${esc(n.entity)}</span>
-            <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>
+            <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>${apiLine}
             <span class="op">${esc(n.op)}</span> ${val}`;
         if (member) return `<div class="member">${inner}</div>`;
-        // Top-level direct attribute → label it inline so it reads like the others.
         const chip = kindChip(n.kind || "direct", n.objApi);
         return `<div class="card" style="--bg:${light}"><div class="card-main">${chip}${inner}</div></div>`;
       }
@@ -4476,9 +4490,13 @@
       // Rank & Limit rule — a labeled card with Object / Group|Sort By / Field / Limit.
       function renderRank(n) {
         const [light, dark] = color(n.entity);
-        const head = `<div class="cont-head" style="background:${dark}"><b>${esc(n.entity || "Rank & Limit")}</b></div>`;
+        const apiTag = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
+        const head = `<div class="cont-head" style="background:${dark}">${kindChip("rank")}<b>${esc(n.entity || "Rank & Limit")}</b>${apiTag}</div>`;
         const rows = [];
-        if (n.rankType) rows.push(`<span class="rk-k">${esc(n.rankType)}</span> <b class="attr">${esc(n.rankField || "")}</b>`);
+        if (n.rankType) {
+          const fieldApiTag = n.fieldApi ? ` <span class="cont-api" style="font-size:10px">${esc(n.fieldApi)}</span>` : "";
+          rows.push(`<span class="rk-k">${esc(n.rankType)}</span> <b class="attr">${esc(n.rankField || "")}</b>${fieldApiTag}`);
+        }
         if (n.limit)    rows.push(`<span class="rk-k">Limit</span> <b class="attr">${esc(n.limit)}</b>`);
         if (!rows.length && n.attr) rows.push(`<b class="attr">${esc(n.attr)}</b>`);
         const body = rows.map((r) => `<div class="member">${r}</div>`).join("");
@@ -4593,6 +4611,7 @@
       .rail.or  { --rc:#c55a11; }
       .rail.then { --rc:#0b5cab; }
       .rail.seq { --rc:#6b7280; }
+      .cond-api { display:inline-block; font:500 9px/1 SFMono-Regular,Consolas,monospace; color:#64748b; background:#f1f5f9; padding:1px 5px; border-radius:3px; margin-left:4px; vertical-align:baseline; }
       .seq-connector { display:flex; flex-direction:column; align-items:center; padding:12px 0; }
       .seq-line { width:2px; height:16px; background:#94a3b8; }
       .seq-badge { font:600 11px/1.3 -apple-system,BlinkMacSystemFont,sans-serif; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:16px; padding:5px 14px; white-space:nowrap; }
@@ -4654,7 +4673,8 @@
       var limit = (n.values || "").replace(/^Limit:\s*/i, "").trim();
       return { t: "rank", entity: n.objectLabel || "Rank & Limit",
                rankType: n.fieldLabel || "", rankField: n.operator || "", limit: limit,
-               attr: [n.fieldLabel, n.operator, n.values].filter(Boolean).join(" ") };
+               attr: [n.fieldLabel, n.operator, n.values].filter(Boolean).join(" "),
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
     }
     // Waterfall member (a Segment in Priority order) OR a true nested segment.
     // operator carries "Priority N" for waterfall members (SF's term).
@@ -4708,8 +4728,10 @@
                  (node.sched ? ". Publish Schedule: " + node.sched : "") +
                  (node.pub ? ". Publish Behavior: " + node.pub : "") + ".";
         case "rank":
-          return "Rank & Limit rule on " + (node.entity || "") + ": " +
+          return "Rank & Limit rule on " + (node.entity || "") +
+                 (node.objApi ? " [" + node.objApi + "]" : "") + ": " +
                  [node.rankType, node.rankField].filter(Boolean).join(" ") +
+                 (node.fieldApi ? " (API: " + node.fieldApi + ")" : "") +
                  (node.limit ? ", limit " + node.limit : "") +
                  ". When multiple rulesets exist, each filters the results of the one above it.";
         default: return "";
