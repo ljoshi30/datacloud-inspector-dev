@@ -30,7 +30,6 @@
  * 5. No eval(), no remote code loading, no dynamic script injection.
  */
 var api = (typeof browser !== "undefined") ? browser : chrome;
-var DC_DEBUG = false;
 
 api.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
@@ -41,7 +40,6 @@ api.action.onClicked.addListener(async (tab) => {
       files: ["inject.js"],
     });
   } catch (e) {
-    console.warn("[DC-MI] injection failed:", e && e.message);
   }
 });
 
@@ -89,7 +87,6 @@ async function pollQueryUntilFinished(coreHost, sid, queryId, dataspace, apiV) {
     var txt = await r.text();
     var st = null; try { st = JSON.parse(txt); } catch (e) {}
     if (!st) break;
-    DC_DEBUG && console.log("[DC-MI] poll status:", st.completionStatus, "rowCount:", st.rowCount, "progress:", st.progress);
     if (st.completionStatus === "Finished" || st.completionStatus === "ResultsProduced") {
       return { queryId: st.queryId || queryId, rowCount: st.rowCount || 0, completionStatus: st.completionStatus };
     }
@@ -109,9 +106,6 @@ async function runDcSqlQuery(req) {
     let url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/query-sql";
     if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
     const body = JSON.stringify({ sql: String(req.sql || ""), rowLimit: req.rowLimit || 2000 });
-    // DIAGNOSTIC: log exactly what we send so a failure is debuggable (open the
-    // extension's background console via about:debugging → Inspect).
-    DC_DEBUG && console.log("[DC-MI] query-sql →", url, "| dataspace:", JSON.stringify(req.dataspace), "| sql:", String(req.sql || "").slice(0, 160));
     const r = await fetch(url, {
       method: "POST",
       headers: { "Authorization": "Bearer " + got.sid, "Content-Type": "application/json", "Accept": "application/json" },
@@ -141,11 +135,9 @@ async function runDcSqlQuery(req) {
     // the true rowCount. Without this, large tables return partial rowCount and pagination
     // stops early (e.g. 38k rows instead of 117k).
     if (queryId && st.completionStatus && st.completionStatus !== "Finished" && st.completionStatus !== "ResultsProduced") {
-      DC_DEBUG && console.log("[DC-MI] query is async (status=" + st.completionStatus + "), polling until finished...");
       var finalStatus = await pollQueryUntilFinished(got.coreHost, got.sid, queryId, req.dataspace, apiV);
       if (finalStatus) {
         rowCount = finalStatus.rowCount || rowCount;
-        DC_DEBUG && console.log("[DC-MI] query finished, final rowCount:", rowCount);
       }
     }
 
@@ -318,7 +310,6 @@ async function aiExplainTransform(req) {
       var sfKey = settings.dc_sfgateway_key;
       if (!sfKey) return { ok: false, error: "NO_KEY" };
       var sfUrl = (settings.dc_sfgateway_url || "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl") + "/v1/chat/completions";
-      DC_DEBUG && console.log("[DC-MI] AI: calling sf-gateway →", sfUrl);
       var msgs = chatMessages || [{ role: "user", content: prompt }];
       var r = await fetch(sfUrl, {
         method: "POST",
@@ -326,7 +317,6 @@ async function aiExplainTransform(req) {
         body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4096, messages: msgs })
       });
       var txt = await r.text();
-      DC_DEBUG && console.log("[DC-MI] AI: response status:", r.status, "body length:", txt.length);
       var j = null; try { j = JSON.parse(txt); } catch (e) {}
       if (r.status !== 200) {
         var em = (j && j.error && j.error.message) || (j && j.message) || "HTTP " + r.status + " - " + txt.slice(0, 200);
@@ -342,7 +332,6 @@ async function aiExplainTransform(req) {
         content = j.completion;
       }
       if (!content && j) content = "Response received but could not extract text. Raw keys: " + Object.keys(j).join(", ");
-      DC_DEBUG && console.log("[DC-MI] AI: extracted content length:", content.length);
       return { ok: true, explanation: content || "Empty response from gateway", provider: "sf-gateway" };
     }
 
@@ -403,7 +392,7 @@ async function saveAiSettings(settings) {
   if (settings.sfGatewayKey) toSave.dc_sfgateway_key = settings.sfGatewayKey;
   if (settings.sfGatewayUrl) toSave.dc_sfgateway_url = settings.sfGatewayUrl;
   Object.assign(_aiSettingsCache, toSave);
-  try { await api.storage.local.set(toSave); } catch (e) { console.warn("[DC-MI] storage.local.set failed, using in-memory cache:", e); }
+  try { await api.storage.local.set(toSave); } catch (e) { /* storage unavailable — in-memory cache still works */ }
   return { ok: true };
 }
 async function getAiSettings() {

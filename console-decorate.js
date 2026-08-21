@@ -1335,7 +1335,6 @@
     if (!wasInline) { state.inline = false; clearInline(); }
     if (wasOn) { state.on = true; bindHover(); redraw(); }
     const summary = { rowsMeasured: after.length, rowsMoved: moved, maxDriftPx: Math.round(max * 10) / 10, worst: worst.slice(0, 8) };
-    try { console.log("%c[drift-meter] max dot drift: " + summary.maxDriftPx + "px across " + summary.rowsMeasured + " rows (" + moved + " moved)", "color:#0b5cab;font-weight:bold"); if (worst.length) console.table(summary.worst); } catch (e) {}
     return summary;
   }
 
@@ -1371,7 +1370,6 @@
         labelParent: describe(parent),
       };
     });
-    try { console.log("%c[probeRow] " + (labelSubstr || "(all)"), "color:#0b5cab;font-weight:bold"); console.log(JSON.stringify(report, null, 2)); } catch (e) {}
     return report;
   }
 
@@ -1417,7 +1415,6 @@
         gapBelowTextPx: gap,   // >~12 means a 10px line fits below WITHOUT growing the row
       };
     });
-    try { console.log("%c[probeGeom] " + (labelSubstr || "(all)"), "color:#0b5cab;font-weight:bold"); console.table(report.map((r) => ({ row: r.rowLabel, rowH: r.rowHeight, textBottomToRowBottom: r.gapBelowTextPx, dotCenterY: r.dotCenterY }))); console.log(JSON.stringify(report, null, 2)); } catch (e) {}
     return report;
   }
 
@@ -2952,7 +2949,7 @@
       operator:    item.operator,
       values:      item.values,
     }));
-    return { tree: { type: "set", join: "AND", items }, flat };
+    return { tree: { type: "set", join: "", items }, flat };
   }
 
   // Returns a tree mirroring the SF canvas DOM structure.
@@ -3930,7 +3927,7 @@
       const blocks = [];
       const kids = tree.children;
       kids.forEach((node, i) => {
-        const blockJoin = i < kids.length - 1 ? (tree.join || "AND") : "";
+        const blockJoin = i < kids.length - 1 ? (tree.join || "") : "";
         if (node.t === "cond") {
           blocks.push({ entity: node.entity, container: false, agg: "", blockJoin, kind: node.kind || "direct", note: node.note || "",
             groups: [{ grp: "", box: false, join: "", rows: [row(node)] }] });
@@ -4202,7 +4199,7 @@
       }
       // Outer rail joins top-level blocks — only meaningful when there are 2+.
       // A single block (e.g. one nested segment / one condition) joins nothing.
-      if (records.length > 1) paintBar(OUTER, dataFirst, dataLast, tree.join || "AND", "thick", true);
+      if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true);
 
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
       // readable: rail columns stay narrow, value/notes columns can grow.
@@ -4526,8 +4523,9 @@
         const kids = tree.children || [];
         const blocks = kids.map((c) => `<div class="toprow">${renderNode(c, false)}</div>`).join("\n");
         // A single top-level block joins nothing — omit the outer rail entirely.
-        if (kids.length <= 1) return `<div class="root"><div class="root-body">${blocks}</div></div>`;
-        const op = tree.join || "AND";
+        // No join (e.g. Rank & Limit) — stack blocks without a connector rail.
+        if (kids.length <= 1 || !tree.join) return `<div class="root"><div class="root-body">${blocks}</div></div>`;
+        const op = tree.join;
         const railCls = "rail " + railMod(op) + " outer";
         return `<div class="root grp ${railMod(op)}">
           <div class="root-body">${blocks}</div>
@@ -4724,7 +4722,8 @@
     function segTreeToKit(toolTree, tab) {
       var isRank = /rank/i.test(tab || "");
       // Waterfall tiers are ordered/prioritised → THEN join (blue rail), not AND/OR.
-      var join = (toolTree && toolTree.waterfall) ? "THEN" : ((toolTree && toolTree.join) || "AND");
+      // Rank & Limit blocks have no logical connector — join stays empty.
+      var join = (toolTree && toolTree.waterfall) ? "THEN" : (toolTree && toolTree.join) || (isRank ? "" : "AND");
       var root = { t: "root", tab: tab || "Include", join: join, children: [] };
       if (toolTree && toolTree.items) root.children = toolTree.items.map(function (c) { return conv(c, isRank); }).filter(Boolean);
       return root;
@@ -4832,7 +4831,7 @@
             ? "Group " + (gi + 1) + " (" + (g.join || "AND") + ")"
             : "Group " + (gi + 1);
           collectG(g, gi, barJoin, { condCount: 0, groupLabel });
-          if (gi < topGroups.length - 1) DR.push({ kind: "inner", label: tree.join || "AND", gIdx: -1, gJoin: tree.join || "AND", isBetweenGroups: true });
+          if (gi < topGroups.length - 1 && tree.join) DR.push({ kind: "inner", label: tree.join, gIdx: -1, gJoin: tree.join, isBetweenGroups: true });
         });
       }
 
@@ -5088,7 +5087,6 @@
         return "<style>" + SEGX.SEG_CSS.replace(/(^|\})\s*body\s*\{[^}]*\}/, "$1") + "</style>" +
                "<div class='dc-seg-canvas'>" + SEGX.renderSegmentBody(kit, { tabs: false }) + "</div>";
       } catch (e) {
-        try { console.warn("[DC-MI] blueprint view failed, using fallback:", e); } catch (_) {}
         return renderSet(t); // fallback to the native renderer
       }
     }
@@ -5448,7 +5446,6 @@
         restore();
       } catch (e) {
         btn.textContent = "Failed"; restore();
-        try { console.error("[DC-MI] segment Excel export failed:", e); } catch (_) {}
       }
     };
 
@@ -7703,7 +7700,7 @@
       aiBtn.oncontextmenu = function (e) { e.preventDefault(); showAiSettings(); };
       try {
         if (aiSettingsBtn) aiSettingsBtn.onclick = function () { showAiSettings(); };
-      } catch (e) { console.error("[DC-MI] settings btn error:", e); }
+      } catch (e) { /* non-critical */ }
       aiBtn.onclick = function () {
         aiBtn.disabled = true; aiBtn.textContent = "Thinking…";
         function doExplain() {
@@ -10195,7 +10192,6 @@
       // Data Cloud SQL doesn't support subqueries — replace SELECT columns with COUNT(*)
       var cleanSql = sql.replace(/;\s*$/, "");
       var countSql = cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
-      console.log("[DC-MI] Count SQL:", countSql);
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
@@ -11188,7 +11184,11 @@ processJSON();
         ph += "<div style='display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:4px 0;'>";
         cfg.queryPath.forEach(function(step, si) {
           if (si > 0) ph += "<span style='color:#0284c7;font-weight:bold;'>→</span>";
-          ph += "<span style='background:#fff;border:1px solid #0284c7;color:#0369a1;border-radius:14px;padding:3px 10px;font-size:10px;font-weight:600;white-space:nowrap;'>" + esc((step.objectLabel || step.objectName || "").replace(/__dlm$|__cio$/g,"")) + " <span style='color:#64748b;font-weight:400;'>(" + esc(step.fieldLabel || step.fieldName || "") + ")</span></span>";
+          var objDisplay = esc((step.objectLabel || step.objectName || "").replace(/__dlm$|__cio$/g,""));
+          var objApi = step.objectName ? "<span style='color:#94a3b8;font-size:9px;font-weight:400;'> [" + esc(step.objectName) + "]</span>" : "";
+          var fieldDisplay = step.fieldLabel || step.fieldName || "";
+          var fieldApi = (step.fieldName && step.fieldLabel && step.fieldName !== step.fieldLabel) ? " <span style='font-size:9px;color:#94a3b8;'>" + esc(step.fieldName) + "</span>" : "";
+          ph += "<span style='background:#fff;border:1px solid #0284c7;color:#0369a1;border-radius:14px;padding:3px 10px;font-size:10px;font-weight:600;white-space:nowrap;'>" + objDisplay + objApi + " <span style='color:#64748b;font-weight:400;'>(" + esc(fieldDisplay) + fieldApi + ")</span></span>";
         });
         ph += "</div>";
       });
@@ -11229,10 +11229,10 @@ processJSON();
       var objType = en.endsWith("__dlm") ? "DMO" : en.endsWith("__cio") ? "CIO" : "Custom";
       var tagStyle = objType === "DMO" ? "background:#e0f2fe;color:#0369a1;" : objType === "CIO" ? "background:#f3e8ff;color:#6b21a8;" : "background:#f3f4f6;color:#374151;";
       tab1Main += "<div style='font:600 12px system-ui;color:#1e293b;padding:6px 10px;background:#f3f4f6;border-radius:4px;margin:10px 0 4px;display:flex;align-items:center;gap:8px;'>" + esc(en.replace(/__dlm$|__cio$/g,"")) + " (" + ea.length + ") <span style='font-size:9px;padding:2px 6px;border-radius:3px;" + tagStyle + "'>" + objType + "</span></div>";
-      tab1Main += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:5px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
+      tab1Main += "<table style='width:100%;border-collapse:collapse;font-size:11px;'><thead><tr style='background:#f9fafb;'><th style='padding:5px 8px;border:1px solid #e5e7eb;width:25px;'>#</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Label</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>API Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Output Name</th><th style='padding:5px 8px;border:1px solid #e5e7eb;'>Source</th></tr></thead><tbody>";
       ea.forEach(function(a, i) {
         var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : "background:#fae8ff;color:#86198f;";
-        tab1Main += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
+        tab1Main += "<tr><td style='padding:5px 8px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;'>" + (i+1) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'>" + esc(a.label || a.name) + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#0369a1;'>" + esc(a.name || "") + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;font:10px monospace;color:#4a6fa5;'>" + esc(a.preferredName || a.referenceAttributeName || "") + "</td><td style='padding:5px 8px;border:1px solid #e5e7eb;'><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></td></tr>";
       });
       tab1Main += "</tbody></table>";
     });
@@ -11284,7 +11284,7 @@ processJSON();
     tab1Sidebar += "<div style='border-top:1px solid #e5e7eb;padding-top:12px;'><div style='font:700 12px system-ui;color:#374151;margin-bottom:8px;'>Attributes Included (" + allIncluded.length + ")</div><div style='max-height:350px;overflow-y:auto;'>";
     allIncluded.forEach(function(a, idx) {
       var srcStyle = a.source === "DIRECT" ? "background:#dcfce7;color:#166534;" : a.source === "RELATED" ? "background:#fef3c7;color:#92400e;" : a.source === "CONTACT_POINT" ? "background:#dbeafe;color:#1e40af;" : a.source === "SYSTEM" ? "background:#f3f4f6;color:#374151;" : "background:#fae8ff;color:#86198f;";
-      tab1Sidebar += "<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:11px;'><div style='display:flex;justify-content:space-between;align-items:center;'><b>" + (idx+1) + ". " + esc(a.label || a.name || "") + "</b><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></div><div style='font-size:10px;color:#64748b;'>From: <code style='font-size:9px;'>" + esc((a.entityName || "").replace(/__dlm$|__cio$/g,"")) + "</code></div></div>";
+      tab1Sidebar += "<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:11px;'><div style='display:flex;justify-content:space-between;align-items:center;'><b>" + (idx+1) + ". " + esc(a.label || a.name || "") + "</b><span style='font-size:9px;padding:1px 5px;border-radius:3px;" + srcStyle + "'>" + esc(a.source || a.type || "") + "</span></div><div style='font-size:10px;color:#0369a1;font-family:monospace;'>" + esc(a.name || "") + "</div><div style='font-size:10px;color:#64748b;'>From: <code style='font-size:9px;'>" + esc((a.entityName || "").replace(/__dlm$|__cio$/g,"")) + "</code></div></div>";
     });
     tab1Sidebar += "</div></div>";
 
@@ -11820,7 +11820,6 @@ processJSON();
                     var dsMatch = decodedBody.match(/"dataSpaceName"\s*:\s*"([^"]+)"/i) || decodedBody.match(/"dataspace"\s*:\s*"([^"]+)"/i);
                     if (dsMatch) _dataModelCache.capturedDataspace = dsMatch[1];
                   } catch(e2) {}
-                  console.log("[DC ERD] Captured getDataModelGraph data" + (_dataModelCache.capturedDataspace ? " [ds=" + _dataModelCache.capturedDataspace + "]" : ""));
                 }
               } catch (e) {}
             } else if (/DataModeling\.getDataModels/i.test(url)) {
@@ -11828,7 +11827,6 @@ processJSON();
                 var resp = JSON.parse(xhr.responseText);
                 if (resp && resp.actions && resp.actions[0] && resp.actions[0].returnValue) {
                   _dataModelCache.dataModels = resp.actions[0].returnValue;
-                  console.log("[DC ERD] Captured getDataModels data");
                 }
               } catch (e) {}
             }
@@ -11838,7 +11836,6 @@ processJSON();
         return originalXHRSend.apply(this, arguments);
       };
     } catch (e) {
-      console.error("[DC ERD] Failed to install XHR interceptor:", e);
     }
 
     // Create launcher button
@@ -12668,8 +12665,6 @@ processJSON();
     var entities = [];
     var entityMap = {}; // id -> entity
 
-    // Log first 500 chars for debugging
-    console.log("[DC ERD] DOT string first 500:", dotString.slice(0, 500));
 
     // The DOT format has nodes like: 1 [ label="Name__dlm" entity="{...escaped JSON...}" ]
     // The entity JSON uses \" for quotes inside. We find each node by matching the pattern.
@@ -12678,7 +12673,6 @@ processJSON();
 
     // If regex doesn't find anything, try alternative parsing
     if (!nodeRegex.test(dotString)) {
-      console.log("[DC ERD] Primary regex failed. Trying line-by-line parse...");
       nodeRegex.lastIndex = 0;
       // Alternative: split by lines and extract manually
       var lines = dotString.split("\n");
@@ -12714,11 +12708,9 @@ processJSON();
             entities.push(entity);
             entityMap[nodeId] = entity;
           } catch (e) {
-            console.log("[DC ERD] Failed to parse entity line:", line.slice(0, 100), e.message);
           }
         }
       });
-      console.log("[DC ERD] Line-by-line parse found", entities.length, "entities");
       return entities;
     }
     nodeRegex.lastIndex = 0;
@@ -12756,7 +12748,6 @@ processJSON();
         entities.push(entity);
         entityMap[nodeId] = entity;
       } catch (e) {
-        console.error("[DC ERD] Failed to parse entity " + nodeId, e);
       }
     }
 
@@ -13163,9 +13154,7 @@ processJSON();
               if (label && name) labelToDevName[label.toLowerCase()] = name;
             });
             dmoListLoaded = true;
-            console.log("[DC Seg] Loaded DMO list: " + Object.keys(labelToDevName).length + " DMOs");
           } else {
-            console.log("[DC Seg] DMO list failed:", ev.data.error || "unknown error");
           }
           callback();
         }
@@ -13181,7 +13170,6 @@ processJSON();
         fetchingDmos[label] = true;
         var devName = labelToDevName[label.toLowerCase()];
         if (!devName) {
-          console.log("[DC Seg] No dev name found for '" + label + "' in DMO list");
           fetchingDmos[label] = false;
           return;
         }
@@ -13194,10 +13182,8 @@ processJSON();
             fieldsByDmo[label] = {};
             ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
             fetchingDmos[label] = false;
-            console.log("[DC Seg] Fetched " + ev.data.resp.fields.length + " fields for '" + label + "' from " + devName);
             callback();
           } else {
-            console.log("[DC Seg] Failed to get fields for '" + label + "' (" + devName + ")");
             fetchingDmos[label] = false;
           }
         }
@@ -13254,7 +13240,6 @@ processJSON();
       // Main check: detect DMO, fetch if needed, apply tooltips
       function checkAndAnnotate() {
         var dmo = detectCurrentDmo();
-        console.log("[DC Seg] checkAndAnnotate: detected DMO =", dmo, "| current =", currentDmo, "| cached:", Object.keys(fieldsByDmo).join(", "));
         if (!dmo) {
           // Fallback: try "Segment On" text for initial load
           function findSegOn(root, depth) {
