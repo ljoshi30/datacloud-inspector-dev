@@ -2926,17 +2926,31 @@
         if (!objectLabel) objectLabel = t;
       }
 
-      // Try to extract API names from the LWC element's JS properties
-      const api = apiNamesFor(condEl, objectLabel, "");
-      // Also try to get the field API from the rankField label (e.g. "Unified Individual TDIR.Civic No")
-      const fieldPart = (rankField || "").replace(/\s+in (ascending|descending) order$/i, "").trim();
-      const dotIdx = fieldPart.indexOf(".");
-      const fieldLabelForApi = dotIdx > 0 ? fieldPart.slice(dotIdx + 1) : fieldPart;
-      if (!api.fieldApi && fieldLabelForApi) {
-        const api2 = apiNamesFor(condEl, objectLabel, fieldLabelForApi);
-        if (api2.fieldApi) api.fieldApi = api2.fieldApi;
-        if (api2.objApi && !api.objApi) api.objApi = api2.objApi;
-      }
+      // Try to extract API names from the LWC element's JS properties.
+      // apiNamesFor lives inside readConditionsFromDOM, so inline the same logic here.
+      const api = { objApi: "", fieldApi: "" };
+      try {
+        let node = condEl;
+        for (let k = 0; k < 6 && node; k++) {
+          const entity = safeGet(node, "entity");
+          if (entity) {
+            const en = safeGet(entity, "name");
+            if (typeof en === "string" && en) api.objApi = en;
+            const fields = safeGet(entity, "fields");
+            if (fields && typeof fields.length === "number") {
+              const fieldPart = (rankField || "").replace(/\s+in (ascending|descending) order$/i, "").trim();
+              const dotIdx = fieldPart.indexOf(".");
+              const targetLabel = dotIdx > 0 ? fieldPart.slice(dotIdx + 1) : fieldPart;
+              for (let j = 0; j < fields.length; j++) {
+                const f = safeGet(fields, j); if (!f) continue;
+                if (safeGet(f, "label") === targetLabel) { const nm = safeGet(f, "name"); if (typeof nm === "string") api.fieldApi = nm; break; }
+              }
+            }
+            if (api.objApi || api.fieldApi) break;
+          }
+          try { const rn = node.getRootNode(); node = (rn && rn.host) ? rn.host : node.parentElement; } catch (e2) { node = null; }
+        }
+      } catch (e) {}
 
       // Emit one structured row per block:
       //   objectLabel = DMO name, fieldLabel = rank type, operator = rank field, values = "Limit: N ..."
