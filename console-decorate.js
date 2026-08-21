@@ -4034,7 +4034,7 @@
       let s = ws.getCell(2, 1);
       s.value = "How to read: each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
               + "The three right-hand columns show the AND/OR logic at each level — 'Join in group' joins rows inside one block, 'Join groups' joins a group-of-groups like (A OR B), 'Join all blocks' is the top-level join across everything. "
-              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = Sequential (Rank & Limit rulesets where each operates on the results of the previous one).";
+              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = each ruleset filters the results of the one above (Rank & Limit).";
       s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
       s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
       ws.getRow(2).height = 34;
@@ -4189,7 +4189,7 @@
         const rc = op === "AND" ? AND : op === "THEN" ? THEN : op === "SEQ" ? SEQ_C : OR;
         for (let rr = r0; rr <= r1; rr++) ws.getCell(rr, c).fill = fill(f);
         if (r0 !== r1) ws.mergeCells(r0, c, r1, c);
-        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "Sequential" : op;
+        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "↓ results of" : op;
         const cell = ws.getCell(r0, c); cell.value = label;
         cell.font = { bold: true, size: outer ? 12 : 10, color: { argb: "FF" + rc } };
         cell.alignment = { horizontal: "center", vertical: "middle" };
@@ -4381,7 +4381,7 @@
         if (joins.AND) rows.push(["AND (green)", "All joined items must match."]);
         if (joins.OR)  rows.push(["OR (orange)", "Any one of the joined items may match."]);
         if (joins.THEN) rows.push(["Priority (blue)", "Waterfall tier order — tiers are applied in priority sequence, not AND/OR'd."]);
-        if (joins.SEQ) rows.push(["Sequential (grey)", "Rank & Limit rulesets are applied in sequence — each ruleset filters the results of the previous one (not AND/OR)."]);
+        if (joins.SEQ) rows.push(["↓ results of (grey)", "Each ruleset filters the results of the one above it. In SF this appears as \"Where [Entity] is in the results of\"."]);
         rows.push(["Join columns", "The three right-hand columns show the join at each level (inside a group, across groups, across all blocks). A join only appears when it connects 2+ items."]);
       }
 
@@ -4508,9 +4508,7 @@
       // Map a join operator to its rail CSS modifier. AND=green, OR=orange,
       // THEN (waterfall hierarchy)=blue.
       function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : op === "SEQ" ? "seq" : "and"; }
-      // Display labels: THEN → "Priority" (waterfall tiers), SEQ → "Sequential"
-      // (rank & limit rulesets where each operates on the results of the previous).
-      function railText(op) { return op === "THEN" ? "Priority" : op === "SEQ" ? "Sequential" : op; }
+      function railText(op) { return op === "THEN" ? "Priority" : op === "SEQ" ? "↓ results of" : op; }
 
       // stack children; if >1, add a right-side bracket rail carrying the operator
       function renderJoin(children, op, boxed, member) {
@@ -4698,7 +4696,7 @@
           return "Rank & Limit rule on " + (node.entity || "") + ": " +
                  [node.rankType, node.rankField].filter(Boolean).join(" ") +
                  (node.limit ? ", limit " + node.limit : "") +
-                 ". When multiple rulesets exist, each operates on the results of the previous one (sequential filtering).";
+                 ". When multiple rulesets exist, each filters the results of the one above it.";
         default: return "";
       }
     }
@@ -4861,7 +4859,7 @@
           const isSeq = dr.label === "SEQ";
           const jc   = isSeq ? "#6b7280" : isOr ? "#7c3aed" : "#0b5cab";
           const jbg  = isSeq ? "#f3f4f6" : isOr ? "#f5f0ff" : "#edf4ff";
-          const jText = isSeq ? "↓ results of above" : dr.label;
+          const jText = isSeq ? "↓ filters results above" : dr.label;
 
           if (dr.isBetweenGroups) {
             // Compact gap between groups — connector pill on the right only
@@ -5189,7 +5187,7 @@
         "<div class='legend'>" +
         "<span><span class='legend-dot' style='background:#008000'></span>AND join</span>" +
         "<span><span class='legend-dot' style='background:#c55a11'></span>OR join</span>" +
-        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>Sequential (each ruleset filters results of the previous)</span>" : "") +
+        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>Each ruleset filters results of the one above</span>" : "") +
         "</div>\n" +
         rulesHtml + "\n</div>\n</body>\n</html>";
     }
