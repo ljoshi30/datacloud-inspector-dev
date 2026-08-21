@@ -45,7 +45,7 @@
           { type: "dcSqlQuery", sql: d.sql, rowLimit: d.rowLimit, dataspace: d.dataspace, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-sql-query", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-sql-query", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
@@ -56,7 +56,7 @@
           { type: "dcFetchPage", queryId: d.queryId, offset: d.offset, rowLimit: d.rowLimit, dataspace: d.dataspace, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-fetch-page", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-fetch-page", id: d.id, ok: !err && resp && resp.ok, resp: resp, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
@@ -69,17 +69,17 @@
           var p = api.runtime.sendMessage({ type: "dcAiExplain", transformJson: aiJson });
           if (p && p.then) {
             p.then(function (resp) {
-              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: resp && resp.ok, explanation: resp && resp.explanation, error: resp && resp.error }, "*");
+              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: resp && resp.ok, explanation: resp && resp.explanation, error: resp && resp.error }, location.origin);
             }).catch(function (e) {
-              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, "*");
+              window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, location.origin);
             });
           } else {
             // Chrome callback style
             var err2 = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: !err2 && p && p.ok, explanation: p && p.explanation, error: err2 || (p && p.error) }, "*");
+            window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: !err2 && p && p.ok, explanation: p && p.explanation, error: err2 || (p && p.error) }, location.origin);
           }
         } catch (e) {
-          window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, "*");
+          window.postMessage({ __dcRes: "dc-ai-explain", id: aiId, ok: false, error: String(e) }, location.origin);
         }
         return;
       }
@@ -87,14 +87,14 @@
       if (d.__dcReq === "dc-save-ai-settings") {
         api.runtime.sendMessage({ type: "dcSaveAiSettings", settings: d.settings }, function (resp) {
           var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-          window.postMessage({ __dcRes: "dc-save-ai-settings", id: d.id, ok: !err && resp && resp.ok, error: err }, "*");
+          window.postMessage({ __dcRes: "dc-save-ai-settings", id: d.id, ok: !err && resp && resp.ok, error: err }, location.origin);
         });
         return;
       }
       if (d.__dcReq === "dc-get-ai-settings") {
         api.runtime.sendMessage({ type: "dcGetAiSettings" }, function (resp) {
           var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-          window.postMessage({ __dcRes: "dc-get-ai-settings", id: d.id, ok: !err, provider: resp && resp.provider, hasAnthropicKey: resp && resp.hasAnthropicKey, hasOpenaiKey: resp && resp.hasOpenaiKey, error: err }, "*");
+          window.postMessage({ __dcRes: "dc-get-ai-settings", id: d.id, ok: !err, provider: resp && resp.provider, hasAnthropicKey: resp && resp.hasAnthropicKey, hasOpenaiKey: resp && resp.hasOpenaiKey, error: err }, location.origin);
         });
         return;
       }
@@ -104,7 +104,7 @@
           { type: "dcTransform", nameOrId: d.nameOrId, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-transform", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-transform", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
@@ -115,7 +115,7 @@
           { type: "dcActivation", activationId: d.activationId, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-activation", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-activation", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
@@ -125,7 +125,7 @@
           { type: "dcDmoList", dataspace: d.dataspace, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-dmo-list", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-dmo-list", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
@@ -135,13 +135,13 @@
           { type: "dcDmoFields", dmoName: d.dmoName, dataspace: d.dataspace, host: location.host },
           function (resp) {
             var err = api.runtime.lastError ? api.runtime.lastError.message : null;
-            window.postMessage({ __dcRes: "dc-dmo-fields", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, "*");
+            window.postMessage({ __dcRes: "dc-dmo-fields", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, location.origin);
           }
         );
         return;
       }
     } catch (e) {
-      try { window.postMessage({ __dcRes: (ev.data && ev.data.__dcReq === "dc-transform") ? "dc-transform" : "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, "*"); } catch (_) {}
+      try { window.postMessage({ __dcRes: (ev.data && ev.data.__dcReq === "dc-transform") ? "dc-transform" : "dc-sql-query", id: ev && ev.data && ev.data.id, ok: false, error: String(e) }, location.origin); } catch (_) {}
     }
   }, false);
 })();

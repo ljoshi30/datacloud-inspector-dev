@@ -82,24 +82,44 @@ remote URLs. All code ships in the extension package.
 
 ### No sid in logs
 The session cookie value is never written to `console.log`, `console.warn`, or
-`console.error`. Diagnostic logs output only URLs (without auth headers), status codes,
-and row counts.
+`console.error`. All diagnostic logs are gated behind `DC_DEBUG = false` and emit nothing
+in production. Only `console.warn`/`console.error` for genuine failures remain active.
 
 ### AI key isolation
 User-provided AI API keys are stored in `chrome.storage.local` (encrypted at rest by the
 browser, not synced) and sent only to the user's explicitly chosen provider endpoint.
-Keys are never logged or included in error messages.
+Keys are never logged or included in error messages. The bookmarklet fallback uses
+`sessionStorage` (cleared on tab close) — never `localStorage` (which is page-origin-wide).
+
+### postMessage origin restriction
+All `postMessage` calls use `location.origin` (not `"*"`), preventing cross-origin iframes
+or windows from eavesdropping on query responses or API data. The AI proxy popup path uses
+an explicit target origin (`https://ljoshi30.github.io`) and validates `ev.source` on
+incoming messages.
+
+### SELECT-only SQL enforcement
+The `runRawSql()` function enforces a client-side guard: only queries starting with
+`SELECT` or `WITH` are allowed. This is defense-in-depth on top of the server-side
+enforcement by Salesforce's `/ssot/query-sql` endpoint.
+
+### Minimal host permissions
+The `host_permissions` are narrowed to the exact domains required: Salesforce production
+domains + the specific AI gateway hostname. No wildcard `*.sfdc.cl` catch-all.
 
 ## Threat model
 
 | Threat | Mitigation |
 |--------|-----------|
 | Malicious SF page sends crafted postMessage to trigger API calls | Bridge validates `ev.source === window` + allowlist of `__dcReq` types |
+| Cross-origin iframe eavesdrops on query results via postMessage | `location.origin` target on all postMessage calls (not `"*"`) |
 | Another extension sends runtime messages to our background | `sender.id` check rejects external senders |
 | Content script spoofs host to redirect sid to attacker domain | Host regex validation in background before any cookie read or fetch |
 | Error message leaks sid | `safeError()` strips Bearer tokens and long hex strings |
 | XSS via message data | Bridge never uses innerHTML with message-derived content; only forwards structured data to background |
 | Prototype pollution from inject.js | inject.js saves/restores originals of any prototype methods it patches (XHR/fetch/anchor) |
+| DML injection via SQL editor | Client-side `SELECT`/`WITH`-only guard + server-side enforcement |
+| AI key theft from page scripts | Keys in `chrome.storage.local` (sandboxed); bookmarklet path uses `sessionStorage` (tab-scoped) |
+| Fake AI proxy popup spoofs response | `ev.source` check ensures only the real popup is trusted |
 
 ## Chrome Web Store / Firefox AMO compliance
 
@@ -109,3 +129,4 @@ Keys are never logged or included in error messages.
 - No remote code execution.
 - Privacy policy provided (PRIVACY.md).
 - All permissions justified with specific technical reasons (STORE-LISTING.md).
+- All `console.log` calls gated behind `DC_DEBUG` flag (disabled in production).

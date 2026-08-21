@@ -30,8 +30,7 @@
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",
-    "https://*.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl/*",
-    "https://*.sfdc.cl/*"
+    "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl/*"
   ],
   "content_scripts": [
     {

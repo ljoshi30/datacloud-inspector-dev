@@ -5998,7 +5998,7 @@
       }
       window.addEventListener("message", onMsg, false);
       // dataspace is REQUIRED by /ssot/query-sql (probe: no ds → 400, ds="TDI" → 201).
-      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000, dataspace: dataspace || "" }, "*");
+      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000, dataspace: dataspace || "" }, location.origin);
       // No fixed timeout — let the query run as long as it needs. The background
       // polls async queries until finished, large tables can take minutes.
     });
@@ -6020,7 +6020,7 @@
         else reject(new Error(d.error || "page fetch failed"));
       }
       window.addEventListener("message", onMsg, false);
-      window.postMessage({ __dcReq: "dc-fetch-page", id: id, queryId: queryId, offset: offset, rowLimit: rowLimit, dataspace: dataspace || "" }, "*");
+      window.postMessage({ __dcReq: "dc-fetch-page", id: id, queryId: queryId, offset: offset, rowLimit: rowLimit, dataspace: dataspace || "" }, location.origin);
       // No fixed timeout for page fetches — large pagination can take time.
     });
   }
@@ -6160,7 +6160,7 @@
         else reject(new Error(d.error || (d.resp && d.resp.error) || "transform read failed"));
       }
       window.addEventListener("message", onMsg, false);
-      window.postMessage({ __dcReq: "dc-transform", id: id, nameOrId: nameOrId }, "*");
+      window.postMessage({ __dcReq: "dc-transform", id: id, nameOrId: nameOrId }, location.origin);
       setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout")); } }, 20000);
     });
   }
@@ -6398,6 +6398,7 @@
   // { columns:[names in result order], rows:[{name:value}] }.
   function runRawSql(sql, dataSpace, rowLimit) {
     return new Promise(function (resolve, reject) {
+      if (!/^\s*(SELECT|WITH)\b/i.test(sql)) { reject(new Error("Only SELECT queries are allowed.")); return; }
       var ds = (dataSpace != null && dataSpace !== "") ? dataSpace : (_auraSniff.dataSpace != null && _auraSniff.dataSpace !== "") ? _auraSniff.dataSpace : "";
       // Fallback: derive from table name prefix or page header
       if (!ds) { ds = (typeof readPageDataSpace === "function") ? readPageDataSpace() : ""; }
@@ -7693,9 +7694,10 @@
           else if (prov === "gemini") s.geminiKey = key;
           else if (prov === "sf-gateway") s.sfGatewayKey = key;
           else s.anthropicKey = key;
-          window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: s }, "*");
-          // Also save to localStorage for bookmarklet popup proxy path
-          try { localStorage.setItem("dc_ai_settings", JSON.stringify({ provider: prov, key: key, gatewayUrl: prov === "sf-gateway" ? "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl" : "" })); } catch (e2) {}
+          window.postMessage({ __dcReq: "dc-save-ai-settings", id: "save-" + Date.now(), settings: s }, location.origin);
+          // Save to sessionStorage for bookmarklet popup proxy path (not localStorage — avoids
+          // exposing the key to other scripts on the same origin beyond this tab session)
+          try { sessionStorage.setItem("dc_ai_settings", JSON.stringify({ provider: prov, key: key, gatewayUrl: prov === "sf-gateway" ? "https://eng-ai-model-gateway.sfproxy.devx-preprod.aws-esvc1-useast2.aws.sfdc.cl" : "" })); } catch (e2) {}
           dlg.innerHTML = "<div style='text-align:center;padding:20px;font:600 14px system-ui;color:#059669'>✓ Saved!</div>";
           setTimeout(function () { dlg.remove(); }, 1000);
         };
@@ -7793,25 +7795,26 @@
                   aiDiv.scrollTop = aiDiv.scrollHeight;
                 }
                 window.addEventListener("message", onChatMsg, false);
-                window.postMessage({ __dcReq: "dc-ai-explain", id: chatId, transformJson: JSON.stringify({ _chatMessages: conversationContext }) }, "*");
+                window.postMessage({ __dcReq: "dc-ai-explain", id: chatId, transformJson: JSON.stringify({ _chatMessages: conversationContext }) }, location.origin);
               }
               chatSend.onclick = sendChat;
               chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter") sendChat(); });
             } else {
               var errMsg = d.error || "Unknown error";
               if (/NO_KEY/i.test(errMsg)) {
-                // Check if we have key in localStorage (extension may have lost it)
+                // Check if we have key in sessionStorage (extension may have lost it)
                 var savedSettings = null;
-                try { savedSettings = JSON.parse(localStorage.getItem("dc_ai_settings") || "null"); } catch (e3) {}
+                try { savedSettings = JSON.parse(sessionStorage.getItem("dc_ai_settings") || "null"); } catch (e3) {}
                 if (savedSettings && savedSettings.key) {
                   // Retry via popup proxy with the saved key
                   aiBtn.textContent = "Retrying…";
                   var proxyUrl2 = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html";
                   var popup2 = window.open(proxyUrl2, "dc_ai_proxy", "width=300,height=200,top=0,left=" + (screen.width - 310));
                   function onRetryMsg(ev2) {
+                    if (ev2.source !== popup2) return;
                     if (ev2.data && ev2.data.type === "dc-ai-proxy-ready") {
                       var msgs2 = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform:\n" + JSON.stringify(rep).slice(0, 30000) }];
-                      popup2.postMessage({ type: "dc-ai-request", provider: savedSettings.provider || "sf-gateway", apiKey: savedSettings.key, gatewayUrl: savedSettings.gatewayUrl || "", messages: msgs2 }, "*");
+                      popup2.postMessage({ type: "dc-ai-request", provider: savedSettings.provider || "sf-gateway", apiKey: savedSettings.key, gatewayUrl: savedSettings.gatewayUrl || "", messages: msgs2 }, "https://ljoshi30.github.io");
                     }
                     if (ev2.data && ev2.data.type === "dc-ai-response") {
                       window.removeEventListener("message", onRetryMsg);
@@ -7838,13 +7841,21 @@
           window.addEventListener("message", onMsg, false);
           if (extBridgePresent()) {
             // Extension path — direct bridge
-            window.postMessage({ __dcReq: "dc-ai-explain", id: id, transformJson: JSON.stringify(rep) }, "*");
+            window.postMessage({ __dcReq: "dc-ai-explain", id: id, transformJson: JSON.stringify(rep) }, location.origin);
           } else {
             // Bookmarklet path — popup proxy with postMessage (opener IS accessible from popup)
-            var aiSettings = JSON.parse(localStorage.getItem("dc_ai_settings") || "{}");
+            var aiSettings = JSON.parse(sessionStorage.getItem("dc_ai_settings") || "{}");
             if (!aiSettings.key) { if (done) return; done = true; aiBtn.disabled = false; aiBtn.textContent = "✨ AI Explain"; showAiSettings(); return; }
-            // Listen for the popup's response BEFORE opening it (persistent listener)
+            // Open popup WITHOUT the key in the URL — send via postMessage after ready
+            var proxyUrl = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html";
+            var proxyPopup = window.open(proxyUrl, "dc_ai_proxy", "width=300,height=200,top=0,left=" + (screen.width - 310));
             function onProxyResponse(ev) {
+              if (ev.source !== proxyPopup) return;
+              if (ev.data && ev.data.type === "dc-ai-proxy-ready") {
+                var msgs = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. Overview (business purpose)\n2. Branch-by-branch data flow\n3. Key business logic\n4. Write mode and important mappings\n\nTransform JSON:\n" + JSON.stringify(rep).slice(0, 30000) }];
+                proxyPopup.postMessage({ type: "dc-ai-request", provider: aiSettings.provider || "sf-gateway", apiKey: aiSettings.key, gatewayUrl: aiSettings.gatewayUrl || "", messages: msgs }, "https://ljoshi30.github.io");
+                return;
+              }
               if (!ev.data || ev.data.type !== "dc-ai-response") return;
               window.removeEventListener("message", onProxyResponse);
               clearTimeout(timeout);
@@ -7858,11 +7869,6 @@
               }
             }
             window.addEventListener("message", onProxyResponse);
-            // Open popup — it will read request from URL hash and postMessage result back
-            var msgs = [{ role: "user", content: "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. Overview (business purpose)\n2. Branch-by-branch data flow\n3. Key business logic\n4. Write mode and important mappings\n\nTransform JSON:\n" + JSON.stringify(rep).slice(0, 30000) }];
-            var reqPayload = encodeURIComponent(JSON.stringify({ provider: aiSettings.provider || "sf-gateway", apiKey: aiSettings.key, gatewayUrl: aiSettings.gatewayUrl || "", messages: msgs }));
-            var proxyUrl = "https://ljoshi30.github.io/datacloud-inspector-dev/ai-proxy.html#" + reqPayload;
-            window.open(proxyUrl, "dc_ai_proxy", "width=300,height=200,top=0,left=" + (screen.width - 310));
           }
         }
         doExplain();
@@ -10778,7 +10784,7 @@
         else reject(new Error(d.error || (d.resp && d.resp.error) || "activation read failed"));
       }
       window.addEventListener("message", onMsg, false);
-      window.postMessage({ __dcReq: "dc-activation", id: id, activationId: activationId }, "*");
+      window.postMessage({ __dcReq: "dc-activation", id: id, activationId: activationId }, location.origin);
       setTimeout(function () {
         if (!done) {
           done = true;
@@ -13170,7 +13176,7 @@ processJSON();
           callback();
         }
         window.addEventListener("message", onList);
-        window.postMessage({ __dcReq: "dc-dmo-list", id: reqId, dataspace: "TDI" }, "*");
+        window.postMessage({ __dcReq: "dc-dmo-list", id: reqId, dataspace: "TDI" }, location.origin);
         setTimeout(function() { window.removeEventListener("message", onList); callback(); }, 8000);
       }
 
@@ -13202,7 +13208,7 @@ processJSON();
           }
         }
         window.addEventListener("message", handler);
-        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, "*");
+        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, location.origin);
         setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); fetchingDmos[label] = false; } }, 5000);
       }
 

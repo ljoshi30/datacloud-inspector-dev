@@ -124,13 +124,9 @@ body{font:13px -apple-system,sans-serif;margin:20px;color:#334155;background:#f8
   }
 
   function sendBack(result) {
-    // Write result to localStorage (bookmarklet polls for this)
-    try { localStorage.setItem("dc_ai_response", JSON.stringify(result)); } catch(e) {}
-    // Also try postMessage for extension path
     if (opener) {
       try { opener.postMessage({ type: "dc-ai-response", result: result }, "*"); } catch(e) {}
     }
-    // Auto-close after sending
     setTimeout(function() { window.close(); }, 2000);
   }
 
