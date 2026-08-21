@@ -2950,10 +2950,12 @@
       values:      item.values,
     }));
     // Multiple rulesets in Rank & Limit are SEQUENTIAL — each outer ruleset
-    // operates on the results of the previous one (SF shows "Where X is in
-    // the results of" between them). Use "SEQ" as the join token.
+    // operates on the results of the previous one. SF shows "Where X is in
+    // the results of" between them. We store the entity name so renderers
+    // can reproduce the exact SF connector text.
     var join = items.length > 1 ? "SEQ" : "";
-    return { tree: { type: "set", join: join, items }, flat };
+    var seqEntity = items.length > 0 ? (items[0].objectLabel || "") : "";
+    return { tree: { type: "set", join: join, seqEntity: seqEntity, items }, flat };
   }
 
   // Returns a tree mirroring the SF canvas DOM structure.
@@ -4034,7 +4036,7 @@
       let s = ws.getCell(2, 1);
       s.value = "How to read: each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
               + "The three right-hand columns show the AND/OR logic at each level — 'Join in group' joins rows inside one block, 'Join groups' joins a group-of-groups like (A OR B), 'Join all blocks' is the top-level join across everything. "
-              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = each ruleset filters the results of the one above (Rank & Limit).";
+              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = \"Where X is in the results of\" (Rank & Limit — each ruleset filters the results of the previous one).";
       s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
       s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
       ws.getRow(2).height = 34;
@@ -4184,15 +4186,15 @@
       // SEQ (rank & limit sequential rulesets) uses grey.
       const THEN = "0B5CAB";
       const SEQ_C = "6B7280";
-      function paintBar(c, r0, r1, op, style, outer) {
+      function paintBar(c, r0, r1, op, style, outer, ctx) {
         const f = op === "AND" ? (outer ? AND_OUTER : AND_BAR) : OR_BAR;
         const rc = op === "AND" ? AND : op === "THEN" ? THEN : op === "SEQ" ? SEQ_C : OR;
         for (let rr = r0; rr <= r1; rr++) ws.getCell(rr, c).fill = fill(f);
         if (r0 !== r1) ws.mergeCells(r0, c, r1, c);
-        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "↓ results of" : op;
+        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "Where " + (ctx || "") + " is in the results of" : op;
         const cell = ws.getCell(r0, c); cell.value = label;
-        cell.font = { bold: true, size: outer ? 12 : 10, color: { argb: "FF" + rc } };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.font = { bold: true, size: outer ? (op === "SEQ" ? 9 : 12) : 10, color: { argb: "FF" + rc } };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
         boxRange(r0, r1, c, c, style, rc);
       }
       for (const rec of records) {
@@ -4203,7 +4205,7 @@
       }
       // Outer rail joins top-level blocks — only meaningful when there are 2+.
       // A single block (e.g. one nested segment / one condition) joins nothing.
-      if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true);
+      if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true, tree.seqEntity);
 
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
       // readable: rail columns stay narrow, value/notes columns can grow.
@@ -4381,7 +4383,7 @@
         if (joins.AND) rows.push(["AND (green)", "All joined items must match."]);
         if (joins.OR)  rows.push(["OR (orange)", "Any one of the joined items may match."]);
         if (joins.THEN) rows.push(["Priority (blue)", "Waterfall tier order — tiers are applied in priority sequence, not AND/OR'd."]);
-        if (joins.SEQ) rows.push(["↓ results of (grey)", "Each ruleset filters the results of the one above it. In SF this appears as \"Where [Entity] is in the results of\"."]);
+        if (joins.SEQ) rows.push(["\"Where X is in the results of\" (grey)", "Each Rank & Limit ruleset filters the results of the one above it — they apply in sequence, not in parallel."]);
         rows.push(["Join columns", "The three right-hand columns show the join at each level (inside a group, across groups, across all blocks). A join only appears when it connects 2+ items."]);
       }
 
@@ -4508,7 +4510,7 @@
       // Map a join operator to its rail CSS modifier. AND=green, OR=orange,
       // THEN (waterfall hierarchy)=blue.
       function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : op === "SEQ" ? "seq" : "and"; }
-      function railText(op) { return op === "THEN" ? "Priority" : op === "SEQ" ? "↓ results of" : op; }
+      function railText(op, ctx) { return op === "THEN" ? "Priority" : op === "SEQ" ? "Where " + (ctx || "") + " is in the results of" : op; }
 
       // stack children; if >1, add a right-side bracket rail carrying the operator
       function renderJoin(children, op, boxed, member) {
@@ -4526,13 +4528,13 @@
         const kids = tree.children || [];
         const blocks = kids.map((c) => `<div class="toprow">${renderNode(c, false)}</div>`).join("\n");
         // A single top-level block joins nothing — omit the outer rail entirely.
-        // No join (e.g. Rank & Limit) — stack blocks without a connector rail.
+        // No join (e.g. Rank & Limit with 1 block) — stack blocks without a connector rail.
         if (kids.length <= 1 || !tree.join) return `<div class="root"><div class="root-body">${blocks}</div></div>`;
         const op = tree.join;
         const railCls = "rail " + railMod(op) + " outer";
         return `<div class="root grp ${railMod(op)}">
           <div class="root-body">${blocks}</div>
-          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op))}<span class="caret">&#9662;</span></span></div>
+          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op, tree.seqEntity))}<span class="caret">&#9662;</span></span></div>
         </div>`;
       }
 
@@ -4731,7 +4733,7 @@
       // previous one) → SEQ join (grey rail with "results of" label).
       var join = (toolTree && toolTree.waterfall) ? "THEN"
                : (toolTree && toolTree.join) || (isRank ? "" : "AND");
-      var root = { t: "root", tab: tab || "Include", join: join, children: [] };
+      var root = { t: "root", tab: tab || "Include", join: join, seqEntity: (toolTree && toolTree.seqEntity) || "", children: [] };
       if (toolTree && toolTree.items) root.children = toolTree.items.map(function (c) { return conv(c, isRank); }).filter(Boolean);
       return root;
     }
@@ -4859,7 +4861,7 @@
           const isSeq = dr.label === "SEQ";
           const jc   = isSeq ? "#6b7280" : isOr ? "#7c3aed" : "#0b5cab";
           const jbg  = isSeq ? "#f3f4f6" : isOr ? "#f5f0ff" : "#edf4ff";
-          const jText = isSeq ? "↓ filters results above" : dr.label;
+          const jText = isSeq ? "Where " + esc(tree.seqEntity || "") + " is in the results of" : dr.label;
 
           if (dr.isBetweenGroups) {
             // Compact gap between groups — connector pill on the right only
@@ -5187,7 +5189,7 @@
         "<div class='legend'>" +
         "<span><span class='legend-dot' style='background:#008000'></span>AND join</span>" +
         "<span><span class='legend-dot' style='background:#c55a11'></span>OR join</span>" +
-        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>Each ruleset filters results of the one above</span>" : "") +
+        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>\"Where X is in the results of\" — each ruleset filters results of the one above</span>" : "") +
         "</div>\n" +
         rulesHtml + "\n</div>\n</body>\n</html>";
     }
