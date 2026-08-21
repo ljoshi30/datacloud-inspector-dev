@@ -4014,8 +4014,8 @@
 
     // render one tab's tree onto a given worksheet (shared by single + multi-sheet)
     function renderSheet(ws, tree) {
-      const NCOLS = 11;
-      const widths = [5, 7, 27, 26, 12, 24, 8, 6, 6, 9, 34];
+      const NCOLS = 10;
+      const widths = [5, 7, 27, 26, 12, 24, 8, 6, 6, 9];
       widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
       const thin = { style: "thin", color: { argb: "FF" + GRID } };
       const fill = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb: "FF" + argb } });
@@ -4034,9 +4034,9 @@
       ws.getRow(1).height = 22;
       ws.mergeCells(2, 1, 2, NCOLS);
       let s = ws.getCell(2, 1);
-      s.value = "How to read: each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
-              + "The three right-hand columns show the AND/OR logic at each level — 'Join in group' joins rows inside one block, 'Join groups' joins a group-of-groups like (A OR B), 'Join all blocks' is the top-level join across everything. "
-              + "A join only appears when it actually connects 2+ items. Colours: green = AND, orange = OR, blue = Priority (waterfall tier order), grey = \"Where X is in the results of\" (Rank & Limit — each ruleset filters the results of the previous one).";
+      s.value = "Each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
+              + "The three right-hand columns show the AND/OR logic: 'Join in group' = inside one block, 'Join groups' = across sub-groups, 'Join all blocks' = top-level. "
+              + "Colours: green = AND, orange = OR, blue = Priority (waterfall), grey = sequential (Rank & Limit).";
       s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
       s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
       ws.getRow(2).height = 34;
@@ -4046,7 +4046,7 @@
       //   Join groups    = joins a group-of-groups, e.g. (A OR B) (medium)
       //   Join all blocks= the top-level join across every block (thick)
       const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Attribute",
-        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks", "Notes"];
+        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks"];
       HEAD.forEach((h, i) => {
         const cell = ws.getCell(3, i + 1); cell.value = h;
         cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
@@ -4067,7 +4067,7 @@
       }
 
       // Data rows
-      const INNER = 8, MID = 9, OUTER = 10, NOTES = 11, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
+      const INNER = 8, MID = 9, OUTER = 10, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
       const blocks = flatten(tree);
       let r = 4; const dataFirst = 4;
       const records = [];
@@ -4113,7 +4113,7 @@
               pc.font = { size: 9, italic: true, color: { argb: "FF44546A" } };
               pc.alignment = { horizontal: "left", vertical: "middle" };
               for (let c = ATTR; c <= V2; c++) ws.getCell(r, c).fill = fill(light);
-              const scols = [1, 2, ATTR, NOTES];
+              const scols = [1, 2, ATTR];
               scols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
               ws.getRow(r).height = 16; r++;
               return;
@@ -4136,7 +4136,7 @@
             setValueCell(ws.getCell(r, V2), row.v2); ws.getCell(r, V2).alignment = { horizontal: "center", vertical: "middle" };
             const from = isMember ? ATTR : ENT;
             for (let c = from; c <= V2; c++) if (!(isMember === false && c === ENT)) ws.getCell(r, c).fill = fill(light);
-            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c); cols.push(NOTES);
+            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c);
             cols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
             ws.getRow(r).height = 16; r++;
           });
@@ -4149,33 +4149,6 @@
         }
         const blockEnd = r - 1;
         if (blockStart !== blockEnd) ws.mergeCells(blockStart, 1, blockEnd, 1);
-        // Migration note: type tag + how-to-build text, in the Notes column. For a
-        // GROUPED block we write PER-SUB-GROUP notes so each sub-container's type
-        // (Direct / Related DLO|DMO / Calculated Insight / Nested) is documented —
-        // otherwise a CI nested in an OR group would be lost from the Notes column.
-        const TYPE_LABEL = { direct: "DIRECT ATTRIBUTE", related: "RELATED ATTRIBUTE", ci: "CALCULATED INSIGHT", nested: "NESTED SEGMENT", priority: "SEGMENT (PRIORITY)", rank: "RANK & LIMIT", group: "GROUPED (AND/OR)" };
-        const writeNote = (r0, r1, label, text) => {
-          if (r1 > r0) ws.mergeCells(r0, NOTES, r1, NOTES);
-          const nk = ws.getCell(r0, NOTES);
-          nk.value = (label ? label + " — " : "") + (text || "");
-          nk.font = { size: 8, italic: true, color: { argb: "FF595959" } }; nk.fill = fill(NOTE);
-          nk.alignment = { horizontal: "left", vertical: "top", wrapText: true };
-        };
-        if (blk.kind === "group") {
-          // Header line for the whole group at its first row's Notes cell...
-          const firstGrp = groupsMeta[0];
-          // then a typed note for each sub-group across its own row span.
-          groupsMeta.forEach((gm, ix) => {
-            const lab = TYPE_LABEL[gm.kind] || "SUB-GROUP";
-            const suffix = (gm.kind === "related" || gm.kind === "direct") && objectKindFromApi(gm.objApi)
-              ? " [" + objectKindFromApi(gm.objApi) + (gm.objApi ? ": " + gm.objApi : "") + "]" : "";
-            const pre = ix === 0 ? blk.note + "  ▸ " : "";
-            writeNote(gm.grpStart, gm.grpEnd, lab + suffix, pre + (gm.note || ""));
-          });
-        } else if (blk.note) {
-          writeNote(blockStart, blockEnd, TYPE_LABEL[blk.kind], blk.note);
-        }
-        for (let rr = blockStart; rr <= blockEnd; rr++) boxRange(rr, rr, NOTES, NOTES, "thin", GRID);
         boxRange(blockStart, blockEnd, 1, V2, "thick", BLOCK);
         records.push({ blk, start: blockStart, end: blockEnd, groups: groupsMeta, groupOp: blk.groupOp });
       }
@@ -4256,7 +4229,6 @@
         const ws = wb.addWorksheet("Segment", SHEET_VIEW);
         renderSheet(ws, { t: "root", tab: "Include", join: "AND", children: [] });
       }
-      renderLegendSheet(wb, meta, treesByTab);
       return await wb.xlsx.writeBuffer();
     }
 
@@ -4274,7 +4246,7 @@
       t.alignment = { horizontal: "center", vertical: "middle" }; ws.getRow(r).height = 22; r++;
       ws.mergeCells(r, 1, r, 2);
       const sub = ws.getCell(r, 1);
-      sub.value = "Create the segment with these settings first, then build the criteria on the tab sheets. See 'How to Rebuild'.";
+      sub.value = "Segment settings — the criteria are on the tab sheets.";
       sub.font = { italic: true, size: 9, color: { argb: "FF333333" } }; sub.fill = fill("EAEFF7");
       sub.alignment = { wrapText: true, vertical: "middle" }; ws.getRow(r).height = 26; r += 2;
       // Labels mirror the SF segment header fields; values are DOM-scraped, blanks omitted.
@@ -4304,101 +4276,6 @@
       if (typeof ws.autoSize === "function") ws.autoSize({ min: [24, 40], max: [34, 90] });
     }
 
-    // A "How to Rebuild" sheet whose content is DYNAMIC — it describes only what
-    // THIS segment actually contains: which tabs exist, which block types appear,
-    // whether it's a waterfall, and which join operators (AND/OR/THEN) are used.
-    // Nothing generic or misleading is added.
-    function renderLegendSheet(wb, meta, treesByTab) {
-      meta = meta || {}; treesByTab = treesByTab || {};
-      // ── inspect the real trees to learn what this segment uses ────────────────
-      const present = {}; const joins = {}; let isWaterfall = false;
-      const tabsWithData = [];
-      function walk(n) {
-        if (!n) return;
-        if (n.t === "root") { if (n.join) joins[n.join] = 1; (n.children || []).forEach(walk); return; }
-        if (n.t === "group") { if (n.join) joins[n.join] = 1; (n.children || []).forEach(walk); return; }
-        if (n.t === "cond") present[n.kind || "direct"] = 1;
-        else if (n.t === "container") present[n.kind || "related"] = 1;
-        else if (n.t === "nested") { if (n.waterfall) { present.priority = 1; isWaterfall = true; } else present.nested = 1; }
-        else if (n.t === "rank") present.rank = 1;
-        if (n.children) n.children.forEach(walk);
-      }
-      Object.keys(treesByTab).forEach((tab) => {
-        const tr = treesByTab[tab];
-        if (tr && tr.children && tr.children.length) { tabsWithData.push(tab); walk(tr); if (tr.join === "THEN" || tr.waterfall) isWaterfall = true; }
-      });
-
-      const ws = wb.addWorksheet("How to Rebuild", { views: [{ showGridLines: false }] });
-      ws.getColumn(1).width = 26; ws.getColumn(2).width = 96;
-      const fill = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb: "FF" + argb } });
-      let r = 1;
-      const title = ws.getCell(r, 1); ws.mergeCells(r, 1, r, 2);
-      title.value = "HOW TO REBUILD: " + (meta.segName || "this segment");
-      title.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } };
-      title.fill = fill(TITLE_FILL); title.alignment = { horizontal: "center", vertical: "middle" }; ws.getRow(r).height = 22; r += 2;
-
-      const rows = [];
-      // ── steps, built from real facts ─────────────────────────────────────────
-      const onObj = meta.segmentOn ? "\"" + meta.segmentOn + "\"" : "the object in the Segment Setup sheet";
-      const spaceTxt = meta.dataSpace ? " in the \"" + meta.dataSpace + "\" Data Space" : "";
-      // State the segment type up front — prefer the scraped label, else the
-      // structurally-detected waterfall. Blank line if we couldn't determine it.
-      const segType = meta.segmentType || (isWaterfall ? "Waterfall Segment" : "");
-      if (segType) rows.push(["Segment Type", segType + (isWaterfall ? " — tiers are ordered by priority (top = highest)." : "")]);
-      const newLabel = /waterfall/i.test(segType) ? "New → Waterfall Segment" : "New";
-      rows.push(["Step 1", "In Data Cloud → Segments, click " + newLabel + ". Set 'Segment On' to " + onObj + spaceTxt + "."]);
-      if (isWaterfall) {
-        rows.push(["Step 2", "This is a waterfall segment: drag each segment onto the canvas in the priority order shown (Priority 1 first). An individual is placed only in the highest-priority segment they match (mutually exclusive audiences)."]);
-      } else {
-        const tabList = tabsWithData.length ? tabsWithData.join(", ") : "Include";
-        rows.push(["Step 2", "Rebuild each numbered block (Blk#) top to bottom on the " + tabList + " sheet(s), using its Notes column for what to drag."]);
-      }
-      let stepN = 3;
-      if (meta.publishSchedule || meta.refreshMode)
-        rows.push(["Step " + stepN++, "Set Publish Schedule" + (meta.publishSchedule ? " = \"" + meta.publishSchedule + "\"" : "") + (meta.refreshMode ? " / Refresh = \"" + meta.refreshMode + "\"" : "") + ", then Save."]);
-      if (meta.population)
-        rows.push(["Step " + stepN++, "Recount and confirm the population matches the target: " + meta.population + "."]);
-
-      // ── block-type key: ONLY the types this segment actually uses ─────────────
-      const TYPE_DESC = {
-        direct: ["DIRECT ATTRIBUTE", "A field on " + (meta.segmentOn || "the segment object") + ". Drag the attribute, set its operator + value (see the row)."],
-        related: ["RELATED ATTRIBUTE", "A related object shown as a container (Count At Least N). Drag the related object, set the aggregation, then add the member filter(s) inside."],
-        ci: ["CALCULATED INSIGHT", "From 'Calculated Insights' in the left panel, drag the named insight, then set its dimension/measure filter."],
-        nested: ["NESTED SEGMENT", "An existing segment reused as a condition. Drag it from 'Segments' in the left panel; set its publish behavior."],
-        priority: ["SEGMENT (PRIORITY)", "A waterfall member. Drag the named segment onto the canvas in priority order; the number is its priority (Priority 1 = highest)."],
-        rank: ["RANK & LIMIT", "On the Rank and Limit tab, Group/Sort By the field shown, then Limit to N records."],
-      };
-      const usedTypes = Object.keys(TYPE_DESC).filter((k) => present[k]);
-      if (usedTypes.length) {
-        rows.push(["", ""]);
-        rows.push(["BLOCK TYPES IN THIS SEGMENT", ""]);
-        usedTypes.forEach((k) => rows.push(TYPE_DESC[k]));
-      }
-
-      // ── logic key: only the operators actually used ──────────────────────────
-      const joinKeys = Object.keys(joins);
-      if (joinKeys.length) {
-        rows.push(["", ""]);
-        rows.push(["LOGIC IN THIS SEGMENT", ""]);
-        if (joins.AND) rows.push(["AND (green)", "All joined items must match."]);
-        if (joins.OR)  rows.push(["OR (orange)", "Any one of the joined items may match."]);
-        if (joins.THEN) rows.push(["Priority (blue)", "Waterfall tier order — tiers are applied in priority sequence, not AND/OR'd."]);
-        if (joins.SEQ) rows.push(["\"Where X is in the results of\" (grey)", "Each Rank & Limit ruleset filters the results of the one above it — they apply in sequence, not in parallel."]);
-        rows.push(["Join columns", "The three right-hand columns show the join at each level (inside a group, across groups, across all blocks). A join only appears when it connects 2+ items."]);
-      }
-
-      rows.forEach(([a, b]) => {
-        const ca = ws.getCell(r, 1), cb = ws.getCell(r, 2);
-        ca.value = a; cb.value = b;
-        const header = a && !b; // section header rows
-        ca.font = { bold: true, size: header ? 11 : 9, color: { argb: header ? "FF1F3864" : "FF1A1A1A" } };
-        cb.font = { size: 10, color: { argb: "FF333333" } };
-        ca.alignment = { vertical: "top", wrapText: true }; cb.alignment = { vertical: "top", wrapText: true };
-        if (header) { ca.fill = fill("EAEFF7"); cb.fill = fill("EAEFF7"); }
-        r++;
-      });
-      if (typeof ws.autoSize === "function") ws.autoSize({ min: [24, 50], max: [34, 92] });
-    }
 
     const api = { buildSegmentWorkbook, buildSegmentWorkbookMulti, renderSheet };
     Object.assign(root, api);
@@ -4642,11 +4519,6 @@
                objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
     }
     // "(API: field_api__c on Object__dlm)" suffix when API names are available.
-    function apiSuffix(node) {
-      var f = node.fieldApi || "", o = node.objApi || "";
-      if (!f && !o) return "";
-      return " (API: " + (f || "?") + (o ? " on " + o : "") + ")";
-    }
     // A Rank & Limit row from readRankLimitFromDOM: fieldLabel = "Group By"/"Sort By",
     // operator = the ranked/sorted field (+ direction), values = "Limit: N …".
     function rankOf(n) {
@@ -4667,61 +4539,14 @@
     // Human-readable "how to build this in Salesforce" note per block kind. This is
     // what makes the export self-sufficient for a migration: the person rebuilding
     // the segment knows exactly WHAT to drag from the left panel and how to set it.
-    function buildNote(kind, node) {
-      switch (kind) {
-        case "direct": {
-          // Classify the segment object itself when its suffix is known.
-          var dk = objectKindFromApi(node.objApi);
-          return "Direct attribute of " + (node.entity || "the segment object") +
-                 (dk ? " (" + dk + ")" : "") +
-                 ". Drag this attribute onto the canvas and set: " +
-                 [node.attr, node.op, node.v1 || node.v2].filter(Boolean).join(" ") + "." + apiSuffix(node);
-        }
-        case "related": {
-          // State whether the related object is a DLO or a DMO — derived ONLY from
-          // the scraped API-name suffix, blank if unknown (never guessed).
-          var rk = objectKindFromApi(node.objApi);
-          return "Related attribute — a field on the related object " +
-                 (node.entity || "a related object") +
-                 (rk ? " (" + rk + ")" : "") +
-                 (node.objApi ? " [API: " + node.objApi + "]" : "") +
-                 ". Drag the related object" +
-                 (node.agg ? ", set the aggregation (" + node.agg + ")" : ", set its aggregation as shown in the UI") +
-                 ", then add the member filter(s) inside it.";
-        }
-        case "ci":
-          return "Calculated Insight: " + (node.entity || "") +
-                 (node.objApi ? " [" + node.objApi + "]" : "") +
-                 ". From the left panel open Calculated Insights, drag \"" + (node.entity || "") +
-                 "\", then set its dimension/measure filter.";
-        case "priority":
-          // Waterfall member — SF term: a Segment processed in priority order.
-          return "Waterfall member segment \"" + (node.entity || "") + "\"" +
-                 (node.tier ? " (" + node.tier + ")" : "") +
-                 ". Drag this segment onto the waterfall canvas in priority order" +
-                 (node.sched ? ". Publish Schedule: " + node.sched : "") +
-                 (node.pub ? ". Publish Behavior: " + node.pub : "") + ".";
-        case "nested":
-          return "Nested segment: drag the segment \"" + (node.entity || "") +
-                 "\" from Segments in the left panel" +
-                 (node.sched ? ". Publish Schedule: " + node.sched : "") +
-                 (node.pub ? ". Publish Behavior: " + node.pub : "") + ".";
-        case "rank":
-          return "Rank & Limit rule on " + (node.entity || "") + ": " +
-                 [node.rankType, node.rankField].filter(Boolean).join(" ") +
-                 (node.limit ? ", limit " + node.limit : "") +
-                 ". When multiple rulesets exist, each filters the results of the one above it.";
-        default: return "";
-      }
-    }
     function conv(node, isRank) {
       if (!node) return null;
       if (node.type === "set") {
         return { t: "group", join: node.join || "AND", boxed: true,
                  children: (node.items || []).map(function (c) { return conv(c, isRank); }).filter(Boolean) };
       }
-      if (isRank) { var rk = rankOf(node); rk.kind = "rank"; rk.note = buildNote("rank", rk); return rk; }
-      if (node.type === "nested-segment") { var ns = nestedOf(node); ns.kind = ns.waterfall ? "priority" : "nested"; ns.note = buildNote(ns.kind, ns); return ns; }
+      if (isRank) { var rk = rankOf(node); rk.kind = "rank"; return rk; }
+      if (node.type === "nested-segment") { var ns = nestedOf(node); ns.kind = ns.waterfall ? "priority" : "nested"; return ns; }
       if (node.type === "aggregation" || node.type === "ci") {
         var isCi = node.type === "ci";
         var agg = isCi ? (node.fieldLabel || "Calculated Insight")
@@ -4733,10 +4558,9 @@
         if (isCi && !c.children.length && (node.operator || node.values)) {
           c.children.push(condOf(Object.assign({ type: "simple" }, { objectLabel: node.objectLabel, fieldLabel: node.fieldLabel, operator: node.operator, values: node.values })));
         }
-        c.note = buildNote(c.kind, c);
         return c;
       }
-      var cd = condOf(node); cd.kind = "direct"; cd.note = buildNote("direct", cd); return cd;
+      var cd = condOf(node); cd.kind = "direct"; return cd;
     }
     function segTreeToKit(toolTree, tab) {
       var isRank = /rank/i.test(tab || "");
@@ -5273,7 +5097,7 @@
       "<div class='toolbar'>" +
         "<button id='dc-d-copy' title='Copies the current tab only, as a grid you can paste into Google Sheets or Excel'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy tab for Sheets</button>" +
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
-        "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs, a Segment Setup sheet, and a How to Rebuild guide'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
+        "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
