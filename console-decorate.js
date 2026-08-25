@@ -6097,12 +6097,11 @@
         return;
       }
     });
-    // SF's Query Editor uses a contenteditable div inside shadow DOM.
-    // window.getSelection() returns empty for these editors.
-    // Scan shadow DOM for the longest contenteditable or textarea with SELECT+FROM.
+    // SF's Query Editor uses CodeMirror (div.cm-content[contenteditable]) inside
+    // shadow DOM. Multiple tabs = multiple cm-content elements. Pick the VISIBLE one.
     if (!result.full) {
       try {
-        var bestSql = "";
+        var candidates = [];
         eachElement(document, function (scan) {
           var txt = "";
           if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20) {
@@ -6110,11 +6109,15 @@
           } else if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20) {
             txt = scan.innerText;
           }
-          if (txt && /SELECT/i.test(txt) && /FROM/i.test(txt) && txt.length > bestSql.length) {
-            bestSql = txt.trim();
+          if (txt && /SELECT/i.test(txt) && /FROM/i.test(txt)) {
+            var visible = false;
+            try { var r = scan.getBoundingClientRect(); visible = r.width > 0 && r.height > 0; } catch (e) {}
+            candidates.push({ txt: txt.trim(), visible: visible });
           }
         });
-        if (bestSql) result.full = bestSql;
+        var visibleOnes = candidates.filter(function (c) { return c.visible; });
+        var pick = visibleOnes.length > 0 ? visibleOnes[visibleOnes.length - 1] : candidates[candidates.length - 1];
+        if (pick) result.full = pick.txt;
       } catch (e) {}
     }
     if (!result.full) {
