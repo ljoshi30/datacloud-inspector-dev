@@ -9906,10 +9906,20 @@
     viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
+    var infoBtn = document.createElement("button");
+    infoBtn.textContent = "ℹ";
+    infoBtn.title = "Show/hide info";
+    infoBtn.style.cssText = "border:1px solid #e2e8f0;background:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:14px;color:#64748b;display:flex;align-items:center;justify-content:center;";
+    infoBtn.onclick = function () {
+      if (card.style.display === "none" && _lastResult) { card.style.display = "block"; }
+      else { card.style.display = "none"; }
+    };
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
+    btnRow.appendChild(infoBtn);
 
     // FAB icon — always visible, toggles the panel
     var fab = document.createElement("button");
@@ -9922,8 +9932,13 @@
     fab.onclick = function () {
       _panelOpen = !_panelOpen;
       btnRow.style.display = _panelOpen ? "flex" : "none";
-      card.style.display = _panelOpen && _lastResult ? "block" : "none";
-      if (_panelOpen && _lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
+      if (_panelOpen && _lastResult) {
+        card.style.display = "block";
+        downloadBtn.style.display = "inline-block";
+        viewBtn.style.display = "inline-block";
+      } else {
+        card.style.display = "none";
+      }
       fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
     };
 
