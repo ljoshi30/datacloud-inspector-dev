@@ -6036,6 +6036,7 @@
   // URL: /r/DataQueryWorkspace/<18-char-id>/view OR contains queryEditor/queryWorkspace keywords with an ID.
   function isQueryEditorPage() {
     var h = location.href;
+    if (/\/o\/DataQueryWorkspace\/home/i.test(h)) return false;
     if (/\/r\/DataQueryWorkspace\/[a-zA-Z0-9]{15,18}\//i.test(h)) return true;
     if (/queryEditor|query-editor/i.test(h) && /[a-zA-Z0-9]{15,18}/.test(h)) return true;
     // Component-based fallback: look for the query workspace tag
