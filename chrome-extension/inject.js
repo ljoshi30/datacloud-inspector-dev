@@ -6097,30 +6097,24 @@
         return;
       }
     });
-    // SF Query Editor: scan for any element containing a full SQL query.
-    // Covers Monaco, CodeMirror, LWC shadow-DOM textareas, and view-lines.
+    // SF's Query Editor uses a contenteditable div inside shadow DOM.
+    // window.getSelection() returns empty for these editors.
+    // Scan shadow DOM for the longest contenteditable or textarea with SELECT+FROM.
     if (!result.full) {
       try {
-        var foundSql = "";
+        var bestSql = "";
         eachElement(document, function (scan) {
-          if (foundSql) return;
-          if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20 && /\bSELECT\b/i.test(scan.value) && /\bFROM\b/i.test(scan.value)) {
-            foundSql = scan.value.trim();
-            return;
+          var txt = "";
+          if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20) {
+            txt = scan.value;
+          } else if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20) {
+            txt = scan.innerText;
           }
-          if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20 && /\bSELECT\b/i.test(scan.innerText) && /\bFROM\b/i.test(scan.innerText)) {
-            foundSql = scan.innerText.trim();
-            return;
-          }
-          var cl = (scan.className && typeof scan.className === "string") ? scan.className : "";
-          if (/view-lines/i.test(cl) && scan.children && scan.children.length > 2) {
-            var txt = scan.textContent || "";
-            if (txt.length > 20 && /SELECT/i.test(txt) && /FROM/i.test(txt)) {
-              foundSql = txt.replace(/\u00a0/g, " ").trim();
-            }
+          if (txt && /SELECT/i.test(txt) && /FROM/i.test(txt) && txt.length > bestSql.length) {
+            bestSql = txt.trim();
           }
         });
-        if (foundSql) result.full = foundSql;
+        if (bestSql) result.full = bestSql;
       } catch (e) {}
     }
     if (!result.full) {
