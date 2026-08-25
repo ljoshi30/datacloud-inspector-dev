@@ -9860,7 +9860,7 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:12px;left:12px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
+    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
@@ -9906,27 +9906,25 @@
     viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
-    var collapseBtn = document.createElement("button");
-    collapseBtn.textContent = "◀";
-    collapseBtn.title = "Collapse";
-    collapseBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:14px;color:#64748b;padding:4px;border-radius:50%;";
-    var _collapsed = false;
-    collapseBtn.onclick = function () {
-      _collapsed = !_collapsed;
-      countBtn.style.display = _collapsed ? "none" : "";
-      runBtn.style.display = _collapsed ? "none" : "";
-      if (!_collapsed && _lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
-      else if (_collapsed) { downloadBtn.style.display = "none"; viewBtn.style.display = "none"; }
-      card.style.display = _collapsed ? "none" : card.style.display;
-      collapseBtn.textContent = _collapsed ? "▶" : "◀";
-      collapseBtn.title = _collapsed ? "Expand" : "Collapse";
-    };
-
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
-    btnRow.appendChild(collapseBtn);
+
+    // FAB icon — always visible, toggles the panel
+    var fab = document.createElement("button");
+    fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-size:18px;cursor:pointer;box-shadow:0 4px 16px rgba(109,40,217,.4);display:flex;align-items:center;justify-content:center;transition:transform .15s;";
+    fab.innerHTML = "<svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M12 5v14M5 12h14'/><circle cx='12' cy='12' r='10'/></svg>";
+    fab.title = "Data 360 Inspector — Query Editor";
+    fab.onmouseenter = function () { fab.style.transform = "scale(1.1)"; };
+    fab.onmouseleave = function () { fab.style.transform = "scale(1)"; };
+    var _panelOpen = true;
+    fab.onclick = function () {
+      _panelOpen = !_panelOpen;
+      btnRow.style.display = _panelOpen ? "flex" : "none";
+      card.style.display = _panelOpen ? card.style.display : "none";
+      fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
+    };
 
     var _lastResult = null;
     var _savedSelection = "";
@@ -10488,7 +10486,7 @@
       window.addEventListener("pointerup", up, true);
     }, true);
 
-    wrap.appendChild(card); wrap.appendChild(btnRow);
+    wrap.appendChild(card); wrap.appendChild(btnRow); wrap.appendChild(fab);
     document.body.appendChild(wrap);
   }
 
