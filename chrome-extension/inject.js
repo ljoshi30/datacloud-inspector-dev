@@ -6059,74 +6059,21 @@
 
   function readQueryEditorSql() {
     var result = { full: "", selected: "", cursorPos: -1 };
-    // Use the last-focused editor if available (most reliable for multi-tab)
-    var el = _lastSqlEditor;
-    if (el) {
-      var t = tagOf(el);
-      if (t === "textarea" && el.value && el.value.trim().length > 8) {
-        result.full = el.value.trim();
-        if (el.selectionStart !== el.selectionEnd) result.selected = el.value.substring(el.selectionStart, el.selectionEnd).trim();
-        result.cursorPos = el.selectionStart;
-        return result;
-      }
-      if (el.getAttribute && el.getAttribute("contenteditable") === "true" && el.innerText) {
-        result.full = el.innerText.trim();
-        var sel = window.getSelection();
-        if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
-          var selText = sel.toString().trim();
-          if (selText.length > 0) result.selected = selText;
-          var preRange = document.createRange();
-          preRange.setStart(el, 0);
-          preRange.setEnd(sel.anchorNode, sel.anchorOffset);
-          result.cursorPos = preRange.toString().length;
-        }
-        return result.full ? result : null;
-      }
-    }
-    // Fallback: scan all editors (first match)
-    eachElement(document, function (scan) {
-      if (result.full) return;
-      var st = tagOf(scan);
-      if (st === "textarea" && scan.value && scan.value.trim().length > 8 && /select|from/i.test(scan.value)) {
-        result.full = scan.value.trim();
-        result.cursorPos = scan.selectionStart || 0;
-        return;
-      }
-      if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && /select|from/i.test(scan.innerText)) {
-        result.full = scan.innerText.trim();
-        return;
-      }
-    });
     // SF's Query Editor uses CodeMirror (div.cm-content[contenteditable]) inside
-    // shadow DOM. Multiple tabs = multiple cm-content elements. Pick the VISIBLE one.
-    if (!result.full) {
-      try {
-        var candidates = [];
-        eachElement(document, function (scan) {
-          var txt = "";
-          if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20) {
-            txt = scan.value;
-          } else if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20) {
-            txt = scan.innerText;
-          }
-          if (txt && /SELECT/i.test(txt) && /FROM/i.test(txt)) {
-            var visible = false;
-            try { var r = scan.getBoundingClientRect(); visible = r.width > 0 && r.height > 0; } catch (e) {}
-            candidates.push({ txt: txt.trim(), visible: visible });
-          }
-        });
-        var visibleOnes = candidates.filter(function (c) { return c.visible; });
-        var pick = visibleOnes.length > 0 ? visibleOnes[visibleOnes.length - 1] : candidates[candidates.length - 1];
-        if (pick) result.full = pick.txt;
-      } catch (e) {}
-    }
-    if (!result.full) {
-      try {
-        var sel2 = window.getSelection();
-        var selTxt = sel2 ? sel2.toString().trim() : "";
-        if (selTxt.length > 8 && /select|from/i.test(selTxt)) result.full = selTxt;
-      } catch (e) {}
-    }
+    // shadow DOM. Multiple tabs exist; pick the VISIBLE one (getBoundingClientRect).
+    try {
+      eachElement(document, function (scan) {
+        if (result.full) return;
+        var txt = "";
+        if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20) {
+          txt = scan.value;
+        } else if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20) {
+          txt = scan.innerText;
+        }
+        if (!txt || !/SELECT/i.test(txt) || !/FROM/i.test(txt)) return;
+        try { var r = scan.getBoundingClientRect(); if (r.width > 0 && r.height > 0) result.full = txt.trim(); } catch (e) {}
+      });
+    } catch (e) {}
     return result.full ? result : null;
   }
 
