@@ -10020,6 +10020,11 @@
         ds = dsCandidates[0] || "";
       }
       var cleanSql = sql.replace(/;\s*$/, "").trim();
+      // For simple queries (no GROUP BY/HAVING/UNION), use COUNT(*) for exact count.
+      // For complex queries, run the full query and count returned rows.
+      var hasGroupBy = /\bGROUP\s+BY\b/i.test(cleanSql) || /\bHAVING\b/i.test(cleanSql) || /\bUNION\b/i.test(cleanSql);
+      var countSql = hasGroupBy ? cleanSql : cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
+      var countLimit = hasGroupBy ? 500000 : 1;
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
@@ -10031,10 +10036,16 @@
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
           return;
         }
-        runRawSql(cleanSql, ds, 50000).then(function (res) {
+        runRawSql(countSql, ds, countLimit).then(function (res) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
-          var cnt = res.rowCount || res.totalRows || (res.rows || []).length || 0;
+          var cnt = 0;
+          if (hasGroupBy) {
+            cnt = (res.rows || []).length;
+          } else {
+            var cRows = res.rows || [];
+            if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
+          }
           var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
           if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
           cardBody.innerHTML = ""
@@ -10218,6 +10229,8 @@
 
     viewBtn.onclick = () => {
       if (!_lastResult || !_lastResult.data || !_lastResult.data.length) return;
+      viewBtn.disabled = true; viewBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Loading…";
+      setTimeout(function () { viewBtn.disabled = false; viewBtn.textContent = "👁 View Results"; }, 500);
       var existing = document.getElementById("dc-qe-results-modal");
       if (existing) { existing.remove(); return; }
       var cols = _lastResult.columns || [];
@@ -10248,10 +10261,13 @@
       var tableWrap = document.createElement("div");
       tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;min-height:0;";
 
-      var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;background:#1e293b;color:#fff;'>";
+      // Render header + first 100 rows immediately, then load rest in chunks
+      var CHUNK = 100;
+      var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
       cols.forEach(function (c) { table += "<th style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;'>" + esc(c) + "</th>"; });
-      table += "</tr></thead><tbody>";
-      for (var i = 0; i < showing; i++) {
+      table += "</tr></thead><tbody id='dc-qe-tbody'>";
+      var firstBatch = Math.min(showing, CHUNK);
+      for (var i = 0; i < firstBatch; i++) {
         var row = rows[i];
         var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
         table += "<tr style='background:" + bg + ";'>";
@@ -10260,6 +10276,28 @@
       }
       table += "</tbody></table>";
       tableWrap.innerHTML = table;
+
+      // Load remaining rows in chunks (non-blocking) so modal appears instantly
+      if (firstBatch < showing) {
+        var loadIdx = firstBatch;
+        function loadChunk() {
+          var tbody = document.getElementById("dc-qe-tbody");
+          if (!tbody || !document.getElementById("dc-qe-results-modal")) return;
+          var end = Math.min(loadIdx + CHUNK, showing);
+          var html = "";
+          for (var j = loadIdx; j < end; j++) {
+            var r = rows[j];
+            var rbg = j % 2 === 0 ? "#fff" : "#f9fafb";
+            html += "<tr style='background:" + rbg + ";'>";
+            cols.forEach(function (c) { html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; });
+            html += "</tr>";
+          }
+          tbody.insertAdjacentHTML("beforeend", html);
+          loadIdx = end;
+          if (loadIdx < showing) setTimeout(loadChunk, 16);
+        }
+        setTimeout(loadChunk, 50);
+      }
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
