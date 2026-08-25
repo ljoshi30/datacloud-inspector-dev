@@ -5920,7 +5920,7 @@
             }
             res.rows.forEach(function (row) {
               csvOut.push(cols2.map(function (c) { return esc2(row[c]); }).join(",") + "\n");
-              if (rowData.length < 500) rowData.push(row);
+              if (rowData.length < 2000) rowData.push(row);
               totalFetched++;
             });
             if (onProgress) onProgress(totalFetched, bmTotal || (userLimit || totalFetched));
@@ -10220,7 +10220,7 @@
       if (existing) { existing.remove(); return; }
       var cols = _lastResult.columns || [];
       var rows = _lastResult.data;
-      var showing = Math.min(rows.length, 500);
+      var showing = Math.min(rows.length, 2000);
       var esc = function (s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
 
       var modal = document.createElement("div");
