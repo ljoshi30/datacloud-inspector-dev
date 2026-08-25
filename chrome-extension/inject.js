@@ -10284,7 +10284,12 @@
           var r = data[i];
           var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
           html += "<tr style='background:" + bg + ";'>";
-          cols.forEach(function (c) { html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; });
+          cols.forEach(function (c) {
+            var val = r[c];
+            var display = esc(val);
+            var raw = val == null ? "" : String(val);
+            html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + display + "</td>";
+          });
           html += "</tr>";
         }
         return html;
@@ -10371,6 +10376,24 @@
         th.onclick = function () { sortRows(th.getAttribute("data-col")); };
         th.onmouseenter = function () { th.style.background = "#334155"; };
         th.onmouseleave = function () { th.style.background = ""; };
+      });
+      // Click-to-copy on any cell
+      tableWrap.addEventListener("click", function (e) {
+        var td = e.target.closest ? e.target.closest("td[data-copy]") : null;
+        if (!td) return;
+        var val = td.getAttribute("data-copy") || "";
+        if (!val) return;
+        try {
+          navigator.clipboard.writeText(val).then(function () {
+            td.style.background = "#dcfce7"; td.style.transition = "background .2s";
+            setTimeout(function () { td.style.background = ""; }, 600);
+          });
+        } catch (ex) {
+          var ta = document.createElement("textarea"); ta.value = val; ta.style.cssText = "position:fixed;opacity:0;";
+          document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+          td.style.background = "#dcfce7"; td.style.transition = "background .2s";
+          setTimeout(function () { td.style.background = ""; }, 600);
+        }
       });
     };
 
