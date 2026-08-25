@@ -10035,7 +10035,8 @@
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
           var cnt = res.rowCount || res.totalRows || (res.rows || []).length || 0;
-          _lastResult = null; downloadBtn.style.display = "none"; viewBtn.style.display = "none";
+          var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
+          if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
@@ -10043,7 +10044,8 @@
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
             + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
-            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>";
+            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>"
+            + prevResultNote;
         }).catch(function (err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
