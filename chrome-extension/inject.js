@@ -10010,33 +10010,22 @@
         var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
         ds = dsCandidates[0] || "";
       }
-      // Data Cloud SQL doesn't support subqueries — replace SELECT columns with COUNT(*)
-      var cleanSql = sql.replace(/;\s*$/, "");
-      var countSql = cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
+      var cleanSql = sql.replace(/;\s*$/, "").trim();
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
-      cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><div style='margin-top:6px;font:10px monospace;color:#94a3b8;word-break:break-all;max-height:40px;overflow:hidden'>" + countSql.replace(/</g,"&lt;") + "</div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+      cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
       ensureQueryContext(function (ready) {
         if (!ready) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Session needed</span></div>"
-            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click <b>Run Highlighted Query</b> in SF's editor first (to establish a session), then click <b># Count</b> again.</div>";
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
           return;
         }
-        runRawSql(countSql, ds, 1).then(function (res) {
+        runRawSql(cleanSql, ds, 1).then(function (res) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
-          var cnt = 0;
-          var cRows = res.rows || res.data || [];
-          if (cRows.length > 0) {
-            var row = cRows[0];
-            var keys = Object.keys(row);
-            for (var ki = 0; ki < keys.length; ki++) {
-              var v = parseInt(row[keys[ki]], 10);
-              if (!isNaN(v) && v >= 0) { cnt = v; break; }
-            }
-          }
+          var cnt = res.rowCount || res.totalRows || (res.rows || res.data || []).length || 0;
           _lastResult = null; downloadBtn.style.display = "none";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
