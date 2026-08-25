@@ -6058,20 +6058,31 @@
   }, true);
 
   function readQueryEditorSql() {
-    var result = { full: "", selected: "", cursorPos: -1 };
-    // SF's Query Editor uses CodeMirror (div.cm-content[contenteditable]) inside
-    // shadow DOM. Multiple tabs exist; pick the VISIBLE one (getBoundingClientRect).
+    var result = { full: "", selected: "" };
     try {
       eachElement(document, function (scan) {
         if (result.full) return;
-        var txt = "";
-        if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20) {
-          txt = scan.value;
-        } else if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20) {
-          txt = scan.innerText;
-        }
-        if (!txt || !/SELECT/i.test(txt) || !/FROM/i.test(txt)) return;
-        try { var r = scan.getBoundingClientRect(); if (r.width > 0 && r.height > 0) result.full = txt.trim(); } catch (e) {}
+        if (!scan.getAttribute || scan.getAttribute("contenteditable") !== "true") return;
+        if (!scan.className || !/cm-content/.test(scan.className)) return;
+        try { var r = scan.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return; } catch (e) { return; }
+        var txt = (scan.innerText || "").trim();
+        if (txt.length < 10) return;
+        result.full = txt;
+        // Try to read CodeMirror selection from the editor instance
+        try {
+          var el = scan;
+          for (var i = 0; i < 6 && el; i++) {
+            if (el.cmView && el.cmView.view && el.cmView.view.state) {
+              var state = el.cmView.view.state;
+              var sel = state.selection && state.selection.main;
+              if (sel && sel.from !== sel.to) {
+                result.selected = state.sliceDoc(sel.from, sel.to).trim();
+              }
+              break;
+            }
+            el = el.parentElement;
+          }
+        } catch (e) {}
       });
     } catch (e) {}
     return result.full ? result : null;
@@ -9962,12 +9973,14 @@
     }
 
     function getHighlightedSql() {
-      // Primary: read the full content of the VISIBLE editor tab directly.
-      // This is the most reliable — bypasses stale selections and hidden tabs.
       var qeResult = (typeof readQueryEditorSql === "function") ? readQueryEditorSql() : null;
-      if (qeResult && qeResult.full) {
+      if (qeResult) {
         _savedSelection = "";
-        return qeResult.full;
+        // If user highlighted something in the editor, use that. Otherwise full tab.
+        if (qeResult.selected && qeResult.selected.length > 10 && /SELECT/i.test(qeResult.selected)) {
+          return qeResult.selected;
+        }
+        if (qeResult.full) return qeResult.full;
       }
       // Fallback: saved selection or last focused editor
       var highlighted = "";
