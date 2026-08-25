@@ -6097,6 +6097,39 @@
         return;
       }
     });
+    // SF's Query Editor uses a Monaco-style code editor (div.view-lines > div.view-line)
+    // not a textarea. Read all visible lines from the active editor panel.
+    if (!result.full) {
+      try {
+        var viewLines = document.querySelectorAll(".view-lines .view-line, .monaco-editor .view-line");
+        if (!viewLines.length) {
+          eachElement(document, function (scan) {
+            if (viewLines.length) return;
+            var cl = scan.className || "";
+            if (/view-lines/i.test(cl) && scan.children && scan.children.length > 2) {
+              viewLines = scan.querySelectorAll(".view-line") || scan.children;
+            }
+          });
+        }
+        if (viewLines && viewLines.length > 0) {
+          var lines = [];
+          for (var i = 0; i < viewLines.length; i++) {
+            var lineText = (viewLines[i].textContent || "").replace(/ /g, " ");
+            lines.push(lineText);
+          }
+          var joined = lines.join("\n").trim();
+          if (joined.length > 8 && /select|from/i.test(joined)) result.full = joined;
+        }
+      } catch (e) {}
+    }
+    // Last resort: get the selection text directly (works regardless of editor type)
+    if (!result.full) {
+      try {
+        var sel2 = window.getSelection();
+        var selTxt = sel2 ? sel2.toString().trim() : "";
+        if (selTxt.length > 8 && /select|from/i.test(selTxt)) result.full = selTxt;
+      } catch (e) {}
+    }
     return result.full ? result : null;
   }
 
@@ -9932,6 +9965,7 @@
 
     function normalizeSql(raw) {
       return (raw || "")
+        .replace(/ /g, " ")
         .replace(/\r\n/g, "\n")
         .replace(/^\s*\d+[ \t]+/gm, "")
         .replace(/\n{2,}/g, "\n")
