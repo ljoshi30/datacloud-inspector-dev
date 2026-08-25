@@ -9931,10 +9931,10 @@
     }, true);
 
     function normalizeSql(raw) {
-      // Only fix the specific pattern where SF's editor DOM collapses lines:
-      // e.g. "__dlmFROM" or "__cWHERE" — an identifier suffix glued to a major keyword.
-      // We do NOT broadly rewrite SQL — that breaks things like APPROX_COUNT_DISTINCT.
       return (raw || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\n{2,}/g, "\n")
+        .replace(/[ \t]+/g, " ")
         .replace(/(__)([a-z]{1,3})(SELECT|FROM|WHERE|GROUP|ORDER|HAVING|JOIN|LIMIT|OFFSET|AND|OR|ON|UNION)\b/gi, "$1$2 $3")
         .replace(/;\s*$/, "").trim();
     }
@@ -9975,14 +9975,12 @@
 
     function validateSql(raw) {
       if (!raw || raw.trim().length < 6) return { ok: false, msg: "Selection is too short to be a valid query." };
-      // Strip comments before validating
-      var stripped = raw.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      var stripped = raw.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
       if (!stripped || stripped.length < 6) return { ok: false, msg: "Your selection contains only comments — select the SQL query itself." };
       if (!/\bSELECT\b/i.test(stripped)) return { ok: false, msg: "No SELECT found. Make sure you highlight a complete query starting with SELECT." };
       if (!/\bFROM\b/i.test(stripped)) return { ok: false, msg: "No FROM clause found. Highlight a complete query (SELECT ... FROM ...)." };
       var selectCount = (stripped.match(/\bSELECT\b/gi) || []).length;
       var fromCount = (stripped.match(/\bFROM\b/gi) || []).length;
-      // Allow subqueries (SELECT in SELECT) but warn if it looks like 2 separate queries
       if (selectCount > fromCount + 1) return { ok: false, msg: "Looks like multiple queries are selected. Highlight just one query." };
       return { ok: true };
     }
@@ -13254,10 +13252,8 @@ processJSON();
     }
     ensureDetailLauncher();
     watchNavigation();
-  } else if (!/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation|segmentWizard/i.test(window.location.href)) {
-    // Only show the mapping launcher if the mapping canvas component is actually on this page.
-    // On unsupported pages, show a brief toast telling the user which pages work.
-    // Skip this entirely for Data Model, Activation, and Segment pages (they have their own launchers)
+  } else if (!/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation|segmentWizard/i.test(window.location.href) && !onQueryEditorPage && !onTransformPage && !onDataModelPage && !onActivationPage) {
+    // Only show the mapping launcher/toast on pages where no launcher was already created.
     var hasMappingCanvas = findByTag(TAGGING_CMP).length > 0;
     if (hasMappingCanvas) {
       ensureLauncher();
