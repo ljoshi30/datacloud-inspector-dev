@@ -10090,7 +10090,7 @@
 
       runBtn.disabled = true; runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
-      downloadBtn.style.display = "none";
+      downloadBtn.style.display = "none"; viewBtn.style.display = "none"; _lastResult = null;
       // Cancel button for long-running exports
       window.__dcQueryExportCancelled = false;
       var cancelBtn = document.createElement("button");
