@@ -9860,7 +9860,7 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
+    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
