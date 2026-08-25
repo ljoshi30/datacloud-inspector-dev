@@ -10022,10 +10022,10 @@
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
           return;
         }
-        runRawSql(cleanSql, ds, 1).then(function (res) {
+        runRawSql(cleanSql, ds, 50000).then(function (res) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
-          var cnt = res.rowCount || res.totalRows || (res.rows || res.data || []).length || 0;
+          var cnt = res.rowCount || res.totalRows || (res.rows || []).length || 0;
           _lastResult = null; downloadBtn.style.display = "none";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
