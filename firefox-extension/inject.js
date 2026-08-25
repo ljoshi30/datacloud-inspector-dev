@@ -8226,16 +8226,19 @@
     //   date; text → operator (=, contains, starts) + text. Builds a WHERE and re-runs
     //   the query server-side via runRawSql. Type is inferred from the loaded values.
     function inferType(fn) {
-      var seen = 0;
+      var seen = 0, numCount = 0, dateCount = 0, boolCount = 0, textCount = 0;
       for (var i = 0; i < rows.length && seen < 20; i++) {
         var v = rows[i][fn]; if (v === null || v === undefined || v === "") continue; seen++;
-        if (typeof v === "boolean") return "bool";
+        if (typeof v === "boolean" || v === "true" || v === "false") { boolCount++; continue; }
         var s = String(v);
-        if (v === "true" || v === "false") return "bool";
-        if (/^-?\d+(\.\d+)?$/.test(s)) return "number";
-        if (/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/.test(s)) return "date";
-        return "text";
+        if (/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/.test(s)) { dateCount++; continue; }
+        if (/^-?\d+(\.\d+)?$/.test(s) && s.length <= 15) { numCount++; continue; }
+        textCount++;
       }
+      if (!seen) return "text";
+      if (boolCount === seen) return "bool";
+      if (dateCount === seen) return "date";
+      if (numCount === seen && numCount > 0) return "number";
       return "text";
     }
     const fullColsForFilter = allColumns || columns;
@@ -8243,12 +8246,14 @@
     function fragOf(cond) {
       var fn = cond.colSel.value, op = cond.opSel.value, t = inferType(fn);
       var raw = (cond.valCtl && cond.valCtl.value != null) ? String(cond.valCtl.value).trim() : "";
-      if (raw === "" && t !== "bool") return null;
       var q = '"' + fn.replace(/"/g, '""') + '"';
+      if (op === "IS NULL") return q + " IS NULL";
+      if (op === "IS NOT NULL") return q + " IS NOT NULL";
+      if (raw === "" && t !== "bool") return null;
       var litStr = "'" + raw.replace(/'/g, "''") + "'";
       if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
-      if (t === "number") return q + " " + op + " " + raw;
-      if (t === "date") return q + " " + op + " '" + raw + "'";
+      if (t === "number") return q + " " + op + " " + litStr;
+      if (t === "date") return q + " " + op + " " + litStr;
       if (op === "contains") return q + " LIKE '%" + raw.replace(/'/g, "''") + "%'";
       if (op === "starts with") return q + " LIKE '" + raw.replace(/'/g, "''") + "%'";
       if (op === "!=") return q + " != " + litStr;
@@ -8284,10 +8289,10 @@
       function rebuild() {
         const t = inferType(colSel.value);
         opSel.innerHTML = "";
-        const ops = t === "bool" ? ["="] :
-                    t === "number" ? ["=", "!=", ">", ">=", "<", "<="] :
-                    t === "date" ? ["=", ">", ">=", "<", "<="] :
-                    ["=", "!=", "contains", "starts with"];
+        const ops = t === "bool" ? ["=", "IS NULL", "IS NOT NULL"] :
+                    t === "number" ? ["=", "!=", ">", ">=", "<", "<=", "IS NULL", "IS NOT NULL"] :
+                    t === "date" ? ["=", ">", ">=", "<", "<=", "IS NULL", "IS NOT NULL"] :
+                    ["=", "!=", "contains", "starts with", "IS NULL", "IS NOT NULL"];
         ops.forEach(function (op) { var o = document.createElement("option"); o.value = op; o.textContent = op; opSel.appendChild(o); });
         if (preset && preset.op && ops.indexOf(preset.op) >= 0) opSel.value = preset.op;
         valWrap.innerHTML = "";
@@ -8296,9 +8301,16 @@
           ["true", "false"].forEach(function (b) { var o = document.createElement("option"); o.value = b; o.textContent = b; cond.valCtl.appendChild(o); });
         } else {
           cond.valCtl = document.createElement("input");
-          cond.valCtl.type = t === "number" ? "number" : "text";
+          cond.valCtl.type = "text";
           cond.valCtl.placeholder = t === "date" ? "YYYY-MM-DD" : "value";
         }
+        // Hide value input for IS NULL / IS NOT NULL
+        function toggleValVisibility() {
+          var isNullOp = opSel.value === "IS NULL" || opSel.value === "IS NOT NULL";
+          valWrap.style.display = isNullOp ? "none" : "";
+        }
+        opSel.addEventListener("change", toggleValVisibility);
+        toggleValVisibility();
         cond.valCtl.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;min-width:120px;";
         if (preset && preset.val != null) cond.valCtl.value = preset.val;   // restore saved value
         // FIX 3: Update button states when value changes
