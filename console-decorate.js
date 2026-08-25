@@ -5889,6 +5889,7 @@
         var BM_MAX = DC_MAX_TOTAL_EXPORT;
         var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
+        var rowData = [];
 
         // Detect if user's SQL already has a LIMIT (respect it as a cap)
         var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
@@ -5907,7 +5908,7 @@
           var remaining = effectiveMax - offset;
           if (remaining <= 0) {
             var blob = new Blob(csvOut, { type: "text/csv" });
-            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
+            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData });
             return;
           }
           var pageSize = Math.min(BM_PAGE, remaining);
@@ -5919,12 +5920,13 @@
             }
             res.rows.forEach(function (row) {
               csvOut.push(cols2.map(function (c) { return esc2(row[c]); }).join(",") + "\n");
+              if (rowData.length < 500) rowData.push(row);
               totalFetched++;
             });
             if (onProgress) onProgress(totalFetched, bmTotal || (userLimit || totalFetched));
             if (res.rows.length === 0 || totalFetched >= effectiveMax) {
               var blob = new Blob(csvOut, { type: "text/csv" });
-              resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2 });
+              resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData });
             } else {
               fetchBatch(offset + res.rows.length);
             }
@@ -9883,9 +9885,16 @@
     downloadBtn.onmouseenter = () => { downloadBtn.style.transform = "scale(1.03)"; downloadBtn.style.boxShadow = "0 4px 16px rgba(37,99,235,.4)"; };
     downloadBtn.onmouseleave = () => { downloadBtn.style.transform = "scale(1)"; downloadBtn.style.boxShadow = "0 3px 12px rgba(37,99,235,.3)"; };
 
+    const viewBtn = document.createElement("button");
+    viewBtn.textContent = "👁 View Results";
+    viewBtn.style.cssText = "display:none;border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
+    viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
+    viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(downloadBtn);
+    btnRow.appendChild(viewBtn);
 
     var _lastResult = null;
     var _savedSelection = "";
@@ -10144,7 +10153,7 @@
             downloadBtn.style.display = "none";
             return;
           }
-          _lastResult = { blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rows: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName };
+          _lastResult = { blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rowCount: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName, data: res.rowData || [] };
           var defaultFilename = tableName + "_" + todayStr() + ".csv";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
@@ -10157,11 +10166,13 @@
             + "<div style='font-size:11px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
             + "<b>Table:</b> " + tableName + " &nbsp;|&nbsp; <b>Space:</b> " + (ds || "default") + " &nbsp;|&nbsp; <b>Time:</b> " + elapsed + "s"
             + "</div>"
-            + "<div style='display:flex;align-items:center;gap:6px;'>"
+            + "<div style='display:flex;align-items:center;gap:6px;margin-bottom:10px;'>"
             + "<label style='font:600 11px -apple-system,sans-serif;color:#475569;white-space:nowrap;'>Filename:</label>"
             + "<input id='dc-qe-filename' type='text' value='" + defaultFilename.replace(/'/g,"") + "' style='flex:1;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;'/>"
-            + "</div>";
+            + "</div>"
+            + "<div style='font-size:10px;color:#94a3b8;margin-top:6px;'>Each query uses Data Cloud credits. Results are stored until you run another query.</div>";
           downloadBtn.style.display = "inline-block";
+          viewBtn.style.display = "inline-block";
         }).catch(function (err) {
           runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
@@ -10203,11 +10214,74 @@
       setTimeout(function () { downloadBtn.textContent = "⬇ Download CSV"; downloadBtn.style.background = "linear-gradient(135deg,#3b82f6,#2563eb)"; }, 2500);
     };
 
+    viewBtn.onclick = () => {
+      if (!_lastResult || !_lastResult.data || !_lastResult.data.length) return;
+      var existing = document.getElementById("dc-qe-results-modal");
+      if (existing) { existing.remove(); return; }
+      var cols = _lastResult.columns || [];
+      var rows = _lastResult.data;
+      var showing = Math.min(rows.length, 500);
+      var esc = function (s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+
+      var modal = document.createElement("div");
+      modal.id = "dc-qe-results-modal";
+      modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
+
+      var box = document.createElement("div");
+      box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;";
+
+      var hdr = document.createElement("div");
+      hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
+      hdr.innerHTML = "<div><div style='font:700 15px system-ui;'>Query Results</div><div style='font:400 11px system-ui;opacity:0.85;'>" + _lastResult.tableName + " — " + _lastResult.rowCount.toLocaleString() + " rows, " + cols.length + " columns" + (showing < rows.length ? " (showing first " + showing + ")" : "") + "</div></div>";
+      var closeX = document.createElement("button");
+      closeX.innerHTML = "✕";
+      closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
+      closeX.onclick = function () { modal.remove(); };
+      hdr.appendChild(closeX);
+
+      var note = document.createElement("div");
+      note.style.cssText = "padding:8px 20px;background:#fffbeb;border-bottom:1px solid #fcd34d;font-size:11px;color:#92400e;flex-shrink:0;";
+      note.textContent = "Each query consumes Data Cloud credits. These results are from the last fetch — no additional API call was made to show this view.";
+
+      var tableWrap = document.createElement("div");
+      tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;";
+
+      var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;background:#1e293b;color:#fff;'>";
+      cols.forEach(function (c) { table += "<th style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;'>" + esc(c) + "</th>"; });
+      table += "</tr></thead><tbody>";
+      for (var i = 0; i < showing; i++) {
+        var row = rows[i];
+        var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+        table += "<tr style='background:" + bg + ";'>";
+        cols.forEach(function (c) { table += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(row[c]) + "</td>"; });
+        table += "</tr>";
+      }
+      table += "</tbody></table>";
+      tableWrap.innerHTML = table;
+
+      var footer = document.createElement("div");
+      footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
+      footer.innerHTML = "<span style='font-size:11px;color:#64748b;'>Showing " + showing.toLocaleString() + " of " + _lastResult.rowCount.toLocaleString() + " rows</span>";
+      var dlBtn2 = document.createElement("button");
+      dlBtn2.textContent = "⬇ Download Full CSV (" + _lastResult.rowCount.toLocaleString() + " rows)";
+      dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
+      dlBtn2.onclick = function () { downloadBtn.click(); };
+      footer.appendChild(dlBtn2);
+
+      box.appendChild(hdr);
+      box.appendChild(note);
+      box.appendChild(tableWrap);
+      box.appendChild(footer);
+      modal.appendChild(box);
+      modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+      document.body.appendChild(modal);
+    };
+
     // Drag handle on the button row
     var _dragMoved = false;
     btnRow.style.cursor = "grab";
     btnRow.addEventListener("pointerdown", function (e) {
-      if (e.target === countBtn || e.target === runBtn || e.target === downloadBtn) return;
+      if (e.target === countBtn || e.target === runBtn || e.target === downloadBtn || e.target === viewBtn) return;
       e.preventDefault();
       btnRow.style.cursor = "grabbing";
       var startX = e.clientX, startY = e.clientY;
