@@ -9958,14 +9958,14 @@
     }, true);
 
     function normalizeSql(raw) {
-      return (raw || "")
-        .replace(/ /g, " ")
+      var s = (raw || "")
+        .replace(/\xA0/g, " ")
         .replace(/\r\n/g, "\n")
         .replace(/^\s*\d+[ \t]+/gm, "")
         .replace(/\n{2,}/g, "\n")
-        .replace(/[ \t]+/g, " ")
-        .replace(/(__)([a-z]{1,3})(SELECT|FROM|WHERE|GROUP|ORDER|HAVING|JOIN|LIMIT|OFFSET|AND|OR|ON|UNION)\b/gi, "$1$2 $3")
-        .replace(/;\s*$/, "").trim();
+        .replace(/[ \t]+/g, " ");
+      s = s.replace(/([A-Za-z0-9_"')])(SELECT|FROM|WHERE|GROUP\s*BY|ORDER\s*BY|HAVING|JOIN|LIMIT|OFFSET|UNION)\b/gi, "$1 $2");
+      return s.replace(/;\s*$/, "").trim();
     }
 
     function extractTableName(sql) {
