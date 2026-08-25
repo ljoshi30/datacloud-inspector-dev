@@ -9933,6 +9933,7 @@
     function normalizeSql(raw) {
       return (raw || "")
         .replace(/\r\n/g, "\n")
+        .replace(/^\s*\d+[ \t]+/gm, "")
         .replace(/\n{2,}/g, "\n")
         .replace(/[ \t]+/g, " ")
         .replace(/(__)([a-z]{1,3})(SELECT|FROM|WHERE|GROUP|ORDER|HAVING|JOIN|LIMIT|OFFSET|AND|OR|ON|UNION)\b/gi, "$1$2 $3")
@@ -9987,24 +9988,39 @@
 
     function getHighlightedSql() {
       var highlighted = "";
+      var fullEditor = "";
+      // Try to get the full editor content for fallback
+      var qeResult = (typeof readQueryEditorSql === "function") ? readQueryEditorSql() : null;
+      if (qeResult) { fullEditor = qeResult.full || ""; }
+      if (!fullEditor && _lastSqlEditor) {
+        var le = _lastSqlEditor;
+        if (le.tagName === "TEXTAREA" && le.value) fullEditor = le.value.trim();
+        else if (le.getAttribute && le.getAttribute("contenteditable") === "true" && le.innerText) fullEditor = le.innerText.trim();
+      }
+      // Try saved selection first
       if (_savedSelection && _savedSelection.length > 10 && /select|from/i.test(_savedSelection)) {
         highlighted = _savedSelection;
       }
+      // Try editor's own selection
       if (!highlighted || highlighted.length <= 10) {
-        var qeResult = (typeof readQueryEditorSql === "function") ? readQueryEditorSql() : null;
         if (qeResult) highlighted = qeResult.selected || qeResult.full || "";
       }
       if ((!highlighted || highlighted.length <= 10) && _lastSqlEditor) {
-        var le = _lastSqlEditor;
-        if (le.tagName === "TEXTAREA" && le.value && le.value.trim().length > 10) {
-          highlighted = (le.selectionStart !== le.selectionEnd) ? le.value.substring(le.selectionStart, le.selectionEnd).trim() : le.value.trim();
-        } else if (le.getAttribute && le.getAttribute("contenteditable") === "true" && le.innerText && le.innerText.trim().length > 10) {
-          highlighted = le.innerText.trim();
+        var le2 = _lastSqlEditor;
+        if (le2.tagName === "TEXTAREA" && le2.value && le2.value.trim().length > 10) {
+          highlighted = (le2.selectionStart !== le2.selectionEnd) ? le2.value.substring(le2.selectionStart, le2.selectionEnd).trim() : le2.value.trim();
+        } else if (le2.getAttribute && le2.getAttribute("contenteditable") === "true" && le2.innerText && le2.innerText.trim().length > 10) {
+          highlighted = le2.innerText.trim();
         }
       }
       if (!highlighted || highlighted.length <= 10) {
         var sel = window.getSelection();
         highlighted = (sel && sel.toString().trim().length > 10) ? sel.toString().trim() : "";
+      }
+      // If selection doesn't contain SELECT but the full editor does, use full editor
+      var normalized = normalizeSql(highlighted);
+      if (normalized && !/\bSELECT\b/i.test(normalized) && fullEditor && /\bSELECT\b/i.test(fullEditor)) {
+        highlighted = fullEditor;
       }
       _savedSelection = "";
       return highlighted;
