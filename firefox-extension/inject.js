@@ -9859,12 +9859,12 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:10px;";
+    wrap.style.cssText = "position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:2147483646;display:flex;flex-direction:column;align-items:center;gap:8px;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
     card.id = "dc-qe-card";
-    card.style.cssText = "display:none;width:340px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,.1);font:13px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:relative;";
+    card.style.cssText = "display:none;width:320px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;box-shadow:0 4px 20px rgba(0,0,0,.15);font:12px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:relative;";
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "×";
@@ -9879,7 +9879,7 @@
 
     // Button row
     const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+    btnRow.style.cssText = "display:flex;gap:6px;align-items:center;background:rgba(255,255,255,.95);padding:6px 12px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.15);backdrop-filter:blur(8px);";
 
     const countBtn = document.createElement("button");
     countBtn.textContent = "# Count";
@@ -10247,10 +10247,23 @@
       setTimeout(function () { viewBtn.disabled = false; viewBtn.textContent = "👁 View Results"; }, 500);
       var existing = document.getElementById("dc-qe-results-modal");
       if (existing) { existing.remove(); return; }
-      var cols = _lastResult.columns || [];
+      var allCols = _lastResult.columns || [];
       var rows = _lastResult.data;
       var showing = Math.min(rows.length, 2000);
       var esc = function (s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+      // Detect empty columns (all null/empty in displayed rows)
+      var emptyCols = {};
+      allCols.forEach(function (c) {
+        var hasValue = false;
+        for (var i = 0; i < showing && !hasValue; i++) {
+          var v = rows[i][c];
+          if (v !== null && v !== undefined && String(v).trim() !== "") hasValue = true;
+        }
+        if (!hasValue) emptyCols[c] = true;
+      });
+      var emptyCount = Object.keys(emptyCols).length;
+      var showEmpty = false;
+      var cols = allCols.filter(function (c) { return !emptyCols[c]; });
 
       var modal = document.createElement("div");
       modal.id = "dc-qe-results-modal";
@@ -10261,7 +10274,7 @@
 
       var hdr = document.createElement("div");
       hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
-      hdr.innerHTML = "<div><div style='font:700 15px system-ui;'>Query Results</div><div style='font:400 11px system-ui;opacity:0.85;'>" + _lastResult.tableName + " — " + _lastResult.rowCount.toLocaleString() + " rows, " + cols.length + " columns" + (showing < rows.length ? " (showing first " + showing + ")" : "") + "</div></div>";
+      hdr.innerHTML = "<div><div style='font:700 15px system-ui;'>Query Results</div><div style='font:400 11px system-ui;opacity:0.85;'>" + _lastResult.tableName + " — " + _lastResult.rowCount.toLocaleString() + " rows, " + allCols.length + " columns" + (showing < rows.length ? " (showing first " + showing + ")" : "") + "</div></div>";
       var closeX = document.createElement("button");
       closeX.innerHTML = "✕";
       closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
@@ -10270,7 +10283,33 @@
 
       var note = document.createElement("div");
       note.style.cssText = "padding:8px 20px;background:#fffbeb;border-bottom:1px solid #fcd34d;font-size:11px;color:#92400e;flex-shrink:0;";
-      note.textContent = "Each query consumes Data Cloud credits. These results are from the last fetch — no additional API call was made to show this view.";
+      note.textContent = "No additional API call — showing data from the last fetch.";
+
+      // Empty columns banner
+      var emptyBanner = document.createElement("div");
+      emptyBanner.style.cssText = emptyCount > 0 ? "padding:6px 20px;background:#f0f9ff;border-bottom:1px solid #bae6fd;font-size:11px;color:#0369a1;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;" : "display:none;";
+      var emptyToggle = document.createElement("a");
+      emptyToggle.href = "#";
+      emptyToggle.style.cssText = "color:#0369a1;font-weight:600;text-decoration:underline;";
+      emptyToggle.textContent = "Show all columns";
+      emptyBanner.innerHTML = "<span>" + emptyCount + " empty column" + (emptyCount !== 1 ? "s" : "") + " hidden (no values in the displayed " + showing.toLocaleString() + " rows). CSV download includes all columns.</span>";
+      emptyBanner.appendChild(emptyToggle);
+      function rebuildTable() {
+        cols = showEmpty ? allCols : allCols.filter(function (c) { return !emptyCols[c]; });
+        emptyToggle.textContent = showEmpty ? "Hide empty columns" : "Show all columns";
+        var thHtml = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
+        cols.forEach(function (c) { thHtml += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'></span></th>"; });
+        thHtml += "</tr></thead><tbody id='dc-qe-tbody'>";
+        thHtml += renderTableBody(rows, SORT_RENDER_MAX);
+        thHtml += "</tbody></table>";
+        tableWrap.innerHTML = thHtml;
+        tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
+          th.onclick = function () { sortRows(th.getAttribute("data-col")); };
+          th.onmouseenter = function () { th.style.background = "#334155"; };
+          th.onmouseleave = function () { th.style.background = ""; };
+        });
+      }
+      emptyToggle.onclick = function (e) { e.preventDefault(); showEmpty = !showEmpty; rebuildTable(); };
 
       var tableWrap = document.createElement("div");
       tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;min-height:0;";
@@ -10357,9 +10396,13 @@
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
-      footer.innerHTML = "<span style='font-size:11px;color:#64748b;'>Showing " + showing.toLocaleString() + " of " + _lastResult.rowCount.toLocaleString() + " rows &nbsp;|&nbsp; Click column headers to sort &nbsp;|&nbsp; Full data available in CSV download</span>";
+      var allShowing = showing >= _lastResult.rowCount;
+      var footerText = allShowing
+        ? showing.toLocaleString() + " rows &nbsp;|&nbsp; Click column headers to sort &nbsp;|&nbsp; Click any cell to copy"
+        : "Showing " + showing.toLocaleString() + " of " + _lastResult.rowCount.toLocaleString() + " rows &nbsp;|&nbsp; Click column headers to sort &nbsp;|&nbsp; CSV has all " + _lastResult.rowCount.toLocaleString() + " rows";
+      footer.innerHTML = "<span style='font-size:11px;color:#64748b;'>" + footerText + "</span>";
       var dlBtn2 = document.createElement("button");
-      dlBtn2.textContent = "⬇ Download Full CSV (" + _lastResult.rowCount.toLocaleString() + " rows)";
+      dlBtn2.textContent = allShowing ? "⬇ Download CSV" : "⬇ Download CSV (" + _lastResult.rowCount.toLocaleString() + " rows)";
       dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
       dlBtn2.onclick = function () { downloadBtn.click(); };
       footer.appendChild(dlBtn2);
