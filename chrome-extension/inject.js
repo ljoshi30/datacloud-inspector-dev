@@ -9872,7 +9872,7 @@
     closeBtn.style.cssText = "position:absolute;top:8px;right:10px;border:none;background:none;font-size:18px;color:#94a3b8;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;";
     closeBtn.onmouseenter = () => { closeBtn.style.color = "#475569"; closeBtn.style.background = "#f1f5f9"; };
     closeBtn.onmouseleave = () => { closeBtn.style.color = "#94a3b8"; closeBtn.style.background = "none"; };
-    closeBtn.onclick = () => { card.style.display = "none"; downloadBtn.style.display = "none"; viewBtn.style.display = "none"; _lastResult = null; };
+    closeBtn.onclick = () => { card.style.display = "none"; };
 
     const cardBody = document.createElement("div");
     card.appendChild(closeBtn);
@@ -9922,7 +9922,8 @@
     fab.onclick = function () {
       _panelOpen = !_panelOpen;
       btnRow.style.display = _panelOpen ? "flex" : "none";
-      if (!_panelOpen) card.style.display = "none";
+      card.style.display = _panelOpen && _lastResult ? "block" : "none";
+      if (_panelOpen && _lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
       fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
     };
 
