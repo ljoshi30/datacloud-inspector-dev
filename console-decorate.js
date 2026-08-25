@@ -6080,6 +6080,7 @@
   // Read the dataspace from the Query Editor page header.
   // The page shows "Data Space" label with the value (e.g. "TDI") nearby.
   // A valid dataspace is short, alphanumeric (may have underscores/hyphens), no spaces.
+  var _pageDataSpaceLabel = "";
   function readPageDataSpace() {
     var ds = "";
     var isValidDs = function (s) {
@@ -6097,6 +6098,7 @@
         var next = el.nextElementSibling;
         if (next) {
           var val = next.textContent.trim().split("\n")[0].trim();
+          if (val && val.length > 0 && val.length < 40) _pageDataSpaceLabel = val;
           if (isValidDs(val)) { ds = val; return; }
         }
         // Look at parent's text minus the label
@@ -10067,7 +10069,7 @@
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
             + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
-            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (ds || "default") + "</div>"
+            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
             + prevResultNote;
         }).catch(function (err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
@@ -10174,7 +10176,7 @@
               + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
               + "<span style='font:600 14px -apple-system,sans-serif;color:#92400e;'>No results</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Query returned <b>0 rows</b>. Nothing to export.<br>"
-              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (ds || "default") + " | Time: " + elapsed + "s</span></div>";
+              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span></div>";
             downloadBtn.style.display = "none";
             return;
           }
@@ -10189,7 +10191,7 @@
             + "<div style='background:#eff6ff;border-radius:8px;padding:8px 10px;text-align:center;'><div style='font:700 18px -apple-system,sans-serif;color:#2563eb;'>" + res.columns.length + "</div><div style='font-size:10px;color:#64748b;'>Columns</div></div>"
             + "</div>"
             + "<div style='font-size:11px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
-            + "<b>Table:</b> " + tableName + " &nbsp;|&nbsp; <b>Space:</b> " + (ds || "default") + " &nbsp;|&nbsp; <b>Time:</b> " + elapsed + "s"
+            + "<b>Table:</b> " + tableName + " &nbsp;|&nbsp; <b>Space:</b> " + (_pageDataSpaceLabel || ds || "default") + " &nbsp;|&nbsp; <b>Time:</b> " + elapsed + "s"
             + "</div>"
             + "<div style='display:flex;align-items:center;gap:6px;margin-bottom:10px;'>"
             + "<label style='font:600 11px -apple-system,sans-serif;color:#475569;white-space:nowrap;'>Filename:</label>"
