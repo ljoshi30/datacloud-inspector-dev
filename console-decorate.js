@@ -9961,7 +9961,7 @@
     function showGuide() {
       card.style.display = "block";
       var maxRows = "500K";
-      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Fetches in batches (up to 50K rows per batch). Large exports may take a minute.</span>";
+      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Salesforce returns ~4,000 rows per request. Large exports fetch in multiple batches automatically.</span>";
       cardBody.innerHTML = ""
         + "<div style='font:600 14px -apple-system,sans-serif;margin-bottom:8px;'>Select your query</div>"
         + "<div style='color:#475569;font-size:12px;line-height:1.7;'>"
