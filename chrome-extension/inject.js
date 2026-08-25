@@ -6097,32 +6097,32 @@
         return;
       }
     });
-    // SF's Query Editor uses a Monaco-style code editor (div.view-lines > div.view-line)
-    // not a textarea. Read all visible lines from the active editor panel.
+    // SF Query Editor: scan for any element containing a full SQL query.
+    // Covers Monaco, CodeMirror, LWC shadow-DOM textareas, and view-lines.
     if (!result.full) {
       try {
-        var viewLines = document.querySelectorAll(".view-lines .view-line, .monaco-editor .view-line");
-        if (!viewLines.length) {
-          eachElement(document, function (scan) {
-            if (viewLines.length) return;
-            var cl = scan.className || "";
-            if (/view-lines/i.test(cl) && scan.children && scan.children.length > 2) {
-              viewLines = scan.querySelectorAll(".view-line") || scan.children;
-            }
-          });
-        }
-        if (viewLines && viewLines.length > 0) {
-          var lines = [];
-          for (var i = 0; i < viewLines.length; i++) {
-            var lineText = (viewLines[i].textContent || "").replace(/ /g, " ");
-            lines.push(lineText);
+        var foundSql = "";
+        eachElement(document, function (scan) {
+          if (foundSql) return;
+          if (tagOf(scan) === "textarea" && scan.value && scan.value.length > 20 && /\bSELECT\b/i.test(scan.value) && /\bFROM\b/i.test(scan.value)) {
+            foundSql = scan.value.trim();
+            return;
           }
-          var joined = lines.join("\n").trim();
-          if (joined.length > 8 && /select|from/i.test(joined)) result.full = joined;
-        }
+          if (scan.getAttribute && scan.getAttribute("contenteditable") === "true" && scan.innerText && scan.innerText.length > 20 && /\bSELECT\b/i.test(scan.innerText) && /\bFROM\b/i.test(scan.innerText)) {
+            foundSql = scan.innerText.trim();
+            return;
+          }
+          var cl = (scan.className && typeof scan.className === "string") ? scan.className : "";
+          if (/view-lines/i.test(cl) && scan.children && scan.children.length > 2) {
+            var txt = scan.textContent || "";
+            if (txt.length > 20 && /SELECT/i.test(txt) && /FROM/i.test(txt)) {
+              foundSql = txt.replace(/\u00a0/g, " ").trim();
+            }
+          }
+        });
+        if (foundSql) result.full = foundSql;
       } catch (e) {}
     }
-    // Last resort: get the selection text directly (works regardless of editor type)
     if (!result.full) {
       try {
         var sel2 = window.getSelection();
