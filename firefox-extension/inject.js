@@ -10261,10 +10261,46 @@
       var tableWrap = document.createElement("div");
       tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;min-height:0;";
 
+      // Sort state
+      var sortCol = null, sortAsc = true;
+      function renderTableBody(data, limit) {
+        var html = "";
+        var max = Math.min(data.length, limit);
+        for (var i = 0; i < max; i++) {
+          var r = data[i];
+          var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+          html += "<tr style='background:" + bg + ";'>";
+          cols.forEach(function (c) { html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; });
+          html += "</tr>";
+        }
+        return html;
+      }
+      function sortRows(colName) {
+        if (sortCol === colName) { sortAsc = !sortAsc; } else { sortCol = colName; sortAsc = true; }
+        rows.sort(function (a, b) {
+          var va = a[colName], vb = b[colName];
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          var na = Number(va), nb = Number(vb);
+          if (!isNaN(na) && !isNaN(nb)) return sortAsc ? na - nb : nb - na;
+          return sortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+        });
+        var tbody = document.getElementById("dc-qe-tbody");
+        if (tbody) tbody.innerHTML = renderTableBody(rows, showing);
+        // Update header arrows
+        var ths = tableWrap.querySelectorAll("th[data-col]");
+        ths.forEach(function (th) {
+          var arrow = th.querySelector(".dc-sort-arrow");
+          if (th.getAttribute("data-col") === colName) { arrow.textContent = sortAsc ? " ▲" : " ▼"; arrow.style.opacity = "1"; }
+          else { arrow.textContent = " ▲"; arrow.style.opacity = "0.3"; }
+        });
+      }
+
       // Render header + first 100 rows immediately, then load rest in chunks
       var CHUNK = 100;
       var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
-      cols.forEach(function (c) { table += "<th style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;'>" + esc(c) + "</th>"; });
+      cols.forEach(function (c) { table += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'> ▲</span></th>"; });
       table += "</tr></thead><tbody id='dc-qe-tbody'>";
       var firstBatch = Math.min(showing, CHUNK);
       for (var i = 0; i < firstBatch; i++) {
@@ -10315,6 +10351,12 @@
       modal.appendChild(box);
       modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
       document.body.appendChild(modal);
+      // Attach sort handlers to header cells
+      tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
+        th.onclick = function () { sortRows(th.getAttribute("data-col")); };
+        th.onmouseenter = function () { th.style.background = "#334155"; };
+        th.onmouseleave = function () { th.style.background = ""; };
+      });
     };
 
     // Drag handle on the button row
