@@ -9880,7 +9880,7 @@
 
     // Button row
     const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:6px;align-items:center;background:rgba(255,255,255,.95);padding:6px 12px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.15);backdrop-filter:blur(8px);";
+    btnRow.style.cssText = "display:none;gap:6px;align-items:center;background:rgba(255,255,255,.95);padding:6px 12px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.15);backdrop-filter:blur(8px);";
 
     const countBtn = document.createElement("button");
     countBtn.textContent = "# Count";
@@ -9914,11 +9914,11 @@
     // FAB icon — always visible, toggles the panel
     var fab = document.createElement("button");
     fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-size:18px;cursor:pointer;box-shadow:0 4px 16px rgba(109,40,217,.4);display:flex;align-items:center;justify-content:center;transition:transform .15s;";
-    fab.innerHTML = "<svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M12 5v14M5 12h14'/><circle cx='12' cy='12' r='10'/></svg>";
+    fab.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'><circle cx='12' cy='12' r='10' stroke='#fff' stroke-width='1.5'/><circle cx='12' cy='4' r='1.2' fill='#fff'/><circle cx='17.7' cy='6.3' r='1.2' fill='#fff'/><circle cx='20' cy='12' r='1.2' fill='#fff'/><circle cx='17.7' cy='17.7' r='1.2' fill='#fff'/><circle cx='12' cy='20' r='1.2' fill='#fff'/><circle cx='6.3' cy='17.7' r='1.2' fill='#fff'/><circle cx='4' cy='12' r='1.2' fill='#fff'/><circle cx='6.3' cy='6.3' r='1.2' fill='#fff'/><circle cx='12' cy='9.5' r='2.5' fill='#fff'/><path d='M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4' stroke='#fff' stroke-width='1.5' stroke-linecap='round'/></svg>";
     fab.title = "Data 360 Inspector — Query Editor";
     fab.onmouseenter = function () { fab.style.transform = "scale(1.1)"; };
     fab.onmouseleave = function () { fab.style.transform = "scale(1)"; };
-    var _panelOpen = true;
+    var _panelOpen = false;
     fab.onclick = function () {
       _panelOpen = !_panelOpen;
       btnRow.style.display = _panelOpen ? "flex" : "none";
