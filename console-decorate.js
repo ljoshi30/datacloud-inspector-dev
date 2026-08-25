@@ -9857,7 +9857,7 @@
     closeBtn.style.cssText = "position:absolute;top:8px;right:10px;border:none;background:none;font-size:18px;color:#94a3b8;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;";
     closeBtn.onmouseenter = () => { closeBtn.style.color = "#475569"; closeBtn.style.background = "#f1f5f9"; };
     closeBtn.onmouseleave = () => { closeBtn.style.color = "#94a3b8"; closeBtn.style.background = "none"; };
-    closeBtn.onclick = () => { card.style.display = "none"; downloadBtn.style.display = "none"; _lastResult = null; };
+    closeBtn.onclick = () => { card.style.display = "none"; downloadBtn.style.display = "none"; viewBtn.style.display = "none"; _lastResult = null; };
 
     const cardBody = document.createElement("div");
     card.appendChild(closeBtn);
@@ -10035,7 +10035,7 @@
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
           var cnt = res.rowCount || res.totalRows || (res.rows || []).length || 0;
-          _lastResult = null; downloadBtn.style.display = "none";
+          _lastResult = null; downloadBtn.style.display = "none"; viewBtn.style.display = "none";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
