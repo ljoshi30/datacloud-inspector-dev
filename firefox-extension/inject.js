@@ -9961,7 +9961,7 @@
     function showGuide() {
       card.style.display = "block";
       var maxRows = "500K";
-      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Fetches in batches (~4,000 rows per batch). Large exports may take 1-2 minutes.</span>";
+      var modeNote = extBridgePresent() ? "" : "<br><span style='color:#94a3b8;font-size:10px;'>Fetches in batches (up to 50K rows per batch). Large exports may take a minute.</span>";
       cardBody.innerHTML = ""
         + "<div style='font:600 14px -apple-system,sans-serif;margin-bottom:8px;'>Select your query</div>"
         + "<div style='color:#475569;font-size:12px;line-height:1.7;'>"
@@ -10156,7 +10156,7 @@
             : "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#10b981,#059669);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>";
           var countHtml = pctKnown
             ? "<b>" + fetched.toLocaleString() + "</b> of <b>" + total.toLocaleString() + "</b> rows fetched"
-            : "<b>" + fetched.toLocaleString() + "</b> rows fetched so far… <span style='color:#94a3b8;font-size:10px;'>(~4K per batch)</span>";
+            : "<b>" + fetched.toLocaleString() + "</b> rows fetched so far…";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:dcpulse 1s infinite;'></div>"
