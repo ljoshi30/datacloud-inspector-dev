@@ -9859,7 +9859,7 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:12px;left:50%;transform:translateX(-50%);z-index:2147483646;display:flex;flex-direction:column;align-items:center;gap:8px;";
+    wrap.style.cssText = "position:fixed;bottom:12px;left:12px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
@@ -9905,10 +9905,27 @@
     viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
+    var collapseBtn = document.createElement("button");
+    collapseBtn.textContent = "◀";
+    collapseBtn.title = "Collapse";
+    collapseBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:14px;color:#64748b;padding:4px;border-radius:50%;";
+    var _collapsed = false;
+    collapseBtn.onclick = function () {
+      _collapsed = !_collapsed;
+      countBtn.style.display = _collapsed ? "none" : "";
+      runBtn.style.display = _collapsed ? "none" : "";
+      if (!_collapsed && _lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
+      else if (_collapsed) { downloadBtn.style.display = "none"; viewBtn.style.display = "none"; }
+      card.style.display = _collapsed ? "none" : card.style.display;
+      collapseBtn.textContent = _collapsed ? "▶" : "◀";
+      collapseBtn.title = _collapsed ? "Expand" : "Collapse";
+    };
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
+    btnRow.appendChild(collapseBtn);
 
     var _lastResult = null;
     var _savedSelection = "";
@@ -10409,6 +10426,7 @@
 
       box.appendChild(hdr);
       box.appendChild(note);
+      if (emptyCount > 0) box.appendChild(emptyBanner);
       box.appendChild(tableWrap);
       box.appendChild(footer);
       modal.appendChild(box);
