@@ -10228,7 +10228,7 @@
       modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
 
       var box = document.createElement("div");
-      box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;";
+      box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;";
 
       var hdr = document.createElement("div");
       hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
@@ -10244,7 +10244,7 @@
       note.textContent = "Each query consumes Data Cloud credits. These results are from the last fetch — no additional API call was made to show this view.";
 
       var tableWrap = document.createElement("div");
-      tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;";
+      tableWrap.style.cssText = "flex:1;overflow:auto;padding:0;min-height:0;";
 
       var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;background:#1e293b;color:#fff;'>";
       cols.forEach(function (c) { table += "<th style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;'>" + esc(c) + "</th>"; });
