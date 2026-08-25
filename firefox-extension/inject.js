@@ -10327,7 +10327,7 @@
         var row = rows[i];
         var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
         table += "<tr style='background:" + bg + ";'>";
-        cols.forEach(function (c) { table += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(row[c]) + "</td>"; });
+        cols.forEach(function (c) { var val = row[c]; var raw = val == null ? "" : String(val); table += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + esc(val) + "</td>"; });
         table += "</tr>";
       }
       table += "</tbody></table>";
@@ -10345,7 +10345,7 @@
             var r = rows[j];
             var rbg = j % 2 === 0 ? "#fff" : "#f9fafb";
             html += "<tr style='background:" + rbg + ";'>";
-            cols.forEach(function (c) { html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; });
+            cols.forEach(function (c) { var val = r[c]; var raw = val == null ? "" : String(val); html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + esc(val) + "</td>"; });
             html += "</tr>";
           }
           tbody.insertAdjacentHTML("beforeend", html);
