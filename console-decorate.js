@@ -10289,6 +10289,7 @@
         }
         return html;
       }
+      var SORT_RENDER_MAX = 500;
       function sortRows(colName) {
         if (sortCol === colName) { sortAsc = !sortAsc; } else { sortCol = colName; sortAsc = true; }
         rows.sort(function (a, b) {
@@ -10301,13 +10302,13 @@
           return sortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
         });
         var tbody = document.getElementById("dc-qe-tbody");
-        if (tbody) tbody.innerHTML = renderTableBody(rows, showing);
+        if (tbody) tbody.innerHTML = renderTableBody(rows, SORT_RENDER_MAX);
         // Update header arrows
         var ths = tableWrap.querySelectorAll("th[data-col]");
         ths.forEach(function (th) {
           var arrow = th.querySelector(".dc-sort-arrow");
-          if (th.getAttribute("data-col") === colName) { arrow.textContent = sortAsc ? " ▲" : " ▼"; arrow.style.opacity = "1"; }
-          else { arrow.textContent = " ▲"; arrow.style.opacity = "0.3"; }
+          if (th.getAttribute("data-col") === colName) { arrow.textContent = sortAsc ? " ▲" : " ▼"; arrow.style.opacity = "1"; arrow.style.color = "#10b981"; }
+          else { arrow.textContent = ""; arrow.style.opacity = "0.3"; arrow.style.color = ""; }
         });
       }
 
