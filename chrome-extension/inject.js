@@ -10062,6 +10062,16 @@
 
     countBtn.onclick = () => {
       var highlighted = getHighlightedSql();
+      // DIAGNOSTIC PROBE — shows what text was captured. Remove after debugging.
+      card.style.display = "block";
+      var probeInfo = "Captured length: " + (highlighted ? highlighted.length : 0) + "<br>"
+        + "Has SELECT: " + (/\bSELECT\b/i.test(highlighted || "")) + "<br>"
+        + "Has FROM: " + (/\bFROM\b/i.test(highlighted || "")) + "<br>"
+        + "First 200 chars:<br><pre style='font-size:10px;max-height:120px;overflow:auto;background:#1e293b;color:#e2e8f0;padding:8px;border-radius:6px;white-space:pre-wrap;word-break:break-all;'>" + ((highlighted || "").substring(0, 200).replace(/</g, "&lt;")) + "</pre>"
+        + "<br>_savedSelection length: " + (_savedSelection ? _savedSelection.length : 0)
+        + "<br>_lastSqlEditor: " + (_lastSqlEditor ? tagOf(_lastSqlEditor) + " (value len: " + ((_lastSqlEditor.value || _lastSqlEditor.innerText || "").length) + ")" : "null");
+      cardBody.innerHTML = "<div style='font:600 12px monospace;color:#f59e0b;margin-bottom:6px;'>DEBUG PROBE</div>" + probeInfo;
+      // END PROBE — normal logic continues below
       var sql;
       if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
         sql = highlighted;
