@@ -9880,29 +9880,29 @@
 
     // Button row
     const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:none;gap:6px;align-items:center;background:rgba(255,255,255,.95);padding:6px 12px;border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.15);backdrop-filter:blur(8px);";
+    btnRow.style.cssText = "display:none;flex-direction:column;gap:6px;align-items:stretch;background:rgba(255,255,255,.95);padding:8px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.15);backdrop-filter:blur(8px);min-width:140px;";
 
     const countBtn = document.createElement("button");
     countBtn.textContent = "# Count";
-    countBtn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
+    countBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 2px 8px rgba(139,92,246,.3);transition:transform .1s;";
     countBtn.onmouseenter = () => { countBtn.style.transform = "scale(1.03)"; countBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     countBtn.onmouseleave = () => { countBtn.style.transform = "scale(1)"; countBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
     const runBtn = document.createElement("button");
     runBtn.textContent = "▶ Fetch & Export";
-    runBtn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.3);transition:transform .1s,box-shadow .1s;";
+    runBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 2px 8px rgba(16,185,129,.3);transition:transform .1s;";
     runBtn.onmouseenter = () => { runBtn.style.transform = "scale(1.03)"; runBtn.style.boxShadow = "0 4px 16px rgba(16,185,129,.4)"; };
     runBtn.onmouseleave = () => { runBtn.style.transform = "scale(1)"; runBtn.style.boxShadow = "0 3px 12px rgba(16,185,129,.3)"; };
 
     const downloadBtn = document.createElement("button");
     downloadBtn.textContent = "⬇ Download CSV";
-    downloadBtn.style.cssText = "display:none;border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);box-shadow:0 3px 12px rgba(37,99,235,.3);transition:transform .1s,box-shadow .1s;";
+    downloadBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);box-shadow:0 2px 8px rgba(37,99,235,.3);transition:transform .1s;";
     downloadBtn.onmouseenter = () => { downloadBtn.style.transform = "scale(1.03)"; downloadBtn.style.boxShadow = "0 4px 16px rgba(37,99,235,.4)"; };
     downloadBtn.onmouseleave = () => { downloadBtn.style.transform = "scale(1)"; downloadBtn.style.boxShadow = "0 3px 12px rgba(37,99,235,.3)"; };
 
     const viewBtn = document.createElement("button");
     viewBtn.textContent = "👁 View Results";
-    viewBtn.style.cssText = "display:none;border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
+    viewBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 2px 8px rgba(139,92,246,.3);transition:transform .1s;";
     viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
@@ -9922,7 +9922,7 @@
     fab.onclick = function () {
       _panelOpen = !_panelOpen;
       btnRow.style.display = _panelOpen ? "flex" : "none";
-      card.style.display = _panelOpen ? card.style.display : "none";
+      if (!_panelOpen) card.style.display = "none";
       fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
     };
 
