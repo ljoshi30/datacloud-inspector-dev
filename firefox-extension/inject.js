@@ -6060,29 +6060,27 @@
   function readQueryEditorSql() {
     var result = { full: "", selected: "" };
     try {
+      // Find ALL cm-editor instances, pick the visible one, read its state directly.
       eachElement(document, function (scan) {
         if (result.full) return;
-        if (!scan.getAttribute || scan.getAttribute("contenteditable") !== "true") return;
-        if (!scan.className || !/cm-content/.test(scan.className)) return;
+        var cl = (scan.className && typeof scan.className === "string") ? scan.className : "";
+        if (!/cm-editor/.test(cl)) return;
         try { var r = scan.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return; } catch (e) { return; }
-        var txt = (scan.innerText || "").trim();
-        if (txt.length < 10) return;
-        result.full = txt;
-        // Try to read CodeMirror selection from the editor instance
-        try {
-          var el = scan;
-          for (var i = 0; i < 6 && el; i++) {
-            if (el.cmView && el.cmView.view && el.cmView.view.state) {
-              var state = el.cmView.view.state;
-              var sel = state.selection && state.selection.main;
-              if (sel && sel.from !== sel.to) {
-                result.selected = state.sliceDoc(sel.from, sel.to).trim();
-              }
-              break;
-            }
-            el = el.parentElement;
+        // This is the visible CodeMirror editor. Read state from cmView.
+        if (scan.cmView && scan.cmView.view && scan.cmView.view.state) {
+          var state = scan.cmView.view.state;
+          result.full = state.doc.toString().trim();
+          var sel = state.selection && state.selection.main;
+          if (sel && sel.from !== sel.to) {
+            result.selected = state.sliceDoc(sel.from, sel.to).trim();
           }
-        } catch (e) {}
+          return;
+        }
+        // Fallback: read innerText from the cm-content child
+        var cmContent = scan.querySelector(".cm-content");
+        if (cmContent && cmContent.innerText && cmContent.innerText.trim().length > 10) {
+          result.full = cmContent.innerText.trim();
+        }
       });
     } catch (e) {}
     return result.full ? result : null;
