@@ -10352,7 +10352,7 @@
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
-      footer.innerHTML = "<span style='font-size:11px;color:#64748b;'>Showing " + showing.toLocaleString() + " of " + _lastResult.rowCount.toLocaleString() + " rows</span>";
+      footer.innerHTML = "<span style='font-size:11px;color:#64748b;'>Showing " + showing.toLocaleString() + " of " + _lastResult.rowCount.toLocaleString() + " rows &nbsp;|&nbsp; Click column headers to sort &nbsp;|&nbsp; Full data available in CSV download</span>";
       var dlBtn2 = document.createElement("button");
       dlBtn2.textContent = "⬇ Download Full CSV (" + _lastResult.rowCount.toLocaleString() + " rows)";
       dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
