@@ -9953,14 +9953,11 @@
     }
 
     function validateSql(raw) {
-      if (!raw || raw.trim().length < 6) return { ok: false, msg: "Selection is too short to be a valid query." };
+      if (!raw || raw.trim().length < 6) return { ok: false, msg: "Query is too short." };
       var stripped = raw.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
-      if (!stripped || stripped.length < 6) return { ok: false, msg: "Your selection contains only comments — select the SQL query itself." };
-      if (!/\bSELECT\b/i.test(stripped)) return { ok: false, msg: "No SELECT found. Make sure you highlight a complete query starting with SELECT." };
-      if (!/\bFROM\b/i.test(stripped)) return { ok: false, msg: "No FROM clause found. Highlight a complete query (SELECT ... FROM ...)." };
-      var selectCount = (stripped.match(/\bSELECT\b/gi) || []).length;
-      var fromCount = (stripped.match(/\bFROM\b/gi) || []).length;
-      if (selectCount > fromCount + 1) return { ok: false, msg: "Looks like multiple queries are selected. Highlight just one query." };
+      if (!stripped || stripped.length < 6) return { ok: false, msg: "Editor contains only comments — write a query." };
+      if (!/SELECT/i.test(stripped)) return { ok: false, msg: "No SELECT found in the active editor tab." };
+      if (!/FROM/i.test(stripped)) return { ok: false, msg: "No FROM found in the active editor tab." };
       return { ok: true };
     }
 
