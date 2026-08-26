@@ -10066,11 +10066,8 @@
         ds = dsCandidates[0] || "";
       }
       var cleanSql = sql.replace(/;\s*$/, "").trim();
-      // For simple queries (no GROUP BY/HAVING/UNION), use COUNT(*) for exact count.
-      // For complex queries, run the full query and count returned rows.
       var hasGroupBy = /\bGROUP\s+BY\b/i.test(cleanSql) || /\bHAVING\b/i.test(cleanSql) || /\bUNION\b/i.test(cleanSql);
       var countSql = hasGroupBy ? cleanSql : cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
-      var countLimit = hasGroupBy ? 500000 : 1;
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
@@ -10082,36 +10079,50 @@
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
           return;
         }
-        runRawSql(countSql, ds, countLimit).then(function (res) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
-          card.style.display = "block";
-          var cnt = 0; var approx = false;
-          if (hasGroupBy) {
-            cnt = (res.rows || []).length;
-            if (cnt >= countLimit - 1) approx = true;
-          } else {
+        if (hasGroupBy) {
+          // GROUP BY: paginate to get exact row count (same as Fetch but discard data)
+          var countTotal = 0;
+          var baseSqlForCount = cleanSql.replace(/\s+LIMIT\s+\d+\s*/gi, " ").replace(/\s+OFFSET\s+\d+\s*/gi, " ").trim();
+          function countBatch(offset) {
+            var batchSql = baseSqlForCount + " LIMIT 49999" + (offset > 0 ? " OFFSET " + offset : "");
+            runRawSql(batchSql, ds, 49999).then(function (res) {
+              var got = (res.rows || []).length;
+              countTotal += got;
+              countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + countTotal.toLocaleString() + "…";
+              if (got === 0 || countTotal >= 500000) { showCount(countTotal); }
+              else { countBatch(offset + got); }
+            }).catch(function (err) { showCount(countTotal || 0, err); });
+          }
+          countBatch(0);
+        } else {
+          // Simple query: SELECT COUNT(*) — exact in one call
+          runRawSql(countSql, ds, 1).then(function (res) {
+            var cnt = 0;
             var cRows = res.rows || [];
             if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
+            showCount(cnt);
+          }).catch(function (err) { showCount(0, err); });
+        }
+        function showCount(cnt, err) {
+          countBtn.disabled = false; countBtn.textContent = "# Count";
+          card.style.display = "block";
+          if (err) {
+            cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
+              + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
+            return;
           }
           var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
           if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
-          var countDisplay = (approx ? "≥ " : "") + Number(cnt).toLocaleString();
-          var approxNote = approx ? "<div style='font-size:10px;color:#f59e0b;margin-top:6px;'>GROUP BY queries: exact count requires Fetch & Export.</div>" : "";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
             + "<span style='font:600 14px -apple-system,sans-serif;'>Count result</span></div>"
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
-            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + countDisplay + "</div>"
+            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
             + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
-            + approxNote + prevResultNote;
-        }).catch(function (err) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
-          card.style.display = "block";
-          cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
-            + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
-        });
+            + prevResultNote;
+        }
       });
     };
 
