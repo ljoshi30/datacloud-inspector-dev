@@ -10380,7 +10380,7 @@
         }
         return html;
       }
-      var SORT_RENDER_MAX = 500;
+      var SORT_RENDER_MAX = 2000;
       function sortRows(colName) {
         if (sortCol === colName) { sortAsc = !sortAsc; } else { sortCol = colName; sortAsc = true; }
         rows.sort(function (a, b) {
@@ -10492,7 +10492,7 @@
     var _dragMoved = false;
     btnRow.style.cursor = "grab";
     btnRow.addEventListener("pointerdown", function (e) {
-      if (e.target === countBtn || e.target === runBtn || e.target === downloadBtn || e.target === viewBtn) return;
+      if (e.target === countBtn || e.target === runBtn || e.target === downloadBtn || e.target === viewBtn || e.target === infoBtn) return;
       e.preventDefault();
       btnRow.style.cursor = "grabbing";
       var startX = e.clientX, startY = e.clientY;
