@@ -9884,28 +9884,28 @@
 
     const countBtn = document.createElement("button");
     countBtn.textContent = "# Count";
-    countBtn.title = "Get the exact row count for the query in the active editor tab. No data is downloaded — only the total count is returned.";
+    countBtn.title = "Returns the total row count for your query. No data is downloaded.";
     countBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 2px 8px rgba(139,92,246,.3);transition:transform .1s;";
     countBtn.onmouseenter = () => { countBtn.style.transform = "scale(1.03)"; countBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     countBtn.onmouseleave = () => { countBtn.style.transform = "scale(1)"; countBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
 
     const runBtn = document.createElement("button");
     runBtn.textContent = "▶ Fetch & Export";
-    runBtn.title = "Fetch all rows and download as CSV. Reads the query from the active editor tab (or highlighted text). Uses Data Cloud credits.";
+    runBtn.title = "Fetch all rows and download as CSV. Highlight a query to run only that one. Uses Data Cloud credits.";
     runBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 2px 8px rgba(16,185,129,.3);transition:transform .1s;";
     runBtn.onmouseenter = () => { runBtn.style.transform = "scale(1.03)"; runBtn.style.boxShadow = "0 4px 16px rgba(16,185,129,.4)"; };
     runBtn.onmouseleave = () => { runBtn.style.transform = "scale(1)"; runBtn.style.boxShadow = "0 3px 12px rgba(16,185,129,.3)"; };
 
     const downloadBtn = document.createElement("button");
     downloadBtn.textContent = "⬇ Download CSV";
-    downloadBtn.title = "Download the last fetched results as a CSV file. No additional API call — uses data already in memory.";
+    downloadBtn.title = "Download results as CSV. No extra API call — uses already fetched data.";
     downloadBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);box-shadow:0 2px 8px rgba(37,99,235,.3);transition:transform .1s;";
     downloadBtn.onmouseenter = () => { downloadBtn.style.transform = "scale(1.03)"; downloadBtn.style.boxShadow = "0 4px 16px rgba(37,99,235,.4)"; };
     downloadBtn.onmouseleave = () => { downloadBtn.style.transform = "scale(1)"; downloadBtn.style.boxShadow = "0 3px 12px rgba(37,99,235,.3)"; };
 
     const viewBtn = document.createElement("button");
     viewBtn.textContent = "👁 View Results";
-    viewBtn.title = "View fetched data in a table (up to 2,000 rows). Click any cell to copy. No additional API call.";
+    viewBtn.title = "View results in a table (up to 2,000 rows). Click any cell to copy. No extra API call.";
     viewBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#6d28d9);box-shadow:0 2px 8px rgba(139,92,246,.3);transition:transform .1s;";
     viewBtn.onmouseenter = () => { viewBtn.style.transform = "scale(1.03)"; viewBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     viewBtn.onmouseleave = () => { viewBtn.style.transform = "scale(1)"; viewBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
@@ -10013,8 +10013,8 @@
       if (!raw || raw.trim().length < 6) return { ok: false, msg: "Query is too short." };
       var stripped = raw.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\s+/g, " ").trim();
       if (!stripped || stripped.length < 6) return { ok: false, msg: "Editor contains only comments — write a query." };
-      if (!/SELECT/i.test(stripped)) return { ok: false, msg: "No SELECT found in the active editor tab." };
-      if (!/FROM/i.test(stripped)) return { ok: false, msg: "No FROM found in the active editor tab." };
+      if (!/SELECT/i.test(stripped)) return { ok: false, msg: "No SELECT found. Write or highlight a query first." };
+      if (!/FROM/i.test(stripped)) return { ok: false, msg: "No FROM found. Make sure your query has a FROM clause." };
       return { ok: true };
     }
 
