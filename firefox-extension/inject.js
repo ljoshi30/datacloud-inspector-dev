@@ -10085,24 +10085,27 @@
         runRawSql(countSql, ds, countLimit).then(function (res) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
-          var cnt = 0;
+          var cnt = 0; var approx = false;
           if (hasGroupBy) {
             cnt = (res.rows || []).length;
+            if (cnt >= countLimit - 1) approx = true;
           } else {
             var cRows = res.rows || [];
             if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
           }
           var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
           if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
+          var countDisplay = (approx ? "≥ " : "") + Number(cnt).toLocaleString();
+          var approxNote = approx ? "<div style='font-size:10px;color:#f59e0b;margin-top:6px;'>GROUP BY queries: exact count requires Fetch & Export.</div>" : "";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
             + "<span style='font:600 14px -apple-system,sans-serif;'>Count result</span></div>"
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
-            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
+            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + countDisplay + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
             + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
-            + prevResultNote;
+            + approxNote + prevResultNote;
         }).catch(function (err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block";
