@@ -9860,7 +9860,7 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;";
+    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;max-height:calc(100vh - 32px);overflow:visible;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
@@ -10521,7 +10521,7 @@
       window.addEventListener("pointerup", up, true);
     }, true);
 
-    wrap.appendChild(card); wrap.appendChild(btnRow); wrap.appendChild(fab);
+    wrap.appendChild(fab); wrap.appendChild(btnRow); wrap.appendChild(card);
     document.body.appendChild(wrap);
   }
 
