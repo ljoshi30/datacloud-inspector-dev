@@ -5785,7 +5785,7 @@
         // SESSION EXPIRED: SF's /aura returns a login redirect / invalidSession marker
         // instead of JSON when the session dies. Detect and give a clear message.
         if (/aura:invalidSession|window\.location|\/secur\/login|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) {
-          reject(new Error("Your Salesforce session has expired — reload this page (log in again), then click the bookmark and retry.")); return;
+          reject(new Error("No active Salesforce session — click SF's Run Query button first to connect, or reload the page and log in again.")); return;
         }
         var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Query response was not JSON.")); return; }
         var a2 = json && json.actions && json.actions[0];
@@ -5793,7 +5793,7 @@
         if (a2.state !== "SUCCESS") {
           var em = "";
           try { em = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; } catch (e) { em = a2.state; }
-          if (/invalidSession|INVALID_SESSION|session expired/i.test(em)) { reject(new Error("Your Salesforce session has expired — reload this page and retry.")); return; }
+          if (/invalidSession|INVALID_SESSION|session expired/i.test(em)) { reject(new Error("No active Salesforce session — click SF's Run Query button first to connect, or reload the page.")); return; }
           reject(new Error("Query failed: " + em)); return;
         }
         var rv = a2.returnValue || [];
@@ -6259,15 +6259,15 @@
         var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
         fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
           .then(function (r) { return r.text(); }).then(function (txt) {
-            if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Your Salesforce session has expired — reload the page and retry.")); return; }
+            if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active Salesforce session — click SF's Run Query button first to connect, or reload the page.")); return; }
             var j; try { j = JSON.parse(txt); } catch (e) {
-              // Non-JSON response = session expired or SF returned an error page
+              // Non-JSON response = no active session or SF returned an error page
               var isQueryEditor = /DataQueryWorkspace/i.test(location.href);
               var sessionHint = isQueryEditor
                 ? "Click SF's \"Run Query\" (or \"Run Highlighted Query\") button first to establish a session, then click our Fetch & Export again."
                 : "Sort any column on the Data Explorer table to re-establish the session, then retry.";
-              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("Session expired — " + sessionHint)); return; }
-              reject(new Error("Session may have expired — " + sessionHint));
+              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("No active session — " + sessionHint)); return; }
+              reject(new Error("No active session — " + sessionHint));
               return;
             }
             var a = j && j.actions && j.actions[0];
