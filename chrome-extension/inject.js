@@ -10070,7 +10070,7 @@
         ds = dsCandidates[0] || "";
       }
       var cleanSql = sql.replace(/;\s*$/, "").trim();
-      var isAlreadyCount = /^\s*SELECT\s+COUNT\s*\(/i.test(cleanSql);
+      var isAlreadyCount = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+\w+\s*)?\s*FROM\b/i.test(cleanSql);
       var countSql = isAlreadyCount ? cleanSql : "SELECT COUNT(*) AS TotalRows FROM (" + cleanSql.replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").replace(/\bOFFSET\s+\d+/i, "").trim() + ") AS countWrapper";
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
