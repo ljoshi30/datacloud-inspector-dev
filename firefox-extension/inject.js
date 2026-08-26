@@ -10126,6 +10126,28 @@
     };
 
     runBtn.onclick = () => {
+      if (_lastResult && _lastResult.rowCount > 0) {
+        card.style.display = "block";
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
+          + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
+          + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Results already fetched</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>You already have <b>" + _lastResult.rowCount.toLocaleString() + " rows</b> from <b>" + _lastResult.tableName + "</b>. Re-fetching will use additional Data Cloud credits.</div>"
+          + "<div style='display:flex;gap:8px;'>"
+          + "<button id='dc-refetch-yes' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);'>Re-fetch (uses credits)</button>"
+          + "<button id='dc-refetch-no' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Use existing results</button>"
+          + "</div>";
+        document.getElementById("dc-refetch-no").onclick = function () {
+          downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block";
+          cardBody.innerHTML = ""
+            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
+            + "<div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div>"
+            + "<span style='font:600 14px -apple-system,sans-serif;'>Previous results ready</span></div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'><b>" + _lastResult.rowCount.toLocaleString() + " rows</b>, <b>" + _lastResult.cols + " columns</b> — use Download CSV or View Results.</div>";
+        };
+        document.getElementById("dc-refetch-yes").onclick = function () { _lastResult = null; runBtn.click(); };
+        return;
+      }
       var highlighted = getHighlightedSql();
       _savedSelection = "";
       var sql;
