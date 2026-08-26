@@ -9912,10 +9912,10 @@
 
     var infoBtn = document.createElement("button");
     infoBtn.textContent = "ℹ";
-    infoBtn.title = "Show/hide info";
-    infoBtn.style.cssText = "border:1px solid #e2e8f0;background:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:14px;color:#64748b;display:flex;align-items:center;justify-content:center;";
+    infoBtn.title = "Show/hide query info card";
+    infoBtn.style.cssText = "display:none;border:1px solid #e2e8f0;background:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:14px;color:#64748b;align-items:center;justify-content:center;";
     infoBtn.onclick = function () {
-      if (card.style.display === "none" && _lastResult) { card.style.display = "block"; }
+      if (card.style.display === "none") { card.style.display = "block"; }
       else { card.style.display = "none"; }
     };
 
@@ -10109,7 +10109,7 @@
         }
         function showCount(cnt, err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
-          card.style.display = "block";
+          card.style.display = "block"; infoBtn.style.display = "flex";
           if (err) {
             cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
               + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
@@ -10250,6 +10250,7 @@
             + "<div style='font-size:10px;color:#94a3b8;margin-top:6px;'>Each query uses Data Cloud credits. Results are stored until you run another query.</div>";
           downloadBtn.style.display = "inline-block";
           viewBtn.style.display = "inline-block";
+          infoBtn.style.display = "flex";
         }).catch(function (err) {
           runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
