@@ -10079,8 +10079,9 @@
       ensureQueryContext(function (ready) {
         if (!ready) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
-          cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Session needed</span></div>"
-            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
+          cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>One-time setup needed</span></div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>To connect, run any query using Salesforce\\'s <b>Run Query</b> button once. This establishes a session that our tool uses.</div>"
+            + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Steps:</b><br>1. Write or select a query in the editor<br>2. Click SF\\'s <b>Run Query</b> button<br>3. Once results appear, use our Count / Fetch buttons</div>";
           return;
         }
         runRawSql(countSql, ds, 1).then(function (res) {
@@ -10093,8 +10094,19 @@
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
           if (err) {
-            cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Count failed</div>"
-              + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</div>";
+            var errMsg = String(err && err.message || err).replace(/</g,"&lt;");
+            var hint = "";
+            if (/syntax error/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Tip:</b> Check your SQL syntax — make sure all parentheses are balanced, column/table names are correct, and keywords are spelled properly.</div>";
+            else if (/denied authorization/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Likely cause:</b> Wrong dataspace. Run a query in SF\\'s editor first so we can detect the correct dataspace.</div>";
+            else if (/session.*expired|INVALID_SESSION|invalidSession/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Fix:</b> Your session expired. Refresh the page, log back in, then retry.</div>";
+            else if (/timeout|bridge timeout/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Fix:</b> The request timed out. Check your connection and try again.</div>";
+            else if (/not connected|not ready/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Fix:</b> Run any query in SF\\'s editor first to establish a session, then try again.</div>";
+            else if (/object.*not found|relation.*does not exist|table.*not found/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Tip:</b> The table or object name may be wrong. Check spelling and ensure it exists in this dataspace.</div>";
+            else if (/column.*not found|field.*not found|unknown column/i.test(errMsg)) hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Tip:</b> A column name in your query doesn\\'t exist. Verify the field API names are correct.</div>";
+            else hint = "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Tip:</b> Verify your query runs correctly in SF\\'s editor first. If it works there but fails here, try refreshing the page.</div>";
+            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#dc2626;'></div><span style='font:600 13px -apple-system,sans-serif;color:#dc2626;'>Could not get count</span></div>"
+              + "<div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + errMsg + "</div>"
+              + hint;
             return;
           }
           var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
@@ -10171,11 +10183,11 @@
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
-            + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Session needed</span></div>"
+            + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>One-time setup needed</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
-            + "Click <b>Run Highlighted Query</b> in SF's editor first (to establish a session), then click our <b>Fetch & Export</b> again.</div>"
+            + "To connect, run any query using Salesforce\\'s <b>Run Query</b> button once. This establishes a session that our tool uses.</div>"
             + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'>"
-            + "The bookmarklet needs SF to fire one query so it can capture the session. After that, all exports work automatically.</div>";
+            + "<b>Steps:</b><br>1. Write or select a query in the editor<br>2. Click SF\\'s <b>Run Query</b> button<br>3. Once results appear, use our Count / Fetch buttons</div>";
           return;
         }
         var startTime = Date.now();
