@@ -9860,12 +9860,12 @@
 
     const wrap = document.createElement("div");
     wrap.id = "dc-bar";
-    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;max-height:calc(100vh - 32px);overflow:visible;";
+    wrap.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483646;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:8px;";
 
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
     card.id = "dc-qe-card";
-    card.style.cssText = "display:none;width:280px;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,.12);font:11px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:relative;resize:horizontal;min-width:200px;max-width:500px;";
+    card.style.cssText = "display:none;width:280px;max-height:min(260px, calc(100vh - 200px));overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,.12);font:11px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:absolute;bottom:100%;left:0;margin-bottom:8px;resize:horizontal;min-width:200px;max-width:500px;";
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "×";
