@@ -9884,7 +9884,7 @@
 
     const countBtn = document.createElement("button");
     countBtn.textContent = "# Count";
-    countBtn.title = "Returns the total row count for your query. No data is downloaded.";
+    countBtn.title = "Returns the exact row count for any query (SELECT, GROUP BY, JOIN). Single API call — no data downloaded.";
     countBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 2px 8px rgba(139,92,246,.3);transition:transform .1s;";
     countBtn.onmouseenter = () => { countBtn.style.transform = "scale(1.03)"; countBtn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     countBtn.onmouseleave = () => { countBtn.style.transform = "scale(1)"; countBtn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
@@ -10070,8 +10070,7 @@
         ds = dsCandidates[0] || "";
       }
       var cleanSql = sql.replace(/;\s*$/, "").trim();
-      var hasGroupBy = /\bGROUP\s+BY\b/i.test(cleanSql) || /\bHAVING\b/i.test(cleanSql) || /\bUNION\b/i.test(cleanSql);
-      var countSql = hasGroupBy ? cleanSql : cleanSql.replace(/^SELECT\s+[\s\S]*?\bFROM\b/i, "SELECT COUNT(*) FROM").replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").trim();
+      var countSql = "SELECT COUNT(*) AS TotalRows FROM (" + cleanSql.replace(/\bORDER\s+BY\b[\s\S]*?(?=\bLIMIT\b|$)/i, "").replace(/\bLIMIT\s+\d+/i, "").replace(/\bOFFSET\s+\d+/i, "").trim() + ")";
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
@@ -10083,30 +10082,12 @@
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Click SF\\'s <b>Run Query</b> button first (to establish a session), then click <b># Count</b> again.</div>";
           return;
         }
-        if (hasGroupBy) {
-          // GROUP BY: paginate to get exact row count (same as Fetch but discard data)
-          var countTotal = 0;
-          var baseSqlForCount = cleanSql.replace(/\s+LIMIT\s+\d+\s*/gi, " ").replace(/\s+OFFSET\s+\d+\s*/gi, " ").trim();
-          function countBatch(offset) {
-            var batchSql = baseSqlForCount + " LIMIT 49999" + (offset > 0 ? " OFFSET " + offset : "");
-            runRawSql(batchSql, ds, 49999).then(function (res) {
-              var got = (res.rows || []).length;
-              countTotal += got;
-              countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + countTotal.toLocaleString() + "…";
-              if (got === 0 || countTotal >= 500000) { showCount(countTotal); }
-              else { countBatch(offset + got); }
-            }).catch(function (err) { showCount(countTotal || 0, err); });
-          }
-          countBatch(0);
-        } else {
-          // Simple query: SELECT COUNT(*) — exact in one call
-          runRawSql(countSql, ds, 1).then(function (res) {
-            var cnt = 0;
-            var cRows = res.rows || [];
-            if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
-            showCount(cnt);
-          }).catch(function (err) { showCount(0, err); });
-        }
+        runRawSql(countSql, ds, 1).then(function (res) {
+          var cnt = 0;
+          var cRows = res.rows || [];
+          if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
+          showCount(cnt);
+        }).catch(function (err) { showCount(0, err); });
         function showCount(cnt, err) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
