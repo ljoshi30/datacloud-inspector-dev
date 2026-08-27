@@ -5402,7 +5402,15 @@
     if (/\/r\/(DataStream|DataLakeObjectInstance|Segment|DataQueryWorkspace)\/[^/]*\/?(list|related)/i.test(h)) return false;
     // Segment pages are NOT Data Explorer (even if they contain a record-list component)
     if (/segmentWizard|standard-Segment|\/r\/Segment\//i.test(h)) return false;
-    return !!findRecordListEl();
+    // DOM check: the record-list LWC component is definitive
+    if (findRecordListEl()) return true;
+    // URL fallback: Explorer uses c__objectApiName with no graph mode
+    if (/c__objectApiName=/i.test(h) && !/displayType=graph/i.test(h)) return true;
+    // URL fallback: Lightning /lightning/n/ or /lightning/r/ pages with CdpDataView in DOM
+    var cdpView = null;
+    eachElement(document, function (e) { if (!cdpView && /cdp-data-view|data-view-record/i.test(tagOf(e))) cdpView = e; });
+    if (cdpView) return true;
+    return false;
   }
 
   // ── Safety limits for the Data Explorer query/render (prevents browser freeze) ──
@@ -13524,20 +13532,27 @@ processJSON();
       updateBadge();
       watchNavigation();
     } else {
-      var toast = document.createElement("div");
-      toast.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:14px 20px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.4);max-width:320px;opacity:0;transition:opacity .3s;";
-      toast.innerHTML = "<div style='display:flex;align-items:flex-start;gap:10px;'>" +
-        "<span style='font-size:18px;line-height:1;'>&#9432;</span>" +
-        "<div><strong style='display:block;margin-bottom:4px;'>Data 360 Inspector</strong>" +
-        "<span style='color:#94a3b8;font-size:12px;line-height:1.5;'>This page is not supported. Works on:<br>" +
-        "• DLO → DMO Mapping canvas<br>" +
-        "• Data Stream / DLO / DMO detail<br>" +
-        "• Data Explorer<br>" +
-        "• Query Editor<br>" +
-        "• Segment builder</span></div></div>";
-      document.body.appendChild(toast);
-      requestAnimationFrame(function () { toast.style.opacity = "1"; });
-      setTimeout(function () { toast.style.opacity = "0"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 400); }, 6000);
+      // Retry after 2s — SF lazy-loads LWC components; Data Explorer may not be in DOM yet
+      setTimeout(function () {
+        if (document.getElementById("dc-bar")) return;
+        if ((typeof isDataExplorePage === "function" && isDataExplorePage())) {
+          ensureExploreLauncher(); watchNavigation(); return;
+        }
+        var toast = document.createElement("div");
+        toast.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:14px 20px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.4);max-width:320px;opacity:0;transition:opacity .3s;";
+        toast.innerHTML = "<div style='display:flex;align-items:flex-start;gap:10px;'>" +
+          "<span style='font-size:18px;line-height:1;'>&#9432;</span>" +
+          "<div><strong style='display:block;margin-bottom:4px;'>Data 360 Inspector</strong>" +
+          "<span style='color:#94a3b8;font-size:12px;line-height:1.5;'>This page is not supported. Works on:<br>" +
+          "• DLO → DMO Mapping canvas<br>" +
+          "• Data Stream / DLO / DMO detail<br>" +
+          "• Data Explorer<br>" +
+          "• Query Editor<br>" +
+          "• Segment builder</span></div></div>";
+        document.body.appendChild(toast);
+        requestAnimationFrame(function () { toast.style.opacity = "1"; });
+        setTimeout(function () { toast.style.opacity = "0"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 400); }, 6000);
+      }, 2000);
     }
   }
 })();
