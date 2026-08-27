@@ -6518,7 +6518,7 @@
   function loadColumnsData(objectName, columns, want) {
     // Single choke point: clamp to the endpoint's hard ceiling so no caller can ask for
     // an abusive/oversized row count (guards the browser + is polite to the server).
-    var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 100));
+    var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000));
     if (extBridgePresent()) return querySqlAllColumns(objectName, columns, null, n);
     if (n > 100) return querySqlAllColumns(objectName, columns, null, n);
     return queryAllColumns(objectName, columns, null, n);
@@ -7973,7 +7973,7 @@
     rowsWrap.innerHTML = "<span>Rows:</span>";
     const rowsInput = document.createElement("input");
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
-    rowsInput.value = String(rows.length || 100);
+    rowsInput.value = String(rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
     rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + "; Download CSV has all loaded rows.";
     rowsInput.addEventListener("input", function () {
@@ -7991,7 +7991,7 @@
     reloadBtn.textContent = "Reload";
     reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     reloadBtn.onclick = () => {
-      var raw = parseInt(rowsInput.value, 10) || 100;
+      var raw = parseInt(rowsInput.value, 10) || 1000;
       var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
       if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
@@ -9562,7 +9562,7 @@
           renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
           return;
         }
-        loadColumnsData(objectName, cols, 100).then((rows) => {
+        loadColumnsData(objectName, cols, 1000).then((rows) => {
           hideSpinner(); viewAllBtn.disabled = false;
           savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns.";
           showAllColumnsTable(objectName, cols, rows);
@@ -9605,7 +9605,7 @@
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
-        loadColumnsData(objectName, fns, 100).then((rows) => {
+        loadColumnsData(objectName, fns, 1000).then((rows) => {
           hideSpinner();
           savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded.";
           showAllColumnsTable(objectName, fns, rows);
@@ -9627,7 +9627,7 @@
       // Export via the SAME one-shot query as the full-table view, so ALL selected
       // columns land in the CSV with real data — not just SF's 10.
       ensureQueryContext(function () {
-        loadColumnsData(objectName, ordered, 100).then((rows) => {
+        loadColumnsData(objectName, ordered, 1000).then((rows) => {
           exportBtn.disabled = false;
           downloadRowsCsv(objectName, ordered, rows);
           savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns.";
