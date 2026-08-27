@@ -5404,12 +5404,6 @@
     if (/segmentWizard|standard-Segment|\/r\/Segment\//i.test(h)) return false;
     // DOM check: the record-list LWC component is definitive
     if (findRecordListEl()) return true;
-    // URL fallback: Explorer uses c__objectApiName with no graph mode
-    if (/c__objectApiName=/i.test(h) && !/displayType=graph/i.test(h)) return true;
-    // URL fallback: Lightning /lightning/n/ or /lightning/r/ pages with CdpDataView in DOM
-    var cdpView = null;
-    eachElement(document, function (e) { if (!cdpView && /cdp-data-view|data-view-record/i.test(tagOf(e))) cdpView = e; });
-    if (cdpView) return true;
     return false;
   }
 
