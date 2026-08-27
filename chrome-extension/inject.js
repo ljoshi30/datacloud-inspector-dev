@@ -8623,14 +8623,29 @@
   let exploreModalEl = null;
 
   function closeExploreModal() {
-    if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; }
+    if (exploreModalEl) { exploreModalEl.style.display = "none"; }
     const bar = document.getElementById("dc-bar");
     if (bar) bar.style.visibility = "";
     hideBackdrop();
   }
 
   function openExploreModal() {
-    if (exploreModalEl) { closeExploreModal(); return; }
+    if (exploreModalEl && exploreModalEl.isConnected) {
+      exploreModalEl.style.display = "flex";
+      const bar = document.getElementById("dc-bar");
+      if (bar) bar.style.visibility = "hidden";
+      // Re-register click-outside and Escape listeners
+      var barEl2 = document.getElementById("dc-bar");
+      var onOut2 = function (e) {
+        if (!exploreModalEl || exploreModalEl.style.display === "none") return;
+        var inModal = exploreModalEl.contains(e.target);
+        var inBar = barEl2 && barEl2.contains(e.target);
+        if (!inModal && !inBar) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
+      };
+      setTimeout(function () { document.addEventListener("pointerdown", onOut2, true); }, 100);
+      return;
+    }
+    if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; }
     // Guard first — never hide the bar unless we can actually open the modal
     const recList = findRecordListEl();
     if (!recList) return;
