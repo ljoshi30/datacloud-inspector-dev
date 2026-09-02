@@ -10487,8 +10487,8 @@
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
         if (cands.indexOf("default") < 0) cands.push("default");
-        var MAX_POLL = 3;   // brief retry for queries that finish in a few seconds; heavy
-                            // aggregations that don't finish fast are sent to Fetch instead.
+        var MAX_POLL = 1;   // one quick retry; if the COUNT(*) wrapper still isn't ready,
+                            // the caller falls back to Fetch-style row counting (which works).
         function tryDs(i, attempt) {
           attempt = attempt || 0;
           var space = cands[i] || "";
@@ -10622,7 +10622,23 @@
         }
         runQeCount(countSql, ds).then(function (pc) {
           showCount(pc.count, null, !pc.ok);
-        }).catch(function (err) { showCount(0, err); });
+        }).catch(function (err) {
+          // If the COUNT(*) wrapper is too heavy to finish (e.g. big GROUP BY), fall back
+          // to counting the SAME way Fetch & Export does — run the raw query and tally the
+          // rows it streams back. Fetch already works fast on these queries, so this does
+          // too. We discard the CSV blob and just use the row total.
+          if (err && (err.heavyCount || /still processing|too heavy/i.test(String(err && err.message)))) {
+            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+            exportPaginatedCsv(cleanSql, ds, function (fetched) {
+              if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + fetched.toLocaleString() + "…";
+            }, function () { return false; }).then(function (res) {
+              if (res.blobUrl) { try { URL.revokeObjectURL(res.blobUrl); } catch (e) {} }
+              showCount(res.totalRows, null, false);
+            }).catch(function (e2) { showCount(0, e2); });
+            return;
+          }
+          showCount(0, err);
+        });
         function showCount(cnt, err, couldntParse) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
