@@ -7954,6 +7954,13 @@
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     closeAllColumnsTable();
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    // ADAPTIVE RENDER CAP — the freeze on VDI/remote-desktop is driven by total DOM
+    // CELLS (every cell repaint travels over the remote link), not row count. So cap by
+    // cells/columns, not a flat row number: a 5-col table still shows 2000 rows, but a
+    // 117-col table shows ~500 (≈58k cells) so the tab stays responsive. ALL rows remain
+    // in `rows` for CSV export — nothing is lost, only the on-screen preview is bounded.
+    const DC_MAX_RENDER_CELLS = 60000;
+    const renderCap = Math.max(200, Math.min(DC_MAX_RENDER_ROWS, Math.floor(DC_MAX_RENDER_CELLS / Math.max(1, columns.length))));
     // Field label lookup from whatever we discovered (falls back to the api name).
     const meta = {};
     const pool = (exploreCache(objectName).allColumns) || [];
@@ -7978,8 +7985,8 @@
     } else if (serverTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
-    if (rows.length > DC_MAX_RENDER_ROWS) {
-      rowsSubInfo += " &bull; <span style='color:#64748b'>Table shows " + DC_MAX_RENDER_ROWS.toLocaleString() + ", Download CSV has all</span>";
+    if (rows.length > renderCap) {
+      rowsSubInfo += " &bull; <span style='color:#64748b'>Table shows " + renderCap.toLocaleString() + ", Download CSV has all</span>";
     }
     titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
       "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>";
@@ -7995,7 +8002,7 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Table shows first " + DC_MAX_RENDER_ROWS.toLocaleString() + "; Download CSV has all loaded rows.";
+    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Table shows first " + renderCap.toLocaleString() + " (wide tables show fewer for speed); Download CSV has all loaded rows.";
     rowsInput.addEventListener("input", function () {
       var v = parseInt(rowsInput.value, 10);
       if (!v || v < 1) {
@@ -8576,7 +8583,7 @@
         });
         // Re-render tbody using the SAME chunked renderer (defined below) so sorting a
         // wide table doesn't block the UI thread.
-        var renderRows2 = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
+        var renderRows2 = rows.length > renderCap ? rows.slice(0, renderCap) : rows;
         renderRowsChunked(renderRows2);
         // Update header sort indicators (arrow lives in a dedicated span so we never
         // corrupt the label/api-name markup via string replace).
@@ -8634,7 +8641,7 @@
       if (total > perChunk) showTableSpinner(panel, "Rendering " + total.toLocaleString() + " rows…");
       chunk();
     }
-    const renderRows = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
+    const renderRows = rows.length > renderCap ? rows.slice(0, renderCap) : rows;
     table.appendChild(tbody);
     scroll.appendChild(table);
     panel.appendChild(scroll);
@@ -8686,11 +8693,11 @@
     renderRowsChunked(renderRows);
     // Render-cap notice: if we only drew part of a large result, say so clearly and
     // point to CSV for the full set (nothing is lost — all rows are in the export).
-    if (rows.length > DC_MAX_RENDER_ROWS) {
+    if (rows.length > renderCap) {
       const sub = panel.querySelector(".dc-ac-sub");
-      if (sub) sub.innerHTML = "Showing first " + DC_MAX_RENDER_ROWS + " of " + rows.length +
+      if (sub) sub.innerHTML = "Showing first " + renderCap.toLocaleString() + " of " + rows.length.toLocaleString() +
         " rows &times; " + columns.length + " cols &bull; " +
-        "<span style='color:#b8860b'>table caps at " + DC_MAX_RENDER_ROWS + " for speed — use “Download CSV” for all " + rows.length + " rows.</span>";
+        "<span style='color:#b8860b'>table caps at " + renderCap.toLocaleString() + " (wide table — fewer rows shown for speed) — use “Download CSV” for all " + rows.length.toLocaleString() + " rows.</span>";
     } else if (wantRows && rows.length < wantRows) {
       // If the user asked for more rows than actually came back, say so honestly — this
       // just means the data set has fewer records than requested (not a silent cap).
