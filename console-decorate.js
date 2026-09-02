@@ -5903,8 +5903,10 @@
         var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
 
         function fetchBatch(offset) {
-          // Check cancel flags before each batch (Explorer Export All + Query Editor)
-          if ((typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) || window.__dcQueryExportCancelled) {
+          // Check cancel flags before each batch. Uses GLOBAL window flags so any caller
+          // (Explorer Export All, filtered Download CSV, Query Editor) can cancel — a
+          // function-local var here would be out of scope and silently never cancel.
+          if (window.__dcExportCancel || window.__dcQueryExportCancelled) {
             reject(new Error("Export cancelled by user"));
             return;
           }
@@ -5968,8 +5970,8 @@
         // 2) paginate remaining chunks
         var queryId = first.queryId;
         function nextPage() {
-          // FIX 4: Check cancel flag before each page (extension path)
-          if (typeof _exportAllCancelled !== "undefined" && _exportAllCancelled) {
+          // Check cancel flag before each page (extension path) — global flag, see above.
+          if (window.__dcExportCancel || window.__dcQueryExportCancelled) {
             reject(new Error("Export cancelled by user"));
             return;
           }
@@ -8195,30 +8197,47 @@
     csvBtn.textContent = csvLabel;
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
+      // If a batched download is already running, this click cancels it.
+      if (csvBtn.dataset.exporting === "true") {
+        window.__dcExportCancel = true;
+        csvBtn.textContent = "Cancelling…"; csvBtn.disabled = true;
+        return;
+      }
       var fc = _filterCount[objectName] || 0;
       var fs2 = _filterState[objectName];
-      // If filter active and more rows exist than loaded → paginate to get all
+      // If filter active and more rows exist than loaded → paginate to get all (cancellable)
       if (fs2 && fs2.active && fc > rows.length) {
-        if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nThis will fetch all matching rows in batches.")) return;
-        csvBtn.disabled = true; csvBtn.textContent = "Exporting…";
+        if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches — you can click Cancel while it runs.")) return;
+        window.__dcExportCancel = false;
+        csvBtn.dataset.exporting = "true"; csvBtn.disabled = false;
+        csvBtn.textContent = "✕ Cancel export";
+        csvBtn.style.background = "#dc2626"; csvBtn.style.borderColor = "#dc2626";
+        var restoreCsvUi = function () {
+          csvBtn.dataset.exporting = "false"; csvBtn.disabled = false;
+          csvBtn.textContent = csvLabel;
+          csvBtn.style.background = "#0d6efd"; csvBtn.style.borderColor = "#0d6efd";
+        };
         var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
         var exportCols = fullCols.map(sqlQuoteIdent).join(", ");
         var wherePart = fs2.where ? " WHERE " + fs2.where : "";
-        var allSql = "SELECT " + exportCols + " FROM " + objectName + wherePart;
+        var allSql = "SELECT " + exportCols + " FROM " + sqlQuoteIdent(objectName) + wherePart;
         exportPaginatedCsv(allSql, ds2, function (fetched) {
-          csvBtn.textContent = fetched.toLocaleString() + " rows…";
+          if (window.__dcExportCancel) return;
+          csvBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + " rows…)";
         }).then(function (res) {
-          csvBtn.disabled = false; csvBtn.textContent = csvLabel;
+          restoreCsvUi();
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
         }).catch(function (err) {
-          csvBtn.disabled = false; csvBtn.textContent = csvLabel;
-          alert("Export failed: " + (err && err.message || err));
+          var cancelled = window.__dcExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          restoreCsvUi();
+          window.__dcExportCancel = false;
+          if (!cancelled) alert("Export failed: " + (err && err.message || err));
         });
         return;
       }
-      // Otherwise download from memory (already have all data)
+      // Otherwise download from memory (already have all data) — instant, nothing to cancel.
       downloadRowsCsv(objectName, fullCols, rows);
     };
 
@@ -8231,62 +8250,58 @@
     var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
     exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
-    // FIX 4: Export All with cancel button
-    var _exportAllCancelled = false;
+    // Export All with a working cancel. Cancel uses a GLOBAL window flag that
+    // exportPaginatedCsv actually checks between batches (a function-local var was
+    // out of scope there, so cancel never fired — that bug is fixed here).
     exportAllBtn.onclick = function () {
-      // If export is in progress, cancel it
+      // If export is in progress, this click cancels it.
       if (exportAllBtn.dataset.exporting === "true") {
-        _exportAllCancelled = true;
-        exportAllBtn.textContent = "Cancelling...";
+        window.__dcExportCancel = true;
+        exportAllBtn.textContent = "Cancelling…";
         exportAllBtn.disabled = true;
         return;
       }
       var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
       var confirmMsg = btnTotal
-        ? "Are you sure you want to download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets."
-        : "Are you sure you want to download ALL records from this object? This may take a while.";
+        ? "Download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
+        : "Download ALL records from this object? This may take a while. You can click Cancel while it runs.";
       if (!confirm(confirmMsg)) return;
-      _exportAllCancelled = false;
+      window.__dcExportCancel = false;
       exportAllBtn.dataset.exporting = "true";
-      exportAllBtn.textContent = "Cancel Export";
-      exportAllBtn.disabled = false; // Keep enabled so user can click to cancel
+      exportAllBtn.textContent = "✕ Cancel Export";
+      exportAllBtn.style.background = "#dc2626"; exportAllBtn.style.borderColor = "#dc2626";
+      exportAllBtn.disabled = false; // stays clickable so the user can cancel
       var originalText = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+      var restoreBtnUi = function () {
+        exportAllBtn.dataset.exporting = "false";
+        exportAllBtn.disabled = false;
+        exportAllBtn.textContent = originalText;
+        exportAllBtn.style.background = "#059669"; exportAllBtn.style.borderColor = "#059669";
+      };
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       var allCols = fullCols.map(sqlQuoteIdent).join(", ");
-      var exportSql = "SELECT " + allCols + " FROM " + objectName;
+      var exportSql = "SELECT " + allCols + " FROM " + sqlQuoteIdent(objectName);
       ensureQueryContext(function (ready) {
         if (!ready) {
-          exportAllBtn.disabled = false;
-          exportAllBtn.dataset.exporting = "false";
-          exportAllBtn.textContent = originalText;
+          restoreBtnUi();
           alert("Session not ready — scroll the Data Explorer table first, then retry.");
           return;
         }
         exportPaginatedCsv(exportSql, ds, function (fetched, total) {
-          if (_exportAllCancelled) return; // Don't update UI if cancelled
-          exportAllBtn.textContent = "Cancel (" + fetched.toLocaleString() + " / " + (total > fetched ? total.toLocaleString() : "?") + ")";
+          if (window.__dcExportCancel) return; // don't overwrite the "Cancelling…" label
+          exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
         }).then(function (res) {
-          exportAllBtn.dataset.exporting = "false";
-          if (_exportAllCancelled) {
-            exportAllBtn.disabled = false;
-            exportAllBtn.textContent = originalText;
-            _exportAllCancelled = false;
-            return;
-          }
-          exportAllBtn.disabled = false;
+          restoreBtnUi();
           exportAllBtn.textContent = originalText + " (" + res.totalRows.toLocaleString() + " rows)";
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
         }).catch(function (err) {
-          exportAllBtn.dataset.exporting = "false";
-          exportAllBtn.disabled = false;
-          exportAllBtn.textContent = originalText;
-          if (_exportAllCancelled) {
-            _exportAllCancelled = false;
-            return;
-          }
+          var cancelled = window.__dcExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          restoreBtnUi();
+          window.__dcExportCancel = false;
+          if (cancelled) { exportAllBtn.textContent = originalText; return; }
           alert("Export failed: " + (err && err.message || err));
         });
       });
@@ -8357,9 +8372,32 @@
       // leading joiner label (AND/OR) for rows after the first
       const joinCell = document.createElement("span");
       joinCell.style.cssText = "min-width:38px;text-align:right;font-weight:600;color:#8a94a6;";
+      // Column search — for wide objects (100+ fields) typing filters the dropdown so
+      // you don't scroll a huge list. Matches on both the label and the API name.
+      const colSearch = document.createElement("input");
+      colSearch.type = "text";
+      colSearch.placeholder = "search…";
+      colSearch.title = "Type to filter the column list (matches label or API name)";
+      colSearch.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;width:90px;";
       const colSel = document.createElement("select");
       colSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;max-width:220px;";
-      fullColsForFilter.forEach(function (fn) { var o = document.createElement("option"); o.value = fn; o.textContent = (meta[fn] || fn); colSel.appendChild(o); });
+      function populateCols(query) {
+        var q = (query || "").trim().toLowerCase();
+        var keep = colSel.value;                    // preserve current selection if still visible
+        colSel.innerHTML = "";
+        var matched = 0;
+        fullColsForFilter.forEach(function (fn) {
+          var label = meta[fn] || fn;
+          if (q && label.toLowerCase().indexOf(q) < 0 && fn.toLowerCase().indexOf(q) < 0) return;
+          var o = document.createElement("option"); o.value = fn; o.textContent = label; colSel.appendChild(o);
+          matched++;
+        });
+        if (!matched) { var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "(no match)"; colSel.appendChild(o0); }
+        // keep prior selection when it still matches; else select first
+        if (keep && Array.prototype.some.call(colSel.options, function (o) { return o.value === keep; })) colSel.value = keep;
+      }
+      populateCols("");
+      colSearch.addEventListener("input", function () { populateCols(colSearch.value); });
       if (preset && preset.col) colSel.value = preset.col;   // restore saved column
       const opSel = document.createElement("select");
       opSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
@@ -8409,7 +8447,7 @@
         row.remove(); relabelJoiners();
         updateFilterBtnStates(); // FIX 3: Update button states after removing condition
       };
-      row.appendChild(joinCell); row.appendChild(colSel); row.appendChild(opSel); row.appendChild(valWrap); row.appendChild(rm);
+      row.appendChild(joinCell); row.appendChild(colSearch); row.appendChild(colSel); row.appendChild(opSel); row.appendChild(valWrap); row.appendChild(rm);
       cond.joinCell = joinCell;
       conditions.push(cond);
       condsWrap.appendChild(row);
@@ -8572,6 +8610,20 @@
       th.innerHTML = "<span class='dc-th-label'>" + esc(meta[fn] || fn) + "<span class='dc-sort-ind'></span></span>" +
         "<div style='font-weight:400;font-size:9px;color:#b9c6de;font-family:SF Mono,Consolas,monospace'>" + esc(fn) + "</div>";
       th.style.cssText = thStyle + "min-width:120px;max-width:600px;white-space:normal;cursor:pointer;";
+      // Header copy button — copies this column's API name. Appears on hover; click does
+      // NOT trigger the sort (stopPropagation). Keyed to the field api name `fn`.
+      const thCopy = document.createElement("button");
+      thCopy.textContent = "⧉";
+      thCopy.title = "Copy column API name: " + fn;
+      thCopy.style.cssText = "position:absolute;top:3px;right:9px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
+      thCopy.onclick = function (e) {
+        e.stopPropagation();
+        try { navigator.clipboard.writeText(fn); } catch (ex) {}
+        thCopy.textContent = "✓"; setTimeout(function () { thCopy.textContent = "⧉"; }, 700);
+      };
+      th.addEventListener("mouseenter", function () { thCopy.style.display = "block"; });
+      th.addEventListener("mouseleave", function () { thCopy.style.display = "none"; });
+      th.appendChild(thCopy);
       // ── Resizable header: drag the right edge to widen/narrow this column ──────
       const grip = document.createElement("div");
       grip.style.cssText = "position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
@@ -8768,15 +8820,24 @@
     const viewToolBtn = mkTool("View", "View full value");
     cellTools.appendChild(copyToolBtn); cellTools.appendChild(viewToolBtn);
     let _toolsTd = null;   // the <td> the tools currently sit in
-    const detachTools = () => { if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools); _toolsTd = null; };
+    // The tools live INSIDE the hovered <td>, but td has overflow:hidden (for ellipsis),
+    // which would CLIP the buttons. So while hovering we flip that td to overflow:visible
+    // and restore it on detach — the buttons then show above the cell content.
+    const detachTools = () => {
+      if (_toolsTd) { _toolsTd.style.overflow = "hidden"; }
+      if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
+      _toolsTd = null;
+    };
     const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
     // Delegation: a single mouseover on tbody positions the shared widget into the cell.
     tbody.addEventListener("mouseover", (e) => {
       const td = e.target && e.target.closest ? e.target.closest("td[data-c]") : null;
       if (!td) return;
       if (td === _toolsTd) return;                 // already showing here
+      if (_toolsTd) { _toolsTd.style.overflow = "hidden"; }   // restore previous cell
       if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
       _toolsTd = td;
+      td.style.overflow = "visible";               // let the tools show
       viewToolBtn.style.display = (td.textContent || "").length > 40 ? "" : "none";
       td.appendChild(cellTools);
     });
