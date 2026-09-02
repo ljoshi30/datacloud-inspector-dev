@@ -8624,7 +8624,11 @@
   }
 
   function openExploreModal() {
-    if (exploreModalEl && exploreModalEl.isConnected) {
+    // Detect the object CURRENTLY on the page (may have changed since last open).
+    const curRecList = findRecordListEl();
+    const curObject = curRecList ? (curRecList.objectName || "unknown") : null;
+    // Reuse the hidden modal ONLY if it's for the same object the page still shows.
+    if (exploreModalEl && exploreModalEl.isConnected && curObject && exploreModalEl.__dcObject === curObject) {
       exploreModalEl.style.display = "flex";
       const bar = document.getElementById("dc-bar");
       if (bar) bar.style.visibility = "hidden";
@@ -8639,9 +8643,10 @@
       setTimeout(function () { document.addEventListener("pointerdown", onOut2, true); }, 100);
       return;
     }
-    if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; }
+    // Object changed (or modal gone) — destroy the stale modal and its data table, rebuild fresh.
+    if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; try { closeAllColumnsTable(); } catch (e) {} }
     // Guard first — never hide the bar unless we can actually open the modal
-    const recList = findRecordListEl();
+    const recList = curRecList;
     if (!recList) return;
     const bar = document.getElementById("dc-bar");
     if (bar) bar.style.visibility = "hidden";
@@ -8665,6 +8670,7 @@
     const modal = document.createElement("div");
     exploreModalEl = modal;
     modal.id = "dc-explore-modal";
+    modal.__dcObject = objectName;   // remember which object this modal is for
     modal.style.cssText = MODAL_CSS;
     document.body.appendChild(modal);
     // No backdrop — user needs to see the SF Data Explorer page behind the modal
