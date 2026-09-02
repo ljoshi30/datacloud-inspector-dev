@@ -6264,9 +6264,25 @@
         var cols = (metadata || []).map(function (m) { return m && m.name; });
         var raw = [];   // positional row values, independent of metadata names
         var rows = (data || []).map(function (arr) {
-          if (!Array.isArray(arr)) return null;
-          raw.push(arr);
-          var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
+          if (Array.isArray(arr)) {
+            // Positional array row: [v0, v1, ...] keyed by metadata column order.
+            raw.push(arr);
+            var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
+          }
+          if (arr && typeof arr === "object") {
+            // Object row: { colName: value }. Some responses (and COUNT) return this
+            // shape. Build the positional array from metadata order (falling back to the
+            // object's own value order when metadata names are missing/blank) so rawRows
+            // still has the value — this is what makes COUNT reliable across shapes.
+            var vals = [];
+            if (cols.length) { for (var k = 0; k < cols.length; k++) vals.push(arr[cols[k]]); }
+            var objVals = Object.keys(arr).map(function (kk) { return arr[kk]; });
+            // If metadata-keyed extraction found nothing usable, use the object's values.
+            var hasAny = vals.some(function (v) { return v != null && v !== ""; });
+            raw.push(hasAny ? vals : objVals);
+            return arr;
+          }
+          return null;
         }).filter(Boolean);
         // rawRows lets callers (e.g. COUNT) read a value positionally even when the
         // server omits/blanks the metadata column name — which otherwise mis-keys the
