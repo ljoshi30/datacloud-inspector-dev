@@ -5398,12 +5398,19 @@
   function isDataExplorePage() {
     // URL hint: Data Explorer lives under specific paths. Exclude known non-Explorer pages.
     var h = location.href;
-    // List views (no record ID in /r/DataStream/ etc.) are NOT Data Explorer
+    // Object-level LIST/HOME pages (/o/<Obj>/list|home) are NOT Data Explorer — they can
+    // render the same record-list component but are just record grids.
+    if (/\/o\/[^/]+\/(list|home)/i.test(h)) return false;
+    // Record LIST / related views (no single record context) are NOT Data Explorer
     if (/\/r\/(DataStream|DataLakeObjectInstance|Segment|DataQueryWorkspace)\/?$/i.test(h)) return false;
     if (/\/r\/(DataStream|DataLakeObjectInstance|Segment|DataQueryWorkspace)\/[^/]*\/?(list|related)/i.test(h)) return false;
-    // Segment pages are NOT Data Explorer (even if they contain a record-list component)
+    // Segment / Query Editor / Data Model pages are NOT Data Explorer (even if they
+    // happen to contain a record-list component).
     if (/segmentWizard|standard-Segment|\/r\/Segment\//i.test(h)) return false;
-    // DOM check: the record-list LWC component is definitive
+    if (/DataQueryWorkspace|queryEditor|query-editor/i.test(h)) return false;
+    if (/standard-DataModel/i.test(h)) return false;
+    if (/marketSegmentActivation|\/r\/MarketSegmentActivation\//i.test(h)) return false;
+    // DOM check: the record-list LWC component is definitive for a real Explorer page
     if (findRecordListEl()) return true;
     return false;
   }
