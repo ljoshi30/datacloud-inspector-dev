@@ -5391,6 +5391,7 @@
     if (_exploreCache[objectName]) {
       _exploreCache[objectName].allColumns  = null;
       _exploreCache[objectName].lastApplied = null;
+      _exploreCache[objectName].lastData    = null;
     }
   }
 
@@ -6516,6 +6517,28 @@
     if (extBridgePresent()) return querySqlAllColumns(objectName, columns, null, n);
     if (n > 100) return querySqlAllColumns(objectName, columns, null, n);
     return queryAllColumns(objectName, columns, null, n);
+  }
+
+  // Credit-saving cache around loadColumnsData: the last successful result is kept in
+  // memory keyed by object + exact column set + row count. Re-viewing the SAME selection
+  // (e.g. after accidentally closing the results table) returns the cached rows WITHOUT
+  // another Data Cloud query. `force:true` (the Refresh button) bypasses the cache.
+  // Returns a Promise<rows>; rows carry a non-enumerable __fromCache flag when reused.
+  function _dataCacheKey(columns, want) {
+    return String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
+  }
+  function loadColumnsDataCached(objectName, columns, want, force) {
+    var cache = exploreCache(objectName);
+    var key = _dataCacheKey(columns, want);
+    if (!force && cache.lastData && cache.lastData.key === key && cache.lastData.rows) {
+      var cached = cache.lastData.rows;
+      try { Object.defineProperty(cached, "__fromCache", { value: true, configurable: true }); } catch (e) {}
+      return Promise.resolve(cached);
+    }
+    return loadColumnsData(objectName, columns, want).then(function (rows) {
+      cache.lastData = { key: key, rows: rows, cols: columns.slice(), want: want };
+      return rows;
+    });
   }
 
   // ── localStorage helpers ──────────────────────────────────────────────────
@@ -8029,7 +8052,7 @@
           else { fail(new Error("Session not ready — try scrolling the table, then retry.")); }
           return;
         }
-        loadColumnsData(objectName, columns, want).then((newRows) => {
+        loadColumnsDataCached(objectName, columns, want, false).then((newRows) => {
           showAllColumnsTable(objectName, columns, newRows, want);
         }).catch(fail);
       });
@@ -8098,7 +8121,30 @@
       });
     };
 
-    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
+    // "Refresh" — force a fresh query, bypassing the in-memory cache. Use this when
+    // the data may have changed in Salesforce; normal re-views serve cached rows free.
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "↻ Refresh";
+    refreshBtn.title = "Fetch the latest data from Salesforce (uses a query / Data Cloud credits). Re-opening this table otherwise reuses cached rows for free.";
+    refreshBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    refreshBtn.onclick = () => {
+      var raw = parseInt(rowsInput.value, 10) || 1000;
+      var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
+      refreshBtn.disabled = true; refreshBtn.textContent = "Refreshing…";
+      showTableSpinner(panel, "Refreshing from Salesforce…");
+      const fail = (err) => {
+        refreshBtn.disabled = false; refreshBtn.textContent = "↻ Refresh";
+        hideTableSpinner(panel);
+        const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
+      };
+      ensureQueryContext(function (ready) {
+        if (!ready) { refreshBtn.disabled = false; refreshBtn.textContent = "↻ Refresh"; hideTableSpinner(panel); fail(new Error("Session not ready — scroll the table once, then retry.")); return; }
+        loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
+          showAllColumnsTable(objectName, columns, newRows, want);
+        }).catch(fail);
+      });
+    };
+    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(refreshBtn); rowsWrap.appendChild(countBtn);
     hdr.appendChild(rowsWrap);
 
     // "Hide empty columns" — data is often sparse (many all-null columns), so this
@@ -9738,9 +9784,9 @@
           renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
           return;
         }
-        loadColumnsData(objectName, cols, 1000).then((rows) => {
+        loadColumnsDataCached(objectName, cols, 1000, false).then((rows) => {
           hideSpinner(); viewAllBtn.disabled = false;
-          savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns.";
+          savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns." + (rows.__fromCache ? " (from cache — no query used)" : "");
           showAllColumnsTable(objectName, cols, rows);
         }).catch((err) => {
           hideSpinner(); viewAllBtn.disabled = false;
@@ -9781,9 +9827,9 @@
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
-        loadColumnsData(objectName, fns, 1000).then((rows) => {
+        loadColumnsDataCached(objectName, fns, 1000, false).then((rows) => {
           hideSpinner();
-          savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded.";
+          savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded." + (rows.__fromCache ? " (from cache — no query used)" : "");
           showAllColumnsTable(objectName, fns, rows);
         }).catch((err) => { hideSpinner(); savedNote.textContent = String(err && err.message || err); });
       });
@@ -9803,10 +9849,10 @@
       // Export via the SAME one-shot query as the full-table view, so ALL selected
       // columns land in the CSV with real data — not just SF's 10.
       ensureQueryContext(function () {
-        loadColumnsData(objectName, ordered, 1000).then((rows) => {
+        loadColumnsDataCached(objectName, ordered, 1000, false).then((rows) => {
           exportBtn.disabled = false;
           downloadRowsCsv(objectName, ordered, rows);
-          savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns.";
+          savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns." + (rows.__fromCache ? " (from cache)" : "");
         }).catch((err) => {
           // Fallback to SF's ≤10-column data if the query path isn't ready.
           exportBtn.disabled = false;
