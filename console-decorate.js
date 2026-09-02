@@ -10334,6 +10334,13 @@
       return s.replace(/;\s*$/, "").trim();
     }
 
+    // Canonical key for comparing two queries for equality (ignores case, all whitespace,
+    // and a trailing semicolon). Used to decide if a re-run is the SAME query as the
+    // cached result → only then do we warn about re-fetching/credits.
+    function normSqlKey(raw) {
+      return String(raw || "").replace(/\s+/g, " ").replace(/;\s*$/, "").trim().toLowerCase();
+    }
+
     function extractTableName(sql) {
       var m = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
       if (!m) return "query-results";
@@ -10429,8 +10436,14 @@
         ds = dsCandidates[0] || "";
       }
       var cleanSql = sql.replace(/;\s*$/, "").trim();
-      var isAlreadyCount = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+\w+\s*)?\s*FROM\b/i.test(cleanSql);
-      var innerSql = cleanSql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim().replace(/\bORDER\s+BY\b[^()]*$/i, "").trim();
+      // A query that ALREADY returns a single COUNT (no other output columns) is run as-is.
+      // Match "SELECT COUNT(...) [AS x] FROM" with nothing between the COUNT and FROM.
+      var isAlreadyCount = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(cleanSql);
+      // Otherwise wrap it: SELECT COUNT(*) FROM (<query>) AS countWrapper. We only strip a
+      // TRAILING LIMIT/OFFSET (so we count the FULL result, not a capped page). We do NOT
+      // touch ORDER BY — leaving it inside the subquery is valid and avoids fragile regex
+      // that broke on ORDER BY expressions containing parentheses (e.g. ORDER BY COUNT(x)).
+      var innerSql = cleanSql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
       var countSql = isAlreadyCount ? cleanSql : "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper";
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
@@ -10485,13 +10498,25 @@
     };
 
     runBtn.onclick = () => {
-      if (_lastResult && _lastResult.rowCount > 0) {
+      // Read the CURRENT query first so the "already fetched" guard can compare it to the
+      // stored one — only warn when the SAME query is being re-run (re-fetching identical
+      // data wastes credits). A DIFFERENT query should run normally, no prompt.
+      var highlighted = getHighlightedSql();
+      _savedSelection = "";
+      var sql;
+      if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
+        sql = normalizeSql(highlighted);
+      } else {
+        showGuide();
+        return;
+      }
+      if (_lastResult && _lastResult.rowCount > 0 && _lastResult.sql && sql && normSqlKey(_lastResult.sql) === normSqlKey(sql)) {
         card.style.display = "block";
         cardBody.innerHTML = ""
           + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
           + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
           + "<span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Results already fetched</span></div>"
-          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>You already have <b>" + _lastResult.rowCount.toLocaleString() + " rows</b> from <b>" + _lastResult.tableName + "</b>. Re-fetching will use additional Data Cloud credits.</div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>You already ran <b>this exact query</b> and have <b>" + _lastResult.rowCount.toLocaleString() + " rows</b> from <b>" + _lastResult.tableName + "</b>. Re-fetching will use additional Data Cloud credits.</div>"
           + "<div style='display:flex;gap:8px;'>"
           + "<button id='dc-refetch-yes' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);'>Re-fetch (uses credits)</button>"
           + "<button id='dc-refetch-no' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Use existing results</button>"
@@ -10505,15 +10530,6 @@
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'><b>" + _lastResult.rowCount.toLocaleString() + " rows</b>, <b>" + _lastResult.cols + " columns</b> — use Download CSV or View Results.</div>";
         };
         document.getElementById("dc-refetch-yes").onclick = function () { _lastResult = null; runBtn.click(); };
-        return;
-      }
-      var highlighted = getHighlightedSql();
-      _savedSelection = "";
-      var sql;
-      if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
-        sql = normalizeSql(highlighted);
-      } else {
-        showGuide();
         return;
       }
       var check = validateSql(sql);
@@ -10607,7 +10623,7 @@
             downloadBtn.style.display = "none";
             return;
           }
-          _lastResult = { blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rowCount: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName, data: res.rowData || [] };
+          _lastResult = { blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rowCount: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName, data: res.rowData || [], sql: sql };
           var defaultFilename = tableName + "_" + todayStr() + ".csv";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
