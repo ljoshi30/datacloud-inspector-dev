@@ -8593,77 +8593,113 @@
     // column in data-c; ONE delegated set of handlers on the scroll container provides
     // hover-copy/view. Memory drops from O(cells×widgets) to O(cells) plain <td>.
     const colByIndex = columns;  // positional map: td index → field name
+    // FIXED row height is REQUIRED for virtual scrolling: the window math converts
+    // scrollTop → row index via ROW_H, so every row must be exactly that tall. We force
+    // it here (height + overflow hidden + nowrap) so a long value can never wrap to two
+    // lines and desync the scroll position from the rendered rows.
+    const TD_CSS = "box-sizing:border-box;height:31px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     function buildRowEl(r, ri) {
       const tr = document.createElement("tr");
-      tr.style.background = ri % 2 ? "#f7f9fc" : "#fff";
+      tr.style.cssText = "height:31px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
       for (let ci = 0; ci < columns.length; ci++) {
         const fn = columns[ci];
         const td = document.createElement("td");
         const val = fmt(r[fn]);
-        td.style.cssText = "position:relative;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        td.style.cssText = TD_CSS;
         td.textContent = val;
         if (val !== "") { td.title = val; td.setAttribute("data-c", ci); }
         tr.appendChild(td);
       }
       return tr;
     }
-    // SCROLL-DRIVEN (lazy) RENDER — ALL columns always show; rows are appended in batches
-    // as the user scrolls near the bottom. This keeps the first paint fast and the live
-    // DOM small (critical on VDI/remote-desktop where every painted cell crosses the
-    // network), while still letting the user reach every loaded row by scrolling. Batch
-    // size scales DOWN with column count so a wide table adds fewer rows per step.
-    const CELL_BUDGET = 12000;   // ~cells appended per batch; scaled by column count
-    const rowsPerBatch = Math.max(20, Math.floor(CELL_BUDGET / Math.max(1, columns.length)));
-    let _renderData = rows;      // full set currently being shown (updated on sort)
-    let _renderIdx = 0;          // next row index not yet in the DOM
-    let _appending = false;      // guard against re-entrant appends
-    function appendNextBatch() {
-      if (_appending || !panel.isConnected) return;
-      if (_renderIdx >= _renderData.length) return;
-      _appending = true;
-      const end = Math.min(_renderIdx + rowsPerBatch, _renderData.length);
-      const frag = document.createDocumentFragment();
-      for (let i = _renderIdx; i < end; i++) frag.appendChild(buildRowEl(_renderData[i], i));
-      tbody.appendChild(frag);
-      _renderIdx = end;
-      _appending = false;
-      updateScrollHint();
+    // VIRTUAL (windowed) RENDER — the DOM holds ONLY the rows near the viewport, no matter
+    // how many rows are loaded. Scrolling up OR down keeps the live DOM at ~one screenful,
+    // so a wide table (117 cols) never accumulates 100k+ cells and never freezes — on local
+    // or VDI/remote-desktop. Zero API calls on any scroll (all data is already in memory).
+    // Space complexity: O(visibleRows × cols) instead of O(totalRows × cols).
+    let _winData = rows;          // current data set (swapped on sort)
+    let ROW_H = 31;               // row height px — measured & corrected after first paint
+    const BUFFER = 12;            // extra rows kept above/below the viewport (smooth scroll)
+    let _win = { start: -1, end: -1 };
+    let _measured = false;        // row-height measured?
+    let _pinned = false;          // column widths pinned + table-layout:fixed?
+    // Spacer rows reserve the scroll height of the un-rendered rows above/below the window,
+    // so the scrollbar length/position stays correct without those rows existing in the DOM.
+    function mkSpacer() {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = columns.length; td.style.cssText = "padding:0;border:none;";
+      tr.appendChild(td);
+      return { tr: tr, td: td };
     }
-    function updateScrollHint() {
+    const topSp = mkSpacer(), botSp = mkSpacer();
+    function updateScrollHint(total) {
       const hintEl = panel.querySelector(".dc-scroll-hint");
       if (!hintEl) return;
-      if (_renderIdx >= _renderData.length) {
-        hintEl.textContent = "All " + _renderData.length.toLocaleString() + " loaded rows shown" + (_renderData.length < rows.length ? "" : "") + ".";
-      } else {
-        hintEl.textContent = "Showing " + _renderIdx.toLocaleString() + " of " + _renderData.length.toLocaleString() + " rows — scroll down to load more.";
+      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total (Download CSV for all)" : "";
+      hintEl.textContent = total.toLocaleString() + " rows loaded" + more + " · scroll freely — all rows & columns available, no extra queries.";
+    }
+    function renderWindow(force) {
+      if (!panel.isConnected) return;
+      const total = _winData.length;
+      const vpH = scroll.clientHeight || 420;
+      const first = Math.max(0, Math.floor(scroll.scrollTop / ROW_H) - BUFFER);
+      const count = Math.ceil(vpH / ROW_H) + BUFFER * 2;
+      const last = Math.min(total, first + count);
+      if (!force && first === _win.start && last === _win.end) return;   // window unchanged
+      if (typeof detachTools === "function") detachTools();
+      tbody.innerHTML = "";
+      topSp.td.style.height = (first * ROW_H) + "px";
+      botSp.td.style.height = (Math.max(0, total - last) * ROW_H) + "px";
+      tbody.appendChild(topSp.tr);
+      const frag = document.createDocumentFragment();
+      for (let i = first; i < last; i++) frag.appendChild(buildRowEl(_winData[i], i));
+      tbody.appendChild(frag);
+      tbody.appendChild(botSp.tr);
+      _win.start = first; _win.end = last;
+      // One-time: pin column widths (measured from the natural first paint) and switch to
+      // table-layout:fixed so columns DON'T jitter as different rows swap into the window.
+      if (!_pinned && last > first) {
+        _pinned = true;
+        const ths = htr.querySelectorAll("th");
+        ths.forEach(function (thEl) {
+          let w = Math.round(thEl.getBoundingClientRect().width);
+          if (!w || w < 60) w = 140;   // fallback so table-layout:fixed can't collapse a column
+          thEl.style.width = w + "px"; thEl.style.minWidth = w + "px";
+        });
+        table.style.tableLayout = "fixed";
       }
+      // One-time: correct the row-height estimate from a real rendered row, then re-window
+      // so spacer heights (and thus the scrollbar) are accurate.
+      if (!_measured && last > first) {
+        const sampleRow = topSp.tr.nextSibling;
+        if (sampleRow && sampleRow.offsetHeight) {
+          _measured = true;
+          const h = sampleRow.offsetHeight;
+          if (Math.abs(h - ROW_H) > 2) { ROW_H = h; _win.start = _win.end = -1; renderWindow(true); return; }
+        }
+      }
+      updateScrollHint(total);
     }
     // (Re)start rendering a data set from the top — used on first render and after sort.
     function renderRowsChunked(dataRows) {
-      if (typeof detachTools === "function") detachTools();   // widget lives in a cell → drop ref before clearing
-      tbody.innerHTML = "";
-      _renderData = dataRows;
-      _renderIdx = 0;
-      appendNextBatch();               // first batch paints immediately
-      // Keep filling until the table is at least as tall as the viewport, so short
-      // batches on very wide tables still fill the screen without a scroll gesture.
-      requestAnimationFrame(function fill() {
-        if (!panel.isConnected) return;
-        if (_renderIdx < _renderData.length && scroll.scrollHeight <= scroll.clientHeight + 40) {
-          appendNextBatch();
-          requestAnimationFrame(fill);
-        }
-      });
+      if (typeof detachTools === "function") detachTools();
+      _winData = dataRows;
+      _win.start = _win.end = -1;
+      scroll.scrollTop = 0;
+      renderWindow(true);
     }
-    // Lazy-load trigger: when scrolled within 300px of the bottom, append the next batch.
+    // Throttle scroll → one render per animation frame (cheap, no backlog).
+    let _scrollRAF = 0;
     scroll.addEventListener("scroll", function () {
-      if (scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 300) appendNextBatch();
+      if (_scrollRAF) return;
+      _scrollRAF = requestAnimationFrame(function () { _scrollRAF = 0; renderWindow(false); });
     });
-    const renderRows = rows;         // full loaded set — scroll reveals all of it
+    const renderRows = rows;         // full loaded set — windowing reveals all of it
     table.appendChild(tbody);
     scroll.appendChild(table);
     panel.appendChild(scroll);
-    // Small footer hint showing lazy-load progress.
+    // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.
     const scrollHint = document.createElement("div");
     scrollHint.className = "dc-scroll-hint";
     scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
@@ -8714,6 +8750,17 @@
     };
 
     renderRowsChunked(renderRows);
+    // Re-render once the panel is actually laid out in the DOM — on first paint
+    // scroll.clientHeight can be 0, so the initial window may be too small. A rAF pass
+    // after layout recomputes the correct window height. (Also re-measures ROW_H.)
+    requestAnimationFrame(function () { if (panel.isConnected) renderWindow(true); });
+    // Re-window when the panel is resized (taller panel → more visible rows, else blanks).
+    if (typeof ResizeObserver !== "undefined") {
+      try {
+        var _ro = new ResizeObserver(function () { if (panel.isConnected) renderWindow(false); });
+        _ro.observe(scroll);
+      } catch (e) {}
+    }
     // If the user asked for more rows than actually came back, say so honestly — this
     // just means the data set has fewer records than requested (not a silent cap).
     if (wantRows && rows.length < wantRows) {
