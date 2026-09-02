@@ -7954,13 +7954,6 @@
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     closeAllColumnsTable();
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    // ADAPTIVE RENDER CAP — the freeze on VDI/remote-desktop is driven by total DOM
-    // CELLS (every cell repaint travels over the remote link), not row count. So cap by
-    // cells/columns, not a flat row number: a 5-col table still shows 2000 rows, but a
-    // 117-col table shows ~500 (≈58k cells) so the tab stays responsive. ALL rows remain
-    // in `rows` for CSV export — nothing is lost, only the on-screen preview is bounded.
-    const DC_MAX_RENDER_CELLS = 60000;
-    const renderCap = Math.max(200, Math.min(DC_MAX_RENDER_ROWS, Math.floor(DC_MAX_RENDER_CELLS / Math.max(1, columns.length))));
     // Field label lookup from whatever we discovered (falls back to the api name).
     const meta = {};
     const pool = (exploreCache(objectName).allColumns) || [];
@@ -7985,9 +7978,6 @@
     } else if (serverTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
-    if (rows.length > renderCap) {
-      rowsSubInfo += " &bull; <span style='color:#64748b'>Table shows " + renderCap.toLocaleString() + ", Download CSV has all</span>";
-    }
     titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
       "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>";
     hdr.appendChild(titleWrap);
@@ -8002,7 +7992,7 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Table shows first " + renderCap.toLocaleString() + " (wide tables show fewer for speed); Download CSV has all loaded rows.";
+    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
     rowsInput.addEventListener("input", function () {
       var v = parseInt(rowsInput.value, 10);
       if (!v || v < 1) {
@@ -8581,10 +8571,9 @@
           var cmp = sa.localeCompare(sb);
           return _currentSortDir === "asc" ? cmp : -cmp;
         });
-        // Re-render tbody using the SAME chunked renderer (defined below) so sorting a
-        // wide table doesn't block the UI thread.
-        var renderRows2 = rows.length > renderCap ? rows.slice(0, renderCap) : rows;
-        renderRowsChunked(renderRows2);
+        // Re-render from the top with the sorted set; scroll reveals all rows lazily.
+        renderRowsChunked(rows);
+        scroll.scrollTop = 0;
         // Update header sort indicators (arrow lives in a dedicated span so we never
         // corrupt the label/api-name markup via string replace).
         htr.querySelectorAll("th .dc-sort-ind").forEach(function (s) { s.textContent = ""; });
@@ -8618,33 +8607,67 @@
       }
       return tr;
     }
-    // Render rows into tbody in NON-BLOCKING chunks so a wide table (100+ cols) or many
-    // rows can't freeze the tab ("page unresponsive"). Shows a spinner until the first
-    // chunk paints, then fills the rest incrementally.
-    const CELL_BUDGET = 8000;   // ~cells per chunk; scales chunk size to column count
+    // SCROLL-DRIVEN (lazy) RENDER — ALL columns always show; rows are appended in batches
+    // as the user scrolls near the bottom. This keeps the first paint fast and the live
+    // DOM small (critical on VDI/remote-desktop where every painted cell crosses the
+    // network), while still letting the user reach every loaded row by scrolling. Batch
+    // size scales DOWN with column count so a wide table adds fewer rows per step.
+    const CELL_BUDGET = 12000;   // ~cells appended per batch; scaled by column count
+    const rowsPerBatch = Math.max(20, Math.floor(CELL_BUDGET / Math.max(1, columns.length)));
+    let _renderData = rows;      // full set currently being shown (updated on sort)
+    let _renderIdx = 0;          // next row index not yet in the DOM
+    let _appending = false;      // guard against re-entrant appends
+    function appendNextBatch() {
+      if (_appending || !panel.isConnected) return;
+      if (_renderIdx >= _renderData.length) return;
+      _appending = true;
+      const end = Math.min(_renderIdx + rowsPerBatch, _renderData.length);
+      const frag = document.createDocumentFragment();
+      for (let i = _renderIdx; i < end; i++) frag.appendChild(buildRowEl(_renderData[i], i));
+      tbody.appendChild(frag);
+      _renderIdx = end;
+      _appending = false;
+      updateScrollHint();
+    }
+    function updateScrollHint() {
+      const hintEl = panel.querySelector(".dc-scroll-hint");
+      if (!hintEl) return;
+      if (_renderIdx >= _renderData.length) {
+        hintEl.textContent = "All " + _renderData.length.toLocaleString() + " loaded rows shown" + (_renderData.length < rows.length ? "" : "") + ".";
+      } else {
+        hintEl.textContent = "Showing " + _renderIdx.toLocaleString() + " of " + _renderData.length.toLocaleString() + " rows — scroll down to load more.";
+      }
+    }
+    // (Re)start rendering a data set from the top — used on first render and after sort.
     function renderRowsChunked(dataRows) {
       if (typeof detachTools === "function") detachTools();   // widget lives in a cell → drop ref before clearing
       tbody.innerHTML = "";
-      const total = dataRows.length;
-      const perChunk = Math.max(20, Math.floor(CELL_BUDGET / Math.max(1, columns.length)));
-      let idx = 0;
-      function chunk() {
-        if (!panel.isConnected) return;   // table closed mid-render → stop
-        const end = Math.min(idx + perChunk, total);
-        const frag = document.createDocumentFragment();
-        for (let i = idx; i < end; i++) frag.appendChild(buildRowEl(dataRows[i], i));
-        tbody.appendChild(frag);
-        idx = end;
-        if (idx < total) { setTimeout(chunk, 0); }
-        else { hideTableSpinner(panel); }
-      }
-      if (total > perChunk) showTableSpinner(panel, "Rendering " + total.toLocaleString() + " rows…");
-      chunk();
+      _renderData = dataRows;
+      _renderIdx = 0;
+      appendNextBatch();               // first batch paints immediately
+      // Keep filling until the table is at least as tall as the viewport, so short
+      // batches on very wide tables still fill the screen without a scroll gesture.
+      requestAnimationFrame(function fill() {
+        if (!panel.isConnected) return;
+        if (_renderIdx < _renderData.length && scroll.scrollHeight <= scroll.clientHeight + 40) {
+          appendNextBatch();
+          requestAnimationFrame(fill);
+        }
+      });
     }
-    const renderRows = rows.length > renderCap ? rows.slice(0, renderCap) : rows;
+    // Lazy-load trigger: when scrolled within 300px of the bottom, append the next batch.
+    scroll.addEventListener("scroll", function () {
+      if (scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 300) appendNextBatch();
+    });
+    const renderRows = rows;         // full loaded set — scroll reveals all of it
     table.appendChild(tbody);
     scroll.appendChild(table);
     panel.appendChild(scroll);
+    // Small footer hint showing lazy-load progress.
+    const scrollHint = document.createElement("div");
+    scrollHint.className = "dc-scroll-hint";
+    scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
+    panel.appendChild(scrollHint);
     document.body.appendChild(panel);
 
     // ── Delegated cell affordances (Copy / View) ────────────────────────────────
@@ -8691,19 +8714,12 @@
     };
 
     renderRowsChunked(renderRows);
-    // Render-cap notice: if we only drew part of a large result, say so clearly and
-    // point to CSV for the full set (nothing is lost — all rows are in the export).
-    if (rows.length > renderCap) {
+    // If the user asked for more rows than actually came back, say so honestly — this
+    // just means the data set has fewer records than requested (not a silent cap).
+    if (wantRows && rows.length < wantRows) {
       const sub = panel.querySelector(".dc-ac-sub");
-      if (sub) sub.innerHTML = "Showing first " + renderCap.toLocaleString() + " of " + rows.length.toLocaleString() +
-        " rows &times; " + columns.length + " cols &bull; " +
-        "<span style='color:#b8860b'>table caps at " + renderCap.toLocaleString() + " (wide table — fewer rows shown for speed) — use “Download CSV” for all " + rows.length.toLocaleString() + " rows.</span>";
-    } else if (wantRows && rows.length < wantRows) {
-      // If the user asked for more rows than actually came back, say so honestly — this
-      // just means the data set has fewer records than requested (not a silent cap).
-      const sub = panel.querySelector(".dc-ac-sub");
-      if (sub) sub.innerHTML = rows.length + " rows &times; " + columns.length + " columns &bull; " +
-        "<span style='color:#b8860b'>requested " + wantRows + ", but only " + rows.length + " records exist (or the source capped it).</span>";
+      if (sub) sub.innerHTML = rows.length.toLocaleString() + " rows &times; " + columns.length + " columns &bull; " +
+        "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but only " + rows.length.toLocaleString() + " records exist (or the source capped it).</span>";
     }
     if (typeof makeDraggable === "function") try { makeDraggable(panel, hdr); } catch (e) {}
     if (typeof addResizeHandle === "function") try { addResizeHandle(panel, 480, 300); } catch (e) {}
