@@ -10302,6 +10302,33 @@
     btnRow.appendChild(viewBtn);
     btnRow.appendChild(infoBtn);
 
+    // Custom INSTANT tooltip for the Query Editor buttons. The native `title` tooltip
+    // has a ~1.5s delay and often doesn't show over these styled FAB buttons, so users
+    // couldn't see the feature descriptions. This shows the button's own title text
+    // immediately on hover, positioned to the right of the button row.
+    var qeTip = document.createElement("div");
+    qeTip.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:260px;background:#1e293b;color:#fff;font:500 11px/1.4 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.3);pointer-events:none;";
+    document.body.appendChild(qeTip);
+    var qeTipFor = function (el) {
+      var tip = el.getAttribute("title");
+      if (!tip) return;
+      el.removeAttribute("title");           // suppress the slow native tooltip
+      el.setAttribute("data-tip", tip);
+      el.addEventListener("mouseenter", function () {
+        qeTip.textContent = el.getAttribute("data-tip") || "";
+        qeTip.style.display = "block";
+        var r = el.getBoundingClientRect();
+        // place to the right of the button; flip left if it would overflow
+        var left = r.right + 8;
+        if (left + 260 > window.innerWidth) left = Math.max(8, r.left - 268);
+        qeTip.style.left = left + "px";
+        qeTip.style.top = Math.max(8, r.top) + "px";
+      });
+      el.addEventListener("mouseleave", function () { qeTip.style.display = "none"; });
+      el.addEventListener("click", function () { qeTip.style.display = "none"; });
+    };
+    [countBtn, runBtn, downloadBtn, viewBtn, infoBtn].forEach(qeTipFor);
+
     // FAB icon — always visible, toggles the panel
     var fab = document.createElement("button");
     fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;font-size:18px;cursor:pointer;box-shadow:0 4px 16px rgba(109,40,217,.4);display:flex;align-items:center;justify-content:center;transition:transform .15s;";
