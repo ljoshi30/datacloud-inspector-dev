@@ -6994,14 +6994,40 @@
   function downloadRowsCsv(objectName, columns, rows) {
     const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const header = ["Id"].concat(columns);
-    const lines = [header.map(esc).join(",")];
-    rows.forEach(r => lines.push(header.map(c => esc(r[c])).join(",")));
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = (objectName || "data-explore") + "-all-columns.csv";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    const doDownload = (parts) => {
+      const blob = new Blob(parts, { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (objectName || "data-explore") + "-all-columns.csv";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    };
+    // Small result → build synchronously (fast, no UI churn).
+    if (rows.length <= 2000) {
+      const lines = [header.map(esc).join(",")];
+      rows.forEach(r => lines.push(header.map(c => esc(r[c])).join(",")));
+      doDownload([lines.join("\n") + "\n"]);
+      return;
+    }
+    // Large result → build the CSV string in non-blocking chunks so a wide/tall dataset
+    // (e.g. 50k rows × 117 cols) can't trigger "page unresponsive". Accumulate into a
+    // parts array (each part = one chunk of joined lines) and hand it all to Blob at the end.
+    const CHUNK = 2000;
+    const parts = [header.map(esc).join(",") + "\n"];
+    let idx = 0;
+    const buildChunk = () => {
+      const end = Math.min(idx + CHUNK, rows.length);
+      let buf = "";
+      for (let i = idx; i < end; i++) {
+        const r = rows[i];
+        buf += header.map(c => esc(r[c])).join(",") + "\n";
+      }
+      parts.push(buf);
+      idx = end;
+      if (idx < rows.length) { setTimeout(buildChunk, 0); }
+      else { doDownload(parts); }
+    };
+    buildChunk();
   }
 
   // ── "Understand this transform" — plain-language view of a Data Transform ──────
