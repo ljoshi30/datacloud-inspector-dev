@@ -5164,6 +5164,25 @@ processJSON();
     watchNavigation();
   }
 
+  // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
+  // Lightning SPA: when the tool injects, the URL/route may not be final yet, so the
+  // one-shot detection above can miss and no FAB appears. Re-check a few times and
+  // launch as soon as it resolves to a Query Editor page (idempotent: bails if the FAB
+  // already exists). Cheap, bounded, and only runs when no launcher fired at load.
+  if (!document.getElementById("dc-bar") && typeof ensureQueryEditorLauncher === "function" && typeof isQueryEditorPage === "function") {
+    var _qeTries = 0;
+    var _qeRetry = setInterval(function () {
+      _qeTries++;
+      if (document.getElementById("dc-bar")) { clearInterval(_qeRetry); return; }   // some launcher appeared
+      if (isQueryEditorPage()) {
+        clearInterval(_qeRetry);
+        try { ensureQueryEditorLauncher(); watchNavigation(); } catch (e) {}
+      } else if (_qeTries >= 8) {
+        clearInterval(_qeRetry);   // ~8s of tries; give up quietly
+      }
+    }, 1000);
+  }
+
   // Segment page: show API names on hover (per-DMO tracking) — SEPARATE from if/else chain
   if (detailPageType === "Segment") {
     (function() {
