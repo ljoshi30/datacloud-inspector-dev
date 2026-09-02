@@ -8036,14 +8036,19 @@
         }).filter(Boolean);
         if (fragsC.length) countWhere = " WHERE " + fragsC.join(" " + (fsC.join || "AND") + " ");
       }
-      var cSql = "SELECT COUNT(*) FROM " + objectName + countWhere;
+      var cSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + countWhere;
       ensureQueryContext(function (ready) {
         if (!ready) { countBtn.disabled = false; countBtn.textContent = "Count"; return; }
         runRawSql(cSql, ds, 1).then(function (res) {
           var cnt = 0;
-          if (res.rows.length > 0) {
-            var firstCol = res.columns[0] || "count";
-            cnt = parseInt(res.rows[0][firstCol], 10) || 0;
+          var cRows = res.rows || [];
+          // Scan every column of the first row for the numeric count (column name varies).
+          if (cRows.length > 0) {
+            var keys = Object.keys(cRows[0]);
+            for (var ki = 0; ki < keys.length; ki++) {
+              var v = parseInt(cRows[0][keys[ki]], 10);
+              if (!isNaN(v) && v >= 0) { cnt = v; break; }
+            }
           }
           countBtn.disabled = false;
           countBtn.textContent = "Total: " + cnt.toLocaleString();
@@ -8360,7 +8365,15 @@
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Add condition";
     addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
-    addBtn.onclick = function () { addCondition(); updateFilterBtnStates(); }; // FIX 3: Update button states after adding condition
+    addBtn.onclick = function () {
+      addCondition();
+      updateFilterBtnStates();
+      // Immediate feedback + bring the new row into view (wide objects have many rows)
+      var lastRow = condsWrap.lastElementChild;
+      if (lastRow && lastRow.scrollIntoView) { try { lastRow.scrollIntoView({ block: "nearest" }); } catch (e) {} }
+      addBtn.style.background = "#eef4ff";
+      setTimeout(function () { addBtn.style.background = "#fff"; }, 150);
+    };
     const applyF = document.createElement("button");
     applyF.textContent = "Apply filter";
     applyF.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
@@ -8378,21 +8391,25 @@
       const cols = (allColumns || columns);
       const wherePart = whereClause ? " WHERE " + whereClause : "";
       const dataSql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
-                  " FROM " + objectName + wherePart + " LIMIT " + DC_MAX_FETCH_ROWS;
-      const countSql = "SELECT COUNT(*) FROM " + objectName + wherePart;
-      applyF.disabled = true; fStatus.textContent = "Filtering…";
-      showTableSpinner(panel, "Filtering…");
+                  " FROM " + sqlQuoteIdent(objectName) + wherePart + " LIMIT " + DC_MAX_FETCH_ROWS;
+      const countSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + wherePart;
+      applyF.disabled = true;
+      var _applyLabel = applyF.textContent;
+      applyF.textContent = whereClause ? "Filtering…" : "Clearing…";
+      fStatus.innerHTML = "<span style='display:inline-block;width:10px;height:10px;border:2px solid #cbd5e1;border-top-color:#0d6efd;border-radius:50%;animation:dc-spin .7s linear infinite;vertical-align:middle;margin-right:6px;'></span>" + (whereClause ? "Applying filter…" : "Clearing filter…");
+      if (!document.getElementById("dc-spin-style")) { var _ss = document.createElement("style"); _ss.id = "dc-spin-style"; _ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(_ss); }
+      showTableSpinner(panel, whereClause ? "Applying filter — running query…" : "Clearing filter…");
       // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
-        if (!ready) { applyF.disabled = false; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
+        if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
         var dataResult = null; var countResult = 0; var done = 0;
         function finish() {
           if (++done < 2) return;
-          applyF.disabled = false;
-          if (!dataResult) return;
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          if (!dataResult) { hideTableSpinner(panel); return; }
           // Only store count for filtered queries — not for unfiltered (clear)
           _filterCount[objectName] = whereClause ? countResult : 0;
           var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
@@ -8413,12 +8430,17 @@
           if (countResult > res.rows.length) res.rows.__serverRowCount = countResult;
           finish();
         }).catch(function (err) {
-          applyF.disabled = false; fStatus.textContent = String(err && err.message || err);
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</span>";
           hideTableSpinner(panel);
           _filterState[objectName] = null;
+          done = 2; // prevent the pending COUNT from calling finish() and rebuilding
         });
         runRawSql(countSql, ds, 1).then(function (cr) {
-          if (cr.rows.length > 0) { var fc = cr.columns[0] || "count"; countResult = parseInt(cr.rows[0][fc], 10) || 0; }
+          if (cr.rows.length > 0) {
+            var keys = Object.keys(cr.rows[0]);
+            for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cr.rows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { countResult = v; break; } }
+          }
           finish();
         }).catch(function () { finish(); });
       });
@@ -8477,9 +8499,30 @@
     var _currentSortDir = null; // "asc" or "desc"
     columns.forEach(fn => {
       const th = document.createElement("th");
-      th.title = fn;
-      th.innerHTML = esc(meta[fn] || fn) + "<div style='font-weight:400;font-size:9px;color:#b9c6de;font-family:SF Mono,Consolas,monospace'>" + esc(fn) + "</div>";
-      th.style.cssText = thStyle + "min-width:120px;max-width:320px;white-space:normal;cursor:pointer;";
+      th.title = "Click to sort · drag right edge to resize";
+      th.innerHTML = "<span class='dc-th-label'>" + esc(meta[fn] || fn) + "<span class='dc-sort-ind'></span></span>" +
+        "<div style='font-weight:400;font-size:9px;color:#b9c6de;font-family:SF Mono,Consolas,monospace'>" + esc(fn) + "</div>";
+      th.style.cssText = thStyle + "min-width:120px;max-width:600px;white-space:normal;cursor:pointer;";
+      // ── Resizable header: drag the right edge to widen/narrow this column ──────
+      const grip = document.createElement("div");
+      grip.style.cssText = "position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
+      grip.onclick = function (e) { e.stopPropagation(); };  // don't trigger sort
+      grip.onpointerdown = function (e) {
+        e.preventDefault(); e.stopPropagation();
+        const startX = e.clientX;
+        const startW = th.getBoundingClientRect().width;
+        const move = function (ev) {
+          const w = Math.max(60, startW + (ev.clientX - startX));
+          th.style.minWidth = w + "px"; th.style.maxWidth = w + "px"; th.style.width = w + "px";
+        };
+        const up = function () {
+          window.removeEventListener("pointermove", move, true);
+          window.removeEventListener("pointerup", up, true);
+        };
+        window.addEventListener("pointermove", move, true);
+        window.addEventListener("pointerup", up, true);
+      };
+      th.appendChild(grip);
       // FIX 1: Add click handler for sort
       th.onclick = function () {
         // Toggle sort direction
@@ -8505,46 +8548,15 @@
           var cmp = sa.localeCompare(sb);
           return _currentSortDir === "asc" ? cmp : -cmp;
         });
-        // Re-render tbody only
-        tbody.innerHTML = "";
+        // Re-render tbody using the SAME chunked renderer (defined below) so sorting a
+        // wide table doesn't block the UI thread.
         var renderRows2 = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
-        renderRows2.forEach(function (r, ri) {
-          var tr = document.createElement("tr");
-          tr.style.background = ri % 2 ? "#f7f9fc" : "#fff";
-          columns.forEach(function (fn2) {
-            var td = document.createElement("td");
-            var val = fmt(r[fn2]);
-            td.style.cssText = "position:relative;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-            var span = document.createElement("span");
-            span.textContent = val; span.style.cssText = "user-select:text;";
-            td.appendChild(span);
-            td.title = val;
-            if (val !== "") {
-              var tools = document.createElement("span");
-              tools.style.cssText = "position:absolute;right:2px;top:2px;display:none;gap:2px;background:rgba(255,255,255,.95);border-radius:4px;padding:1px;";
-              var mkT = function (label, title, onclick) {
-                var b = document.createElement("button");
-                b.textContent = label; b.title = title;
-                b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
-                b.onclick = function (e) { e.stopPropagation(); onclick(); };
-                return b;
-              };
-              tools.appendChild(mkT("Copy", "Copy value", function () {
-                try { navigator.clipboard.writeText(val); } catch (e) {}
-              }));
-              if (val.length > 40) tools.appendChild(mkT("View", "View full value", function () { showCellValue(fn2, meta[fn2] || fn2, val); }));
-              td.appendChild(tools);
-              td.onmouseenter = function () { tools.style.display = "flex"; };
-              td.onmouseleave = function () { tools.style.display = "none"; };
-            }
-            tr.appendChild(td);
-          });
-          tbody.appendChild(tr);
-        });
-        // Update header indicators
-        var allTh = htr.querySelectorAll("th");
-        allTh.forEach(function (h) { h.innerHTML = h.innerHTML.replace(/ [▲▼]$/, ""); });
-        th.innerHTML = th.innerHTML + " " + (_currentSortDir === "asc" ? "▲" : "▼");
+        renderRowsChunked(renderRows2);
+        // Update header sort indicators (arrow lives in a dedicated span so we never
+        // corrupt the label/api-name markup via string replace).
+        htr.querySelectorAll("th .dc-sort-ind").forEach(function (s) { s.textContent = ""; });
+        var indSpan = th.querySelector(".dc-sort-ind");
+        if (indSpan) indSpan.textContent = _currentSortDir === "asc" ? " ▲" : " ▼";
       };
       htr.appendChild(th);
     });
@@ -8553,46 +8565,99 @@
     // result (e.g. 50k) can't freeze the tab. ALL rows stay in `rows` for CSV export.
     const tbody = document.createElement("tbody");
     const fmt = (v) => v == null ? "" : (typeof v === "boolean" ? (v ? "true" : "false") : String(v));
-    const renderRows = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
-    renderRows.forEach((r, ri) => {
+    // PERF: build LEAN cells — no per-cell buttons or listeners. For a wide table
+    // (117 cols × 2000 rows ≈ 234k cells) attaching Copy/View buttons + 2 listeners per
+    // cell created ~700k nodes/listeners and froze the tab. Instead each cell stores its
+    // column in data-c; ONE delegated set of handlers on the scroll container provides
+    // hover-copy/view. Memory drops from O(cells×widgets) to O(cells) plain <td>.
+    const colByIndex = columns;  // positional map: td index → field name
+    function buildRowEl(r, ri) {
       const tr = document.createElement("tr");
       tr.style.background = ri % 2 ? "#f7f9fc" : "#fff";
-      columns.forEach(fn => {
+      for (let ci = 0; ci < columns.length; ci++) {
+        const fn = columns[ci];
         const td = document.createElement("td");
         const val = fmt(r[fn]);
         td.style.cssText = "position:relative;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-        const span = document.createElement("span");
-        span.textContent = val; span.style.cssText = "user-select:text;";
-        td.appendChild(span);
-        td.title = val;
-        if (val !== "") {
-          // Salesforce-like cell affordances: hover shows Copy + View (View opens a
-          // modal with the FULL value — essential for long text / JSON / blob fields).
-          const tools = document.createElement("span");
-          tools.style.cssText = "position:absolute;right:2px;top:2px;display:none;gap:2px;background:rgba(255,255,255,.95);border-radius:4px;padding:1px;";
-          const mkT = (label, title, onclick) => {
-            const b = document.createElement("button");
-            b.textContent = label; b.title = title;
-            b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
-            b.onclick = (e) => { e.stopPropagation(); onclick(); };
-            return b;
-          };
-          tools.appendChild(mkT("Copy", "Copy value", () => {
-            try { navigator.clipboard.writeText(val); } catch (e) {}
-          }));
-          if (val.length > 40) tools.appendChild(mkT("View", "View full value", () => showCellValue(fn, meta[fn] || fn, val)));
-          td.appendChild(tools);
-          td.onmouseenter = () => { tools.style.display = "flex"; };
-          td.onmouseleave = () => { tools.style.display = "none"; };
-        }
+        td.textContent = val;
+        if (val !== "") { td.title = val; td.setAttribute("data-c", ci); }
         tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
+      }
+      return tr;
+    }
+    // Render rows into tbody in NON-BLOCKING chunks so a wide table (100+ cols) or many
+    // rows can't freeze the tab ("page unresponsive"). Shows a spinner until the first
+    // chunk paints, then fills the rest incrementally.
+    const CELL_BUDGET = 8000;   // ~cells per chunk; scales chunk size to column count
+    function renderRowsChunked(dataRows) {
+      if (typeof detachTools === "function") detachTools();   // widget lives in a cell → drop ref before clearing
+      tbody.innerHTML = "";
+      const total = dataRows.length;
+      const perChunk = Math.max(20, Math.floor(CELL_BUDGET / Math.max(1, columns.length)));
+      let idx = 0;
+      function chunk() {
+        if (!panel.isConnected) return;   // table closed mid-render → stop
+        const end = Math.min(idx + perChunk, total);
+        const frag = document.createDocumentFragment();
+        for (let i = idx; i < end; i++) frag.appendChild(buildRowEl(dataRows[i], i));
+        tbody.appendChild(frag);
+        idx = end;
+        if (idx < total) { setTimeout(chunk, 0); }
+        else { hideTableSpinner(panel); }
+      }
+      if (total > perChunk) showTableSpinner(panel, "Rendering " + total.toLocaleString() + " rows…");
+      chunk();
+    }
+    const renderRows = rows.length > DC_MAX_RENDER_ROWS ? rows.slice(0, DC_MAX_RENDER_ROWS) : rows;
     table.appendChild(tbody);
     scroll.appendChild(table);
     panel.appendChild(scroll);
     document.body.appendChild(panel);
+
+    // ── Delegated cell affordances (Copy / View) ────────────────────────────────
+    // ONE reusable tools widget, moved INTO whichever cell is hovered — instead of a
+    // widget + 2 listeners per cell. This is the memory/perf win for wide tables:
+    // 234k cells now carry zero widgets/listeners; the table has exactly 3 handlers.
+    const cellTools = document.createElement("span");
+    cellTools.style.cssText = "position:absolute;right:2px;top:2px;display:flex;gap:2px;z-index:5;background:rgba(255,255,255,.97);border-radius:4px;padding:1px;box-shadow:0 1px 4px rgba(0,0,0,.15);";
+    const mkTool = (label, title) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title;
+      b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
+      return b;
+    };
+    const copyToolBtn = mkTool("Copy", "Copy value");
+    const viewToolBtn = mkTool("View", "View full value");
+    cellTools.appendChild(copyToolBtn); cellTools.appendChild(viewToolBtn);
+    let _toolsTd = null;   // the <td> the tools currently sit in
+    const detachTools = () => { if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools); _toolsTd = null; };
+    const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
+    // Delegation: a single mouseover on tbody positions the shared widget into the cell.
+    tbody.addEventListener("mouseover", (e) => {
+      const td = e.target && e.target.closest ? e.target.closest("td[data-c]") : null;
+      if (!td) return;
+      if (td === _toolsTd) return;                 // already showing here
+      if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
+      _toolsTd = td;
+      viewToolBtn.style.display = (td.textContent || "").length > 40 ? "" : "none";
+      td.appendChild(cellTools);
+    });
+    // Hide when the pointer leaves the table body entirely.
+    tbody.addEventListener("mouseleave", detachTools);
+    copyToolBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!_toolsTd) return;
+      try { navigator.clipboard.writeText(cellInfo(_toolsTd).val); } catch (ex) {}
+      copyToolBtn.textContent = "✓"; setTimeout(() => { copyToolBtn.textContent = "Copy"; }, 700);
+    };
+    viewToolBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!_toolsTd) return;
+      const info = cellInfo(_toolsTd);
+      showCellValue(info.fn, meta[info.fn] || info.fn, info.val);
+    };
+
+    renderRowsChunked(renderRows);
     // Render-cap notice: if we only drew part of a large result, say so clearly and
     // point to CSV for the full set (nothing is lost — all rows are in the export).
     if (rows.length > DC_MAX_RENDER_ROWS) {
