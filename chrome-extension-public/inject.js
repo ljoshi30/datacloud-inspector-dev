@@ -963,7 +963,7 @@
         const bar = document.createElement("div");
         bar.style.cssText = "display:flex;align-items:center;padding:8px 10px;background:#6b1f9a;color:#fff;border-radius:6px 6px 0 0";
         bar.innerHTML = "<strong style='flex:1'>No fields found — open a DLO&rarr;DMO mapping page.</strong>";
-        const close = document.createElement("button"); close.textContent = "✕";
+        const close = document.createElement("button"); close.textContent = "✕"; close.title = "Dismiss this message";
         close.style.cssText = "border:none;background:transparent;color:#fff;font-size:16px;cursor:pointer"; close.onclick = () => wrap.remove();
         bar.appendChild(close);
         const ta = document.createElement("textarea");
@@ -3686,7 +3686,7 @@ processJSON();
       });
     };
     var closeX = document.createElement("button");
-    closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
+    closeX.textContent = "✕"; closeX.title = "Close this export view"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
     closeX.onclick = function() { modal.remove(); };
     var jsonBtn = document.createElement("button");
     jsonBtn.textContent = "{ } JSON"; jsonBtn.title = "Show the raw JSON behind this export (toggle) — useful for debugging or copying the exact structure."; jsonBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
@@ -3718,10 +3718,12 @@ processJSON();
     var tabBar = document.createElement("div");
     tabBar.style.cssText = "display:flex;border-bottom:2px solid #e5e7eb;background:#f9fafb;flex-shrink:0;";
     var tabs = [["studio","Studio UI View"],["filters","Filters & Rules"],["schema","Schema & Paths"],["audit","Audit & Metadata"]];
+    var tabTips = { studio: "See the activation laid out like the Salesforce Studio UI", filters: "View the activation's filters and rules", schema: "View the attribute schema and field paths (with API names)", audit: "View audit info and metadata (created/modified, IDs)" };
     tabs.forEach(function(t, i) {
       var tb = document.createElement("div");
       tb.setAttribute("data-actab", t[0]);
       tb.textContent = t[1];
+      tb.title = tabTips[t[0]] || ("Show " + t[1]);
       tb.style.cssText = "padding:12px 20px;cursor:pointer;font:600 12px system-ui;color:" + (i === 0 ? "#667eea" : "#6b7280") + ";border-bottom:3px solid " + (i === 0 ? "#667eea" : "transparent") + ";transition:all .15s;";
       tabBar.appendChild(tb);
     });
@@ -4047,6 +4049,7 @@ processJSON();
     panelTitle.style.cssText = "font:700 15px -apple-system,sans-serif;color:#1e293b;";
     var panelClose = document.createElement("button");
     panelClose.textContent = "×";
+    panelClose.title = "Close this DMO selector";
     panelClose.style.cssText = "border:none;background:none;cursor:pointer;font-size:24px;color:#64748b;padding:0;";
     panelClose.onclick = function() { overlay.remove(); };
     panelHeader.appendChild(panelTitle);
@@ -4057,6 +4060,7 @@ processJSON();
     var searchInput = document.createElement("input");
     searchInput.type = "text";
     searchInput.placeholder = "Search DMOs...";
+    searchInput.title = "Type to filter the DMO list below by name";
     searchInput.style.cssText = "flex:1;min-width:180px;padding:7px 12px;border:1px solid #d1d5db;border-radius:6px;font:13px -apple-system,sans-serif;outline:none;";
     searchInput.addEventListener("input", function() {
       var q = searchInput.value.toLowerCase();
@@ -4323,6 +4327,7 @@ processJSON();
     footer.style.cssText = "padding:14px 20px;border-top:2px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;background:#f8f9fa;";
     var cancelBtn = document.createElement("button");
     cancelBtn.textContent = "Cancel";
+    cancelBtn.title = "Close without changing the diagram";
     cancelBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px;padding:8px 16px;cursor:pointer;font:600 11px system-ui;";
     cancelBtn.onclick = function() { overlay.remove(); };
     var applyBtn = document.createElement("button");
@@ -4373,9 +4378,11 @@ processJSON();
         suggestControls.style.cssText = "display:flex;gap:8px;margin-bottom:8px;";
         var selAllSuggest = document.createElement("button");
         selAllSuggest.textContent = "Select All";
+        selAllSuggest.title = "Select all suggested related entities";
         selAllSuggest.style.cssText = "border:1px solid #3b82f6;background:#3b82f6;color:#fff;border-radius:4px;padding:4px 10px;cursor:pointer;font:600 10px system-ui;";
         var deselAllSuggest = document.createElement("button");
         deselAllSuggest.textContent = "Deselect All";
+        deselAllSuggest.title = "Clear the suggested-entity selection";
         deselAllSuggest.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:4px;padding:4px 10px;cursor:pointer;font:600 10px system-ui;";
         suggestControls.appendChild(selAllSuggest);
         suggestControls.appendChild(deselAllSuggest);
@@ -4406,6 +4413,7 @@ processJSON();
 
         var skipBtn = document.createElement("button");
         skipBtn.textContent = "Skip — use my selection only";
+        skipBtn.title = "Generate the diagram with only the entities you picked, ignoring the suggestions";
         skipBtn.style.cssText = "border:1px solid #94a3b8;background:#fff;color:#475569;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
         skipBtn.onclick = function() {
           suggestOverlay.remove();
@@ -4422,6 +4430,7 @@ processJSON();
 
         var addBtn = document.createElement("button");
         addBtn.textContent = "Add Selected & Generate";
+        addBtn.title = "Add the checked suggested entities to your selection and generate the diagram";
         addBtn.style.cssText = "border:1px solid #8b5cf6;background:#8b5cf6;color:#fff;border-radius:6px;padding:7px 14px;cursor:pointer;font:600 11px system-ui;";
         addBtn.onclick = function() {
           // Add only CHECKED related DMOs
@@ -4593,6 +4602,7 @@ processJSON();
 
     var closeBtn = document.createElement("button");
     closeBtn.textContent = "×";
+    closeBtn.title = "Close the ERD diagram";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:24px;color:#64748b;padding:0 8px;";
     closeBtn.onclick = function() { modal.remove(); };
 
@@ -4609,6 +4619,7 @@ processJSON();
     helpContainer.style.cssText = "border-bottom:1px solid #e2e8f0;background:#f8fafc;";
 
     var helpToggle = document.createElement("div");
+    helpToggle.title = "Show/hide a short guide on how to use the ERD tool";
     helpToggle.style.cssText = "padding:10px 18px;cursor:pointer;display:flex;align-items:center;gap:8px;font:600 12px -apple-system,sans-serif;color:#3b82f6;";
     helpToggle.textContent = "ℹ How to use";
 
