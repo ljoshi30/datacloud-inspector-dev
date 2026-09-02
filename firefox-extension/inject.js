@@ -6262,32 +6262,11 @@
       var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
       function mapByMeta(data, metadata) {
         var cols = (metadata || []).map(function (m) { return m && m.name; });
-        var raw = [];   // positional row values, independent of metadata names
         var rows = (data || []).map(function (arr) {
-          if (Array.isArray(arr)) {
-            // Positional array row: [v0, v1, ...] keyed by metadata column order.
-            raw.push(arr);
-            var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
-          }
-          if (arr && typeof arr === "object") {
-            // Object row: { colName: value }. Some responses (and COUNT) return this
-            // shape. Build the positional array from metadata order (falling back to the
-            // object's own value order when metadata names are missing/blank) so rawRows
-            // still has the value — this is what makes COUNT reliable across shapes.
-            var vals = [];
-            if (cols.length) { for (var k = 0; k < cols.length; k++) vals.push(arr[cols[k]]); }
-            var objVals = Object.keys(arr).map(function (kk) { return arr[kk]; });
-            // If metadata-keyed extraction found nothing usable, use the object's values.
-            var hasAny = vals.some(function (v) { return v != null && v !== ""; });
-            raw.push(hasAny ? vals : objVals);
-            return arr;
-          }
-          return null;
+          if (!Array.isArray(arr)) return null;
+          var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
         }).filter(Boolean);
-        // rawRows lets callers (e.g. COUNT) read a value positionally even when the
-        // server omits/blanks the metadata column name — which otherwise mis-keys the
-        // row object and made COUNT return 0 while Fetch (positional) worked.
-        return { columns: cols, rows: rows, rawRows: raw };
+        return { columns: cols, rows: rows };
       }
       if (extBridgePresent()) {
         runDcSqlViaBridge(sql, n, ds).then(function (res) {
@@ -6354,18 +6333,6 @@
     });
   }
 
-  // Extract the numeric value from a COUNT query's runRawSql result. Reads the RAW
-  // positional value first (immune to missing/blank metadata column names, which mis-key
-  // the named row object and caused COUNT to return 0 while Fetch worked), then falls back
-  // to the named row. Returns { count, ok } — ok=false means the value couldn't be read
-  // (empty response), so callers should NOT show 0 as if it were a real answer.
-  function parseCountResult(res) {
-    var rr = (res && res.rawRows && res.rawRows[0]) || null;
-    if (rr) { for (var ri = 0; ri < rr.length; ri++) { var rv = parseInt(rr[ri], 10); if (!isNaN(rv) && rv >= 0) return { count: rv, ok: true }; } }
-    var cRows = (res && res.rows) || [];
-    if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) return { count: v, ok: true }; } }
-    return { count: 0, ok: false };
-  }
 
   // Fire ONE queryDCSql for an exact SELECT column list; resolve rows mapped positionally
   // back to {selectCol: value}. `idKey` (if any) is included in the SELECT and its column
@@ -10492,6 +10459,68 @@
       return highlighted;
     }
 
+    // ── Query-Editor-OWNED count runner ──────────────────────────────────────────
+    // Self-contained: runs the COUNT query via the same /aura queryDCSql action but
+    // parses the raw response ITSELF, so it does NOT depend on the shared runRawSql/
+    // mapByMeta row-mapping (which is array-only and is used by Data Explorer). This
+    // keeps Query Editor fully independent — changes here can never affect Explorer —
+    // AND it reliably reads the count whether the row comes back as an array [n] or an
+    // object {col:n}. Resolves { count, ok }; ok=false = value genuinely not in response.
+    // Reuses the read-only session (_auraSniff) + dataspace candidates, same as fetch.
+    function runQeCount(countSql, ds) {
+      return new Promise(function (resolve, reject) {
+        // Extension path: the documented endpoint returns clean array rows, so the shared
+        // runRawSql is reliable there — reuse it and parse the single value.
+        if (typeof extBridgePresent === "function" && extBridgePresent()) {
+          runRawSql(countSql, ds, 1).then(function (res) {
+            var cnt = null, cRows = (res && res.rows) || [];
+            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var num = parseInt(r0[k], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } } } }
+            resolve({ count: cnt === null ? 0 : cnt, ok: cnt !== null });
+          }).catch(reject);
+          return;
+        }
+        // Bookmarklet path: do our OWN aura POST + raw parse (handles array OR object rows).
+        if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
+        var cands = [ds];
+        if (typeof dataSpaceCandidates === "function") {
+          var fm = countSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+          dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
+        }
+        if (cands.indexOf("default") < 0) cands.push("default");
+        function tryDs(i) {
+          var space = cands[i] || "";
+          _auraQid = (_auraQid || 0) + 1;
+          var act = { id: "dcqecnt-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: countSql, rowLimit: 1, dataspace: space } };
+          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+          fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+            .then(function (r) { return r.text(); }).then(function (txt) {
+              if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var a = j && j.actions && j.actions[0];
+              if (!a || a.state !== "SUCCESS") {
+                var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+                var cleanErr = em;
+                try { var p = (typeof em === "string" && em.charAt(0) === "{") ? JSON.parse(em) : null; if (p && p.primaryMessage) cleanErr = p.primaryMessage; else if (p && p.errorMessage) cleanErr = p.errorMessage.replace(/^[A-Z_]+:\s*/, ""); } catch (e2) {}
+                if (/denied authorization|not authorized/i.test(cleanErr) && i + 1 < cands.length) { tryDs(i + 1); return; }
+                reject(new Error(cleanErr || "Count query failed")); return;
+              }
+              if (space) _auraSniff.dataSpace = space;
+              // Parse the count from the RAW response — handle every shape:
+              var rv = a.returnValue || {};
+              var dr = rv.dataRows || rv.rows || [];
+              var first = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
+              var cnt = null;
+              if (first != null) {
+                var vals = Array.isArray(first) ? first : (typeof first === "object" ? Object.keys(first).map(function (k) { return first[k]; }) : [first]);
+                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
+              }
+              resolve({ count: cnt === null ? 0 : cnt, ok: cnt !== null });
+            }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
+        }
+        tryDs(0);
+      });
+    }
+
     countBtn.onclick = () => {
       var highlighted = getHighlightedSql();
       var sql;
@@ -10538,8 +10567,7 @@
             + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Steps:</b><br>1. Write or select a query in the editor<br>2. Click SF\\'s <b>Run Query</b> button<br>3. Once results appear, use our Count / Fetch buttons</div>";
           return;
         }
-        runRawSql(countSql, ds, 1).then(function (res) {
-          var pc = parseCountResult(res);
+        runQeCount(countSql, ds).then(function (pc) {
           showCount(pc.count, null, !pc.ok);
         }).catch(function (err) { showCount(0, err); });
         function showCount(cnt, err, couldntParse) {
