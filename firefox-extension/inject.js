@@ -10505,16 +10505,33 @@
                 reject(new Error(cleanErr || "Count query failed")); return;
               }
               if (space) _auraSniff.dataSpace = space;
-              // Parse the count from the RAW response — handle every shape:
               var rv = a.returnValue || {};
-              var dr = rv.dataRows || rv.rows || [];
-              var first = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
               var cnt = null;
+              // 1) Read the COUNT value from the result row(s), any shape.
+              var dr = rv.dataRows || rv.rows || rv.data || [];
+              var first = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
               if (first != null) {
                 var vals = Array.isArray(first) ? first : (typeof first === "object" ? Object.keys(first).map(function (k) { return first[k]; }) : [first]);
                 for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
               }
-              resolve({ count: cnt === null ? 0 : cnt, ok: cnt !== null });
+              // 2) Fallback: some responses carry the total in a status/rowCount field
+              // (and for heavy/async queries the row may not be inline). For a COUNT
+              // query that IS the answer.
+              if (cnt === null) {
+                var rc = (rv.status && rv.status.rowCount) != null ? rv.status.rowCount
+                       : (rv.rowCount != null ? rv.rowCount
+                       : (rv.returnedRows != null ? rv.returnedRows : null));
+                var rcn = parseInt(rc, 10);
+                if (!isNaN(rcn) && rcn >= 0) cnt = rcn;
+              }
+              // 3) Still nothing → surface the actual returnValue keys so the failure is
+              // diagnosable instead of a dead-end "couldn't read".
+              if (cnt === null) {
+                var seen = "";
+                try { seen = Object.keys(rv).join(", ") || "(empty returnValue)"; } catch (e) { seen = "(unreadable)"; }
+                reject(new Error("Count value not found in response. Response contained: " + seen + ". If this query is heavy, it may still be running — try again in a moment, or use Fetch & Export.")); return;
+              }
+              resolve({ count: cnt, ok: true });
             }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
         }
         tryDs(0);
@@ -10545,7 +10562,24 @@
         var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
         ds = dsCandidates[0] || "";
       }
-      var cleanSql = sql.replace(/;\s*$/, "").trim();
+      // Strip SQL comments BEFORE building the count. A leading "-- ..." block (or /* */)
+      // is common in shared queries; left in, it produces fragile wrapped SQL like
+      // "SELECT COUNT(*) FROM (-- comment\n...)" where a line comment can swallow structure.
+      // Remove line comments (-- to end of line) and block comments (/* ... */), but NOT
+      // inside single-quoted string literals (e.g. a filename value containing "--").
+      function stripSqlComments(s) {
+        var out = "", i = 0, n = s.length, inStr = false;
+        while (i < n) {
+          var ch = s[i], nx = s[i + 1];
+          if (inStr) { out += ch; if (ch === "'") { if (nx === "'") { out += nx; i += 2; continue; } inStr = false; } i++; continue; }
+          if (ch === "'") { inStr = true; out += ch; i++; continue; }
+          if (ch === "-" && nx === "-") { while (i < n && s[i] !== "\n") i++; continue; }      // line comment
+          if (ch === "/" && nx === "*") { i += 2; while (i < n && !(s[i] === "*" && s[i + 1] === "/")) i++; i += 2; continue; } // block comment
+          out += ch; i++;
+        }
+        return out;
+      }
+      var cleanSql = stripSqlComments(sql).replace(/\s+/g, " ").replace(/;\s*$/, "").trim();
       // A query that ALREADY returns a single COUNT (no other output columns) is run as-is.
       // Match "SELECT COUNT(...) [AS x] FROM" with nothing between the COUNT and FROM.
       var isAlreadyCount = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(cleanSql);
