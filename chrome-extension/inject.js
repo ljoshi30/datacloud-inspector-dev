@@ -5337,6 +5337,22 @@
     return el;
   }
 
+  // Small transient toast near the Explorer launcher — used to tell the user why an
+  // action can't run (e.g. no object selected) instead of the button doing nothing.
+  function dcExploreToast(msg) {
+    try {
+      var existing = document.getElementById("dc-explore-toast");
+      if (existing) existing.remove();
+      var t = document.createElement("div");
+      t.id = "dc-explore-toast";
+      t.textContent = msg;
+      t.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483647;max-width:300px;background:#111827;color:#fff;font:500 13px/1.5 -apple-system,sans-serif;padding:12px 16px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.35);opacity:0;transition:opacity .25s;";
+      document.body.appendChild(t);
+      requestAnimationFrame(function () { t.style.opacity = "1"; });
+      setTimeout(function () { t.style.opacity = "0"; setTimeout(function () { try { t.remove(); } catch (e) {} }, 300); }, 4000);
+    } catch (e) {}
+  }
+
   // Resolve the DATA SPACE for a given object — using ONLY authoritative sources, never
   // guessing from the object name (that was the "RH_Profile__dll → RH → denied" bug:
   // the name prefix is NOT the data space). Priority:
@@ -7032,6 +7048,9 @@
   function exportExploreCsv(recList) {
     const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
     const rows = recList.data || [];
+    // Don't download an empty/header-only file — tell the user what to do instead.
+    if (!cols.length) { dcExploreToast("No columns to export — open an object and let its data load, then try again."); return; }
+    if (!rows.length) { dcExploreToast("No rows on screen to export. Load some data first (scroll or run a query)."); return; }
     const esc = v => { const s = v == null ? "" : String(v); return s.includes(",") || s.includes('"') || s.includes("\n") ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [cols.map(c => esc(c.label || c.fieldName)).join(",")];
     rows.forEach(row => lines.push(cols.map(c => esc(row[c.fieldName])).join(",")));
@@ -8988,12 +9007,13 @@
     }
     // Object changed (or modal gone) — destroy the stale modal and its data table, rebuild fresh.
     if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; try { closeAllColumnsTable(); } catch (e) {} }
-    // Guard first — never hide the bar unless we can actually open the modal
+    // Guard: no object selected on the page → tell the user instead of doing nothing.
     const recList = curRecList;
-    if (!recList) return;
+    if (!recList) { dcExploreToast("Select a Data Cloud object first, then click Columns."); return; }
+    const objectName = recList.objectName || "";
+    if (!objectName || objectName === "unknown") { dcExploreToast("No object detected — open a Data Explorer object (DLO/DMO/CI), then try again."); return; }
     const bar = document.getElementById("dc-bar");
     if (bar) bar.style.visibility = "hidden";
-    const objectName = recList.objectName || "unknown";
 
     const MODAL_CSS = "position:fixed;top:60px;right:24px;width:420px;max-height:82vh;z-index:2147483645;background:#fff;border:1px solid #d0d5de;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;overflow:hidden;";
 
@@ -11023,7 +11043,13 @@
     dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
 
     colBtn.onclick    = (e) => { e.stopPropagation(); openExploreModal(); };
-    exportBtn.onclick = (e) => { e.stopPropagation(); const rl = findRecordListEl(); if (rl) exportExploreCsv(rl); };
+    exportBtn.onclick = (e) => {
+      e.stopPropagation();
+      const rl = findRecordListEl();
+      if (!rl) { dcExploreToast("Select a Data Cloud object first, then click Export CSV."); return; }
+      if (!rl.objectName || rl.objectName === "unknown") { dcExploreToast("No object detected — open a Data Explorer object, then try again."); return; }
+      exportExploreCsv(rl);
+    };
     reopenBtn.onclick = (e) => {
       e.stopPropagation();
       if (!reopenLastTable()) {
