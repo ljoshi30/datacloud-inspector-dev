@@ -6246,11 +6246,16 @@
       var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
       function mapByMeta(data, metadata) {
         var cols = (metadata || []).map(function (m) { return m && m.name; });
+        var raw = [];   // positional row values, independent of metadata names
         var rows = (data || []).map(function (arr) {
           if (!Array.isArray(arr)) return null;
+          raw.push(arr);
           var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
         }).filter(Boolean);
-        return { columns: cols, rows: rows };
+        // rawRows lets callers (e.g. COUNT) read a value positionally even when the
+        // server omits/blanks the metadata column name — which otherwise mis-keys the
+        // row object and made COUNT return 0 while Fetch (positional) worked.
+        return { columns: cols, rows: rows, rawRows: raw };
       }
       if (extBridgePresent()) {
         runDcSqlViaBridge(sql, n, ds).then(function (res) {
@@ -6315,6 +6320,19 @@
       }
       tryDs(0);
     });
+  }
+
+  // Extract the numeric value from a COUNT query's runRawSql result. Reads the RAW
+  // positional value first (immune to missing/blank metadata column names, which mis-key
+  // the named row object and caused COUNT to return 0 while Fetch worked), then falls back
+  // to the named row. Returns { count, ok } — ok=false means the value couldn't be read
+  // (empty response), so callers should NOT show 0 as if it were a real answer.
+  function parseCountResult(res) {
+    var rr = (res && res.rawRows && res.rawRows[0]) || null;
+    if (rr) { for (var ri = 0; ri < rr.length; ri++) { var rv = parseInt(rr[ri], 10); if (!isNaN(rv) && rv >= 0) return { count: rv, ok: true }; } }
+    var cRows = (res && res.rows) || [];
+    if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) return { count: v, ok: true }; } }
+    return { count: 0, ok: false };
   }
 
   // Fire ONE queryDCSql for an exact SELECT column list; resolve rows mapped positionally
@@ -10458,14 +10476,20 @@
           return;
         }
         runRawSql(countSql, ds, 1).then(function (res) {
-          var cnt = 0;
-          var cRows = res.rows || [];
-          if (cRows.length > 0) { var keys = Object.keys(cRows[0]); for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cRows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } }
-          showCount(cnt);
+          var pc = parseCountResult(res);
+          showCount(pc.count, null, !pc.ok);
         }).catch(function (err) { showCount(0, err); });
-        function showCount(cnt, err) {
+        function showCount(cnt, err, couldntParse) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
+          // Distinguish "genuinely 0 rows" from "we couldn't read the count value" — the
+          // latter should NOT masquerade as 0. Surface it so the user retries rather than
+          // trusting a wrong 0.
+          if (!err && couldntParse) {
+            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Couldn't read the count</span></div>"
+              + "<div style='font-size:12px;color:#475569;line-height:1.6;'>The query ran but the count value wasn't in the response. Please click <b># Count</b> again — if it persists, use <b>Fetch &amp; Export</b> to see the row total.</div>";
+            return;
+          }
           if (err) {
             var errMsg = String(err && err.message || err).replace(/</g,"&lt;");
             var hint = "";
