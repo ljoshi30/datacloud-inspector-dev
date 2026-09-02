@@ -3595,10 +3595,10 @@ processJSON();
     hdr.innerHTML = "<div style='flex:1;'><div style='font:700 16px system-ui;'>" + esc(targetName) + "</div><div style='font:400 11px system-ui;opacity:0.8;'>Activation Studio Inspector</div></div>";
     // Buttons
     var dlHtmlBtn = document.createElement("button");
-    dlHtmlBtn.textContent = "⬇ HTML"; dlHtmlBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    dlHtmlBtn.textContent = "⬇ HTML"; dlHtmlBtn.title = "Download this export as a formatted HTML file you can open in a browser or share."; dlHtmlBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     dlHtmlBtn.onclick = function() { var b = new Blob([generateRichDashboardHTML(data, targetName)], {type:"text/html"}); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "activation-" + targetName.replace(/[^a-zA-Z0-9]/g,"-") + ".html"; a.click(); };
     var dlExcelBtn = document.createElement("button");
-    dlExcelBtn.textContent = "⬇ Excel"; dlExcelBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    dlExcelBtn.textContent = "⬇ Excel"; dlExcelBtn.title = "Download this export as an Excel (.xlsx) spreadsheet for filtering/sharing in Sheets or Excel."; dlExcelBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     dlExcelBtn.onclick = function() {
       var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
       if (!_MiniXLSX) { alert("Excel builder not available — use the full extension build"); return; }
@@ -3689,7 +3689,7 @@ processJSON();
     closeX.textContent = "✕"; closeX.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:4px 8px;";
     closeX.onclick = function() { modal.remove(); };
     var jsonBtn = document.createElement("button");
-    jsonBtn.textContent = "{ } JSON"; jsonBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
+    jsonBtn.textContent = "{ } JSON"; jsonBtn.title = "Show the raw JSON behind this export (toggle) — useful for debugging or copying the exact structure."; jsonBtn.style.cssText = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 10px system-ui;";
     var jsonShowing = false;
     jsonBtn.onclick = function() {
       if (jsonShowing) {
@@ -3767,6 +3767,7 @@ processJSON();
 
     var btn = document.createElement("button");
     btn.textContent = "📋 Export Activation";
+    btn.title = "Export this activation's target, attributes and field mappings (with API names) to HTML / Sheets so you can review or share the configuration.";
     btn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.3);transition:transform .1s,box-shadow .1s;";
     btn.onmouseenter = function () {
       btn.style.transform = "scale(1.03)";
@@ -3878,6 +3879,7 @@ processJSON();
 
     var btn = document.createElement("button");
     btn.textContent = "📊 ERD Diagram";
+    btn.title = "Build an entity-relationship diagram of the Data Model — DMOs and how they relate — from the graph on this page. Downloadable as HTML.";
     btn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(139,92,246,.3);transition:transform .1s,box-shadow .1s;";
     btn.onmouseenter = function() { btn.style.transform = "scale(1.03)"; btn.style.boxShadow = "0 4px 16px rgba(139,92,246,.4)"; };
     btn.onmouseleave = function() { btn.style.transform = "scale(1)"; btn.style.boxShadow = "0 3px 12px rgba(139,92,246,.3)"; };
