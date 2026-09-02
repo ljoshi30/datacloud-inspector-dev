@@ -7774,7 +7774,18 @@
   // 10-column ceiling for the user — no SF datatable involved. Draggable + resizable,
   // sticky header + sticky Id column, with a "Download CSV (all columns)" action.
   let allColsTableEl = null;
+  // Remembers the last rendered results table so it can be REOPENED after the user
+  // closes it (accidentally or not) WITHOUT re-querying — the rows are still in memory.
+  let _lastTableState = null;   // { objectName, columns, rows, wantRows, allColumns }
   function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } }
+  function reopenLastTable() {
+    if (_lastTableState && typeof showAllColumnsTable === "function") {
+      var s = _lastTableState;
+      showAllColumnsTable(s.objectName, s.columns, s.rows, s.wantRows, s.allColumns);
+      return true;
+    }
+    return false;
+  }
   // Popup showing one cell's FULL value (for long text / JSON / blob fields), with a
   // Copy button and pretty-print for JSON. Salesforce-like "view field value" behavior.
   var _cellViewEl = null;
@@ -7978,6 +7989,8 @@
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     closeAllColumnsTable();
+    // Remember everything needed to reopen this exact table later, with no re-query.
+    _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     // Field label lookup from whatever we discovered (falls back to the api name).
     const meta = {};
@@ -8030,7 +8043,8 @@
       }
     });
     const reloadBtn = document.createElement("button");
-    reloadBtn.textContent = "Reload";
+    reloadBtn.textContent = "↻ Reload";
+    reloadBtn.title = "Fetch the number of rows in the box above, fresh from Salesforce (uses a query / Data Cloud credits).";
     reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     reloadBtn.onclick = () => {
       var raw = parseInt(rowsInput.value, 10) || 1000;
@@ -8041,20 +8055,21 @@
       const sub = panel.querySelector(".dc-ac-sub");
       if (sub) sub.textContent = "Loading " + want + " rows…" + (want > DC_WARN_ROWS ? " (large query — this can take a while)" : "");
       const fail = (err) => {
-        reloadBtn.disabled = false; reloadBtn.textContent = "Reload";
+        reloadBtn.disabled = false; reloadBtn.textContent = "↻ Reload";
         hideTableSpinner(panel);
         const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
       };
       ensureQueryContext(function (ready) {
         if (!ready) {
-          reloadBtn.disabled = false; reloadBtn.textContent = "Reload";
+          reloadBtn.disabled = false; reloadBtn.textContent = "↻ Reload";
           hideTableSpinner(panel);
           var sub2 = panel.querySelector(".dc-ac-sub");
           if (sub2) { sub2.textContent = ""; var cw = document.createElement("div"); sub2.appendChild(cw); renderConnectButton(cw, function () { reloadBtn.click(); }); }
           else { fail(new Error("Session not ready — try scrolling the table, then retry.")); }
           return;
         }
-        loadColumnsDataCached(objectName, columns, want, false).then((newRows) => {
+        // force:true — Reload is an explicit action; the user wants CURRENT data, not cache.
+        loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
           showAllColumnsTable(objectName, columns, newRows, want);
         }).catch(fail);
       });
@@ -8124,29 +8139,7 @@
     };
 
     // "Refresh" — force a fresh query, bypassing the in-memory cache. Use this when
-    // the data may have changed in Salesforce; normal re-views serve cached rows free.
-    const refreshBtn = document.createElement("button");
-    refreshBtn.textContent = "↻ Refresh";
-    refreshBtn.title = "Fetch the latest data from Salesforce (uses a query / Data Cloud credits). Re-opening this table otherwise reuses cached rows for free.";
-    refreshBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
-    refreshBtn.onclick = () => {
-      var raw = parseInt(rowsInput.value, 10) || 1000;
-      var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
-      refreshBtn.disabled = true; refreshBtn.textContent = "Refreshing…";
-      showTableSpinner(panel, "Refreshing from Salesforce…");
-      const fail = (err) => {
-        refreshBtn.disabled = false; refreshBtn.textContent = "↻ Refresh";
-        hideTableSpinner(panel);
-        const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
-      };
-      ensureQueryContext(function (ready) {
-        if (!ready) { refreshBtn.disabled = false; refreshBtn.textContent = "↻ Refresh"; hideTableSpinner(panel); fail(new Error("Session not ready — scroll the table once, then retry.")); return; }
-        loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
-          showAllColumnsTable(objectName, columns, newRows, want);
-        }).catch(fail);
-      });
-    };
-    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(refreshBtn); rowsWrap.appendChild(countBtn);
+    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
     hdr.appendChild(rowsWrap);
 
     // "Hide empty columns" — data is often sparse (many all-null columns), so this
@@ -8253,6 +8246,9 @@
     // Export All with a working cancel. Cancel uses a GLOBAL window flag that
     // exportPaginatedCsv actually checks between batches (a function-local var was
     // out of scope there, so cancel never fired — that bug is fixed here).
+    // Holds the last Export All result so a repeat click re-downloads the SAME file for
+    // free instead of silently re-querying (which would burn credits again).
+    var _exportAllDone = null;   // { blobUrl, filename, rows }
     exportAllBtn.onclick = function () {
       // If export is in progress, this click cancels it.
       if (exportAllBtn.dataset.exporting === "true") {
@@ -8260,6 +8256,16 @@
         exportAllBtn.textContent = "Cancelling…";
         exportAllBtn.disabled = true;
         return;
+      }
+      // Already exported once this session → don't re-query silently. Offer the saved
+      // file (no credits) or an explicit fresh re-export.
+      if (_exportAllDone && _exportAllDone.blobUrl) {
+        var again = confirm("Already exported " + _exportAllDone.rows.toLocaleString() + " rows this session.\n\nOK = re-download the SAME file (no query, no credits)\nCancel = fetch fresh from Salesforce (uses credits)");
+        if (again) {
+          var a0 = document.createElement("a"); a0.href = _exportAllDone.blobUrl; a0.download = _exportAllDone.filename; a0.click();
+          return;
+        }
+        // fall through to a fresh export
       }
       var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
       var confirmMsg = btnTotal
@@ -8292,11 +8298,13 @@
           exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
         }).then(function (res) {
           restoreBtnUi();
-          exportAllBtn.textContent = originalText + " (" + res.totalRows.toLocaleString() + " rows)";
+          exportAllBtn.textContent = "✓ Exported (" + res.totalRows.toLocaleString() + " rows)";
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
-          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+          // Keep the blob so a repeat click re-downloads the SAME file for free (no
+          // re-query). Not revoked here; released when the table is closed/rebuilt.
+          _exportAllDone = { blobUrl: res.blobUrl, filename: fn, rows: res.totalRows };
         }).catch(function (err) {
           var cancelled = window.__dcExportCancel || /cancelled by user/i.test(String(err && err.message || err));
           restoreBtnUi();
@@ -8339,6 +8347,7 @@
     // Build one WHERE fragment from a {colSel, opSel, valCtl} condition row.
     function fragOf(cond) {
       var fn = cond.colSel.value, op = cond.opSel.value, t = inferType(fn);
+      if (!fn) return null;                 // no column chosen yet → skip this condition
       var raw = (cond.valCtl && cond.valCtl.value != null) ? String(cond.valCtl.value).trim() : "";
       var q = '"' + fn.replace(/"/g, '""') + '"';
       if (op === "IS NULL") return q + " IS NULL";
@@ -8385,20 +8394,36 @@
         var q = (query || "").trim().toLowerCase();
         var keep = colSel.value;                    // preserve current selection if still visible
         colSel.innerHTML = "";
+        // Search-driven: with NO query we show only the prompt (no column list). The user
+        // types in the search box to reveal matching columns, then picks one.
+        var ph = document.createElement("option"); ph.value = ""; ph.disabled = true;
+        ph.textContent = q ? "Select column…" : "Type in search box →";
+        colSel.appendChild(ph);
         var matched = 0;
-        fullColsForFilter.forEach(function (fn) {
-          var label = meta[fn] || fn;
-          if (q && label.toLowerCase().indexOf(q) < 0 && fn.toLowerCase().indexOf(q) < 0) return;
-          var o = document.createElement("option"); o.value = fn; o.textContent = label; colSel.appendChild(o);
-          matched++;
-        });
-        if (!matched) { var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "(no match)"; colSel.appendChild(o0); }
-        // keep prior selection when it still matches; else select first
+        if (q) {
+          fullColsForFilter.forEach(function (fn) {
+            var label = meta[fn] || fn;
+            if (label.toLowerCase().indexOf(q) < 0 && fn.toLowerCase().indexOf(q) < 0) return;
+            var o = document.createElement("option"); o.value = fn; o.textContent = label; colSel.appendChild(o);
+            matched++;
+          });
+          if (!matched) { var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "(no match)"; o0.disabled = true; colSel.appendChild(o0); }
+        }
+        // Keep prior selection when it still matches; otherwise leave the prompt selected
+        // (never auto-pick a column).
         if (keep && Array.prototype.some.call(colSel.options, function (o) { return o.value === keep; })) colSel.value = keep;
+        else colSel.value = "";
       }
       populateCols("");
       colSearch.addEventListener("input", function () { populateCols(colSearch.value); });
-      if (preset && preset.col) colSel.value = preset.col;   // restore saved column
+      // Restore a saved-filter column: it won't be in the (empty) search list, so add its
+      // option explicitly and pre-fill the search box with its label for clarity.
+      if (preset && preset.col) {
+        var pl = meta[preset.col] || preset.col;
+        var po = document.createElement("option"); po.value = preset.col; po.textContent = pl; colSel.appendChild(po);
+        colSel.value = preset.col;
+        colSearch.value = pl;
+      }
       const opSel = document.createElement("select");
       opSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
       const valWrap = document.createElement("span");
@@ -8561,6 +8586,9 @@
       clearF.style.cursor = isActive ? "pointer" : "not-allowed";
       // Disable applyF if no condition has a filled value
       var hasFilledCondition = conditions.some(function (c) {
+        if (!c.colSel.value) return false;   // must have a column chosen
+        var op = c.opSel && c.opSel.value;
+        if (op === "IS NULL" || op === "IS NOT NULL") return true;   // no value needed
         var val = (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value).trim() : "";
         return val !== "" || inferType(c.colSel.value) === "bool";
       });
@@ -10877,6 +10905,8 @@
 
     const colBtn    = mkBtn("dc-explore-cols-btn",   "Columns",    "Select and save columns",   "linear-gradient(135deg,#6366f1,#4f46e5)", colIconSvg,    "Pick & reorder fields");
     const exportBtn = mkBtn("dc-explore-export-btn", "Export CSV", "Export visible rows to CSV", "linear-gradient(135deg,#10b981,#059669)", exportIconSvg, "Download visible rows");
+    const reopenIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 8a6 6 0 1 1 1.8 4.3'/><path d='M2 12v-3h3'/></svg>";
+    const reopenBtn = mkBtn("dc-explore-reopen-btn", "Show last results", "Reopen the last results table you closed — same rows & columns, no new query", "linear-gradient(135deg,#0ea5e9,#0369a1)", reopenIconSvg, "No new query / no credits");
 
     const separator = document.createElement("div");
     separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
@@ -10891,9 +10921,16 @@
 
     colBtn.onclick    = (e) => { e.stopPropagation(); openExploreModal(); };
     exportBtn.onclick = (e) => { e.stopPropagation(); const rl = findRecordListEl(); if (rl) exportExploreCsv(rl); };
+    reopenBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!reopenLastTable()) {
+        alert("No results to reopen yet. Use Columns → \"Show selected columns' data\" first.");
+      }
+    };
 
     menu.appendChild(colBtn);
     menu.appendChild(exportBtn);
+    menu.appendChild(reopenBtn);
     menu.appendChild(separator);
     menu.appendChild(dismissRow);
 
