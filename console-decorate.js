@@ -10507,29 +10507,28 @@
               if (space) _auraSniff.dataSpace = space;
               var rv = a.returnValue || {};
               var cnt = null;
-              // 1) Read the COUNT value from the result row(s), any shape.
+              // The count value lives INSIDE the single result row. Do NOT fall back to a
+              // rowCount/returnedRows field — for "SELECT COUNT(*) FROM (...)" that field is
+              // the number of OUTPUT rows (=1), not the count value (that bug showed 1).
+              // Deep-scan the row for the largest non-negative integer we can find, so we
+              // work whether the value is a string/number, in an array, or nested object.
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var first = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
-              if (first != null) {
-                var vals = Array.isArray(first) ? first : (typeof first === "object" ? Object.keys(first).map(function (k) { return first[k]; }) : [first]);
-                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
+              function scanForInt(v, depth) {
+                if (v == null || depth > 4) return null;
+                if (typeof v === "number") return (isFinite(v) && v >= 0 && Math.floor(v) === v) ? v : null;
+                if (typeof v === "string") { var t = v.trim(); if (/^\d+$/.test(t)) return parseInt(t, 10); return null; }
+                var best = null;
+                if (Array.isArray(v)) { for (var k = 0; k < v.length; k++) { var r1 = scanForInt(v[k], depth + 1); if (r1 != null && (best == null || r1 > best)) best = r1; } return best; }
+                if (typeof v === "object") { for (var kk in v) { if (Object.prototype.hasOwnProperty.call(v, kk)) { var r2 = scanForInt(v[kk], depth + 1); if (r2 != null && (best == null || r2 > best)) best = r2; } } return best; }
+                return null;
               }
-              // 2) Fallback: some responses carry the total in a status/rowCount field
-              // (and for heavy/async queries the row may not be inline). For a COUNT
-              // query that IS the answer.
+              if (first != null) cnt = scanForInt(first, 0);
+              // Still nothing readable → surface the ACTUAL row so it's diagnosable, not "1".
               if (cnt === null) {
-                var rc = (rv.status && rv.status.rowCount) != null ? rv.status.rowCount
-                       : (rv.rowCount != null ? rv.rowCount
-                       : (rv.returnedRows != null ? rv.returnedRows : null));
-                var rcn = parseInt(rc, 10);
-                if (!isNaN(rcn) && rcn >= 0) cnt = rcn;
-              }
-              // 3) Still nothing → surface the actual returnValue keys so the failure is
-              // diagnosable instead of a dead-end "couldn't read".
-              if (cnt === null) {
-                var seen = "";
-                try { seen = Object.keys(rv).join(", ") || "(empty returnValue)"; } catch (e) { seen = "(unreadable)"; }
-                reject(new Error("Count value not found in response. Response contained: " + seen + ". If this query is heavy, it may still be running — try again in a moment, or use Fetch & Export.")); return;
+                var dump = "";
+                try { dump = JSON.stringify(first !== null ? first : rv).slice(0, 300); } catch (e) { dump = "(unreadable)"; }
+                reject(new Error("Count value not found in the response row. Raw row: " + dump + " — please share this; meanwhile use Fetch & Export for the total.")); return;
               }
               resolve({ count: cnt, ok: true });
             }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
