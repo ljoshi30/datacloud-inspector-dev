@@ -10487,9 +10487,14 @@
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
         if (cands.indexOf("default") < 0) cands.push("default");
-        function tryDs(i) {
+        var MAX_POLL = 20;   // heavy async queries: retry up to ~20× (see delay below)
+        function tryDs(i, attempt) {
+          attempt = attempt || 0;
           var space = cands[i] || "";
           _auraQid = (_auraQid || 0) + 1;
+          // rowLimit:1 is correct — a wrapped count returns exactly 1 row. (This is NOT
+          // the cause of heavy-query delays: rowLimit:1 works for other queries incl.
+          // JOINs. Heavy GROUP BY aggregations simply run async and need the retry below.)
           var act = { id: "dcqecnt-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: countSql, rowLimit: 1, dataspace: space } };
           var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
@@ -10501,17 +10506,16 @@
                 var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
                 var cleanErr = em;
                 try { var p = (typeof em === "string" && em.charAt(0) === "{") ? JSON.parse(em) : null; if (p && p.primaryMessage) cleanErr = p.primaryMessage; else if (p && p.errorMessage) cleanErr = p.errorMessage.replace(/^[A-Z_]+:\s*/, ""); } catch (e2) {}
-                if (/denied authorization|not authorized/i.test(cleanErr) && i + 1 < cands.length) { tryDs(i + 1); return; }
+                if (/denied authorization|not authorized/i.test(cleanErr) && i + 1 < cands.length) { tryDs(i + 1, 0); return; }
                 reject(new Error(cleanErr || "Count query failed")); return;
               }
               if (space) _auraSniff.dataSpace = space;
               var rv = a.returnValue || {};
               var cnt = null;
-              // The count value lives INSIDE the single result row. Do NOT fall back to a
-              // rowCount/returnedRows field — for "SELECT COUNT(*) FROM (...)" that field is
-              // the number of OUTPUT rows (=1), not the count value (that bug showed 1).
-              // Deep-scan the row for the largest non-negative integer we can find, so we
-              // work whether the value is a string/number, in an array, or nested object.
+              // The count value lives INSIDE the single result row. Do NOT read a
+              // rowCount/returnedRows field — for "SELECT COUNT(*) FROM (...)" that is the
+              // number of OUTPUT rows (=1), not the count value (that bug showed 1).
+              // Deep-scan the row for the non-negative integer, any shape.
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var first = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
               function scanForInt(v, depth) {
@@ -10524,16 +10528,27 @@
                 return null;
               }
               if (first != null) cnt = scanForInt(first, 0);
-              // Still nothing readable → surface the ACTUAL row so it's diagnosable, not "1".
-              if (cnt === null) {
-                var dump = "";
-                try { dump = JSON.stringify(first !== null ? first : rv).slice(0, 300); } catch (e) { dump = "(unreadable)"; }
-                reject(new Error("Count value not found in the response row. Raw row: " + dump + " — please share this; meanwhile use Fetch & Export for the total.")); return;
+              if (cnt !== null) { resolve({ count: cnt, ok: true }); return; }
+              // No row value yet. Heavy queries run ASYNC: the response comes back with
+              // dataRows:[] and completionStatus:"Unspecified"/"Running" while Data Cloud is
+              // still materializing (rowsProcessed climbing). Re-issue the query a few times
+              // with a short delay until the result row is ready.
+              var st = rv.status || {};
+              var notFinished = (dr.length === 0) &&
+                (st.completionStatus === "Unspecified" || st.completionStatus === "Running" ||
+                 st.completionStatus === "Processing" || st.progress < 100 || st.completionStatus == null);
+              if (notFinished && attempt < MAX_POLL) {
+                if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting… (" + (attempt + 1) + ")";
+                setTimeout(function () { tryDs(i, attempt + 1); }, 1500);   // ~1.5s × 20 ≈ 30s max
+                return;
               }
-              resolve({ count: cnt, ok: true });
+              // Give up: surface the actual response so it's diagnosable, never a wrong number.
+              var dump = "";
+              try { dump = JSON.stringify(first !== null ? first : rv).slice(0, 300); } catch (e) { dump = "(unreadable)"; }
+              reject(new Error("The query is still processing after ~30s (heavy aggregation). Try Count again, or use Fetch & Export which streams results. [" + dump + "]")); return;
             }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
         }
-        tryDs(0);
+        tryDs(0, 0);
       });
     }
 
