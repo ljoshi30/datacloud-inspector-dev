@@ -10487,7 +10487,8 @@
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
         if (cands.indexOf("default") < 0) cands.push("default");
-        var MAX_POLL = 20;   // heavy async queries: retry up to ~20× (see delay below)
+        var MAX_POLL = 3;   // brief retry for queries that finish in a few seconds; heavy
+                            // aggregations that don't finish fast are sent to Fetch instead.
         function tryDs(i, attempt) {
           attempt = attempt || 0;
           var space = cands[i] || "";
@@ -10538,14 +10539,18 @@
                 (st.completionStatus === "Unspecified" || st.completionStatus === "Running" ||
                  st.completionStatus === "Processing" || st.progress < 100 || st.completionStatus == null);
               if (notFinished && attempt < MAX_POLL) {
-                if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting… (" + (attempt + 1) + ")";
-                setTimeout(function () { tryDs(i, attempt + 1); }, 1500);   // ~1.5s × 20 ≈ 30s max
+                if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
+                setTimeout(function () { tryDs(i, attempt + 1); }, 1500);   // ~1.5s × 3 ≈ 5s
                 return;
               }
-              // Give up: surface the actual response so it's diagnosable, never a wrong number.
-              var dump = "";
-              try { dump = JSON.stringify(first !== null ? first : rv).slice(0, 300); } catch (e) { dump = "(unreadable)"; }
-              reject(new Error("The query is still processing after ~30s (heavy aggregation). Try Count again, or use Fetch & Export which streams results. [" + dump + "]")); return;
+              // Heavy aggregation that won't count quickly (e.g. GROUP BY across large
+              // joined tables with APPROX_COUNT_DISTINCT). Counting requires materializing
+              // every group first, so it's as expensive as the query itself — it can't be
+              // fast. Point the user to Fetch & Export, which STREAMS rows instead of
+              // waiting for one final aggregate. Flag it so the UI shows a plain message.
+              var e2 = new Error("This query is too heavy to count directly — it aggregates a large joined result. Use Fetch & Export instead: it streams the rows and shows the total when done.");
+              e2.heavyCount = true;
+              reject(e2); return;
             }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
         }
         tryDs(0, 0);
@@ -10627,6 +10632,13 @@
           if (!err && couldntParse) {
             cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Couldn't read the count</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>The query ran but the count value wasn't in the response. Please click <b># Count</b> again — if it persists, use <b>Fetch &amp; Export</b> to see the row total.</div>";
+            return;
+          }
+          // Heavy-aggregation queries that can't be counted quickly → clean amber message
+          // pointing to Fetch & Export (not a scary "error").
+          if (err && err.heavyCount) {
+            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Count too heavy for this query</span></div>"
+              + "<div style='font-size:12px;color:#475569;line-height:1.6;'>This query aggregates a large joined result (GROUP BY over many rows). Counting requires building every group first, so it can't be quick.<br><br>Use <b>▶ Fetch &amp; Export</b> — it streams the rows and shows the total when done.</div>";
             return;
           }
           if (err) {
