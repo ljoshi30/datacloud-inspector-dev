@@ -5884,7 +5884,12 @@
   // incrementally. Extension-only (pagination needs the sid-cookie background).
   // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
   // Resolves { blobUrl, totalRows, columns } — the caller triggers the download.
-  function exportPaginatedCsv(sql, dataspace, onProgress) {
+  // `isCancelled` (optional) = a per-caller function returning true when THAT caller's
+  // own cancel button was pressed. Passing it keeps each feature's cancel state private
+  // so Explorer and Query Editor (which share this function) can never cancel each other.
+  // If omitted, nothing cancels (the caller simply doesn't offer cancellation).
+  function exportPaginatedCsv(sql, dataspace, onProgress, isCancelled) {
+    var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
     return new Promise(function (resolve, reject) {
       // Bookmarklet: paginate via LIMIT/OFFSET batches through /aura.
       if (!extBridgePresent()) {
@@ -5903,10 +5908,8 @@
         var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
 
         function fetchBatch(offset) {
-          // Check cancel flags before each batch. Uses GLOBAL window flags so any caller
-          // (Explorer Export All, filtered Download CSV, Query Editor) can cancel — a
-          // function-local var here would be out of scope and silently never cancel.
-          if (window.__dcExportCancel || window.__dcQueryExportCancelled) {
+          // Per-caller cancel check — reads only THIS caller's own flag (no cross-feature leak).
+          if (cancelled()) {
             reject(new Error("Export cancelled by user"));
             return;
           }
@@ -5970,8 +5973,8 @@
         // 2) paginate remaining chunks
         var queryId = first.queryId;
         function nextPage() {
-          // Check cancel flag before each page (extension path) — global flag, see above.
-          if (window.__dcExportCancel || window.__dcQueryExportCancelled) {
+          // Per-caller cancel check (extension path).
+          if (cancelled()) {
             reject(new Error("Export cancelled by user"));
             return;
           }
@@ -7989,6 +7992,10 @@
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     closeAllColumnsTable();
+    // Explorer-private cancel flag for its CSV / Export All (only one export runs at a
+    // time in this table). Kept LOCAL so it can never collide with the Query Editor's
+    // own export cancel — the two features are fully independent.
+    var _explorerExportCancel = false;
     // Remember everything needed to reopen this exact table later, with no re-query.
     _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -8192,9 +8199,9 @@
     csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
-      // If a batched download is already running, this click cancels it.
+      // If a batched download is already running, this click cancels it (Explorer-local flag).
       if (csvBtn.dataset.exporting === "true") {
-        window.__dcExportCancel = true;
+        _explorerExportCancel = true;
         csvBtn.textContent = "Cancelling…"; csvBtn.disabled = true;
         return;
       }
@@ -8203,7 +8210,7 @@
       // If filter active and more rows exist than loaded → paginate to get all (cancellable)
       if (fs2 && fs2.active && fc > rows.length) {
         if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches — you can click Cancel while it runs.")) return;
-        window.__dcExportCancel = false;
+        _explorerExportCancel = false;
         csvBtn.dataset.exporting = "true"; csvBtn.disabled = false;
         csvBtn.textContent = "✕ Cancel export";
         csvBtn.style.background = "#dc2626"; csvBtn.style.borderColor = "#dc2626";
@@ -8217,18 +8224,18 @@
         var wherePart = fs2.where ? " WHERE " + fs2.where : "";
         var allSql = "SELECT " + exportCols + " FROM " + sqlQuoteIdent(objectName) + wherePart;
         exportPaginatedCsv(allSql, ds2, function (fetched) {
-          if (window.__dcExportCancel) return;
+          if (_explorerExportCancel) return;
           csvBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + " rows…)";
-        }).then(function (res) {
+        }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreCsvUi();
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
         }).catch(function (err) {
-          var cancelled = window.__dcExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          var wasCancelled = _explorerExportCancel || /cancelled by user/i.test(String(err && err.message || err));
           restoreCsvUi();
-          window.__dcExportCancel = false;
-          if (!cancelled) alert("Export failed: " + (err && err.message || err));
+          _explorerExportCancel = false;
+          if (!wasCancelled) alert("Export failed: " + (err && err.message || err));
         });
         return;
       }
@@ -8253,9 +8260,9 @@
     // free instead of silently re-querying (which would burn credits again).
     var _exportAllDone = null;   // { blobUrl, filename, rows }
     exportAllBtn.onclick = function () {
-      // If export is in progress, this click cancels it.
+      // If export is in progress, this click cancels it (Explorer-local flag).
       if (exportAllBtn.dataset.exporting === "true") {
-        window.__dcExportCancel = true;
+        _explorerExportCancel = true;
         exportAllBtn.textContent = "Cancelling…";
         exportAllBtn.disabled = true;
         return;
@@ -8275,7 +8282,7 @@
         ? "Download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
         : "Download ALL records from this object? This may take a while. You can click Cancel while it runs.";
       if (!confirm(confirmMsg)) return;
-      window.__dcExportCancel = false;
+      _explorerExportCancel = false;
       exportAllBtn.dataset.exporting = "true";
       exportAllBtn.textContent = "✕ Cancel Export";
       exportAllBtn.style.background = "#dc2626"; exportAllBtn.style.borderColor = "#dc2626";
@@ -8297,9 +8304,9 @@
           return;
         }
         exportPaginatedCsv(exportSql, ds, function (fetched, total) {
-          if (window.__dcExportCancel) return; // don't overwrite the "Cancelling…" label
+          if (_explorerExportCancel) return; // don't overwrite the "Cancelling…" label
           exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
-        }).then(function (res) {
+        }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreBtnUi();
           exportAllBtn.textContent = "✓ Exported (" + res.totalRows.toLocaleString() + " rows)";
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
@@ -8309,10 +8316,10 @@
           // re-query). Not revoked here; released when the table is closed/rebuilt.
           _exportAllDone = { blobUrl: res.blobUrl, filename: fn, rows: res.totalRows };
         }).catch(function (err) {
-          var cancelled = window.__dcExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          var wasCancelled = _explorerExportCancel || /cancelled by user/i.test(String(err && err.message || err));
           restoreBtnUi();
-          window.__dcExportCancel = false;
-          if (cancelled) { exportAllBtn.textContent = originalText; return; }
+          _explorerExportCancel = false;
+          if (wasCancelled) { exportAllBtn.textContent = originalText; return; }
           alert("Export failed: " + (err && err.message || err));
         });
       });
@@ -10565,7 +10572,7 @@
             + "<div style='color:#64748b;font-size:11px;'>" + countHtml + "</div>"
             + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
           cardBody.appendChild(cancelBtn);
-        }).then(function (res) {
+        }, function () { return window.__dcQueryExportCancelled === true; }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
