@@ -8809,7 +8809,10 @@
     // widget + 2 listeners per cell. This is the memory/perf win for wide tables:
     // 234k cells now carry zero widgets/listeners; the table has exactly 3 handlers.
     const cellTools = document.createElement("span");
-    cellTools.style.cssText = "position:absolute;right:2px;top:2px;display:flex;gap:2px;z-index:5;background:rgba(255,255,255,.97);border-radius:4px;padding:1px;box-shadow:0 1px 4px rgba(0,0,0,.15);";
+    // position:FIXED + appended to <body> so the cell's overflow:hidden (needed for the
+    // text ellipsis) can't clip it, and long cell text never spills. It's placed over the
+    // hovered cell's top-right using the cell's screen rect.
+    cellTools.style.cssText = "position:fixed;display:flex;gap:2px;z-index:2147483647;background:rgba(255,255,255,.98);border-radius:4px;padding:1px;box-shadow:0 1px 5px rgba(0,0,0,.2);";
     const mkTool = (label, title) => {
       const b = document.createElement("button");
       b.textContent = label; b.title = title;
@@ -8824,25 +8827,29 @@
     // which would CLIP the buttons. So while hovering we flip that td to overflow:visible
     // and restore it on detach — the buttons then show above the cell content.
     const detachTools = () => {
-      if (_toolsTd) { _toolsTd.style.overflow = "hidden"; }
       if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
       _toolsTd = null;
     };
     const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
-    // Delegation: a single mouseover on tbody positions the shared widget into the cell.
+    // Delegation: a single mouseover on tbody positions the shared widget over the cell.
     tbody.addEventListener("mouseover", (e) => {
       const td = e.target && e.target.closest ? e.target.closest("td[data-c]") : null;
       if (!td) return;
       if (td === _toolsTd) return;                 // already showing here
-      if (_toolsTd) { _toolsTd.style.overflow = "hidden"; }   // restore previous cell
-      if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
       _toolsTd = td;
-      td.style.overflow = "visible";               // let the tools show
       viewToolBtn.style.display = (td.textContent || "").length > 40 ? "" : "none";
-      td.appendChild(cellTools);
+      // Append to the panel (not body) so it's auto-removed when the table closes.
+      if (!cellTools.parentNode) panel.appendChild(cellTools);
+      // Place at the cell's top-right (screen coords, since position:fixed).
+      var r = td.getBoundingClientRect();
+      cellTools.style.top = (r.top + 2) + "px";
+      cellTools.style.left = "auto";
+      cellTools.style.right = (window.innerWidth - r.right + 2) + "px";
     });
-    // Hide when the pointer leaves the table body entirely.
+    // Hide when the pointer leaves the table body entirely, or the table scrolls
+    // (fixed coords would otherwise drift from the cell).
     tbody.addEventListener("mouseleave", detachTools);
+    scroll.addEventListener("scroll", detachTools);
     copyToolBtn.onclick = (e) => {
       e.stopPropagation();
       if (!_toolsTd) return;
