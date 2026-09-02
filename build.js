@@ -488,6 +488,108 @@ if (fs.existsSync(extDir)) {
   fs.writeFileSync(path.join(ffDir, "manifest.json"), JSON.stringify(ffManifest, null, 2) + "\n");
 }
 
+// ---- PUBLIC extensions (Chrome + Firefox) for the WEB STORE ------------------
+// The FULL chrome-extension/ above is the internal dev vehicle (includes the AI
+// feature + an internal SF gateway host) and must NOT be published. This block
+// emits a CLEAN, store-safe extension from the STRIPPED public code:
+//   - inject.js  = publicCode (mapping + DS/DLO/DMO only; AI already @strip'd out)
+//   - background = ONLY the toolbar-click injector (no SQL relay, no AI, no sid read)
+//   - NO bridge.js (public features inject directly; they never use the bridge)
+//   - manifest   = minimal perms (scripting, activeTab) + Salesforce hosts ONLY
+//                  (no `cookies`, no `storage`, no AI/internal hosts)
+// This matches the public listing's promise: read-only, nothing leaves the browser.
+if (fs.existsSync(extDir)) {
+  const pubExtDir = path.join(dir, "chrome-extension-public");
+  const pubFfDir  = path.join(dir, "firefox-extension-public");
+  try { fs.mkdirSync(pubExtDir, { recursive: true }); } catch (e) {}
+
+  // Minimal background: the toolbar click toggles the tool by injecting the public
+  // code into the page's MAIN world. Nothing else. (Same toggle contract: 2nd run
+  // tears down.) Cross-browser via the browser/chrome alias.
+  const PUBLIC_BG =
+`/*
+ * PUBLIC build — Data 360 Inspector (Chrome Web Store / Firefox AMO).
+ * Toolbar-icon click injects the inspector into the page's MAIN world.
+ * MAIN world is required to read Salesforce Lightning component properties
+ * that hold the API names we display. Clicking again tears it down (toggle).
+ * READ-ONLY. No network calls of any kind — nothing leaves the browser.
+ */
+var api = (typeof browser !== "undefined") ? browser : chrome;
+api.action.onClicked.addListener(async (tab) => {
+  if (!tab || !tab.id) return;
+  try {
+    await api.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      world: "MAIN",
+      files: ["inject.js"],
+    });
+  } catch (e) {}
+});
+`;
+
+  // Minimal, store-safe manifest: no cookies, no storage, no AI/internal hosts.
+  const chromeManifestFull = JSON.parse(fs.readFileSync(path.join(extDir, "manifest.json"), "utf8"));
+  const sfHosts = [
+    "https://*.lightning.force.com/*",
+    "https://*.salesforce.com/*",
+    "https://*.salesforce-setup.com/*",
+    "https://*.force.com/*",
+  ];
+  const pubChromeManifest = {
+    manifest_version: 3,
+    name: "Data 360 Inspector",
+    version: chromeManifestFull.version,
+    description: "Read-only developer tool for Salesforce Data Cloud / Data 360. Reveals API (developer) names on the DLO→DMO mapping canvas and exports Data Stream / DLO / DMO field lists. Nothing leaves your browser.",
+    icons: chromeManifestFull.icons,
+    action: chromeManifestFull.action,
+    permissions: ["scripting", "activeTab"],
+    host_permissions: sfHosts,
+    content_scripts: [
+      { matches: sfHosts, js: ["inject.js"], run_at: "document_idle", all_frames: false }
+    ],
+    background: { service_worker: "background.js" },
+  };
+  // NOTE: content_scripts here would double-inject with the click handler; the tool
+  // self-guards (2nd run = teardown), but to avoid a load-time auto-inject we DROP the
+  // content_scripts entry — injection is user-initiated via the toolbar click only.
+  delete pubChromeManifest.content_scripts;
+
+  fs.writeFileSync(path.join(pubExtDir, "inject.js"), publicCode);
+  fs.writeFileSync(path.join(pubExtDir, "background.js"), PUBLIC_BG);
+  fs.writeFileSync(path.join(pubExtDir, "manifest.json"), JSON.stringify(pubChromeManifest, null, 2) + "\n");
+  // icons (reuse)
+  const pubIcons = path.join(pubExtDir, "icons"); try { fs.mkdirSync(pubIcons, { recursive: true }); } catch (e) {}
+  const srcIcons = path.join(extDir, "icons");
+  if (fs.existsSync(srcIcons)) for (const ic of fs.readdirSync(srcIcons)) { if (/^icon\d+\.(png|ico)$/i.test(ic)) fs.copyFileSync(path.join(srcIcons, ic), path.join(pubIcons, ic)); }
+  // remove any stale bridge.js (public build must not ship it)
+  try { fs.unlinkSync(path.join(pubExtDir, "bridge.js")); } catch (e) {}
+
+  // Firefox public variant
+  try { fs.mkdirSync(pubFfDir, { recursive: true }); } catch (e) {}
+  const pubFfManifest = JSON.parse(JSON.stringify(pubChromeManifest));
+  pubFfManifest.background = { scripts: ["background.js"] };
+  pubFfManifest.browser_specific_settings = { gecko: { id: "data360-inspector@ljoshi30", strict_min_version: "128.0" } };
+  fs.writeFileSync(path.join(pubFfDir, "inject.js"), publicCode);
+  fs.writeFileSync(path.join(pubFfDir, "background.js"), PUBLIC_BG);
+  fs.writeFileSync(path.join(pubFfDir, "manifest.json"), JSON.stringify(pubFfManifest, null, 2) + "\n");
+  const pubFfIcons = path.join(pubFfDir, "icons"); try { fs.mkdirSync(pubFfIcons, { recursive: true }); } catch (e) {}
+  if (fs.existsSync(srcIcons)) for (const ic of fs.readdirSync(srcIcons)) { if (/^icon\d+\.(png|ico)$/i.test(ic)) fs.copyFileSync(path.join(srcIcons, ic), path.join(pubFfIcons, ic)); }
+
+  // GUARD: the public extension must NEVER contain AI/internal-host strings.
+  const forbidden = ["anthropic", "openai", "googleapis", "sfproxy", "sfdc.cl", "dc-ai-explain", "cookies"];
+  for (const dirp of [pubExtDir, pubFfDir]) {
+    for (const f of ["inject.js", "background.js", "manifest.json"]) {
+      const content = fs.readFileSync(path.join(dirp, f), "utf8").toLowerCase();
+      for (const bad of forbidden) {
+        if (content.includes(bad)) {
+          console.error("ERROR: public extension " + path.join(dirp, f) + " contains forbidden token '" + bad + "'; aborting.");
+          process.exit(1);
+        }
+      }
+    }
+  }
+}
+
 // index.html for GitHub Pages — written AFTER version bump so the displayed version is correct.
 const finalVersion = extVersion || _mfVer;
 const indexHtml = fullHtml.replace("<strong>v" + _mfVer + "</strong>", "<strong>v" + finalVersion + "</strong>");
