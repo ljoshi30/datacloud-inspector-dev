@@ -8079,7 +8079,7 @@
     const countBtn = document.createElement("button");
     countBtn.textContent = "Count";
     countBtn.style.cssText = "border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
-    countBtn.title = "Query the total number of records in this object (runs SELECT COUNT(*))";
+    countBtn.title = "Show the TOTAL number of records in this object (or matching the active filter). One quick COUNT(*) query — no rows downloaded.";
     countBtn.onclick = () => {
       countBtn.disabled = true; countBtn.textContent = "Counting…";
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
@@ -8170,6 +8170,7 @@
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
     const sqlBtn = document.createElement("button");
     sqlBtn.textContent = "Edit SQL";
+    sqlBtn.title = "Open a SQL editor to write your own query for this object (single-table SELECT). Advanced alternative to the filter bar.";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
     sqlBtn.onclick = () => {
       // FIX 8: If a UI filter is active (not from SQL), warn user — editing SQL will reset it
@@ -8188,6 +8189,7 @@
       ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
       : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.textContent = csvLabel;
+    csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
       // If a batched download is already running, this click cancels it.
@@ -8242,6 +8244,7 @@
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
     exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
+    exportAllBtn.title = "Download EVERY row of this object as CSV (ignores any filter), fetched in batches from Salesforce. Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.";
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     // Export All with a working cancel. Cancel uses a GLOBAL window flag that
     // exportPaginatedCsv actually checks between batches (a function-local var was
@@ -8317,6 +8320,7 @@
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&#x2715;";
+    closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
     closeBtn.onclick = closeAllColumnsTable;
     hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
@@ -8496,6 +8500,7 @@
     ctrlRow.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;";
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Add condition";
+    addBtn.title = "Add another filter condition (column + operator + value). Multiple conditions combine with the AND/OR selector between them.";
     addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     addBtn.onclick = function () {
       addCondition();
@@ -8508,9 +8513,11 @@
     };
     const applyF = document.createElement("button");
     applyF.textContent = "Apply filter";
+    applyF.title = "Run your conditions as a WHERE query on Salesforce and show matching rows (uses a query / Data Cloud credits).";
     applyF.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
     const clearF = document.createElement("button");
     clearF.textContent = "Clear";
+    clearF.title = "Remove all filter conditions and reload the unfiltered rows.";
     clearF.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     const fStatus = document.createElement("span"); fStatus.style.cssText = "color:#8a94a6;";
     // Snapshot the current condition rows into plain data (for persistence across re-render).
@@ -10903,8 +10910,8 @@
       return b;
     };
 
-    const colBtn    = mkBtn("dc-explore-cols-btn",   "Columns",    "Select and save columns",   "linear-gradient(135deg,#6366f1,#4f46e5)", colIconSvg,    "Pick & reorder fields");
-    const exportBtn = mkBtn("dc-explore-export-btn", "Export CSV", "Export visible rows to CSV", "linear-gradient(135deg,#10b981,#059669)", exportIconSvg, "Download visible rows");
+    const colBtn    = mkBtn("dc-explore-cols-btn",   "Columns",    "Pick which fields to show (beyond Salesforce's 10-column display limit), reorder & save the set, then view all their data in one table.",   "linear-gradient(135deg,#6366f1,#4f46e5)", colIconSvg,    "Pick & reorder fields");
+    const exportBtn = mkBtn("dc-explore-export-btn", "Export CSV", "Download the rows currently shown in Salesforce's own Data Explorer table as a CSV file.", "linear-gradient(135deg,#10b981,#059669)", exportIconSvg, "Download visible rows");
     const reopenIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 8a6 6 0 1 1 1.8 4.3'/><path d='M2 12v-3h3'/></svg>";
     const reopenBtn = mkBtn("dc-explore-reopen-btn", "Show last results", "Reopen the last results table you closed — same rows & columns, no new query", "linear-gradient(135deg,#0ea5e9,#0369a1)", reopenIconSvg, "No new query / no credits");
 
@@ -10936,7 +10943,7 @@
 
     const fab = document.createElement("button");
     fab.id = "dc-fab";
-    fab.title = "Data 360 Inspector";
+    fab.title = "Data 360 Inspector — click for Data Explorer tools (pick columns, view all data, export CSV, reopen last results)";
     fab.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'><circle cx='12' cy='12' r='10' stroke='#fff' stroke-width='1.5'/><circle cx='12' cy='4' r='1.2' fill='#fff'/><circle cx='17.7' cy='6.3' r='1.2' fill='#fff'/><circle cx='20' cy='12' r='1.2' fill='#fff'/><circle cx='17.7' cy='17.7' r='1.2' fill='#fff'/><circle cx='12' cy='20' r='1.2' fill='#fff'/><circle cx='6.3' cy='17.7' r='1.2' fill='#fff'/><circle cx='4' cy='12' r='1.2' fill='#fff'/><circle cx='6.3' cy='6.3' r='1.2' fill='#fff'/><circle cx='12' cy='9.5' r='2.5' fill='#fff'/><path d='M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4' stroke='#fff' stroke-width='1.5' stroke-linecap='round'/></svg>";
     fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;pointer-events:auto;background:linear-gradient(135deg,#2d2b55 0%,#5b4f9e 100%);box-shadow:0 4px 18px rgba(91,79,158,.5);display:flex;align-items:center;justify-content:center;transition:box-shadow .15s,transform .12s;flex-shrink:0;";
     fab.onmouseenter = () => { fab.style.boxShadow = "0 6px 24px rgba(91,79,158,.65)"; fab.style.transform = "scale(1.07)"; };
