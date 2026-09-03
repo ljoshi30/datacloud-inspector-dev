@@ -12843,6 +12843,31 @@ processJSON();
     return edges;
   }
 
+  // Node attributes come back with dataType=null in some orgs, but the graph's EDGES
+  // carry populated sourceAttributeKey/targetAttributeKey blobs that DO include
+  // dataType/businessType/dataRequired for the relationship fields. Build a lookup
+  // keyed by "<entityDeveloperName>::<fieldDeveloperName>" so nodes can borrow it.
+  function buildEdgeAttrTypeMap(dotString) {
+    var map = {};
+    if (!dotString) return map;
+    var keyRegex = /(?:source|target)AttributeKey="((?:[^"\\]|\\.)*)"/g;
+    var m;
+    while ((m = keyRegex.exec(dotString)) !== null) {
+      try {
+        var obj = JSON.parse(m[1].replace(/\\"/g, '"').replace(/\\n/g, '').replace(/\\\\/g, '\\'));
+        var ent = obj && obj.entityDeveloperName;
+        var fld = obj && obj.developerName;
+        if (!ent || !fld) continue;
+        var dt = obj.dataType || obj.businessType || "";
+        if (!dt && obj.dataRequired == null) continue;
+        var k = ent + "::" + fld;
+        if (!map[k]) map[k] = { dataType: dt, dataRequired: !!obj.dataRequired };
+        else if (!map[k].dataType && dt) map[k].dataType = dt;
+      } catch (e) {}
+    }
+    return map;
+  }
+
   // Verify if a relationship between two entities is real based on KQ fields
   // Returns: { verified: boolean, fkField: string, fkSide: "from"|"to", cardinality: string } or null
   function verifyRelationship(fromEnt, toEnt) {
@@ -13622,6 +13647,22 @@ processJSON();
     body.style.cssText = "flex:1;overflow:auto;padding:20px;background:#f8fafc;";
     body.innerHTML = renderERDCards(entities, relationships, sourceMap);
 
+    // Live search — filter cards by label / API name (data-erd-search).
+    body.addEventListener("input", function(e) {
+      if (!e.target || e.target.id !== "dc-erd-search") return;
+      var q = e.target.value.trim().toLowerCase();
+      var cards = body.querySelectorAll(".dc-erd-card");
+      var shown = 0;
+      cards.forEach(function(card) {
+        var key = card.getAttribute("data-erd-search") || "";
+        var match = !q || key.indexOf(q) >= 0;
+        card.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      var countEl = body.querySelector("#dc-erd-search-count");
+      if (countEl) countEl.textContent = q ? (shown + " of " + cards.length + " cards") : "";
+    });
+
     // Event delegation for copy and toggle buttons (CSP-safe)
     body.addEventListener("click", function(e) {
       var target = e.target;
@@ -13676,6 +13717,7 @@ processJSON();
   function parseDOTGraph(dotString) {
     var entities = [];
     var entityMap = {}; // id -> entity
+    var edgeTypeMap = buildEdgeAttrTypeMap(dotString); // "<entityDevName>::<fieldDevName>" -> {dataType,dataRequired}
 
 
     // The DOT format has nodes like: 1 [ label="Name__dlm" entity="{...escaped JSON...}" ]
@@ -13698,22 +13740,25 @@ processJSON();
           try {
             var unescaped = entityJsonStr.replace(/\\"/g, '"').replace(/\\n/g, '').replace(/\\\\/g, '\\');
             var entityData = JSON.parse(unescaped);
+            var _pkSet = {}; (entityData.primaryKeys || []).forEach(function(pk){ if (pk && pk.developerName) _pkSet[pk.developerName] = true; });
+            var _entDev = entityData.developerName || devName;
             var entity = {
               id: nodeId,
-              developerName: entityData.developerName || devName,
+              developerName: _entDev,
               masterLabel: entityData.masterLabel || devName,
               category: getCategoryName(entityData.dataEntityCategoryId),
               categoryId: entityData.dataEntityCategoryId,
               attributes: (entityData.attributes || []).map(function(attr) {
                 var dn = attr.developerName || "";
+                var _et = edgeTypeMap[_entDev + "::" + dn] || null; // type borrowed from edges when node's is null
                 return {
                   masterLabel: attr.masterLabel || dn || "",
                   developerName: dn,
-                  dataType: attr.dataType || attr.businessType || "",
-                  isPrimaryKey: (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
-                  isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+                  dataType: attr.dataType || attr.businessType || (_et && _et.dataType) || "",
+                  isPrimaryKey: !!_pkSet[dn] || (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+                  isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn) && !_pkSet[dn],
                   foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
-                  isRequired: attr.dataRequired || false
+                  isRequired: attr.dataRequired || (_et && _et.dataRequired) || false
                 };
               })
             };
@@ -13737,22 +13782,30 @@ processJSON();
         var unescaped = entityJsonStr.replace(/\\"/g, '"').replace(/\\n/g, '').replace(/\\\\/g, '\\');
         var entityData = JSON.parse(unescaped);
 
+        // Authoritative PK set from entity.primaryKeys (verified via probe: attribute-level
+        // primaryIndexOrder comes back null, but primaryKeys[] is populated, e.g.
+        // [{index:1, developerName:"Id__c", masterLabel:"Quote Id"}]).
+        var _pkSet = {}; (entityData.primaryKeys || []).forEach(function(pk){ if (pk && pk.developerName) _pkSet[pk.developerName] = true; });
+        var _entDev = entityData.developerName || devName;
         var entity = {
           id: nodeId,
-          developerName: entityData.developerName || devName,
+          developerName: _entDev,
           masterLabel: entityData.masterLabel || devName,
           category: getCategoryName(entityData.dataEntityCategoryId),
           categoryId: entityData.dataEntityCategoryId,
           attributes: (entityData.attributes || []).map(function(attr) {
             var dn = attr.developerName || "";
+            // Node attr dataType is null in some orgs; borrow it from the edge blob when so.
+            var _et = edgeTypeMap[_entDev + "::" + dn] || null;
             return {
               masterLabel: attr.masterLabel || dn || "",
               developerName: dn,
-              dataType: attr.dataType || attr.businessType || "",
-              isPrimaryKey: (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
-              isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+              dataType: attr.dataType || attr.businessType || (_et && _et.dataType) || "",
+              // PK: authoritative primaryKeys[] first, then legacy signals as fallback.
+              isPrimaryKey: !!_pkSet[dn] || (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
+              isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn) && !_pkSet[dn],
               foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
-              isRequired: attr.dataRequired || false
+              isRequired: attr.dataRequired || (_et && _et.dataRequired) || false
             };
           })
         };
@@ -13859,18 +13912,34 @@ processJSON();
     });
 
     // ── Entity cards ──
-    html += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px;'>";
+    // Search bar — filters cards by label / API name (wired in body's 'input' handler).
+    html += "<div style='display:flex;align-items:center;gap:8px;margin-bottom:16px;'>";
+    html += "<input id='dc-erd-search' type='text' placeholder='Search cards by name or API name…' title='Type to filter the cards below' style='flex:1;max-width:420px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font:13px -apple-system,sans-serif;outline:none;'>";
+    html += "<span id='dc-erd-search-count' style='font:600 11px system-ui;color:#64748b;'></span>";
+    html += "</div>";
+    html += "<div id='dc-erd-grid' style='display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px;'>";
 
     entities.forEach(function(entity) {
       var categoryColor = entity.category === "PROFILE" ? "#10b981"
         : entity.category === "ENGAGEMENT" ? "#f59e0b"
         : "#6b7280";
 
-      html += "<div style='background:#fff;border:2px solid " + categoryColor + ";border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);'>";
+      // Count mapped (non-system) fields shown on this card, for the header badge.
+      var _cardFieldCount = entity.attributes.filter(function(a) {
+        return _systemFields.indexOf(a.developerName) < 0;
+      }).length;
+      // data-erd-search lets the search bar show/hide whole cards by label/api name.
+      var _searchKey = (esc(entity.masterLabel) + " " + esc(entity.developerName)).toLowerCase();
+      html += "<div class='dc-erd-card' data-erd-search=\"" + _searchKey + "\" style='background:#fff;border:2px solid " + categoryColor + ";border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);'>";
 
-      // Card header
+      // Card header — title links to the DMO detail (verified URL: the standard-DataModel
+      // nav item with c__objectApiName=<developerName>). Opens in a new tab.
+      var _detailUrl = "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(entity.developerName);
       html += "<div style='background:" + categoryColor + ";color:#fff;padding:12px 14px;'>";
-      html += "<div style='font:700 14px -apple-system,sans-serif'>" + esc(entity.masterLabel) + "</div>";
+      html += "<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;'>";
+      html += "<a href='" + _detailUrl + "' target='_blank' rel='noopener' title='Open this DMO’s detail page in a new tab' style='font:700 14px -apple-system,sans-serif;color:#fff;text-decoration:none;border-bottom:1px dotted rgba(255,255,255,.6);'>" + esc(entity.masterLabel) + " <span style='font-size:10px;opacity:.8;'>↗</span></a>";
+      html += "<span title='Mapped fields shown on this card' style='background:rgba(255,255,255,.25);color:#fff;font:600 10px system-ui;padding:2px 8px;border-radius:10px;white-space:nowrap;'>" + _cardFieldCount + " fields</span>";
+      html += "</div>";
       html += "<div style='font:600 10px SF Mono,Consolas,monospace;opacity:0.9;margin-top:2px'>" + esc(entity.developerName) + "</div>";
       html += "<div style='display:flex;gap:8px;margin-top:4px;align-items:center;'>";
       html += "<span style='font:600 9px system-ui;opacity:0.8;text-transform:uppercase;letter-spacing:0.5px'>" + esc(entity.category) + "</span>";
@@ -13937,26 +14006,31 @@ processJSON();
       // Filter fields: show PKs, FKs, and business fields (hide system fields)
       var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
       var bizFields = entity.attributes.filter(function(a) {
-        if (a.isPrimaryKey || a.foreignKey) return false;
+        if (a.isPrimaryKey || a.isForeignKey) return false;
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
         return true;
       });
 
       // Fields table
       if (keyFields.length > 0 || bizFields.length > 0) {
+        var _shownCount = keyFields.length + bizFields.length;
         html += "<div style='overflow-x:auto;'>";
-        html += "<div style='font:500 9px system-ui;color:#94a3b8;padding:4px 10px;'>Key fields from graph view (subset)</div>";
+        html += "<div style='font:500 9px system-ui;color:#94a3b8;padding:4px 10px;'>" + _shownCount + " mapped field" + (_shownCount === 1 ? "" : "s") + " (Is Mapped = True; system fields hidden)</div>";
         html += "<table style='width:100%;border-collapse:collapse;font:11px -apple-system,sans-serif;'>";
         html += "<thead><tr style='background:#f8fafc;border-bottom:1px solid #e2e8f0;'>";
+        html += "<th style='text-align:center;padding:6px 4px;font:600 9px system-ui;color:#64748b;'>#</th>";
         html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Field</th>";
         html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>API Name</th>";
         html += "<th style='text-align:left;padding:6px 10px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Type</th>";
         html += "<th style='text-align:center;padding:6px 4px;font:600 9px system-ui;color:#64748b;text-transform:uppercase'>Key</th>";
         html += "</tr></thead><tbody>";
 
+        var _rowNo = 0; // continuous serial across key + business fields
         // PKs first (highlighted)
         keyFields.forEach(function(attr) {
+          _rowNo++;
           html += "<tr style='background:#f0fdf4;border-bottom:1px solid #dcfce7;'>";
+          html += "<td style='padding:6px 4px;text-align:center;color:#94a3b8;font-size:10px'>" + _rowNo + "</td>";
           html += "<td style='padding:6px 10px;color:#166534;font-weight:600'>" + esc(attr.masterLabel) + "</td>";
           html += "<td style='padding:6px 10px;font:600 10px SF Mono,Consolas,monospace;color:#166534'>" + esc(attr.developerName) + "</td>";
           html += "<td style='padding:6px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
@@ -13966,8 +14040,10 @@ processJSON();
 
         // Business fields
         bizFields.forEach(function(attr, idx) {
+          _rowNo++;
           var rowBg = idx % 2 === 0 ? "#fff" : "#f9fafb";
           html += "<tr style='background:" + rowBg + ";border-bottom:1px solid #f1f5f9;'>";
+          html += "<td style='padding:6px 4px;text-align:center;color:#94a3b8;font-size:10px'>" + _rowNo + "</td>";
           html += "<td style='padding:6px 10px;color:#1e293b'>" + esc(attr.masterLabel) + "</td>";
           html += "<td style='padding:6px 10px;font:500 10px SF Mono,Consolas,monospace;color:#475569'>" + esc(attr.developerName) + "</td>";
           html += "<td style='padding:6px 10px;color:#64748b;font-size:10px'>" + esc(attr.dataType) + "</td>";
@@ -14080,7 +14156,7 @@ processJSON();
 
       var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
       var bizFields = entity.attributes.filter(function(a) {
-        if (a.isPrimaryKey || a.foreignKey) return false;
+        if (a.isPrimaryKey || a.isForeignKey) return false;
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
         return true;
       });
@@ -14088,7 +14164,7 @@ processJSON();
       if (keyFields.length > 0 || bizFields.length > 0) {
         html += "<table>\n<thead><tr><th>Field</th><th>API Name</th><th>Type</th><th>Key</th></tr></thead>\n<tbody>\n";
         keyFields.forEach(function(attr) {
-          html += "<tr class='pk-row'><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td>" + (attr.isPrimaryKey ? "PK" : "") + (attr.foreignKey ? "FK" : "") + "</td></tr>\n";
+          html += "<tr class='pk-row'><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td>" + (attr.isPrimaryKey ? "PK" : "") + (attr.isForeignKey ? "FK" : "") + "</td></tr>\n";
         });
         bizFields.forEach(function(attr) {
           html += "<tr><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td></td></tr>\n";
