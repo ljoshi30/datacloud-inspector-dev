@@ -10628,13 +10628,33 @@
           // rows it streams back. Fetch already works fast on these queries, so this does
           // too. We discard the CSV blob and just use the row total.
           if (err && (err.heavyCount || /still processing|too heavy/i.test(String(err && err.message)))) {
-            cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
-            exportPaginatedCsv(cleanSql, ds, function (fetched) {
-              if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + fetched.toLocaleString() + "…";
-            }, function () { return false; }).then(function (res) {
-              if (res.blobUrl) { try { URL.revokeObjectURL(res.blobUrl); } catch (e) {} }
-              showCount(res.totalRows, null, false);
-            }).catch(function (e2) { showCount(0, e2); });
+            // The cheap COUNT(*) couldn't finish for this heavy aggregation. The only way
+            // to get the number is to run the FULL query and tally rows (same work — and
+            // same Data Cloud credits — as Fetch & Export). Make the user OPT IN so Count
+            // never silently burns fetch-level credits when they expected a cheap count.
+            countBtn.disabled = false; countBtn.textContent = "# Count";
+            cardBody.innerHTML = ""
+              + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Fast count not possible</span></div>"
+              + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>This query aggregates a large joined result, so a quick count won't complete. We can still get the exact number by running the full query and counting the rows — but that uses <b>the same Data Cloud credits as Fetch &amp; Export</b> (it does the same work).</div>"
+              + "<div style='display:flex;gap:8px;'>"
+              + "<button id='dc-cnt-run' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);'>Count anyway (uses credits)</button>"
+              + "<button id='dc-cnt-cancel' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Cancel</button>"
+              + "</div>";
+            var cancelBtnEl = document.getElementById("dc-cnt-cancel");
+            if (cancelBtnEl) cancelBtnEl.onclick = function () {
+              cardBody.innerHTML = "<div style='font-size:12px;color:#475569;line-height:1.6;'>No count run — no credits used. Tip: use <b>▶ Fetch &amp; Export</b> if you also want the rows.</div>";
+            };
+            var runBtnEl = document.getElementById("dc-cnt-run");
+            if (runBtnEl) runBtnEl.onclick = function () {
+              countBtn.disabled = true;
+              cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+              exportPaginatedCsv(cleanSql, ds, function (fetched) {
+                if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + fetched.toLocaleString() + "…";
+              }, function () { return false; }).then(function (res) {
+                if (res.blobUrl) { try { URL.revokeObjectURL(res.blobUrl); } catch (e) {} }
+                showCount(res.totalRows, null, false);
+              }).catch(function (e2) { showCount(0, e2); });
+            };
             return;
           }
           showCount(0, err);
