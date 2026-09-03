@@ -1463,7 +1463,7 @@
     // toggle-off from an after-navigation re-detect (SPA route change in the same tab).
     loadUrl: (function () { try { return location.href; } catch (e) { return ""; } })(),
     // Build stamp — bump when verifying which code is actually loaded in the page.
-    buildTag: "navfix-7",
+    buildTag: "navfix-7-empty",
     // Live diagnostics for the SPA navigation watcher (why teardown may not be firing).
     navDiag: function () { return { polling: !!navPoll, lastUrl: lastUrl, currentUrl: (function () { try { return location.href; } catch (e) { return "?"; } })(), changed: (function () { try { return location.href !== lastUrl; } catch (e) { return "?"; } })() }; },
     _test: { API_ATTR, HEADER } };
@@ -7232,6 +7232,12 @@
   // Download an arbitrary rows[]×columns[] set as CSV (used by the full-table view,
   // so ALL columns export with data — not just SF's 10).
   function downloadRowsCsv(objectName, columns, rows) {
+    // Don't produce a header-only CSV when the object has no records — tell the user
+    // instead of silently downloading an empty file.
+    if (!rows || !rows.length) {
+      if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows.");
+      return;
+    }
     const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const header = ["Id"].concat(columns);
     const doDownload = (parts) => {
@@ -8491,6 +8497,12 @@
       ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
       : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.textContent = csvLabel;
+    // No records → disable Download CSV (nothing to save) so it can't produce an empty file.
+    var _noRows = !rows.length && !(filterTotal > 0);
+    if (_noRows) {
+      csvBtn.disabled = true; csvBtn.style.opacity = "0.5"; csvBtn.style.cursor = "not-allowed";
+      csvBtn.title = "This object has no records — nothing to download.";
+    }
     csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
@@ -8548,6 +8560,11 @@
     exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
     exportAllBtn.title = "Download EVERY row of this object as CSV (ignores any filter), fetched in batches from Salesforce. Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.";
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
+    // No records loaded and none reported on the server → nothing to export.
+    if (_noRows && !serverTotal) {
+      exportAllBtn.disabled = true; exportAllBtn.style.opacity = "0.5"; exportAllBtn.style.cursor = "not-allowed";
+      exportAllBtn.title = "This object has no records — nothing to export.";
+    }
     // Export All with a working cancel. Cancel uses a GLOBAL window flag that
     // exportPaginatedCsv actually checks between batches (a function-local var was
     // out of scope there, so cancel never fired — that bug is fixed here).
@@ -9133,6 +9150,17 @@
     const renderRows = rows;         // full loaded set — windowing reveals all of it
     table.appendChild(tbody);
     scroll.appendChild(table);
+    // Zero-record state: the object was queried successfully but has no rows. Show the
+    // table with its column headers (so the user sees the schema) PLUS a clear banner,
+    // instead of a bare empty grid that looks broken. Download CSV is already disabled above.
+    if (!rows.length) {
+      const emptyBanner = document.createElement("div");
+      emptyBanner.style.cssText = "padding:28px 20px;text-align:center;color:#64748b;font:13px -apple-system,sans-serif;";
+      emptyBanner.innerHTML = "<div style='font-size:26px;margin-bottom:8px;'>📭</div>"
+        + "<div style='font-weight:600;color:#475569;margin-bottom:4px;'>No records in " + esc(objectName) + "</div>"
+        + "<div style='font-size:12px;'>This object has <b>0 rows</b>. Columns are shown above; there's no data to display or download.</div>";
+      scroll.appendChild(emptyBanner);
+    }
     panel.appendChild(scroll);
     // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.
     const scrollHint = document.createElement("div");

@@ -1463,7 +1463,7 @@
     // toggle-off from an after-navigation re-detect (SPA route change in the same tab).
     loadUrl: (function () { try { return location.href; } catch (e) { return ""; } })(),
     // Build stamp — bump when verifying which code is actually loaded in the page.
-    buildTag: "navfix-7",
+    buildTag: "navfix-7-empty",
     // Live diagnostics for the SPA navigation watcher (why teardown may not be firing).
     navDiag: function () { return { polling: !!navPoll, lastUrl: lastUrl, currentUrl: (function () { try { return location.href; } catch (e) { return "?"; } })(), changed: (function () { try { return location.href !== lastUrl; } catch (e) { return "?"; } })() }; },
     _test: { API_ATTR, HEADER } };
