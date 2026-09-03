@@ -14081,9 +14081,8 @@ processJSON();
               masterLabel: attr.masterLabel || dn || "",
               developerName: dn,
               dataType: attr.dataType || attr.businessType || (_et && _et.dataType) || "",
-              // PK: authoritative primaryKeys[] first, then legacy signals as fallback.
-              isPrimaryKey: !!_pkSet[dn] || (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
-              isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn) && !_pkSet[dn],
+              isPrimaryKey: !!_pkSet[dn],
+              isForeignKey: dn.indexOf("KQ_") === 0 && !_pkSet[dn],
               foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
               isRequired: attr.dataRequired || (_et && _et.dataRequired) || false
             };
