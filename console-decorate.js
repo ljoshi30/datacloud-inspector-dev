@@ -5337,6 +5337,41 @@
     return el;
   }
 
+  // INSTANT custom tooltip for a container's controls. Native `title` tooltips take ~1.5s
+  // to appear and users don't discover them — this shows the same text immediately on
+  // hover. Call attachInstantTooltips(container): any descendant with a `title` gets its
+  // title moved to data-tip (suppressing the slow native one) and shown in a fast bubble.
+  var _dcTipEl = null;
+  function attachInstantTooltips(container) {
+    if (!container || container.__dcTipWired) return;
+    container.__dcTipWired = true;
+    if (!_dcTipEl) {
+      _dcTipEl = document.createElement("div");
+      _dcTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;white-space:normal;";
+      document.body.appendChild(_dcTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title");
+      if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _dcTipEl.textContent = tip;
+      _dcTipEl.style.display = "block";
+      var r = el.getBoundingClientRect();
+      var top = r.top - _dcTipEl.offsetHeight - 8;                 // prefer above
+      if (top < 6) top = r.bottom + 8;                             // else below
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _dcTipEl.offsetWidth - 6);
+      _dcTipEl.style.top = top + "px"; _dcTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_dcTipEl) _dcTipEl.style.display = "none"; };
+    // Delegated: one pair of listeners covers all current AND future controls in the container.
+    container.addEventListener("mouseover", function (e) {
+      var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null;
+      if (el && container.contains(el)) show(el);
+    }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
+
   // Small transient toast near the Explorer launcher — used to tell the user why an
   // action can't run (e.g. no object selected) instead of the button doing nothing.
   function dcExploreToast(msg) {
@@ -8873,6 +8908,7 @@
     scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
     panel.appendChild(scrollHint);
     document.body.appendChild(panel);
+    try { attachInstantTooltips(panel); } catch (e) {}   // fast tooltips for header/filter buttons
 
     // ── Delegated cell affordances (Copy / View) ────────────────────────────────
     // ONE reusable tools widget, moved INTO whichever cell is hovered — instead of a
@@ -9019,6 +9055,7 @@
     modal.__dcObject = objectName;   // remember which object this modal is for
     modal.style.cssText = MODAL_CSS;
     document.body.appendChild(modal);
+    try { attachInstantTooltips(modal); } catch (e) {}   // fast tooltips for selector/footer buttons + tabs
     // No backdrop — user needs to see the SF Data Explorer page behind the modal
     _buildExploreModal(modal, recList, initialCols, objectName, initialSelected);
 
@@ -9268,6 +9305,7 @@
 
         const handle = document.createElement("span");
         handle.textContent = "⠿";
+        handle.title = "Drag to reorder this column";
         handle.style.cssText = "color:#bbb;font-size:16px;flex-shrink:0;cursor:grab;line-height:1;padding:0 2px;";
 
         const num = document.createElement("span");
@@ -9802,6 +9840,7 @@
       makeDraggable(soqlPanelEl, sh);
       addResizeHandle(soqlPanelEl, 460, 240);
       document.body.appendChild(soqlPanelEl);
+      try { attachInstantTooltips(soqlPanelEl); } catch (e) {}   // fast tooltips for Run/Copy/Reset
       syncHighlight();
       textarea.focus();
     }
@@ -9822,15 +9861,16 @@
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
     footer.appendChild(savedNote);
 
-    const mkFootBtn = (label, primary, icon) => {
+    const mkFootBtn = (label, primary, icon, tip) => {
       const b = document.createElement("button");
       b.textContent = icon ? icon + " " + label : label;
+      if (tip) b.title = tip;
       b.style.cssText = "flex:1;border-radius:6px;padding:7px 8px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid " +
         (primary ? "#0d6efd;background:#0d6efd;color:#fff;" : "#c9d0da;background:#fff;color:#1e3a5f;");
       if (!primary) { b.onmouseenter = () => (b.style.background = "#f3f6fb"); b.onmouseleave = () => (b.style.background = "#fff"); }
       return b;
     };
-    const viewAllBtn = mkFootBtn("Show selected columns' data", true);
+    const viewAllBtn = mkFootBtn("Show selected columns' data", true, null, "Load and display the data for all the columns you've ticked, in one scrollable table (runs a query / uses Data Cloud credits).");
     // Check if connection is ready — if not, show instruction and poll
     var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
     var _connHint = null;
@@ -9871,11 +9911,11 @@
         }
       }, 30000);
     }
-    const saveBtn    = mkFootBtn("Save set", false);
-    const restoreBtn = mkFootBtn("Restore saved", false);
-    const clearBtn   = mkFootBtn("Clear saved", false);
-    const exportBtn  = mkFootBtn("Export CSV", false);
-    const soqlEdBtn  = mkFootBtn("Edit SOQL", false);
+    const saveBtn    = mkFootBtn("Save set", false, null, "Save the currently ticked columns (and their order) so you can reuse this selection later on this object.");
+    const restoreBtn = mkFootBtn("Restore saved", false, null, "Re-apply the column set you previously saved for this object.");
+    const clearBtn   = mkFootBtn("Clear saved", false, null, "Delete the saved column set for this object.");
+    const exportBtn  = mkFootBtn("Export CSV", false, null, "Download the selected columns' data as a CSV file (runs a query / uses Data Cloud credits).");
+    const soqlEdBtn  = mkFootBtn("Edit SOQL", false, null, "Open a SQL editor to write/adjust the query for these columns (single-table SELECT).");
 
     // Grey out restore if nothing saved
     if (!savedColObjs || !savedColObjs.length) {
