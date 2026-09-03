@@ -26,7 +26,21 @@
   "use strict";
   // Re-running the bookmarklet acts as a TOGGLE for the whole tool: if it's
   // already loaded, remove it entirely (bar, tooltip, tags, modal, timers).
-  if (window.__DC_DECOR__) { try { window.__DC_DECOR__.teardown(); } catch (e) {} return; }
+  //
+  // BUT: this is a Lightning SPA. If the user injected on page A (e.g. Query Editor),
+  // then navigated in-tab to page B (e.g. a Data Stream), watchNavigation() tears down
+  // the FAB yet the global guard may still be set. A second bookmark click on page B
+  // must RE-DETECT page B — not just toggle off. So: if the URL changed since we loaded,
+  // tear down the stale UI and FALL THROUGH to re-run detection for the new page. Only a
+  // re-click on the SAME url is a true toggle-off.
+  if (window.__DC_DECOR__) {
+    var _prevUrl = "";
+    try { _prevUrl = window.__DC_DECOR__.loadUrl || ""; } catch (e) {}
+    var _curUrl = ""; try { _curUrl = location.href; } catch (e) {}
+    try { window.__DC_DECOR__.teardown(); } catch (e) {}
+    if (_prevUrl === _curUrl) return;   // same page → toggle off
+    // else: navigated → teardown done, continue to re-initialize for the new page
+  }
 
   const API_ATTR = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;      // attribute-name is an API name
   const API_VAL = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;       // a value that is a bare API name
@@ -849,6 +863,7 @@
   try { lastUrl = location.href; } catch (e) {}
   let navPoll = null;
   function watchNavigation() {
+    if (navPoll) return;   // already watching — don't stack pollers
     navPoll = setInterval(() => {
       let u = ""; try { u = location.href; } catch (e) {}
       if (u !== lastUrl) {
@@ -1444,6 +1459,13 @@
 
   window.__DC_DECOR__ = { toggle, toggleInline, teardown, redraw, state, targetLists, buildMappingRows, openExport, driftMeter, probeRow, probeGeom, _diag: showDiag,
     tableRedraw, buildTableMap,
+    // URL the tool initialized on — used by the re-click guard to tell a same-page
+    // toggle-off from an after-navigation re-detect (SPA route change in the same tab).
+    loadUrl: (function () { try { return location.href; } catch (e) { return ""; } })(),
+    // Build stamp — bump when verifying which code is actually loaded in the page.
+    buildTag: "navfix-7",
+    // Live diagnostics for the SPA navigation watcher (why teardown may not be firing).
+    navDiag: function () { return { polling: !!navPoll, lastUrl: lastUrl, currentUrl: (function () { try { return location.href; } catch (e) { return "?"; } })(), changed: (function () { try { return location.href !== lastUrl; } catch (e) { return "?"; } })() }; },
     _test: { API_ATTR, HEADER } };
 
   // Keeps a dragged FAB within the visible viewport when the window resizes
@@ -1600,7 +1622,13 @@
       if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
       if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
       /* @strip:start dev */
-      if (/standard-Segment|\/r\/Segment\/[a-zA-Z0-9]{15,18}|segmentWizard/i.test(h) || findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0) return "Segment";
+      // Segment by URL always wins. The component-DOM fallback (for wizard routes that
+      // don't name Segment in the URL) is only trusted when the URL isn't clearly ANOTHER
+      // page — otherwise a stale segment-wizard component left mounted after in-tab nav
+      // would misclassify (same SPA stale-DOM trap fixed in isQueryEditorPage/Explorer).
+      if (/standard-Segment|\/r\/Segment\/[a-zA-Z0-9]{15,18}|segmentWizard/i.test(h)) return "Segment";
+      if (!(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
+          && (findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0)) return "Segment";
       /* @strip:end */
     } catch (e) {}
     return null;
@@ -5530,6 +5558,12 @@
     if (/DataQueryWorkspace|queryEditor|query-editor/i.test(h)) return false;
     if (/standard-DataModel/i.test(h)) return false;
     if (/marketSegmentActivation|\/r\/MarketSegmentActivation\//i.test(h)) return false;
+    // URL-AUTHORITATIVE guard (same fix as isQueryEditorPage): a real DataStream/DLO/DMO/
+    // Segment RECORD page (…/r/DataStream/<id>/view) is NOT Data Explorer. The bare/list
+    // exclusions above miss the "/view" record route, so without this the DOM check below
+    // would match the STALE record-list component left mounted from the previous Explorer
+    // page (Lightning SPA doesn't unmount on in-tab nav) → wrong FAB until reload.
+    if (typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "DataExplore")) return false;
     // DOM check: the record-list LWC component is definitive for a real Explorer page
     if (findRecordListEl()) return true;
     return false;
@@ -6175,7 +6209,15 @@
     if (/\/o\/DataQueryWorkspace\/home/i.test(h)) return false;
     if (/\/r\/DataQueryWorkspace\/[a-zA-Z0-9]{15,18}\//i.test(h)) return true;
     if (/queryEditor|query-editor/i.test(h) && /[a-zA-Z0-9]{15,18}/.test(h)) return true;
-    // Component-based fallback: look for the query workspace tag
+    // URL-AUTHORITATIVE guard: this is a Lightning SPA — after navigating away from the
+    // Query Editor in the SAME tab, SF often leaves the old `runtime_cdp-query-workspace`
+    // component mounted in the DOM. The component-scan fallback below would then match that
+    // STALE node and wrongly report a Query Editor page (e.g. on a /r/DataStream/ page),
+    // showing the wrong FAB until a full reload destroys the component. So: if the URL is
+    // clearly ANOTHER detail-page type, do NOT fall back to the DOM scan. (Confirmed RCA.)
+    if (urlIsOtherDetailPage(h, "QueryEditor")) return false;
+    // Component-based fallback: look for the query workspace tag (only when the URL is
+    // ambiguous, e.g. the SPA route hasn't settled yet on first inject).
     var found = false;
     eachElement(document, function (el) {
       if (found) return;
@@ -6183,6 +6225,44 @@
       if (/cdp-query-workspace|query-workspace|queryWorkspace/i.test(t)) found = true;
     });
     return found;
+  }
+
+  // ── CENTRAL URL→page-type resolver (the ONE source of truth) ─────────────────
+  // The whole "wrong/stale FAB after in-tab navigation" class of bug comes from detectors
+  // trusting components still MOUNTED in the DOM (Lightning SPA doesn't unmount on in-tab
+  // nav). The fix, applied uniformly to every FAB and every direction: the URL decides the
+  // page type. This returns the definitive type from the URL ALONE (no DOM), or "" when the
+  // URL is genuinely ambiguous (only then may a detector consult the DOM). Add new page
+  // types here once and every detector inherits the guard.
+  function urlDefinitePageType(h) {
+    h = h || location.href;
+    try {
+      // Order matters: most-specific record/nav routes first.
+      if (/\/r\/DataQueryWorkspace\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "QueryEditor";
+      if (/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DataStream";
+      if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
+      if (/\/r\/MarketSegmentActivation\/[a-zA-Z0-9]{15,18}\//i.test(h) || /marketSegmentActivation/i.test(h)) return "Activation";
+      if (/\/r\/Segment\/[a-zA-Z0-9]{15,18}\//i.test(h) || /standard-Segment|segmentWizard/i.test(h)) return "Segment";
+      if (/standard-DataModel/i.test(h)) return "DataModel";
+      if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
+      // Data Explorer is a one.app hash route; the hash base64-decodes to a componentDef
+      // naming the tab. Detect it from the URL so it no longer relies on a lingering
+      // record-list component.
+      var m = h.match(/#(.+)$/);
+      if (m) {
+        var decoded = "";
+        try { decoded = decodeURIComponent(escape(atob(m[1]))); } catch (e) { try { decoded = atob(m[1]); } catch (e2) { decoded = ""; } }
+        if (/dataViewTab/i.test(decoded)) return "DataExplore";
+      }
+    } catch (e) {}
+    return "";
+  }
+
+  // Back-compat helper: true when the URL definitely identifies SOME page type other than
+  // the one asking. `exceptType` is the caller's own type (so it doesn't exclude itself).
+  function urlIsOtherDetailPage(h, exceptType) {
+    var t = urlDefinitePageType(h);
+    return t !== "" && t !== (exceptType || "__none__");
   }
 
   // Track the last-focused SQL editor element. When the user clicks "Export CSV",
@@ -10573,6 +10653,10 @@
     };
 
     var _lastResult = null;
+    // Memoized COUNT — mirrors how Fetch caches _lastResult. Keyed by normalized SQL so
+    // re-clicking Count on the SAME query does NOT hit the API again (saves credits).
+    // { key, count, rowsProcessed, tableName, ds }
+    var _lastCount = null;
     var _savedSelection = "";
     // Continuously track the latest selection from ANYWHERE on the page.
     // This means: highlight SQL → click our button (even after switching tabs).
@@ -10649,6 +10733,17 @@
     function qeIsSandbox() { try { return /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) { return false; } }
     function qeCreditRate() { return qeIsSandbox() ? 1.6 : 2; }
     function qeEnvLabel() { return qeIsSandbox() ? "Sandbox" : "Production"; }
+    // Format the credit estimate for a given rows-processed count WITHOUT collapsing small
+    // values to "<0.01" (user wants the real number, e.g. 3,614 rows → 0.0072, not <0.01).
+    // Uses enough significant digits that any non-zero cost is visible.
+    function qeCreditStr(rowsProcessed) {
+      var c = (rowsProcessed / 1000000) * qeCreditRate();
+      if (c === 0) return "0";
+      if (c >= 1) return c.toFixed(2);
+      if (c >= 0.01) return c.toFixed(3);
+      // very small: show 4 significant digits so tiny costs are still legible
+      return c.toPrecision(2).replace(/0+$/, "").replace(/\.$/, "");
+    }
     // Brief, honest credit-consumption note shown in the Query Editor. Both Count and Fetch
     // run a Data Cloud query billed under the "Data Queries" usage type. The rate line is
     // DYNAMIC: it bolds this org's environment (Sandbox/Production) and its rate.
@@ -10803,6 +10898,135 @@
       });
     }
 
+    // ── Query-Editor-OWNED fetch/export runner ───────────────────────────────────
+    // A QE-private paginated fetch that mirrors the bookmarklet branch of the shared
+    // exportPaginatedCsv, but does its OWN /aura queryDCSql POST so it can read and SUM
+    // status.rowsProcessed per batch (the credit basis SF shows). This keeps Query Editor
+    // fully independent of Data Explorer's shared runRawSql/exportPaginatedCsv — nothing
+    // here can affect Explorer. Resolves { blobUrl, totalRows, columns, rowData,
+    // rowsProcessed }. In EXTENSION mode the documented endpoint doesn't expose
+    // rowsProcessed, so it defers to the shared exportPaginatedCsv (rowsProcessed=null),
+    // exactly like the Count path does.
+    function qeFetchExport(sql, ds, onProgress, isCancelled) {
+      var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
+      // Extension path: reuse the documented streaming export (no rowsProcessed available).
+      if (typeof extBridgePresent === "function" && extBridgePresent()) {
+        return exportPaginatedCsv(sql, ds, onProgress, isCancelled).then(function (res) {
+          res.rowsProcessed = null; return res;
+        });
+      }
+      return new Promise(function (resolve, reject) {
+        if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
+        var BM_PAGE = 49999;
+        var BM_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var csvOut = [], cols2 = [], totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
+
+        var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
+        var userLimit = userLimitMatch ? parseInt(userLimitMatch[1], 10) : 0;
+        var effectiveMax = userLimit > 0 ? Math.min(userLimit, BM_MAX) : BM_MAX;
+        var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
+
+        // Dataspace candidates (most-likely first), same resolution the fetch path uses.
+        var cands = [ds];
+        if (typeof dataSpaceCandidates === "function") {
+          var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+          dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
+        }
+        if (cands.indexOf("default") < 0) cands.push("default");
+        var dsi = 0;
+
+        function finish() {
+          var blob = new Blob(csvOut, { type: "text/csv" });
+          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null });
+        }
+
+        function fetchBatch(offset) {
+          if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
+          var remaining = effectiveMax - offset;
+          if (remaining <= 0) { finish(); return; }
+          var pageSize = Math.min(BM_PAGE, remaining);
+          var batchSql = baseSql + " LIMIT " + pageSize + (offset > 0 ? " OFFSET " + offset : "");
+          var space = cands[dsi] || "";
+          _auraQid = (_auraQid || 0) + 1;
+          var act = { id: "dcqefetch-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: batchSql, rowLimit: pageSize, dataspace: space } };
+          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+          fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+            .then(function (r) { return r.text(); }).then(function (txt) {
+              if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first, then retry.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var a = j && j.actions && j.actions[0];
+              if (!a || a.state !== "SUCCESS") {
+                var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+                var cleanErr = em;
+                try { var p = (typeof em === "string" && em.charAt(0) === "{") ? JSON.parse(em) : null; if (p && p.primaryMessage) cleanErr = p.primaryMessage; else if (p && p.errorMessage) cleanErr = p.errorMessage.replace(/^[A-Z_]+:\s*/, ""); } catch (e2) {}
+                // Wrong dataspace → try next candidate (only meaningful on the first batch).
+                if (/denied authorization|not authorized/i.test(cleanErr) && offset === 0 && dsi + 1 < cands.length) { dsi++; fetchBatch(0); return; }
+                var hint = "";
+                if (/does not exist|42P01/i.test(cleanErr)) hint = " — check the table name/dataspace.";
+                else if (/unknown column|42703/i.test(cleanErr)) hint = " — check the column names.";
+                else if (/syntax error|42601/i.test(cleanErr)) hint = " — check your SQL syntax.";
+                reject(new Error(cleanErr + hint)); return;
+              }
+              if (space) _auraSniff.dataSpace = space;
+              var rv = a.returnValue || {};
+              var dr = rv.dataRows || rv.rows || rv.data || [];
+              var meta = rv.metadata || [];
+              var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
+              // Header from metadata (first batch that has columns).
+              if (!cols2.length && meta && meta.length) {
+                cols2 = meta.map(function (m) { return m && m.name; });
+                csvOut.push(cols2.map(esc2).join(",") + "\n");
+              }
+              arrData.forEach(function (row) {
+                if (!Array.isArray(row)) return;
+                csvOut.push(cols2.map(function (c, i) { return esc2(row[i]); }).join(",") + "\n");
+                if (rowData.length < 2000) { var o = {}; for (var i = 0; i < cols2.length; i++) o[cols2[i]] = row[i]; rowData.push(o); }
+                totalFetched++;
+              });
+              // Accumulate rows PROCESSED across batches (credit basis).
+              var _rp = rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount);
+              var rpNum = parseInt(_rp, 10);
+              if (!isNaN(rpNum)) { rowsProcessed += rpNum; sawRp = true; }
+              if (onProgress) onProgress(totalFetched, userLimit || totalFetched);
+              // Terminate when this batch came back SHORT of a full page — that means it's
+              // the last page, so there's no need to fire another (credit-costing) batch that
+              // would only re-scan the source to return 0 rows. This both avoids a wasted
+              // query AND prevents double-counting rowsProcessed (the trailing empty batch
+              // reports the same scan count again). Only keep paginating on a FULL page.
+              if (arrData.length === 0 || arrData.length < pageSize || totalFetched >= effectiveMax) { finish(); }
+              else { fetchBatch(offset + arrData.length); }
+            }).catch(function (err) { reject(new Error("Fetch request failed: " + err)); });
+        }
+        fetchBatch(0);
+      });
+    }
+
+    // Build the Count result HTML (shared by a fresh count and a cache hit so they look
+    // identical). `cached` adds a small "no credits used" note. QE-only helper.
+    function countResultHtml(cnt, rowsProcessed, tableName, ds, cached) {
+      var rpLine = "";
+      if (rowsProcessed != null && rowsProcessed >= 0) {
+        var _rate = qeCreditRate();
+        rpLine = "<div style='margin-top:6px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + rowsProcessed.toLocaleString()
+          + " <span style='color:#94a3b8;'>(≈ " + qeCreditStr(rowsProcessed) + " credits @ " + _rate + "/1M, " + qeEnvLabel() + ")</span></div>";
+      }
+      var creditFooter = cached
+        ? "<div style='margin-top:8px;font-size:10px;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 8px;line-height:1.45;'>✓ Cached count for this exact query — <b>no new credits used</b>. Edit the query to re-count.</div>"
+        : "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> at <b>" + qeCreditRate() + " credits/1M</b> (" + qeEnvLabel() + "). Track in Digital Wallet.</div>";
+      return ""
+        + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
+        + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
+        + "<span style='font:600 14px -apple-system,sans-serif;'>Count result</span></div>"
+        + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
+        + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
+        + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
+        + rpLine
+        + "<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
+        + creditFooter
+        + (_lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "");
+    }
+
     countBtn.onclick = () => {
       var highlighted = getHighlightedSql();
       var sql;
@@ -10854,6 +11078,14 @@
       // that broke on ORDER BY expressions containing parentheses (e.g. ORDER BY COUNT(x)).
       var innerSql = cleanSql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
       var countSql = isAlreadyCount ? cleanSql : "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper";
+      // CACHE HIT: same query already counted → show stored result, no API/credits.
+      // Keyed on the CLEANED sql (comments/whitespace-insensitive) so cosmetic edits match.
+      var _cntKey = normSqlKey(cleanSql);
+      if (_lastCount && _lastCount.key === _cntKey) {
+        card.style.display = "block"; infoBtn.style.display = "flex";
+        cardBody.innerHTML = countResultHtml(_lastCount.count, _lastCount.rowsProcessed, _lastCount.tableName || tableName, _lastCount.ds || ds, true);
+        return;
+      }
       countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
@@ -10939,29 +11171,10 @@
               + hint;
             return;
           }
-          var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
           if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
-          // Rows PROCESSED (scanned) — what Data Cloud billed for. Shown like SF's own UI,
-          // with a rough credit estimate (Data Queries: 2 credits / 1M rows, Production).
-          var rpLine = "";
-          if (rowsProcessed != null && rowsProcessed >= 0) {
-            var _rate = qeCreditRate();
-            var est = (rowsProcessed / 1000000 * _rate);
-            var estStr = est >= 0.01 ? est.toFixed(2) : "<0.01";
-            rpLine = "<div style='margin-top:6px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + rowsProcessed.toLocaleString()
-              + " <span style='color:#94a3b8;'>(≈ " + estStr + " credits @ " + _rate + "/1M, " + qeEnvLabel() + ")</span></div>";
-          }
-          cardBody.innerHTML = ""
-            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
-            + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
-            + "<span style='font:600 14px -apple-system,sans-serif;'>Count result</span></div>"
-            + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
-            + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
-            + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
-            + rpLine
-            + "<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
-            + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> at <b>" + qeCreditRate() + " credits/1M</b> (" + qeEnvLabel() + "). Track in Digital Wallet.</div>"
-            + prevResultNote;
+          // Memoize so re-clicking Count on this exact query is free (no API/credits).
+          _lastCount = { key: _cntKey, count: cnt, rowsProcessed: (rowsProcessed != null ? rowsProcessed : null), tableName: tableName, ds: ds };
+          cardBody.innerHTML = countResultHtml(cnt, rowsProcessed, tableName, ds, false);
         }
       });
     };
@@ -11059,7 +11272,7 @@
           return;
         }
         var startTime = Date.now();
-        exportPaginatedCsv(sql, ds, function (fetched, total) {
+        qeFetchExport(sql, ds, function (fetched, total) {
           var pctKnown = total > fetched;
           runBtn.textContent = pctKnown ? (fetched.toLocaleString() + " / " + total.toLocaleString() + " rows…") : (fetched.toLocaleString() + " rows fetched…");
           var pct = pctKnown ? Math.round(fetched / total * 100) : 0;
@@ -11105,6 +11318,9 @@
             + "<div style='font-size:11px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
             + "<b>Table:</b> " + tableName + " &nbsp;|&nbsp; <b>Space:</b> " + (_pageDataSpaceLabel || ds || "default") + " &nbsp;|&nbsp; <b>Time:</b> " + elapsed + "s"
             + "</div>"
+            + ((res.rowsProcessed != null && res.rowsProcessed >= 0)
+                ? "<div style='margin-bottom:10px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + res.rowsProcessed.toLocaleString() + " <span style='color:#94a3b8;'>(≈ " + qeCreditStr(res.rowsProcessed) + " credits @ " + qeCreditRate() + "/1M, " + qeEnvLabel() + ")</span></div>"
+                : "")
             + "<div style='display:flex;align-items:center;gap:6px;margin-bottom:10px;'>"
             + "<label style='font:600 11px -apple-system,sans-serif;color:#475569;white-space:nowrap;'>Filename:</label>"
             + "<input id='dc-qe-filename' type='text' value='" + defaultFilename.replace(/'/g,"") + "' style='flex:1;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;'/>"
@@ -14203,15 +14419,22 @@ processJSON();
     : onActivationPage ? "Activation"
     : onSegmentPage ? "Segment"
     : ((typeof isDataExplorePage === "function" && isDataExplorePage()) ? "DataExplore" : detectDetailPageType());
+  // Every launcher path calls watchNavigation() so that when the user navigates away in
+  // the SAME tab (Lightning SPA), the FAB tears down and its scope ends — a fresh bookmark
+  // click then re-detects purely from the new URL. (Transform/DataModel/Activation were
+  // previously missing this, so their FABs lingered after in-tab navigation.)
   if (detailPageType === "Transform" && typeof ensureTransformLauncher === "function") {
     ensureTransformLauncher();
+    watchNavigation();
   } else if (detailPageType === "QueryEditor" && typeof ensureQueryEditorLauncher === "function") {
     ensureQueryEditorLauncher();
     watchNavigation();
   } else if (detailPageType === "DataModel" && typeof ensureDataModelLauncher === "function") {
     ensureDataModelLauncher();
+    watchNavigation();
   } else if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
     ensureActivationLauncher();
+    watchNavigation();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
@@ -14544,4 +14767,13 @@ processJSON();
       }, 2000);
     }
   }
+
+  // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
+  // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll
+  // tears the FAB down the instant the URL changes, ending its scope. Idempotent — the
+  // `if (navPoll) return` guard makes this a no-op if a branch above already started it.
+  // This is the backstop for cases like Data Explorer (#/one.app route) → Data Stream
+  // (/lightning/r/…), where the Explorer FAB otherwise lingered because its branch's
+  // watcher wasn't active.
+  try { watchNavigation(); } catch (e) {}
 })();

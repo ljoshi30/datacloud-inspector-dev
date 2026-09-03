@@ -26,7 +26,21 @@
   "use strict";
   // Re-running the bookmarklet acts as a TOGGLE for the whole tool: if it's
   // already loaded, remove it entirely (bar, tooltip, tags, modal, timers).
-  if (window.__DC_DECOR__) { try { window.__DC_DECOR__.teardown(); } catch (e) {} return; }
+  //
+  // BUT: this is a Lightning SPA. If the user injected on page A (e.g. Query Editor),
+  // then navigated in-tab to page B (e.g. a Data Stream), watchNavigation() tears down
+  // the FAB yet the global guard may still be set. A second bookmark click on page B
+  // must RE-DETECT page B — not just toggle off. So: if the URL changed since we loaded,
+  // tear down the stale UI and FALL THROUGH to re-run detection for the new page. Only a
+  // re-click on the SAME url is a true toggle-off.
+  if (window.__DC_DECOR__) {
+    var _prevUrl = "";
+    try { _prevUrl = window.__DC_DECOR__.loadUrl || ""; } catch (e) {}
+    var _curUrl = ""; try { _curUrl = location.href; } catch (e) {}
+    try { window.__DC_DECOR__.teardown(); } catch (e) {}
+    if (_prevUrl === _curUrl) return;   // same page → toggle off
+    // else: navigated → teardown done, continue to re-initialize for the new page
+  }
 
   const API_ATTR = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;      // attribute-name is an API name
   const API_VAL = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;       // a value that is a bare API name
@@ -849,6 +863,7 @@
   try { lastUrl = location.href; } catch (e) {}
   let navPoll = null;
   function watchNavigation() {
+    if (navPoll) return;   // already watching — don't stack pollers
     navPoll = setInterval(() => {
       let u = ""; try { u = location.href; } catch (e) {}
       if (u !== lastUrl) {
@@ -1444,6 +1459,13 @@
 
   window.__DC_DECOR__ = { toggle, toggleInline, teardown, redraw, state, targetLists, buildMappingRows, openExport, driftMeter, probeRow, probeGeom, _diag: showDiag,
     tableRedraw, buildTableMap,
+    // URL the tool initialized on — used by the re-click guard to tell a same-page
+    // toggle-off from an after-navigation re-detect (SPA route change in the same tab).
+    loadUrl: (function () { try { return location.href; } catch (e) { return ""; } })(),
+    // Build stamp — bump when verifying which code is actually loaded in the page.
+    buildTag: "navfix-7",
+    // Live diagnostics for the SPA navigation watcher (why teardown may not be firing).
+    navDiag: function () { return { polling: !!navPoll, lastUrl: lastUrl, currentUrl: (function () { try { return location.href; } catch (e) { return "?"; } })(), changed: (function () { try { return location.href !== lastUrl; } catch (e) { return "?"; } })() }; },
     _test: { API_ATTR, HEADER } };
 
   // Keeps a dragged FAB within the visible viewport when the window resizes
@@ -5320,15 +5342,22 @@ processJSON();
     : onActivationPage ? "Activation"
     : onSegmentPage ? "Segment"
     : ((typeof isDataExplorePage === "function" && isDataExplorePage()) ? "DataExplore" : detectDetailPageType());
+  // Every launcher path calls watchNavigation() so that when the user navigates away in
+  // the SAME tab (Lightning SPA), the FAB tears down and its scope ends — a fresh bookmark
+  // click then re-detects purely from the new URL. (Transform/DataModel/Activation were
+  // previously missing this, so their FABs lingered after in-tab navigation.)
   if (detailPageType === "Transform" && typeof ensureTransformLauncher === "function") {
     ensureTransformLauncher();
+    watchNavigation();
   } else if (detailPageType === "QueryEditor" && typeof ensureQueryEditorLauncher === "function") {
     ensureQueryEditorLauncher();
     watchNavigation();
   } else if (detailPageType === "DataModel" && typeof ensureDataModelLauncher === "function") {
     ensureDataModelLauncher();
+    watchNavigation();
   } else if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
     ensureActivationLauncher();
+    watchNavigation();
   } else if (detailPageType === "DataExplore" && typeof ensureExploreLauncher === "function") {
     ensureExploreLauncher();
     watchNavigation();
@@ -5661,4 +5690,13 @@ processJSON();
       }, 2000);
     }
   }
+
+  // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
+  // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll
+  // tears the FAB down the instant the URL changes, ending its scope. Idempotent — the
+  // `if (navPoll) return` guard makes this a no-op if a branch above already started it.
+  // This is the backstop for cases like Data Explorer (#/one.app route) → Data Stream
+  // (/lightning/r/…), where the Explorer FAB otherwise lingered because its branch's
+  // watcher wasn't active.
+  try { watchNavigation(); } catch (e) {}
 })();
