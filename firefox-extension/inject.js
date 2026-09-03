@@ -8251,6 +8251,11 @@
   // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
+    // Never open the modal for an empty object — show a FAB-level toast instead.
+    if (!rows || !rows.length) {
+      dcExploreToast((objectName || "This object") + " has no records — nothing to show.");
+      return;
+    }
     closeAllColumnsTable();
     // Explorer-private cancel flag for its CSV / Export All (only one export runs at a
     // time in this table). Kept LOCAL so it can never collide with the Query Editor's
@@ -8508,12 +8513,6 @@
       ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
       : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.textContent = csvLabel;
-    // No records → disable Download CSV (nothing to save) so it can't produce an empty file.
-    var _noRows = !rows.length && !(filterTotal > 0);
-    if (_noRows) {
-      csvBtn.disabled = true; csvBtn.style.opacity = "0.5"; csvBtn.style.cursor = "not-allowed";
-      csvBtn.title = "This object has no records — nothing to download.";
-    }
     csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
