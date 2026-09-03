@@ -1165,6 +1165,29 @@
     if (onKey) { document.removeEventListener("keydown", onKey, true); onKey = null; }
     hideBackdrop();
   }
+  // Mapping-export modal INSTANT tooltips — self-contained for this feature only.
+  var _mxTipEl = null;
+  function installMappingExportTooltips(container) {
+    if (!container || container.__mxTipWired) return;
+    container.__mxTipWired = true;
+    if (!_mxTipEl) {
+      _mxTipEl = document.createElement("div");
+      _mxTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_mxTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title"); if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _mxTipEl.textContent = tip; _mxTipEl.style.display = "block";
+      var r = el.getBoundingClientRect(); var top = r.top - _mxTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _mxTipEl.offsetWidth - 6);
+      _mxTipEl.style.top = top + "px"; _mxTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_mxTipEl) _mxTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
   function openExport() {
     // Rebuild fresh from the CURRENT (visible) page each time it opens.
     let allRows = buildMappingRows();
@@ -1224,11 +1247,11 @@
         "#dc-export .ft{padding:8px 16px;border-top:1px solid #e0e5ee;color:#8a94ab;font-size:11px;background:#f9fafc}" +
         "</style>" +
         "<div class='hd'><strong>Mappings: DLO&nbsp;&rarr;&nbsp;DMO</strong>" +
-        "<select id='dc-x-dmo'>" + opts + "</select>" +
+        "<select id='dc-x-dmo' title='Filter the mappings by a specific DMO (or show all)'>" + opts + "</select>" +
         "<span class='sp'></span>" +
-        "<button id='dc-x-copy'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets</button>" +
-        "<button class='sec' id='dc-x-csv'>Download CSV</button>" +
-        "<button class='x' id='dc-x-close'>&times;</button></div>" +
+        "<button id='dc-x-copy' title='Copy all shown mappings (with API names) to the clipboard, tab-separated for pasting into Google Sheets / Excel'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets</button>" +
+        "<button class='sec' id='dc-x-csv' title='Download the shown mappings as a CSV file'>Download CSV</button>" +
+        "<button class='x' id='dc-x-close' title='Close this mappings view'>&times;</button></div>" +
         "<div class='bd'><table><thead><tr><th>Source object (DLO)</th><th>Source field</th><th></th><th>Target object (DMO)</th><th>Target field</th></tr></thead><tbody>" +
         (trs || "<tr><td colspan='5' style='padding:24px;text-align:center;color:#8a94ab'>No mapped fields found.</td></tr>") +
         "</tbody></table></div>" +
@@ -1238,6 +1261,7 @@
       // header is the drag handle (buttons/select inside are ignored by makeDraggable)
       const hd = exportEl.querySelector(".hd"); if (hd) makeDraggable(exportEl, hd);
       addResizeHandle(exportEl, 480, 300);
+      try { installMappingExportTooltips(exportEl); } catch (e) {}
       exportEl.querySelector("#dc-x-copy").onclick = (e) => {
         navigator.clipboard.writeText(rowsToTable(rows, "\t")).then(() => { e.target.textContent = "✓ Copied!"; setTimeout(() => (e.target.innerHTML = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets"), 1200); }).catch(() => {});
       };
@@ -1739,6 +1763,35 @@
     if (dcBackdropEl) { dcBackdropEl.remove(); dcBackdropEl = null; }
   }
 
+  // ── Detail-export (Data Stream / DLO / DMO) INSTANT tooltips ────────────────────
+  // Self-contained for this feature only (own element + own bubble). No shared code —
+  // changing another feature's tooltips can never affect this one. Shows any control's
+  // title text immediately on hover (native title is ~1.5s and undiscoverable).
+  var _deTipEl = null;
+  function installDetailExportTooltips(container) {
+    if (!container || container.__deTipWired) return;
+    container.__deTipWired = true;
+    if (!_deTipEl) {
+      _deTipEl = document.createElement("div");
+      _deTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_deTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title");
+      if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _deTipEl.textContent = tip; _deTipEl.style.display = "block";
+      var r = el.getBoundingClientRect();
+      var top = r.top - _deTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _deTipEl.offsetWidth - 6);
+      _deTipEl.style.top = top + "px"; _deTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_deTipEl) _deTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
+
   function openDsExport() {
     const meta   = readDsMetadata();
     const fields = readDsFields();
@@ -1877,6 +1930,7 @@
     };
     const hd=detailExportEl.querySelector(".hd"); if(hd) makeDraggable(detailExportEl,hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc=(e)=>{ if(e.key==="Escape"){closeDetail();document.removeEventListener("keydown",onEsc,true);} };
     document.addEventListener("keydown",onEsc,true);
     const onOut=(e)=>{ if(detailExportEl&&!detailExportEl.contains(e.target)){closeDetail();document.removeEventListener("pointerdown",onOut,true);} };
@@ -2089,6 +2143,7 @@
     };
     const hd=detailExportEl.querySelector(".hd"); if(hd) makeDraggable(detailExportEl,hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc=(e)=>{ if(e.key==="Escape"){closeDetail();document.removeEventListener("keydown",onEsc,true);} };
     document.addEventListener("keydown",onEsc,true);
     const onOut=(e)=>{ if(detailExportEl&&!detailExportEl.contains(e.target)){closeDetail();document.removeEventListener("pointerdown",onOut,true);} };
@@ -2558,6 +2613,7 @@
 
     const hd = detailExportEl.querySelector(".hd"); if (hd) makeDraggable(detailExportEl, hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc = (e) => { if (e.key === "Escape") { closeDetail(); document.removeEventListener("keydown", onEsc, true); } };
     document.addEventListener("keydown", onEsc, true);
     const onOut = (e) => { if (detailExportEl && !detailExportEl.contains(e.target)) { closeDetail(); document.removeEventListener("pointerdown", onOut, true); } };
@@ -5236,6 +5292,7 @@
     };
 
     addResizeHandle(detailExportEl, 340, 260);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     detailExportEl.querySelector("#dc-d-csv").onclick = (e) => {
       const d = tabData[currentModalTab] || {};
       const btn = e.currentTarget || e.target;
@@ -5363,10 +5420,22 @@
       _dcTipEl.style.top = top + "px"; _dcTipEl.style.left = left + "px";
     };
     var hide = function () { if (_dcTipEl) _dcTipEl.style.display = "none"; };
-    // Delegated: one pair of listeners covers all current AND future controls in the container.
+    // Delegated: covers current AND future controls. IMPORTANT: only fire for actual
+    // CONTROLS (button/select/label/tab/close), NEVER for table cells — a <td>/<th> has a
+    // title set to its full (possibly huge JSON) value and its own Copy/View widget, so
+    // tooltip-ing cells both showed giant bubbles and fought the cell buttons.
     container.addEventListener("mouseover", function (e) {
       var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null;
-      if (el && container.contains(el)) show(el);
+      if (!el || !container.contains(el)) return;
+      var tag = (el.tagName || "").toLowerCase();
+      // Only real controls get a tooltip — never a data cell/header itself (its title is
+      // the full value + it has its own Copy/View). Buttons INSIDE a header still work
+      // because the matched element is the <button>, not the <td>/<th>.
+      if (tag === "td" || tag === "th") return;
+      var isControl = tag === "button" || tag === "select" || tag === "label" || tag === "a" ||
+                      el.hasAttribute("data-tab");
+      if (!isControl) return;
+      show(el);
     }, true);
     container.addEventListener("mouseout", hide, true);
     container.addEventListener("click", hide, true);
@@ -7127,6 +7196,36 @@
   // goes through the cookie bridge). Draggable modal; nothing is written.
   let _xformEl = null;
   function closeTransformView() { if (_xformEl) { _xformEl.remove(); _xformEl = null; } }
+  // Transform-viewer INSTANT tooltips — self-contained for this feature only.
+  var _xfTipEl = null;
+  function installTransformTooltips(container) {
+    if (!container || container.__xfTipWired) return;
+    container.__xfTipWired = true;
+    if (!_xfTipEl) {
+      _xfTipEl = document.createElement("div");
+      _xfTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_xfTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title"); if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _xfTipEl.textContent = tip; _xfTipEl.style.display = "block";
+      var r = el.getBoundingClientRect(); var top = r.top - _xfTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _xfTipEl.offsetWidth - 6);
+      _xfTipEl.style.top = top + "px"; _xfTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_xfTipEl) _xfTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) {
+      var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null;
+      if (!el || !container.contains(el)) return;
+      var tag = (el.tagName || "").toLowerCase();
+      if (tag === "td" || tag === "th") return;
+      if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return;
+      show(el);
+    }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
   function showTransformSummary(rep) {
     closeTransformView();
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
@@ -7244,9 +7343,9 @@
       })() + "</div>" +
       "<button class='dc-xf-ai' style='display:none;border:1px solid #7c3aed;background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>✨ AI Explain</button>" +
       "<button class='dc-xf-ai-settings' style='display:none;border:1px solid #94a3b8;background:#f1f5f9;border-radius:6px;padding:6px 8px;cursor:pointer;font:11px system-ui;color:#475569;position:relative;z-index:10' title='Change AI provider or API key'>⚙</button>" +
-      "<button class='dc-xf-download' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Download Summary</button>" +
-      "<button class='dc-xf-copy' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
-      "<button class='dc-xf-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
+      "<button class='dc-xf-download' title='Download this plain-language transform summary as an HTML file' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Download Summary</button>" +
+      "<button class='dc-xf-copy' title='Copy the raw transform definition JSON to the clipboard' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;color:#1e3a5f'>Copy JSON</button>" +
+      "<button class='dc-xf-x' title='Close this transform view' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button></div>";
 
     // ── Translate node actions to plain English ──
     function humanize(n) {
@@ -7521,6 +7620,7 @@
       "<svg width='16' height='16' style='display:block'><path d='M14,10 L10,14 M14,6 L6,14 M14,2 L2,14' stroke='#94a3b8' stroke-width='1.5' stroke-linecap='round'/></svg></div>";
     m.innerHTML = hdr + body + resizeHandle;
     document.body.appendChild(m);
+    try { installTransformTooltips(m); } catch (e) {}
     m.querySelector(".dc-xf-x").onclick = function () { closeTransformView(); teardown(); };
     m.querySelector(".dc-xf-copy").onclick = function () { try { navigator.clipboard.writeText(JSON.stringify(rep, null, 2)); var b = m.querySelector(".dc-xf-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
     // ── Download Summary button — generates styled HTML for printing/PDF ──
@@ -8850,7 +8950,7 @@
       const count = Math.ceil(vpH / ROW_H) + BUFFER * 2;
       const last = Math.min(total, first + count);
       if (!force && first === _win.start && last === _win.end) return;   // window unchanged
-      if (typeof detachTools === "function") detachTools();
+      var _ct = panel.querySelector("#dc-cell-tools"); if (_ct) _ct.style.display = "none";   // hide cell Copy/View before recycling rows
       tbody.innerHTML = "";
       topSp.td.style.height = (first * ROW_H) + "px";
       botSp.td.style.height = (Math.max(0, total - last) * ROW_H) + "px";
@@ -8886,7 +8986,7 @@
     }
     // (Re)start rendering a data set from the top — used on first render and after sort.
     function renderRowsChunked(dataRows) {
-      if (typeof detachTools === "function") detachTools();
+      var _ct = panel.querySelector("#dc-cell-tools"); if (_ct) _ct.style.display = "none";   // hide cell Copy/View before re-render
       _winData = dataRows;
       _win.start = _win.end = -1;
       scroll.scrollTop = 0;
@@ -8915,52 +9015,61 @@
     // widget + 2 listeners per cell. This is the memory/perf win for wide tables:
     // 234k cells now carry zero widgets/listeners; the table has exactly 3 handlers.
     const cellTools = document.createElement("span");
-    // position:FIXED + appended to <body> so the cell's overflow:hidden (needed for the
-    // text ellipsis) can't clip it, and long cell text never spills. It's placed over the
-    // hovered cell's top-right using the cell's screen rect.
-    cellTools.style.cssText = "position:fixed;display:flex;gap:2px;z-index:2147483647;background:rgba(255,255,255,.98);border-radius:4px;padding:1px;box-shadow:0 1px 5px rgba(0,0,0,.2);";
+    // Fixed-position floating widget appended to <body>. High-contrast dark pill so the
+    // Copy/View buttons are clearly readable over any cell content. It STAYS visible while
+    // the pointer is over it (so the buttons are actually clickable) and only moves/hides
+    // when you hover a different cell or leave both.
+    cellTools.id = "dc-cell-tools";
+    cellTools.style.cssText = "position:fixed;display:none;gap:4px;z-index:2147483647;background:#1e293b;border-radius:6px;padding:3px 4px;box-shadow:0 3px 10px rgba(0,0,0,.35);";
     const mkTool = (label, title) => {
       const b = document.createElement("button");
       b.textContent = label; b.title = title;
-      b.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:3px;font:600 9px system-ui;padding:1px 4px;cursor:pointer;color:#1e3a5f;";
+      b.style.cssText = "border:none;background:#fff;border-radius:4px;font:700 11px system-ui;padding:3px 9px;cursor:pointer;color:#1e293b;";
+      b.onmouseenter = function () { b.style.background = "#c7d2fe"; };
+      b.onmouseleave = function () { b.style.background = "#fff"; };
       return b;
     };
-    const copyToolBtn = mkTool("Copy", "Copy value");
-    const viewToolBtn = mkTool("View", "View full value");
+    const copyToolBtn = mkTool("Copy", "Copy this cell's value");
+    const viewToolBtn = mkTool("View", "View the full value");
     cellTools.appendChild(copyToolBtn); cellTools.appendChild(viewToolBtn);
-    let _toolsTd = null;   // the <td> the tools currently sit in
-    // The tools live INSIDE the hovered <td>, but td has overflow:hidden (for ellipsis),
-    // which would CLIP the buttons. So while hovering we flip that td to overflow:visible
-    // and restore it on detach — the buttons then show above the cell content.
-    const detachTools = () => {
-      if (cellTools.parentNode) cellTools.parentNode.removeChild(cellTools);
-      _toolsTd = null;
-    };
+    panel.appendChild(cellTools);          // added once; shown/hidden, never re-parented
+    let _toolsTd = null;                   // the <td> the tools currently belong to
+    let _hideTimer = null;                 // small delay so moving cell→widget doesn't hide
     const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
-    // Delegation: a single mouseover on tbody positions the shared widget over the cell.
+    const positionTools = (td) => {
+      var r = td.getBoundingClientRect();
+      cellTools.style.display = "flex";
+      // measure after display to place fully inside viewport
+      var w = cellTools.offsetWidth || 90;
+      cellTools.style.top = Math.max(4, r.top + (r.height - (cellTools.offsetHeight || 22)) / 2) + "px";
+      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(6, r.right - w - 4)) + "px";
+    };
+    const scheduleHide = () => {
+      if (_hideTimer) clearTimeout(_hideTimer);
+      _hideTimer = setTimeout(function () { cellTools.style.display = "none"; _toolsTd = null; }, 250);
+    };
+    const cancelHide = () => { if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; } };
+    // Show/position when hovering a data cell.
     tbody.addEventListener("mouseover", (e) => {
       const td = e.target && e.target.closest ? e.target.closest("td[data-c]") : null;
       if (!td) return;
-      if (td === _toolsTd) return;                 // already showing here
+      cancelHide();
+      if (td === _toolsTd && cellTools.style.display !== "none") return;
       _toolsTd = td;
       viewToolBtn.style.display = (td.textContent || "").length > 40 ? "" : "none";
-      // Append to the panel (not body) so it's auto-removed when the table closes.
-      if (!cellTools.parentNode) panel.appendChild(cellTools);
-      // Place at the cell's top-right (screen coords, since position:fixed).
-      var r = td.getBoundingClientRect();
-      cellTools.style.top = (r.top + 2) + "px";
-      cellTools.style.left = "auto";
-      cellTools.style.right = (window.innerWidth - r.right + 2) + "px";
+      positionTools(td);
     });
-    // Hide when the pointer leaves the table body entirely, or the table scrolls
-    // (fixed coords would otherwise drift from the cell).
-    tbody.addEventListener("mouseleave", detachTools);
-    scroll.addEventListener("scroll", detachTools);
+    // Leaving the table body starts the hide timer (cancelled if we enter the widget).
+    tbody.addEventListener("mouseleave", scheduleHide);
+    cellTools.addEventListener("mouseenter", cancelHide);
+    cellTools.addEventListener("mouseleave", scheduleHide);
+    // Scrolling hides immediately (fixed coords would drift from the cell).
+    scroll.addEventListener("scroll", function () { cellTools.style.display = "none"; _toolsTd = null; });
     copyToolBtn.onclick = (e) => {
       e.stopPropagation();
       if (!_toolsTd) return;
       try { navigator.clipboard.writeText(cellInfo(_toolsTd).val); } catch (ex) {}
-      copyToolBtn.textContent = "✓"; setTimeout(() => { copyToolBtn.textContent = "Copy"; }, 700);
+      copyToolBtn.textContent = "✓"; setTimeout(() => { copyToolBtn.textContent = "Copy"; }, 800);
     };
     viewToolBtn.onclick = (e) => {
       e.stopPropagation();
@@ -13206,10 +13315,35 @@ processJSON();
     panel.appendChild(footer);
     overlay.appendChild(panel);
     bodyContainer.parentElement.appendChild(overlay);
+    try { installErdTooltips(overlay); } catch (e) {}
 
     overlay.addEventListener("click", function(e) {
       if (e.target === overlay) overlay.remove();
     });
+  }
+
+  // ERD / Data Model INSTANT tooltips — self-contained for this feature only.
+  var _erdTipEl = null;
+  function installErdTooltips(container) {
+    if (!container || container.__erdTipWired) return;
+    container.__erdTipWired = true;
+    if (!_erdTipEl) {
+      _erdTipEl = document.createElement("div");
+      _erdTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_erdTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title"); if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _erdTipEl.textContent = tip; _erdTipEl.style.display = "block";
+      var r = el.getBoundingClientRect(); var top = r.top - _erdTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _erdTipEl.offsetWidth - 6);
+      _erdTipEl.style.top = top + "px"; _erdTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_erdTipEl) _erdTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
   }
 
   function showERDModal() {
@@ -13422,6 +13556,7 @@ processJSON();
     content.appendChild(body);
     modal.appendChild(content);
     document.body.appendChild(modal);
+    try { installErdTooltips(modal); } catch (e) {}
 
     modal.addEventListener("click", function(e) {
       if (e.target === modal) modal.remove();

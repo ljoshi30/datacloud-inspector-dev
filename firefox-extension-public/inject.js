@@ -1165,6 +1165,29 @@
     if (onKey) { document.removeEventListener("keydown", onKey, true); onKey = null; }
     hideBackdrop();
   }
+  // Mapping-export modal INSTANT tooltips — self-contained for this feature only.
+  var _mxTipEl = null;
+  function installMappingExportTooltips(container) {
+    if (!container || container.__mxTipWired) return;
+    container.__mxTipWired = true;
+    if (!_mxTipEl) {
+      _mxTipEl = document.createElement("div");
+      _mxTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_mxTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title"); if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _mxTipEl.textContent = tip; _mxTipEl.style.display = "block";
+      var r = el.getBoundingClientRect(); var top = r.top - _mxTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _mxTipEl.offsetWidth - 6);
+      _mxTipEl.style.top = top + "px"; _mxTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_mxTipEl) _mxTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
   function openExport() {
     // Rebuild fresh from the CURRENT (visible) page each time it opens.
     let allRows = buildMappingRows();
@@ -1224,11 +1247,11 @@
         "#dc-export .ft{padding:8px 16px;border-top:1px solid #e0e5ee;color:#8a94ab;font-size:11px;background:#f9fafc}" +
         "</style>" +
         "<div class='hd'><strong>Mappings: DLO&nbsp;&rarr;&nbsp;DMO</strong>" +
-        "<select id='dc-x-dmo'>" + opts + "</select>" +
+        "<select id='dc-x-dmo' title='Filter the mappings by a specific DMO (or show all)'>" + opts + "</select>" +
         "<span class='sp'></span>" +
-        "<button id='dc-x-copy'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets</button>" +
-        "<button class='sec' id='dc-x-csv'>Download CSV</button>" +
-        "<button class='x' id='dc-x-close'>&times;</button></div>" +
+        "<button id='dc-x-copy' title='Copy all shown mappings (with API names) to the clipboard, tab-separated for pasting into Google Sheets / Excel'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets</button>" +
+        "<button class='sec' id='dc-x-csv' title='Download the shown mappings as a CSV file'>Download CSV</button>" +
+        "<button class='x' id='dc-x-close' title='Close this mappings view'>&times;</button></div>" +
         "<div class='bd'><table><thead><tr><th>Source object (DLO)</th><th>Source field</th><th></th><th>Target object (DMO)</th><th>Target field</th></tr></thead><tbody>" +
         (trs || "<tr><td colspan='5' style='padding:24px;text-align:center;color:#8a94ab'>No mapped fields found.</td></tr>") +
         "</tbody></table></div>" +
@@ -1238,6 +1261,7 @@
       // header is the drag handle (buttons/select inside are ignored by makeDraggable)
       const hd = exportEl.querySelector(".hd"); if (hd) makeDraggable(exportEl, hd);
       addResizeHandle(exportEl, 480, 300);
+      try { installMappingExportTooltips(exportEl); } catch (e) {}
       exportEl.querySelector("#dc-x-copy").onclick = (e) => {
         navigator.clipboard.writeText(rowsToTable(rows, "\t")).then(() => { e.target.textContent = "✓ Copied!"; setTimeout(() => (e.target.innerHTML = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy for Sheets"), 1200); }).catch(() => {});
       };
@@ -1737,6 +1761,35 @@
     if (dcBackdropEl) { dcBackdropEl.remove(); dcBackdropEl = null; }
   }
 
+  // ── Detail-export (Data Stream / DLO / DMO) INSTANT tooltips ────────────────────
+  // Self-contained for this feature only (own element + own bubble). No shared code —
+  // changing another feature's tooltips can never affect this one. Shows any control's
+  // title text immediately on hover (native title is ~1.5s and undiscoverable).
+  var _deTipEl = null;
+  function installDetailExportTooltips(container) {
+    if (!container || container.__deTipWired) return;
+    container.__deTipWired = true;
+    if (!_deTipEl) {
+      _deTipEl = document.createElement("div");
+      _deTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_deTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title");
+      if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _deTipEl.textContent = tip; _deTipEl.style.display = "block";
+      var r = el.getBoundingClientRect();
+      var top = r.top - _deTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _deTipEl.offsetWidth - 6);
+      _deTipEl.style.top = top + "px"; _deTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_deTipEl) _deTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
+
   function openDsExport() {
     const meta   = readDsMetadata();
     const fields = readDsFields();
@@ -1875,6 +1928,7 @@
     };
     const hd=detailExportEl.querySelector(".hd"); if(hd) makeDraggable(detailExportEl,hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc=(e)=>{ if(e.key==="Escape"){closeDetail();document.removeEventListener("keydown",onEsc,true);} };
     document.addEventListener("keydown",onEsc,true);
     const onOut=(e)=>{ if(detailExportEl&&!detailExportEl.contains(e.target)){closeDetail();document.removeEventListener("pointerdown",onOut,true);} };
@@ -2087,6 +2141,7 @@
     };
     const hd=detailExportEl.querySelector(".hd"); if(hd) makeDraggable(detailExportEl,hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc=(e)=>{ if(e.key==="Escape"){closeDetail();document.removeEventListener("keydown",onEsc,true);} };
     document.addEventListener("keydown",onEsc,true);
     const onOut=(e)=>{ if(detailExportEl&&!detailExportEl.contains(e.target)){closeDetail();document.removeEventListener("pointerdown",onOut,true);} };
@@ -2556,6 +2611,7 @@
 
     const hd = detailExportEl.querySelector(".hd"); if (hd) makeDraggable(detailExportEl, hd);
     addResizeHandle(detailExportEl, 480, 300);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
     const onEsc = (e) => { if (e.key === "Escape") { closeDetail(); document.removeEventListener("keydown", onEsc, true); } };
     document.addEventListener("keydown", onEsc, true);
     const onOut = (e) => { if (detailExportEl && !detailExportEl.contains(e.target)) { closeDetail(); document.removeEventListener("pointerdown", onOut, true); } };
@@ -4485,10 +4541,35 @@ processJSON();
     panel.appendChild(footer);
     overlay.appendChild(panel);
     bodyContainer.parentElement.appendChild(overlay);
+    try { installErdTooltips(overlay); } catch (e) {}
 
     overlay.addEventListener("click", function(e) {
       if (e.target === overlay) overlay.remove();
     });
+  }
+
+  // ERD / Data Model INSTANT tooltips — self-contained for this feature only.
+  var _erdTipEl = null;
+  function installErdTooltips(container) {
+    if (!container || container.__erdTipWired) return;
+    container.__erdTipWired = true;
+    if (!_erdTipEl) {
+      _erdTipEl = document.createElement("div");
+      _erdTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;";
+      document.body.appendChild(_erdTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title"); if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _erdTipEl.textContent = tip; _erdTipEl.style.display = "block";
+      var r = el.getBoundingClientRect(); var top = r.top - _erdTipEl.offsetHeight - 8; if (top < 6) top = r.bottom + 8;
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _erdTipEl.offsetWidth - 6);
+      _erdTipEl.style.top = top + "px"; _erdTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_erdTipEl) _erdTipEl.style.display = "none"; };
+    container.addEventListener("mouseover", function (e) { var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null; if (!el || !container.contains(el)) return; var tag = (el.tagName || "").toLowerCase(); if (tag === "td" || tag === "th") return; if (tag !== "button" && tag !== "select" && tag !== "label" && tag !== "a" && !el.hasAttribute("data-tab")) return; show(el); }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
   }
 
   function showERDModal() {
@@ -4701,6 +4782,7 @@ processJSON();
     content.appendChild(body);
     modal.appendChild(content);
     document.body.appendChild(modal);
+    try { installErdTooltips(modal); } catch (e) {}
 
     modal.addEventListener("click", function(e) {
       if (e.target === modal) modal.remove();
