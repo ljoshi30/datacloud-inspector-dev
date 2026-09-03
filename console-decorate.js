@@ -9310,6 +9310,8 @@
     if (!recList) { dcExploreToast("Select a Data Cloud object first, then click Columns."); return; }
     const objectName = recList.objectName || "";
     if (!objectName || objectName === "unknown") { dcExploreToast("No object detected — open a Data Explorer object (DLO/DMO/CI), then try again."); return; }
+    // No records in SF's own table → nothing to show; block modal and toast immediately.
+    if (!recList.data || !recList.data.length) { dcExploreToast((objectName || "This object") + " has no records — nothing to show."); return; }
     const bar = document.getElementById("dc-bar");
     if (bar) bar.style.visibility = "hidden";
 
