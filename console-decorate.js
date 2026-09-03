@@ -2406,13 +2406,20 @@
       ["creationType",            "Creation Type"],
       ["usageTag",                "Usage Tag"],
     ];
+    // Include the API names alongside each label (the UI shows both stacked; the export
+    // was label-only). Order mirrors the on-screen columns: each label is followed by its
+    // API name so a reader can map DMO/field label → API name directly.
     const REL_COLS = [
       ["sourceEntityLabel",  "Object"],
+      ["sourceEntity",       "Object API Name"],
       ["sourceFieldLabel",   "Field"],
+      ["sourceField",        "Field API Name"],
       ["keyQualifierSource", "Key Qualifier (Field)"],
       ["cardinality",        "Cardinality"],
       ["targetEntityLabel",  "Related Object"],
+      ["targetEntity",       "Related Object API Name"],
       ["targetFieldLabel",   "Related Field"],
+      ["targetField",        "Related Field API Name"],
       ["keyQualifierTarget", "Key Qualifier (Related Field)"],
     ];
 
