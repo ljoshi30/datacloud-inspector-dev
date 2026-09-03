@@ -2440,7 +2440,11 @@
     };
     const toText = (rows, cols, sep) => {
       const e = sep === "," ? csvEsc : tsvEsc;
-      return metaLines(sep) + cols.map(c => c[1]).join(sep) + "\n" +
+      // NOTE: metaLines() ends WITHOUT a trailing newline (its last entry is the blank
+      // spacer row ["",""] → just a separator char). Concatenating the header directly
+      // put a leading empty cell on the header row, shifting every header one column
+      // right vs the data. Insert the newline so the header starts at column A.
+      return metaLines(sep) + "\n" + cols.map(c => c[1]).join(sep) + "\n" +
              rows.map(r => cols.map(c => e(r[c[0]])).join(sep)).join("\n");
     };
     const download = (text, filename) => {
