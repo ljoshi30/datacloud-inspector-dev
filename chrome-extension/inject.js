@@ -10706,7 +10706,11 @@
                 return null;
               }
               if (first != null) cnt = scanForInt(first, 0);
-              if (cnt !== null) { resolve({ count: cnt, ok: true }); return; }
+              // Capture rows PROCESSED (what Data Cloud scanned = the credit basis) from
+              // the response status, to show alongside the count like SF's own UI does.
+              var _rp = (rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount)) ;
+              var rowsProcessed = parseInt(_rp, 10); if (isNaN(rowsProcessed)) rowsProcessed = null;
+              if (cnt !== null) { resolve({ count: cnt, ok: true, rowsProcessed: rowsProcessed }); return; }
               // No row value yet. Heavy queries run ASYNC: the response comes back with
               // dataRows:[] and completionStatus:"Unspecified"/"Running" while Data Cloud is
               // still materializing (rowsProcessed climbing). Re-issue the query a few times
@@ -10798,7 +10802,7 @@
           return;
         }
         runQeCount(countSql, ds).then(function (pc) {
-          showCount(pc.count, null, !pc.ok);
+          showCount(pc.count, null, !pc.ok, pc.rowsProcessed);
         }).catch(function (err) {
           // If the COUNT(*) wrapper is too heavy to finish (e.g. big GROUP BY), fall back
           // to counting the SAME way Fetch & Export does — run the raw query and tally the
@@ -10836,7 +10840,7 @@
           }
           showCount(0, err);
         });
-        function showCount(cnt, err, couldntParse) {
+        function showCount(cnt, err, couldntParse, rowsProcessed) {
           countBtn.disabled = false; countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
           // Distinguish "genuinely 0 rows" from "we couldn't read the count value" — the
@@ -10872,6 +10876,15 @@
           }
           var prevResultNote = _lastResult ? "<div style='margin-top:10px;padding:8px 10px;background:#f0fdf4;border-radius:6px;font-size:11px;color:#059669;'>Previous fetch results still available — use View Results or Download CSV.</div>" : "";
           if (_lastResult) { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; }
+          // Rows PROCESSED (scanned) — what Data Cloud billed for. Shown like SF's own UI,
+          // with a rough credit estimate (Data Queries: 2 credits / 1M rows, Production).
+          var rpLine = "";
+          if (rowsProcessed != null && rowsProcessed >= 0) {
+            var estProd = (rowsProcessed / 1000000 * 2);
+            var estStr = estProd >= 0.01 ? estProd.toFixed(2) : "<0.01";
+            rpLine = "<div style='margin-top:6px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + rowsProcessed.toLocaleString()
+              + " <span style='color:#94a3b8;'>(≈ " + estStr + " credits @ 2/1M, Production)</span></div>";
+          }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;'></div>"
@@ -10879,7 +10892,9 @@
             + "<div style='background:#f5f3ff;border-radius:10px;padding:16px;text-align:center;margin-bottom:10px;'>"
             + "<div style='font:700 28px -apple-system,sans-serif;color:#7c3aed;'>" + Number(cnt).toLocaleString() + "</div>"
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
-            + "<div style='font-size:10px;color:#94a3b8;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
+            + rpLine
+            + "<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
+            + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> (2 credits/1M Prod · 1.6 Sandbox). Track in Digital Wallet.</div>"
             + prevResultNote;
         }
       });
@@ -11028,7 +11043,7 @@
             + "<label style='font:600 11px -apple-system,sans-serif;color:#475569;white-space:nowrap;'>Filename:</label>"
             + "<input id='dc-qe-filename' type='text' value='" + defaultFilename.replace(/'/g,"") + "' style='flex:1;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;'/>"
             + "</div>"
-            + "<div style='font-size:10px;color:#94a3b8;margin-top:6px;'>Each query uses Data Cloud credits. Results are stored until you run another query.</div>";
+            + "<div style='margin-top:6px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> (scanned), not returned: 2 credits/1M (Prod) · 1.6 (Sandbox). Downloading this CSV again or viewing results is free. Track in Digital Wallet.</div>";
           downloadBtn.style.display = "inline-block";
           viewBtn.style.display = "inline-block";
           infoBtn.style.display = "flex";
