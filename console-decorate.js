@@ -13514,33 +13514,34 @@ processJSON();
 
     var title = document.createElement("div");
     title.style.cssText = "flex:1;font:700 16px -apple-system,sans-serif;color:#1e293b;";
-    // Get dataspace from: 1) captured at XHR time, 2) page dropdown, 3) cached data
-    var dsName = _dataModelCache.capturedDataspace || "";
-    if (!dsName) {
-      // Read from the combobox button that has title="data space" nearby
-      // The button has class slds-combobox__input and its SPAN child has the value
-      (function findDs(root, depth) {
-        if (depth > 8 || dsName) return;
-        // Find the label "*Data Space" first, then find the combobox near it
-        root.querySelectorAll("label, span").forEach(function(lbl) {
-          if (dsName) return;
-          if (/^\*?Data Space$/i.test((lbl.textContent || "").trim())) {
-            // Found the label — now find the combobox button in the same container
-            var container = lbl.parentElement;
-            for (var i = 0; i < 4 && container; i++) {
-              var btn = container.querySelector("button.slds-combobox__input, button[class*='combobox__input']");
-              if (btn) {
-                var span = btn.querySelector("span.slds-truncate");
-                dsName = span ? span.textContent.trim() : btn.textContent.trim();
-                break;
-              }
-              container = container.parentElement;
+    // Dataspace priority: the LIVE dropdown selection wins (what the user currently has
+    // chosen), THEN the value captured at XHR time, THEN cached data. Previously the
+    // captured value won — so after the first load the label stayed stuck on that
+    // dataspace (e.g. "TDI") even after switching the dropdown to "default".
+    var dsName = "";
+    (function findDs(root, depth) {
+      if (depth > 8 || dsName) return;
+      // Find the label "*Data Space" first, then find the combobox near it
+      root.querySelectorAll("label, span").forEach(function(lbl) {
+        if (dsName) return;
+        if (/^\*?Data Space$/i.test((lbl.textContent || "").trim())) {
+          var container = lbl.parentElement;
+          for (var i = 0; i < 4 && container; i++) {
+            var btn = container.querySelector("button.slds-combobox__input, button[class*='combobox__input']");
+            if (btn) {
+              var span = btn.querySelector("span.slds-truncate");
+              var v = span ? span.textContent.trim() : btn.textContent.trim();
+              if (v && !/^select\b/i.test(v)) dsName = v;   // ignore "Select an Option" placeholder
+              break;
             }
+            container = container.parentElement;
           }
-        });
-        root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dsName) findDs(el.shadowRoot, depth + 1); });
-      })(document, 0);
-    }
+        }
+      });
+      root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dsName) findDs(el.shadowRoot, depth + 1); });
+    })(document, 0);
+    // Fall back to the value captured from the last getDataModelGraph request.
+    if (!dsName) dsName = _dataModelCache.capturedDataspace || "";
     if (!dsName && _dataModelCache.dataModels && _dataModelCache.dataModels.dataModels && _dataModelCache.dataModels.dataModels[0]) {
       // Fallback to cached data — but use the most common dataspace, not the first
       var dsCounts = {};
