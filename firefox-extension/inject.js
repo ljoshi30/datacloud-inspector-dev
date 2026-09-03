@@ -8245,11 +8245,66 @@
       });
     };
 
+    // ── Data Explorer credit env + own count runner (SEPARATE from Query Editor) ──────
+    // Detect Sandbox vs Production from the org host (docs: sandbox URLs contain
+    // ".sandbox."). Rate card: Data Queries = 2 credits/1M rows processed (Prod), 1.6 (Sb).
+    var _dxSandbox = false; try { _dxSandbox = /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) {}
+    var _dxRate = _dxSandbox ? 1.6 : 2, _dxEnv = _dxSandbox ? "Sandbox" : "Production";
+    // Explorer-OWNED count runner: resolves { count, rowsProcessed }. Extension path reuses
+    // the shared runRawSql (clean rows) but can't read rowsProcessed there → null. Bookmarklet
+    // path does its OWN aura call so it can read status.rowsProcessed (the credit basis).
+    // Fully independent of Query Editor's runQeCount — no shared code.
+    function runExploreCount(cSql, ds) {
+      return new Promise(function (resolve, reject) {
+        if (typeof extBridgePresent === "function" && extBridgePresent()) {
+          runRawSql(cSql, ds, 1).then(function (res) {
+            var cnt = 0, cRows = (res && res.rows) || [];
+            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } } }
+            resolve({ count: cnt, rowsProcessed: null });
+          }).catch(reject);
+          return;
+        }
+        if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — sort a column on the table first to connect.")); return; }
+        var cands = [ds];
+        if (typeof dataSpaceCandidates === "function") { var fm = cSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
+        if (cands.indexOf("default") < 0) cands.push("default");
+        function tryDs(i) {
+          var space = cands[i] || "";
+          _auraQid = (_auraQid || 0) + 1;
+          var act = { id: "dxcnt-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: cSql, rowLimit: 1, dataspace: space } };
+          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+          fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+            .then(function (r) { return r.text(); }).then(function (txt) {
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — sort a column on the table first, then retry.")); return; }
+              var a = j && j.actions && j.actions[0];
+              if (!a || a.state !== "SUCCESS") {
+                var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+                if (/denied authorization|not authorized/i.test(String(em)) && i + 1 < cands.length) { tryDs(i + 1); return; }
+                reject(new Error(String(em) || "Count failed")); return;
+              }
+              if (space) _auraSniff.dataSpace = space;
+              var rv = a.returnValue || {};
+              var dr = rv.dataRows || rv.rows || rv.data || [];
+              var firstRow = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
+              var cnt = 0;
+              if (firstRow != null) {
+                var vals = Array.isArray(firstRow) ? firstRow : (typeof firstRow === "object" ? Object.keys(firstRow).map(function (kk) { return firstRow[kk]; }) : [firstRow]);
+                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
+              }
+              var _rp = (rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount));
+              var rowsProcessed = parseInt(_rp, 10); if (isNaN(rowsProcessed)) rowsProcessed = null;
+              resolve({ count: cnt, rowsProcessed: rowsProcessed });
+            }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
+        }
+        tryDs(0);
+      });
+    }
+
     // "Count" button — runs COUNT(*) to show the true total records in the DMO/DLO
     const countBtn = document.createElement("button");
     countBtn.textContent = "Count";
     countBtn.style.cssText = "border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
-    countBtn.title = "Show the TOTAL number of records in this object (or matching the active filter). One quick COUNT(*) query — no rows downloaded.";
+    countBtn.title = "Show the TOTAL number of records in this object (or matching the active filter). Runs a COUNT(*) query (uses Data Cloud credits — billed on rows processed).";
     countBtn.onclick = () => {
       countBtn.disabled = true; countBtn.textContent = "Counting…";
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
@@ -8272,26 +8327,23 @@
       var cSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + countWhere;
       ensureQueryContext(function (ready) {
         if (!ready) { countBtn.disabled = false; countBtn.textContent = "Count"; return; }
-        runRawSql(cSql, ds, 1).then(function (res) {
-          var cnt = 0;
-          var cRows = res.rows || [];
-          // Scan every column of the first row for the numeric count (column name varies).
-          if (cRows.length > 0) {
-            var keys = Object.keys(cRows[0]);
-            for (var ki = 0; ki < keys.length; ki++) {
-              var v = parseInt(cRows[0][keys[ki]], 10);
-              if (!isNaN(v) && v >= 0) { cnt = v; break; }
-            }
-          }
+        runExploreCount(cSql, ds).then(function (cr) {
+          var cnt = cr.count || 0;
+          var rowsProcessed = cr.rowsProcessed;
           countBtn.disabled = false;
           countBtn.textContent = "Total: " + cnt.toLocaleString();
           countBtn.style.background = "#059669"; countBtn.style.borderColor = "#059669";
-          // Update the subtitle with count info
+          // Update the subtitle with count info + rows-processed & credit estimate (like SF).
           var sub = panel.querySelector(".dc-ac-sub");
           if (sub) {
             var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
             info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
             if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
+            if (rowsProcessed != null && rowsProcessed >= 0) {
+              var est = (rowsProcessed / 1000000 * _dxRate);
+              var estStr = est >= 0.01 ? est.toFixed(2) : "<0.01";
+              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + estStr + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
+            }
             sub.innerHTML = info;
           }
           // Show Export All button if it was hidden (now we know the total)
