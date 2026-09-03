@@ -9970,6 +9970,20 @@
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
     footer.appendChild(savedNote);
 
+    // Data Explorer credit-awareness note (self-contained — separate from Query Editor).
+    // "Show data", Reload, Count, Export CSV and Export All each run a Data Cloud query
+    // (usage type "Data Queries"): 2 credits / 1M rows PROCESSED in Production, 1.6 in
+    // Sandbox, billed on rows scanned (not returned). Cached re-open, in-memory CSV,
+    // scroll & sort are free. Collapsible so it doesn't crowd the modal.
+    const creditNoteEx = document.createElement("details");
+    creditNoteEx.style.cssText = "font-size:10.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 9px;line-height:1.5;";
+    creditNoteEx.innerHTML = "<summary style='cursor:pointer;font-weight:600;color:#92400e;'>💳 How this uses Data Cloud credits</summary>"
+      + "<div style='margin-top:5px;'>Loading data (<b>Show data</b>, <b>Reload</b>, <b>Count</b>, <b>Export CSV / Export All</b>) runs a query — usage type <b>Data Queries</b>.<br>"
+      + "Rate (Aug-2025 card): <b>2 credits / 1M rows processed</b> (Production) · <b>1.6</b> (Sandbox).<br>"
+      + "Billed on rows <b>processed</b> (scanned), not returned. Reopening cached results, in-memory CSV, scrolling &amp; sorting are <b>free</b>.<br>"
+      + "<span style='color:#b45309;'>Charged to Data Services or Flex credits per your org; min 1 credit/month. Track in Digital Wallet.</span></div>";
+    footer.appendChild(creditNoteEx);
+
     const mkFootBtn = (label, primary, icon, tip) => {
       const b = document.createElement("button");
       b.textContent = icon ? icon + " " + label : label;
@@ -10569,6 +10583,20 @@
         + "<b>▶ Fetch & Export</b> — fetch all rows and download as CSV<br><br>"
         + "<span style='color:#64748b;font-size:11px;'>Fetch supports up to " + maxRows + " rows.</span>"
         + modeNote
+        + creditNote()
+        + "</div>";
+    }
+    // Brief, honest credit-consumption note shown in the Query Editor. Both Count and
+    // Fetch run a Data Cloud query, billed under the "Data Queries" usage type at the
+    // published Aug-2025 rate: 2 credits / 1M rows PROCESSED (Production), 1.6 (Sandbox).
+    // "Processed" = rows the query scans, not rows returned — a heavy JOIN/GROUP BY can
+    // process far more than it returns. Reading cached results / CSV-from-memory is free.
+    function creditNote() {
+      return "<div style='margin-top:10px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:10.5px;color:#92400e;line-height:1.5;'>"
+        + "<b>💳 Data Cloud credits:</b> Count &amp; Fetch each run a query (usage type <b>Data Queries</b>).<br>"
+        + "Rate (Aug-2025 card): <b>2 credits / 1M rows processed</b> in Production · <b>1.6</b> in Sandbox.<br>"
+        + "Billed on rows <b>processed</b> (scanned), not returned — a big JOIN/GROUP BY can process far more rows than it shows. Cached results &amp; already-fetched CSV are free.<br>"
+        + "<span style='color:#b45309;'>Charged to Data Services or Flex credits per your org; min 1 credit/month. Track in Digital Wallet.</span>"
         + "</div>";
     }
 
