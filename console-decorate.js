@@ -9975,11 +9975,15 @@
     // (usage type "Data Queries"): 2 credits / 1M rows PROCESSED in Production, 1.6 in
     // Sandbox, billed on rows scanned (not returned). Cached re-open, in-memory CSV,
     // scroll & sort are free. Collapsible so it doesn't crowd the modal.
+    // Detect Sandbox vs Production from the org host (docs: sandbox URLs contain
+    // ".sandbox."/"--"). Explorer-local — no dependency on Query Editor's copy.
+    var _exSandbox = false; try { _exSandbox = /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) {}
+    var _exRate = _exSandbox ? 1.6 : 2, _exEnv = _exSandbox ? "Sandbox" : "Production";
     const creditNoteEx = document.createElement("details");
     creditNoteEx.style.cssText = "font-size:10.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 9px;line-height:1.5;";
     creditNoteEx.innerHTML = "<summary style='cursor:pointer;font-weight:600;color:#92400e;'>💳 How this uses Data Cloud credits</summary>"
       + "<div style='margin-top:5px;'>Loading data (<b>Show data</b>, <b>Reload</b>, <b>Count</b>, <b>Export CSV / Export All</b>) runs a query — usage type <b>Data Queries</b>.<br>"
-      + "Rate (Aug-2025 card): <b>2 credits / 1M rows processed</b> (Production) · <b>1.6</b> (Sandbox).<br>"
+      + "Rate (Aug-2025 card): <b>" + _exRate + " credits / 1M rows processed</b> (this <b>" + _exEnv + "</b> org) · " + (_exSandbox ? "2 in Production" : "1.6 in Sandbox") + ".<br>"
       + "Billed on rows <b>processed</b> (scanned), not returned. Reopening cached results, in-memory CSV, scrolling &amp; sorting are <b>free</b>.<br>"
       + "<span style='color:#b45309;'>Charged to Data Services or Flex credits per your org; min 1 credit/month. Track in Digital Wallet.</span></div>";
     footer.appendChild(creditNoteEx);
@@ -10586,15 +10590,24 @@
         + creditNote()
         + "</div>";
     }
-    // Brief, honest credit-consumption note shown in the Query Editor. Both Count and
-    // Fetch run a Data Cloud query, billed under the "Data Queries" usage type at the
-    // published Aug-2025 rate: 2 credits / 1M rows PROCESSED (Production), 1.6 (Sandbox).
-    // "Processed" = rows the query scans, not rows returned — a heavy JOIN/GROUP BY can
-    // process far more than it returns. Reading cached results / CSV-from-memory is free.
+    // Detect Sandbox vs Production from the org host. Salesforce sandbox My Domain URLs
+    // contain ".sandbox." (docs: MyDomain--Sandbox.sandbox.my.salesforce.com /
+    // .sandbox.lightning.force.com); production is .my.salesforce.com / .lightning.force.com.
+    // Data Queries rate card (Aug-2025): 2 credits / 1M rows processed (Prod), 1.6 (Sandbox).
+    function qeIsSandbox() { try { return /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) { return false; } }
+    function qeCreditRate() { return qeIsSandbox() ? 1.6 : 2; }
+    function qeEnvLabel() { return qeIsSandbox() ? "Sandbox" : "Production"; }
+    // Brief, honest credit-consumption note shown in the Query Editor. Both Count and Fetch
+    // run a Data Cloud query billed under the "Data Queries" usage type. The rate line is
+    // DYNAMIC: it bolds this org's environment (Sandbox/Production) and its rate.
     function creditNote() {
+      var sb = qeIsSandbox();
+      var rateLine = sb
+        ? "Rate (Aug-2025 card): <b>1.6 credits / 1M rows processed</b> (this <b>Sandbox</b> org) · 2 in Production."
+        : "Rate (Aug-2025 card): <b>2 credits / 1M rows processed</b> (this <b>Production</b> org) · 1.6 in Sandbox.";
       return "<div style='margin-top:10px;padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:10.5px;color:#92400e;line-height:1.5;'>"
         + "<b>💳 Data Cloud credits:</b> Count &amp; Fetch each run a query (usage type <b>Data Queries</b>).<br>"
-        + "Rate (Aug-2025 card): <b>2 credits / 1M rows processed</b> in Production · <b>1.6</b> in Sandbox.<br>"
+        + rateLine + "<br>"
         + "Billed on rows <b>processed</b> (scanned), not returned — a big JOIN/GROUP BY can process far more rows than it shows. Cached results &amp; already-fetched CSV are free.<br>"
         + "<span style='color:#b45309;'>Charged to Data Services or Flex credits per your org; min 1 credit/month. Track in Digital Wallet.</span>"
         + "</div>";
@@ -10880,10 +10893,11 @@
           // with a rough credit estimate (Data Queries: 2 credits / 1M rows, Production).
           var rpLine = "";
           if (rowsProcessed != null && rowsProcessed >= 0) {
-            var estProd = (rowsProcessed / 1000000 * 2);
-            var estStr = estProd >= 0.01 ? estProd.toFixed(2) : "<0.01";
+            var _rate = qeCreditRate();
+            var est = (rowsProcessed / 1000000 * _rate);
+            var estStr = est >= 0.01 ? est.toFixed(2) : "<0.01";
             rpLine = "<div style='margin-top:6px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + rowsProcessed.toLocaleString()
-              + " <span style='color:#94a3b8;'>(≈ " + estStr + " credits @ 2/1M, Production)</span></div>";
+              + " <span style='color:#94a3b8;'>(≈ " + estStr + " credits @ " + _rate + "/1M, " + qeEnvLabel() + ")</span></div>";
           }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
@@ -10894,7 +10908,7 @@
             + "<div style='font-size:11px;color:#64748b;margin-top:4px;'>rows in <b>" + tableName + "</b></div></div>"
             + rpLine
             + "<div style='font-size:10px;color:#94a3b8;margin-top:4px;'>Space: " + (_pageDataSpaceLabel || ds || "default") + "</div>"
-            + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> (2 credits/1M Prod · 1.6 Sandbox). Track in Digital Wallet.</div>"
+            + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> at <b>" + qeCreditRate() + " credits/1M</b> (" + qeEnvLabel() + "). Track in Digital Wallet.</div>"
             + prevResultNote;
         }
       });
@@ -11043,7 +11057,7 @@
             + "<label style='font:600 11px -apple-system,sans-serif;color:#475569;white-space:nowrap;'>Filename:</label>"
             + "<input id='dc-qe-filename' type='text' value='" + defaultFilename.replace(/'/g,"") + "' style='flex:1;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font:12px -apple-system,sans-serif;color:#1e293b;'/>"
             + "</div>"
-            + "<div style='margin-top:6px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> (scanned), not returned: 2 credits/1M (Prod) · 1.6 (Sandbox). Downloading this CSV again or viewing results is free. Track in Digital Wallet.</div>";
+            + "<div style='margin-top:6px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 This ran a <b>Data Queries</b> call — billed on rows <b>processed</b> (scanned), not returned, at <b>" + qeCreditRate() + " credits/1M</b> (" + qeEnvLabel() + "). Downloading this CSV again or viewing results is free. Track in Digital Wallet.</div>";
           downloadBtn.style.display = "inline-block";
           viewBtn.style.display = "inline-block";
           infoBtn.style.display = "flex";
