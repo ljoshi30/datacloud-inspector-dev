@@ -8571,7 +8571,7 @@
     exportAllBtn.title = "Download EVERY row of this object as CSV (ignores any filter), fetched in batches from Salesforce. Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.";
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     // No records loaded and none reported on the server → nothing to export.
-    if (_noRows && !serverTotal) {
+    if (!rows.length && !serverTotal) {
       exportAllBtn.disabled = true; exportAllBtn.style.opacity = "0.5"; exportAllBtn.style.cursor = "not-allowed";
       exportAllBtn.title = "This object has no records — nothing to export.";
     }
@@ -8870,6 +8870,7 @@
       // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
+      try { var _preDs3 = readPageDataSpace(); if (_preDs3) { if (_auraSniff) _auraSniff.dataSpace = _preDs3; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs3; } } catch (e) {}
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
@@ -10257,6 +10258,17 @@
       // Persist immediately so the work survives a tab close, even before viewing.
       try { lsSave(objectName, cols.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn })); } catch (e) {}
       exploreCache(objectName).lastApplied = cols.slice();
+      // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
+      // This works reliably on every org because the Data Explorer page always shows a
+      // visible "Data Space" selector. Storing it here means the query always has a
+      // dataspace even on a cold-start bookmarklet inject (before any Aura query has fired).
+      try {
+        var _preDs = readPageDataSpace();
+        if (_preDs) {
+          if (_auraSniff) _auraSniff.dataSpace = _preDs;
+          if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs;
+        }
+      } catch (e) {}
       viewAllBtn.disabled = true;
       showSpinner("Loading " + cols.length + " columns…");
       // Make sure we have live query credentials first (bootstraps invisibly if the
@@ -10276,7 +10288,15 @@
           showAllColumnsTable(objectName, cols, rows);
         }).catch((err) => {
           hideSpinner(); viewAllBtn.disabled = false;
-          savedNote.textContent = String(err && err.message || err);
+          var msg = String(err && err.message || err);
+          // dataspace="" means the bookmarklet hasn't captured a dataspace yet.
+          // Give the user a plain actionable message instead of the raw SQL error.
+          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace=""/.test(msg) || /does not exist/i.test(msg)) {
+            msg = "Could not detect the Data Space for this object. " +
+              "Sort or filter any column in Salesforce's own Data Explorer table first — " +
+              "that establishes the session and dataspace, then try Show selected columns' data again.";
+          }
+          savedNote.textContent = msg;
         });
       });
     };
@@ -10311,6 +10331,7 @@
       // Restore = repopulate the picker AND open the full-columns table for the saved
       // set (via the one-shot query) — no blank writes to SF's native table.
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
+      try { var _preDs2 = readPageDataSpace(); if (_preDs2) { if (_auraSniff) _auraSniff.dataSpace = _preDs2; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs2; } } catch (e) {}
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
         loadColumnsDataCached(objectName, fns, 1000, false).then((rows) => {
