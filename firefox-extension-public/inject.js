@@ -4905,8 +4905,11 @@ processJSON();
                   masterLabel: attr.masterLabel || dn || "",
                   developerName: dn,
                   dataType: attr.dataType || attr.businessType || (_et && _et.dataType) || "",
-                  isPrimaryKey: !!_pkSet[dn] || (attr.primaryIndexOrder != null) || /^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn),
-                  isForeignKey: dn.indexOf("KQ_") === 0 && !/^KQ_Id|^KQ_Key_Qual|^KQ_keyQual/i.test(dn) && !_pkSet[dn],
+                  // PK: authoritative primaryKeys[] only. No KQ_ heuristics — KQ_ fields
+                  // are key qualifiers (lookup aids), not PKs unless explicitly listed.
+                  isPrimaryKey: !!_pkSet[dn],
+                  // FK: KQ_ field that is NOT a PK (not in primaryKeys[]).
+                  isForeignKey: dn.indexOf("KQ_") === 0 && !_pkSet[dn],
                   foreignKey: attr.referenceModelEntityAttributeDeveloperName || null,
                   isRequired: attr.dataRequired || (_et && _et.dataRequired) || false
                 };
@@ -5153,11 +5156,23 @@ processJSON();
         html += "</div>";
       }
 
-      // Filter fields: show PKs, FKs, and business fields (hide system fields)
-      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
-      var bizFields = entity.attributes.filter(function(a) {
-        if (a.isPrimaryKey || a.isForeignKey) return false;
+      // Split fields into three groups:
+      //   sysFields  — standard system columns (always at the bottom with a heading)
+      //   keyFields  — PKs + FKs that are NOT system fields (shown highlighted at top)
+      //   bizFields  — everything else (no key, not system)
+      // System fields that happen to be PK/FK (e.g. DataSourceId__c is a PK on Unified
+      // Link) still go to the bottom group — they are plumbing, not meaningful keys for
+      // a user reading the model. Their PK/FK badge is preserved in the footer note.
+      var sysFields = entity.attributes.filter(function(a) {
+        return _systemFields.indexOf(a.developerName) >= 0;
+      });
+      var keyFields = entity.attributes.filter(function(a) {
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        return a.isPrimaryKey || a.isForeignKey;
+      });
+      var bizFields = entity.attributes.filter(function(a) {
+        if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        if (a.isPrimaryKey || a.isForeignKey) return false;
         return true;
       });
 
@@ -5202,13 +5217,19 @@ processJSON();
         });
 
         html += "</tbody></table></div>";
-        // Show hidden system fields list
-        var hiddenFields = entity.attributes.filter(function(a) {
-          if (a.isPrimaryKey || a.foreignKey) return false;
-          return _systemFields.indexOf(a.developerName) >= 0;
-        });
-        if (hiddenFields.length > 0) {
-          html += "<div style='padding:4px 14px 8px;font:10px -apple-system,sans-serif;color:#94a3b8;'>" + hiddenFields.length + " system fields not shown: " + hiddenFields.map(function(f) { return f.masterLabel || f.developerName; }).join(", ") + "</div>";
+        // System fields section — always at the bottom with a clear heading so users know
+        // they exist but are separated from the meaningful model fields. Show PK/FK badge
+        // if applicable (e.g. DataSourceId__c is a real PK on some Unified Link entities).
+        if (sysFields.length > 0) {
+          html += "<div style='padding:4px 14px 2px;font:600 9px system-ui;color:#94a3b8;text-transform:uppercase;letter-spacing:.4px;'>System Fields (" + sysFields.length + ")</div>";
+          html += "<div style='padding:2px 14px 8px;font:10px -apple-system,sans-serif;color:#94a3b8;'>";
+          html += sysFields.map(function(f) {
+            var badge = f.isPrimaryKey ? " <span style='color:#10b981;font-weight:700;font-size:9px;'>PK</span>"
+                      : f.isForeignKey ? " <span style='color:#f59e0b;font-weight:700;font-size:9px;'>FK</span>"
+                      : "";
+            return esc(f.masterLabel || f.developerName) + badge;
+          }).join(", ");
+          html += "</div>";
         }
       } else {
         html += "<div style='padding:16px;color:#94a3b8;text-align:center;font:12px system-ui'>No business attributes</div>";
@@ -5304,10 +5325,14 @@ processJSON();
         html += "<div class='card-source' style='background:#eff6ff;border-color:#bfdbfe;'><b style='color:#1e40af;'>Related to:</b> " + uniqueRels2.map(esc).join(", ") + "</div>\n";
       }
 
-      var keyFields = entity.attributes.filter(function(a) { return a.isPrimaryKey || a.isForeignKey; });
-      var bizFields = entity.attributes.filter(function(a) {
-        if (a.isPrimaryKey || a.isForeignKey) return false;
+      var sysFields2 = entity.attributes.filter(function(a) { return _systemFields.indexOf(a.developerName) >= 0; });
+      var keyFields = entity.attributes.filter(function(a) {
         if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        return a.isPrimaryKey || a.isForeignKey;
+      });
+      var bizFields = entity.attributes.filter(function(a) {
+        if (_systemFields.indexOf(a.developerName) >= 0) return false;
+        if (a.isPrimaryKey || a.isForeignKey) return false;
         return true;
       });
 
@@ -5320,6 +5345,9 @@ processJSON();
           html += "<tr><td>" + esc(attr.masterLabel) + "</td><td class='api'>" + esc(attr.developerName) + "</td><td>" + esc(attr.dataType) + "</td><td></td></tr>\n";
         });
         html += "</tbody>\n</table>\n";
+      }
+      if (sysFields2.length > 0) {
+        html += "<div class='card-source' style='font-size:10px;color:#94a3b8;'><b>System Fields:</b> " + sysFields2.map(function(f) { return esc(f.masterLabel || f.developerName) + (f.isPrimaryKey ? " (PK)" : f.isForeignKey ? " (FK)" : ""); }).join(", ") + "</div>\n";
       }
 
       html += "</div>\n";
