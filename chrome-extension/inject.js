@@ -8040,7 +8040,7 @@
   // Remembers the last rendered results table so it can be REOPENED after the user
   // closes it (accidentally or not) WITHOUT re-querying — the rows are still in memory.
   let _lastTableState = null;   // { objectName, columns, rows, wantRows, allColumns }
-  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } }
+  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); }
   function reopenLastTable() {
     if (_lastTableState && typeof showAllColumnsTable === "function") {
       var s = _lastTableState;
@@ -8897,7 +8897,21 @@
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
-        var dataResult = null; var countResult = 0; var done = 0; var timedOut = false;
+        var dataResult = null; var countResult = 0; var done = 0; var timedOut = false; var cancelled = false;
+        // Wire Cancel button on the spinner overlay to stop re-render
+        var spinnerEl = panel.querySelector(".dc-table-spinner");
+        var cancelBtnEl = spinnerEl && spinnerEl.querySelector("button");
+        if (cancelBtnEl) {
+          cancelBtnEl.onclick = function () {
+            cancelled = true;
+            timedOut = true; // reuse timedOut to block finish()
+            spinnerEl.style.display = "none";
+            applyF.disabled = false; applyF.textContent = _applyLabel;
+            fStatus.textContent = "Cancelled";
+            _filterState[objectName] = null;
+            done = 2;
+          };
+        }
         var _filterTimeout = setTimeout(function () {
           timedOut = true;
           applyF.disabled = false; applyF.textContent = _applyLabel;
@@ -8934,14 +8948,16 @@
           // stash message so the rebuilt modal can restore it
           if (_filterState[objectName]) _filterState[objectName]._statusMsg = msg;
           fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
+          // Hide spinner before re-render so it never gets stuck if showAllColumnsTable exits early
+          hideTableSpinner(panel);
           // pass _wantBeforeFilter so Rows input keeps the user's value, not filtered row count
           try {
             showAllColumnsTable(objectName, cols, dataResult.rows, _wantBeforeFilter, cols);
           } catch (renderErr) {
-            hideTableSpinner(panel);
             fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>Display error: " + String(renderErr && renderErr.message || renderErr).replace(/</g,"&lt;") + "</span>";
           }
-          updateFilterBtnStates(); // FIX 3: Update button states after applying filter
+          // Note: do NOT call updateFilterBtnStates() here — showAllColumnsTable rebuilds the
+          // panel and its own construction calls updateFilterBtnStates() in the correct closure.
         }
         runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
           dataResult = res;
@@ -8950,6 +8966,7 @@
           if (countResult > res.rows.length) res.rows.__serverRowCount = countResult;
           finish();
         }).catch(function (err) {
+          if (timedOut) return; // timeout or cancel already handled
           applyF.disabled = false; applyF.textContent = _applyLabel;
           fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</span>";
           hideTableSpinner(panel);
@@ -9013,6 +9030,8 @@
         }
       }
     }
+    // Always re-evaluate button states in the correct closure AFTER conditions are restored
+    updateFilterBtnStates();
     panel.appendChild(fbar);
 
     // scroll area + table
@@ -9262,7 +9281,8 @@
     const copyToolBtn = mkTool("Copy", "Copy this cell's value");
     const viewToolBtn = mkTool("View", "View the full value");
     cellTools.appendChild(copyToolBtn); cellTools.appendChild(viewToolBtn);
-    panel.appendChild(cellTools);          // added once; shown/hidden, never re-parented
+    // Must be on <body>, NOT panel — panel has transform:translateX which breaks position:fixed children
+    document.body.appendChild(cellTools);
     let _toolsTd = null;                   // the <td> the tools currently belong to
     let _hideTimer = null;                 // small delay so moving cell→widget doesn't hide
     const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
@@ -9883,18 +9903,28 @@
         const fieldStr = fields.length ? fields.map(function(fn){ return '"' + fn.replace(/"/g,'""') + '"'; }).join(", ") : '"Id"';
         // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
-        var fs = _filterState[from];
+        // _filterState is keyed by full object name (rawObjName); fall back to stripped name
+        var fs = _filterState[rawObjName] || _filterState[from];
         if (fs && fs.active) {
-          // If it's from SQL, use the stored WHERE directly
-          if (fs.fromSql && fs.where) {
+          // Use the stored WHERE string directly — it was already built by fragOf/buildWhere
+          if (fs.where) {
             whereClause = " WHERE " + fs.where;
           } else if (fs.conds && fs.conds.length) {
-            // Otherwise build from UI conditions
+            // Rebuild from UI conditions (fallback for older saved state)
             var frags = fs.conds.map(function (c) {
             if (!c.col) return null;
             var val = (c.val != null) ? String(c.val) : "";
-            if (val === "" && c.op !== "!=" && c.op !== "=") return null;
             var q = '"' + c.col.replace(/"/g, '""') + '"';
+            // IS NULL / IS NOT NULL ops — no value needed
+            if (c.op === "IS NULL") return q + " IS NULL";
+            if (c.op === "IS NOT NULL") return q + " IS NOT NULL";
+            // empty value or literal "null" → IS NULL / IS NOT NULL
+            var rawLower = val.toLowerCase();
+            if (rawLower === "" || rawLower === "null") {
+              if (c.op === "=" ) return q + " IS NULL";
+              if (c.op === "!=") return q + " IS NOT NULL";
+              return null;
+            }
             if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
             if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
             return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
