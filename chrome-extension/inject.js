@@ -8899,6 +8899,16 @@
           if (!dataResult) { hideTableSpinner(panel); return; }
           // Only store count for filtered queries — not for unfiltered (clear)
           _filterCount[objectName] = whereClause ? countResult : 0;
+          // zero-result filter: keep existing table visible, just update status — do NOT
+          // call showAllColumnsTable (it would hit the empty-object guard and freeze the spinner)
+          if (whereClause && (!dataResult.rows || !dataResult.rows.length)) {
+            hideTableSpinner(panel);
+            _filterCount[objectName] = 0;
+            _filterState[objectName] = null;
+            fStatus.innerHTML = "<span style='color:#b45309;font-weight:600;'>No rows match this filter — showing previous results</span>";
+            updateFilterBtnStates();
+            return;
+          }
           var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
           if (countResult > dataResult.rows.length) {
             msg += " of <b>" + countResult.toLocaleString() + "</b> matching";
@@ -8910,7 +8920,12 @@
           if (_filterState[objectName]) _filterState[objectName]._statusMsg = msg;
           fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
           // pass _wantBeforeFilter so Rows input keeps the user's value, not filtered row count
-          showAllColumnsTable(objectName, cols, dataResult.rows, _wantBeforeFilter, cols);
+          try {
+            showAllColumnsTable(objectName, cols, dataResult.rows, _wantBeforeFilter, cols);
+          } catch (renderErr) {
+            hideTableSpinner(panel);
+            fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>Display error: " + String(renderErr && renderErr.message || renderErr).replace(/</g,"&lt;") + "</span>";
+          }
           updateFilterBtnStates(); // FIX 3: Update button states after applying filter
         }
         runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
