@@ -8428,18 +8428,9 @@
       // If filter is active, count WITH the filter's WHERE clause
       var countWhere = "";
       var fsC = _filterState[objectName];
-      if (fsC && fsC.active && fsC.conds) {
-        var fragsC = fsC.conds.map(function (c) {
-          if (!c.col) return null;
-          var val = (c.val != null) ? String(c.val) : "";
-          // Allow empty string as valid value for != and = operators
-          if (val === "" && c.op !== "!=" && c.op !== "=") return null;
-          var q = '"' + c.col.replace(/"/g, '""') + '"';
-          if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
-          if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
-          return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
-        }).filter(Boolean);
-        if (fragsC.length) countWhere = " WHERE " + fragsC.join(" " + (fsC.join || "AND") + " ");
+      // Use the stored WHERE string directly — handles IS NULL, IS NOT NULL, and fromSql filters
+      if (fsC && fsC.active && fsC.where) {
+        countWhere = " WHERE " + fsC.where;
       }
       var cSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + countWhere;
       ensureQueryContext(function (ready) {
@@ -8692,6 +8683,8 @@
       return "text";
     }
     const fullColsForFilter = allColumns || columns;
+    // Escape SQL LIKE special characters so user values are treated as literals
+    function escapeLike(s) { return s.replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_"); }
     // Build one WHERE fragment from a {colSel, opSel, valCtl} condition row.
     function fragOf(cond) {
       var fn = cond.colSel.value, op = cond.opSel.value, t = inferType(fn);
@@ -8711,13 +8704,15 @@
       if (raw === "''") {
         if (op === "=" ) return q + " = ''";
         if (op === "!=") return q + " != ''";
+        return null; // '' doesn't make sense for LIKE / comparison ops
       }
       var litStr = "'" + raw.replace(/'/g, "''") + "'";
       if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
       if (t === "number") return q + " " + op + " " + litStr;
       if (t === "date") return q + " " + op + " " + litStr;
-      if (op === "contains") return q + " LIKE '%" + raw.replace(/'/g, "''") + "%'";
-      if (op === "starts with") return q + " LIKE '" + raw.replace(/'/g, "''") + "%'";
+      if (op === "contains") return q + " LIKE '%" + escapeLike(raw) + "%' ESCAPE '\\\\'";
+      if (op === "starts with") return q + " LIKE '" + escapeLike(raw) + "%' ESCAPE '\\\\'";
+
       if (op === "!=") return q + " != " + litStr;
       return q + " = " + litStr;
     }
@@ -9788,13 +9783,14 @@
     let soqlAcDropEl = null;
     var _savedSoqlText = "";
     var _savedSoqlRanOk = false; // only restore saved SQL if it ran without error
+    var _savedSoqlObjName = ""; // which object the saved SQL belongs to
     function closeSoqlEditor() {
       // Save the current SQL only if it ran successfully (no syntax errors)
       if (soqlPanelEl && _savedSoqlRanOk) {
         var ta = soqlPanelEl.querySelector("textarea");
-        if (ta && ta.value.trim()) _savedSoqlText = ta.value;
+        if (ta && ta.value.trim()) { _savedSoqlText = ta.value; _savedSoqlObjName = objectName; }
       } else if (!_savedSoqlRanOk) {
-        _savedSoqlText = ""; // discard broken SQL so next open gets a fresh build
+        _savedSoqlText = ""; _savedSoqlObjName = ""; // discard broken SQL so next open gets a fresh build
       }
       soqlAcDropEl = null;
       if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
@@ -9933,8 +9929,9 @@
               if (c.op === "!=") return q + " IS NOT NULL";
               return null;
             }
-            if (c.op === "contains") return q + " LIKE '%" + val.replace(/'/g, "''") + "%'";
-            if (c.op === "starts with") return q + " LIKE '" + val.replace(/'/g, "''") + "%'";
+            if (c.op === "contains") return q + " LIKE '%" + escapeLike(val) + "%' ESCAPE '\\\\'";
+            if (c.op === "starts with") return q + " LIKE '" + escapeLike(val) + "%' ESCAPE '\\\\'";
+
             return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
           }).filter(Boolean);
           if (frags.length) whereClause = " WHERE " + frags.join(" " + (fs.join || "AND") + " ");
@@ -9957,7 +9954,9 @@
 
       const textarea = document.createElement("textarea");
       _savedSoqlRanOk = false; // reset — must run successfully to save on next close
-      textarea.value = _savedSoqlText || buildInitialSoql();
+      // Clear saved SQL if it belongs to a different object
+      var savedSqlForThis = (_savedSoqlObjName === objectName) ? _savedSoqlText : "";
+      textarea.value = savedSqlForThis || buildInitialSoql();
       textarea.spellcheck = false;
       textarea.autocomplete = "off";
       textarea.autocorrect = "off";
@@ -10048,7 +10047,11 @@
           }
           out.push(ch); i++;
         }
-        return out.join("");
+        var result = out.join("");
+        // Rewrite = NULL / != NULL / <> NULL → IS NULL / IS NOT NULL (outside string literals)
+        result = result.replace(/(!= *NULL|<> *NULL)/gi, "IS NOT NULL");
+        result = result.replace(/= *NULL\b/gi, "IS NULL");
+        return result;
       }
 
       runBtn.onclick = () => {
@@ -10088,6 +10091,9 @@
           var askRows = userLim ? Math.min(parseInt(userLim[1], 10), DC_MAX_FETCH_ROWS) : DC_MAX_FETCH_ROWS;
           // FIX 7 & 8: Parse WHERE clause and store as filter state
           var whereMatch = soql.match(/\bWHERE\s+([\s\S]+?)(?:\s+(?:GROUP|ORDER|LIMIT|OFFSET)\b|$)/i);
+          // Extract FROM table from the actual (auto-quoted) SQL so COUNT uses same name as data query
+          var fromMatch = soql.match(/\bFROM\s+("(?:[^"]|"")*"|\S+)/i);
+          var fromTable = fromMatch ? fromMatch[1] : sqlQuoteIdent(objName);
           _filterState[objName] = null; // Reset first (FIX 8: clear any UI filter)
           runRawSql(soql, ds, askRows).then(function (res) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
@@ -10096,7 +10102,7 @@
             if (whereMatch && whereMatch[1]) {
               var whereClause2 = whereMatch[1].trim();
               _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
-              var countSql2 = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objName) + " WHERE " + whereClause2;
+              var countSql2 = "SELECT COUNT(*) FROM " + fromTable + " WHERE " + whereClause2;
               runRawSql(countSql2, ds, 1).then(function (cntRes) {
                 var cnt = 0;
                 if (cntRes.rows.length > 0) { var fc = cntRes.columns[0] || "count"; cnt = parseInt(cntRes.rows[0][fc], 10) || 0; }
