@@ -8790,7 +8790,7 @@
           var isNullOp = opSel.value === "IS NULL" || opSel.value === "IS NOT NULL";
           valWrap.style.display = isNullOp ? "none" : "";
         }
-        opSel.addEventListener("change", toggleValVisibility);
+        opSel.addEventListener("change", function () { toggleValVisibility(); updateFilterBtnStates(); });
         toggleValVisibility();
         cond.valCtl.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;min-width:120px;";
         if (preset && preset.val != null) cond.valCtl.value = preset.val;   // restore saved value
@@ -8880,8 +8880,18 @@
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
-        var dataResult = null; var countResult = 0; var done = 0;
+        var dataResult = null; var countResult = 0; var done = 0; var timedOut = false;
+        var _filterTimeout = setTimeout(function () {
+          timedOut = true;
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>Query timed out — try a narrower filter or fewer columns</span>";
+          hideTableSpinner(panel);
+          _filterState[objectName] = null;
+          done = 2;
+        }, 30000);
         function finish() {
+          if (timedOut) return;
+          clearTimeout(_filterTimeout);
           if (++done < 2) return;
           applyF.disabled = false; applyF.textContent = _applyLabel;
           if (!dataResult) { hideTableSpinner(panel); return; }
