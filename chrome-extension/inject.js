@@ -9982,8 +9982,7 @@
       statusDot.style.cssText = "width:6px;height:6px;border-radius:50%;background:#334155;flex-shrink:0;";
       const statusSpan = document.createElement("span");
       statusSpan.style.cssText = "flex:1;font-size:11px;color:#64748b;";
-      // FIX 6: Add note about simple queries only
-      statusSpan.textContent = "⌘↵ to run  ·  Simple queries only (single table, no JOIN/UNION)";
+      statusSpan.textContent = "⌘↵ to run  ·  Supports: WHERE, IN, BETWEEN, IS NULL, LIKE, GROUP BY, ORDER BY, aggregate functions  ·  For JOINs use Data Cloud Query Editor";
 
       const mkB = (label, accent) => {
         const b = document.createElement("button");
@@ -10060,7 +10059,7 @@
         if (!soql) { setStatus("Query is empty", "err"); return; }
         // FIX 8: Validate no JOIN or UNION
         if (/\bJOIN\b/i.test(soql) || /\bUNION\b/i.test(soql)) {
-          setStatus("Only simple queries (single table) are supported. JOIN and UNION are not supported.", "err");
+          setStatus("JOIN / UNION not supported here — use the Salesforce Data Cloud Query Editor for multi-table queries.", "err");
           return;
         }
         // Auto-quote any bare SF identifiers (e.g. phone_cell__c → "phone_cell__c")
@@ -10135,7 +10134,7 @@
           .then(()=>{ copyBtn.textContent="✓ Copied"; setTimeout(()=>{copyBtn.textContent="Copy";},2000); })
           .catch(()=>{ textarea.select(); document.execCommand("copy"); });
       };
-      resetBtn.onclick = () => { textarea.value=buildInitialSoql(); syncHighlight(); setStatus("⌘↵ to run  ·  type to autocomplete",""); hideAc(); };
+      resetBtn.onclick = () => { textarea.value=buildInitialSoql(); syncHighlight(); setStatus("⌘↵ to run  ·  Supports: WHERE, IN, BETWEEN, IS NULL, LIKE, GROUP BY, ORDER BY, aggregate functions  ·  For JOINs use Data Cloud Query Editor",""); hideAc(); };
 
       toolbar.appendChild(runBtn);
       toolbar.appendChild(copyBtn);
