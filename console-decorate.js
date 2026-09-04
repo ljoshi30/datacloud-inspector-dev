@@ -5753,16 +5753,15 @@
         return;
       }
     } catch (e) {}
-    // Fallback: column toggle
+    // Fallback: dummy /aura POST — sniffer captures context+token from ANY aura response.
+    // Column toggle was here but removed: it modifies recList.columns and the restore
+    // sometimes fails (timing race), permanently dropping a column each bookmarklet load.
     try {
-      var rl = findRecordListEl();
-      var current = rl ? getCurrentFields(rl) : [];
-      if (current.length >= 2 && typeof applyColumnViaSF === "function") {
-        var probeSet = current.slice(0, current.length - 1);
-        applyColumnViaSF(probeSet, function () {
-          setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
-        });
-      }
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
     } catch (e) {}
   }
 
@@ -5780,16 +5779,9 @@
       setTimeout(poll, 200);
     }
     // Try ALL connection methods at once — don't wait for one to fail
-    // 1) Column toggle nudge
-    if (current.length >= 2 && typeof applyColumnViaSF === "function") {
-      var probeSet = current.slice(0, current.length - 1);
-      try { applyColumnViaSF(probeSet, function () {
-        setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
-      }); } catch (e) {}
-    } else if (current.length && typeof applyColumnViaSF === "function") {
-      try { applyColumnViaSF(current, function () {}); } catch (e) {}
-    }
-    // 2) Row checkbox click (toggles on then off)
+    // NOTE: column toggle was here but removed — it modifies recList.columns and the restore
+    // sometimes races, permanently dropping a column each bookmarklet load.
+    // 1) Row checkbox click (toggles on then off)
     try {
       var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
       if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 600); }
@@ -5838,27 +5830,18 @@
       // Force an /aura call: try column toggle on record list, or fire a minimal
       // navigation aura action (which also sends aura.context + aura.token)
       var triggered = false;
-      var rl = findRecordListEl();
-      var current = rl ? getCurrentFields(rl) : [];
-      if (current.length >= 2 && typeof applyColumnViaSF === "function") {
-        var probeSet = current.slice(0, current.length - 1);
-        try { applyColumnViaSF(probeSet, function () {
-          setTimeout(function () { try { applyColumnViaSF(current, function () {}); } catch (e) {} }, 400);
-        }); triggered = true; } catch (e) {}
-      } else if (current.length && typeof applyColumnViaSF === "function") {
-        try { applyColumnViaSF(current, function () {}); triggered = true; } catch (e) {}
-      }
-      // Fallback: fire a dummy /aura POST (the sniffer catches context+token from ANY aura call)
-      if (!triggered) {
-        try {
-          fetch("/aura?r=99&aura.ApexAction.execute=1", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-            body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
-            credentials: "include"
-          }).catch(function () {});
-        } catch (e) {}
-      }
+      // NOTE: column toggle removed here — it modifies recList.columns and the restore
+      // sometimes races, permanently dropping a column each time Connect is clicked.
+      // Fire a dummy /aura POST instead (sniffer captures context+token from any aura response).
+      try {
+        fetch("/aura?r=99&aura.ApexAction.execute=1", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+          credentials: "include"
+        }).catch(function () {});
+        triggered = true;
+      } catch (e) {}
       // Try multiple UI interactions that fire aura calls
       if (!triggered) {
         try {
