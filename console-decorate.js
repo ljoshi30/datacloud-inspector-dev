@@ -8685,7 +8685,13 @@
       var q = '"' + fn.replace(/"/g, '""') + '"';
       if (op === "IS NULL") return q + " IS NULL";
       if (op === "IS NOT NULL") return q + " IS NOT NULL";
-      if (raw === "" && t !== "bool") return null;
+      // treat empty value or literal "null" as a null check
+      var rawLower = raw.toLowerCase();
+      if (rawLower === "" || rawLower === "null") {
+        if (op === "=" || op === "IS NULL") return q + " IS NULL";
+        if (op === "!=" || op === "IS NOT NULL") return q + " IS NOT NULL";
+        return null;
+      }
       var litStr = "'" + raw.replace(/'/g, "''") + "'";
       if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
       if (t === "number") return q + " " + op + " " + litStr;
@@ -8927,6 +8933,8 @@
         var op = c.opSel && c.opSel.value;
         if (op === "IS NULL" || op === "IS NOT NULL") return true;   // no value needed
         var val = (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value).trim() : "";
+        // empty value or "null" with = / != will become IS NULL / IS NOT NULL — counts as filled
+        if (val === "" || val.toLowerCase() === "null") return op === "=" || op === "!=";
         return val !== "" || inferType(c.colSel.value) === "bool";
       });
       applyF.disabled = !hasFilledCondition;
