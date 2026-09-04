@@ -10154,7 +10154,7 @@
 
       runBtn.onclick = () => {
         hideAc();
-        var isRetry = false; // guards the unknown-column auto-retry to fire only once per click
+        var strippedCols = {}; // tracks columns auto-stripped so far — prevents infinite loops
         var soql = textarea.value.trim();
         if (!soql) { setStatus("Query is empty", "err"); return; }
         // FIX 8: Validate no JOIN or UNION
@@ -10222,57 +10222,76 @@
               try { closeSoqlEditor(); } catch (e) {}
               showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
             }
-          }).catch(function (err) {
+          }).catch(function handleSqlErr(err) {
             var errMsg = String(err && err.message || err);
-            // Unknown column: auto-strip the bad column and retry ONCE (isRetry prevents loops)
-            var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s]+)['"`]?/i);
-            if (badColMatch && !isRetry) {
+            // Unknown column: auto-strip bad SELECT columns one at a time, retrying until
+            // success or no more can be removed. strippedCols tracks which have been tried
+            // so we never loop on the same column twice.
+            var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s,)]+)['"`]?/i);
+            if (badColMatch) {
               var badCol = badColMatch[1].replace(/^"|"$/g, "");
-              // Strip the bad column by parsing SELECT … FROM, filtering the column list,
-              // and rebuilding — avoids regex comma-handling bugs for first/middle/last position.
-              var retrySql = soql;
-              var selFromMatch = soql.match(/^(SELECT\s+)([\s\S]+?)(\s+FROM\b[\s\S]*)$/i);
-              if (selFromMatch) {
-                var selectKw = selFromMatch[1];
-                var colsPart  = selFromMatch[2];
-                var rest      = selFromMatch[3];
-                // Split on commas that are NOT inside quotes
-                var colTokens = colsPart.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
-                var filtered = colTokens.filter(function(tok) {
-                  var bare = tok.trim().replace(/^"|"$/g, "");
-                  return bare.toLowerCase() !== badCol.toLowerCase();
-                });
-                if (filtered.length > 0 && filtered.length < colTokens.length) {
-                  retrySql = selectKw + filtered.join(",") + rest;
+              // Only auto-retry if this column is in the SELECT list and not yet stripped
+              if (!strippedCols[badCol.toLowerCase()]) {
+                var retrySql = soql;
+                var selFromMatch = soql.match(/^(SELECT\s+)([\s\S]+?)(\s+FROM\b[\s\S]*)$/i);
+                if (selFromMatch) {
+                  var selectKw = selFromMatch[1];
+                  var colsPart  = selFromMatch[2];
+                  var rest      = selFromMatch[3];
+                  // Split on commas that are NOT inside double-quoted identifiers
+                  var colTokens = colsPart.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+                  var inSelect = colTokens.some(function(tok) {
+                    return tok.trim().replace(/^"|"$/g, "").toLowerCase() === badCol.toLowerCase();
+                  });
+                  if (inSelect) {
+                    var filtered = colTokens.filter(function(tok) {
+                      return tok.trim().replace(/^"|"$/g, "").toLowerCase() !== badCol.toLowerCase();
+                    });
+                    if (filtered.length > 0 && filtered.length < colTokens.length) {
+                      retrySql = selectKw + filtered.join(",") + rest;
+                    }
+                  }
+                }
+                if (retrySql !== soql) {
+                  strippedCols[badCol.toLowerCase()] = true;
+                  var stripped = Object.keys(strippedCols);
+                  setStatus("Column\"" + badCol + "\" not found — retrying without it…", "");
+                  soql = retrySql; // update closure var so next catch sees the reduced SQL
+                  runRawSql(retrySql, ds, askRows).then(function(res2) {
+                    runBtn.disabled = false; runBtn.style.opacity = "1";
+                    if (!res2.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+                    var stripMsg = stripped.length === 1
+                      ? "\"" + stripped[0] + "\" removed (not on this object)"
+                      : stripped.length + " columns removed (not on this object): " + stripped.join(", ");
+                    setStatus(stripMsg + " — showing " + res2.columns.length + " columns.", "warn");
+                    _savedSoqlRanOk = true;
+                    textarea.value = retrySql;
+                    syncHighlight();
+                    try { closeSoqlEditor(); } catch(e) {}
+                    showAllColumnsTable(objName, res2.columns, res2.rows, res2.rows.length, res2.columns);
+                  }).catch(handleSqlErr); // recurse — strip next bad column if any
+                  return;
                 }
               }
-              if (retrySql !== soql) {
-                isRetry = true; // prevent further retries if the stripped SQL also errors
-                setStatus("Column \"" + badCol + "\" not found — retrying without it…", "");
-                runRawSql(retrySql, ds, askRows).then(function(res2) {
-                  runBtn.disabled = false; runBtn.style.opacity = "1";
-                  if (!res2.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-                  setStatus("\"" + badCol + "\" removed (not on this object) — showing " + res2.columns.length + " columns.", "warn");
-                  _savedSoqlRanOk = true;
-                  textarea.value = retrySql;
-                  syncHighlight();
-                  try { closeSoqlEditor(); } catch(e) {}
-                  showAllColumnsTable(objName, res2.columns, res2.rows, res2.rows.length, res2.columns);
-                }).catch(function(err2) {
-                  runBtn.disabled = false; runBtn.style.opacity = "1";
-                  _savedSoqlRanOk = false;
-                  setStatus(String(err2 && err2.message || err2), "err");
-                });
-                return;
+              // Column is in WHERE/ORDER BY, or already stripped — can't auto-fix
+              runBtn.disabled = false; runBtn.style.opacity = "1";
+              _savedSoqlRanOk = false;
+              var inSelectList = false;
+              var selM2 = soql.match(/^SELECT\s+([\s\S]+?)\s+FROM\b/i);
+              if (selM2) {
+                var toks2 = selM2[1].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+                inSelectList = toks2.some(function(t){ return t.trim().replace(/^"|"$/g,"").toLowerCase() === badCol.toLowerCase(); });
               }
+              if (!inSelectList) {
+                setStatus(errMsg + " — This column is not in the SELECT list. Check the field API name in your WHERE / ORDER BY clause.", "err");
+              } else {
+                setStatus(errMsg + " — Check the column name in your query; it may be misspelled or not exist on this object.", "err");
+              }
+              return;
             }
             runBtn.disabled = false; runBtn.style.opacity = "1";
             _savedSoqlRanOk = false;
-            var friendly = errMsg;
-            if (/unknown column/i.test(errMsg)) {
-              friendly = errMsg + " — Check the column name in your query; it may be misspelled or not exist on this object.";
-            }
-            setStatus(friendly, "err");
+            setStatus(errMsg, "err");
           });
         });
       };
