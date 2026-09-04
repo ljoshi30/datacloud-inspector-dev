@@ -8700,12 +8700,17 @@
       var q = '"' + fn.replace(/"/g, '""') + '"';
       if (op === "IS NULL") return q + " IS NULL";
       if (op === "IS NOT NULL") return q + " IS NOT NULL";
-      // treat empty value or literal "null" as a null check
       var rawLower = raw.toLowerCase();
+      // completely empty value → IS NULL / IS NOT NULL
       if (rawLower === "" || rawLower === "null") {
-        if (op === "=" || op === "IS NULL") return q + " IS NULL";
-        if (op === "!=" || op === "IS NOT NULL") return q + " IS NOT NULL";
+        if (op === "=" ) return q + " IS NULL";
+        if (op === "!=") return q + " IS NOT NULL";
         return null;
+      }
+      // user typed '' (SQL empty-string syntax) → pass through as literal empty string
+      if (raw === "''") {
+        if (op === "=" ) return q + " = ''";
+        if (op === "!=") return q + " != ''";
       }
       var litStr = "'" + raw.replace(/'/g, "''") + "'";
       if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
@@ -9782,11 +9787,14 @@
     let soqlPanelEl = null;
     let soqlAcDropEl = null;
     var _savedSoqlText = "";
+    var _savedSoqlRanOk = false; // only restore saved SQL if it ran without error
     function closeSoqlEditor() {
-      // Save the current SQL text so reopening preserves it
-      if (soqlPanelEl) {
+      // Save the current SQL only if it ran successfully (no syntax errors)
+      if (soqlPanelEl && _savedSoqlRanOk) {
         var ta = soqlPanelEl.querySelector("textarea");
         if (ta && ta.value.trim()) _savedSoqlText = ta.value;
+      } else if (!_savedSoqlRanOk) {
+        _savedSoqlText = ""; // discard broken SQL so next open gets a fresh build
       }
       soqlAcDropEl = null;
       if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
@@ -9948,6 +9956,7 @@
       hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:hidden;pointer-events:none;z-index:1;box-sizing:border-box;";
 
       const textarea = document.createElement("textarea");
+      _savedSoqlRanOk = false; // reset — must run successfully to save on next close
       textarea.value = _savedSoqlText || buildInitialSoql();
       textarea.spellcheck = false;
       textarea.autocomplete = "off";
@@ -10093,20 +10102,24 @@
                 if (cntRes.rows.length > 0) { var fc = cntRes.columns[0] || "count"; cnt = parseInt(cntRes.rows[0][fc], 10) || 0; }
                 _filterCount[objName] = cnt;
                 if (cnt > res.rows.length) res.rows.__serverRowCount = cnt;
+                _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
                 showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
               }).catch(function () {
+                _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
                 showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
               });
             } else {
               _filterState[objName] = null;
               _filterCount[objName] = 0;
+              _savedSoqlRanOk = true;
               try { closeSoqlEditor(); } catch (e) {}
               showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
             }
           }).catch(function (err) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
+            _savedSoqlRanOk = false;
             setStatus(String(err && err.message || err), "err");
           });
         });
