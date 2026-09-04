@@ -8229,11 +8229,17 @@
   var _filterState = {};
   var _filterCount = {};
   var _countCache = {};
+  var _soqlEditorOpen = false; // true while any SQL editor panel is in the DOM
   // Original (pre-filter) rows per object — set once on first table open, never overwritten
   // by filter/SQL results. Restoring from here costs zero credits.
   var _originalRows = {};
   var _originalColumns = {};
   var _originalWantRows = {};
+  // SQL editor state — hoisted to module scope so background _buildExploreModal rebuilds
+  // don't wipe a successfully-run query (#4)
+  var _savedSoqlText = "";
+  var _savedSoqlRanOk = false;
+  var _savedSoqlObjName = "";
   function showTableSpinner(panel, msg) {
     var existing = panel.querySelector(".dc-table-spinner");
     if (existing) { var lbl = existing.querySelector(".dc-spin-msg"); if (lbl) lbl.textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
@@ -8338,7 +8344,7 @@
         rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
         rowsInput.value = String(DC_MAX_FETCH_ROWS);
       } else {
-        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "";
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
       }
     });
     const reloadBtn = document.createElement("button");
@@ -8368,7 +8374,15 @@
           return;
         }
         // force:true — Reload is an explicit action; the user wants CURRENT data, not cache.
+        // Always clear filter state first — Reload fetches unfiltered data, so any active
+        // filter (UI or SQL) would be misleading if left set (#2, #10).
+        _filterState[objectName] = null;
+        _filterCount[objectName] = 0;
         loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
+          // Update original cache with fresh data so Clear/Back-to-original stays current
+          _originalRows[objectName] = newRows;
+          _originalColumns[objectName] = columns;
+          _originalWantRows[objectName] = want;
           showAllColumnsTable(objectName, columns, newRows, want);
         }).catch(fail);
       });
@@ -8514,15 +8528,8 @@
     sqlBtn.textContent = "Edit SQL";
     sqlBtn.title = "Open a SQL editor to write your own query for this object (single-table SELECT). Advanced alternative to the filter bar.";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
-    sqlBtn.onclick = () => {
-      // FIX 8: If a UI filter is active (not from SQL), warn user — editing SQL will reset it
-      var activeFilter = _filterState[objectName];
-      if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
-        if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
-        _filterState[objectName] = null;
-      }
-      try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {}
-    };
+    // onclick wired below after openSoqlEditor is defined in this same closure
+    var _sqlBtnPendingWire = true;
 
     const csvBtn = document.createElement("button");
     // FIX 5: Download CSV label shows loaded row count
@@ -8879,6 +8886,11 @@
     addBtn.title = "Add another filter condition (column + operator + value). Multiple conditions combine with the AND/OR selector between them.";
     addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
     addBtn.onclick = function () {
+      // Warn if SQL filter is active — adding a UI condition will replace it when Apply runs
+      var fs = _filterState[objectName];
+      if (fs && fs.active && fs.fromSql) {
+        if (!confirm("A SQL filter is currently active. Adding a UI condition and clicking Apply will replace the SQL filter.\n\nProceed?")) return;
+      }
       addCondition();
       updateFilterBtnStates();
       // Immediate feedback + bring the new row into view (wide objects have many rows)
@@ -9078,11 +9090,13 @@
           var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
           var resetSql = "SELECT " + (allColumns || columns).map(function(c){ return '"' + c.replace(/"/g,'""') + '"'; }).join(", ") + " FROM " + sqlQuoteIdent(objectName) + " LIMIT " + DC_MAX_FETCH_ROWS;
           backBtn.disabled = true; backBtn.textContent = "Loading…";
+          showTableSpinner(panel, "Restoring original rows…");
           ensureQueryContext(function(ready) {
-            if (!ready) { backBtn.disabled = false; backBtn.textContent = "← Back to original"; return; }
+            if (!ready) { backBtn.disabled = false; backBtn.textContent = "← Back to original"; hideTableSpinner(panel); return; }
             runRawSql(resetSql, ds2, DC_MAX_FETCH_ROWS).then(function(res) {
+              hideTableSpinner(panel);
               showAllColumnsTable(objectName, res.columns, res.rows, res.rows.length, res.columns);
-            }).catch(function() { backBtn.disabled = false; backBtn.textContent = "← Back to original"; });
+            }).catch(function() { backBtn.disabled = false; backBtn.textContent = "← Back to original"; hideTableSpinner(panel); });
           });
         }
       };
@@ -9848,9 +9862,8 @@
     // ── SOQL Editor panel ─────────────────────────────────────────────────────
     let soqlPanelEl = null;
     let soqlAcDropEl = null;
-    var _savedSoqlText = "";
-    var _savedSoqlRanOk = false; // only restore saved SQL if it ran without error
-    var _savedSoqlObjName = ""; // which object the saved SQL belongs to
+    // _savedSoqlText / _savedSoqlRanOk / _savedSoqlObjName are module-scoped (declared above
+    // showAllColumnsTable) so background rebuilds of _buildExploreModal don't reset them.
     function closeSoqlEditor() {
       // Save the current SQL only if it ran successfully (no syntax errors)
       if (soqlPanelEl && _savedSoqlRanOk) {
@@ -9861,10 +9874,26 @@
       }
       soqlAcDropEl = null;
       if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
+      _soqlEditorOpen = false;
     }
-    _openSoqlEditor = openSoqlEditor;   // expose to the results-table "Edit SQL" button
+    _openSoqlEditor = openSoqlEditor;   // expose for external callers (e.g. column picker button)
+    // Wire the results-table SQL button directly to THIS closure's openSoqlEditor so
+    // reopening a last-table never calls the wrong object's editor (#3)
+    if (_sqlBtnPendingWire) {
+      _sqlBtnPendingWire = false;
+      sqlBtn.onclick = function () {
+        var activeFilter = _filterState[objectName];
+        if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
+          if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
+          _filterState[objectName] = null;
+        }
+        openSoqlEditor();
+      };
+    }
     function openSoqlEditor() {
       if (soqlPanelEl) { closeSoqlEditor(); return; }
+      if (_soqlEditorOpen) return; // another closure already has an editor open — don't duplicate
+      _soqlEditorOpen = true;
 
       // ── Syntax token regexes ──────────────────────────────────────────────
       const SOQL_KW  = /\b(SELECT|FROM|WHERE|AND|OR|NOT|IN|LIKE|INCLUDES|EXCLUDES|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|OFFSET|ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST|NULL|TRUE|FALSE|TODAY|YESTERDAY|TOMORROW|THIS_WEEK|LAST_WEEK|NEXT_WEEK|THIS_MONTH|LAST_MONTH|THIS_QUARTER|LAST_QUARTER|THIS_YEAR|LAST_YEAR|LAST_N_DAYS|NEXT_N_DAYS|LAST_N_MONTHS|NEXT_N_MONTHS)\b/gi;
@@ -10122,6 +10151,7 @@
 
       runBtn.onclick = () => {
         hideAc();
+        var isRetry = false; // guards the unknown-column auto-retry to fire only once per click
         var soql = textarea.value.trim();
         if (!soql) { setStatus("Query is empty", "err"); return; }
         // FIX 8: Validate no JOIN or UNION
@@ -10191,23 +10221,24 @@
             }
           }).catch(function (err) {
             var errMsg = String(err && err.message || err);
-            // Unknown column: auto-strip the bad column and retry once
+            // Unknown column: auto-strip the bad column and retry ONCE (isRetry prevents loops)
             var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s]+)['"`]?/i);
-            if (badColMatch && !soql._retried) {
+            if (badColMatch && !isRetry) {
               var badCol = badColMatch[1].replace(/^"|"$/g, "");
-              // Remove the bad column from the SELECT list
-              var retrySql = soql.replace(new RegExp(',?\\s*"?' + badCol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '"?\\s*,?', "i"), function(m) {
-                return m.indexOf(",") !== -1 ? (m.trim().startsWith(",") ? "" : ",") : "";
+              // Build a regex that matches the quoted or unquoted column name
+              var escapedCol = badCol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              var retrySql = soql.replace(new RegExp(',?\\s*"?' + escapedCol + '"?\\s*,?', "i"), function(m) {
+                // If match contains a comma keep one comma; if it's the only thing, drop it
+                return m.trim() === "" ? "" : (m.indexOf(",") !== -1 ? (m.trimStart().startsWith(",") ? "" : ",") : "");
               });
-              // Clean up double commas / leading comma
-              retrySql = retrySql.replace(/SELECT\s*,/, "SELECT ").replace(/,\s*,/g, ",").replace(/,\s*FROM/i, " FROM");
+              retrySql = retrySql.replace(/SELECT\s*,/i, "SELECT ").replace(/,\s*,/g, ",").replace(/,\s*FROM\b/i, " FROM");
               if (retrySql !== soql) {
-                retrySql._retried = true;
+                isRetry = true; // prevent further retries if the stripped SQL also errors
                 setStatus("Column \"" + badCol + "\" not found — retrying without it…", "");
                 runRawSql(retrySql, ds, askRows).then(function(res2) {
                   runBtn.disabled = false; runBtn.style.opacity = "1";
                   if (!res2.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-                  setStatus("Column \"" + badCol + "\" was removed (not on this object). Showing remaining " + res2.columns.length + " columns.", "warn");
+                  setStatus("\"" + badCol + "\" removed (not on this object) — showing " + res2.columns.length + " columns.", "warn");
                   _savedSoqlRanOk = true;
                   textarea.value = retrySql;
                   syncHighlight();
