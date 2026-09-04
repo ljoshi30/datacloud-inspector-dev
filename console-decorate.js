@@ -8229,6 +8229,11 @@
   var _filterState = {};
   var _filterCount = {};
   var _countCache = {};
+  // Original (pre-filter) rows per object — set once on first table open, never overwritten
+  // by filter/SQL results. Restoring from here costs zero credits.
+  var _originalRows = {};
+  var _originalColumns = {};
+  var _originalWantRows = {};
   function showTableSpinner(panel, msg) {
     var existing = panel.querySelector(".dc-table-spinner");
     if (existing) { var lbl = existing.querySelector(".dc-spin-msg"); if (lbl) lbl.textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
@@ -8278,6 +8283,13 @@
     var _explorerExportCancel = false;
     // Remember everything needed to reopen this exact table later, with no re-query.
     _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
+    // Cache the original (unfiltered) rows the FIRST time this object is opened, or when
+    // no filter is active. Used for zero-credit "Back to original" restore.
+    if (!_filterState[objectName] || !_filterState[objectName].active) {
+      _originalRows[objectName] = rows;
+      _originalColumns[objectName] = columns;
+      _originalWantRows[objectName] = wantRows;
+    }
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     // Field label lookup from whatever we discovered (falls back to the api name).
     const meta = {};
@@ -8605,7 +8617,7 @@
         }
         // fall through to a fresh export
       }
-      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || knownTotal || 0;
+      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0;
       var confirmMsg = btnTotal
         ? "Download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
         : "Download ALL records from this object? This may take a while. You can click Cancel while it runs.";
@@ -8657,7 +8669,7 @@
     closeBtn.innerHTML = "&#x2715;";
     closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
-    closeBtn.onclick = closeAllColumnsTable;
+    closeBtn.onclick = function () { _explorerExportCancel = true; closeAllColumnsTable(); };
     hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
@@ -8728,6 +8740,7 @@
     const joinSel = document.createElement("select");
     joinSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:3px 5px;font:600 11px -apple-system,sans-serif;color:#16325c;";
     ["AND", "OR"].forEach(function (j) { var o = document.createElement("option"); o.value = j; o.textContent = j; joinSel.appendChild(o); });
+    joinSel.addEventListener("change", function () { relabelJoiners(); });
 
     function addCondition(preset) {
       const row = document.createElement("div");
@@ -8833,9 +8846,22 @@
       relabelJoiners();
     }
     function relabelJoiners() {
+      var op = joinSel.value || "AND";
       conditions.forEach(function (c, i) {
         if (i === 0) { c.joinCell.textContent = "Where"; }
-        else { c.joinCell.innerHTML = ""; c.joinCell.appendChild(joinSel); }
+        else {
+          c.joinCell.innerHTML = "";
+          if (i === conditions.length - 1) {
+            // Last gap: put the live <select> so user can change AND/OR
+            c.joinCell.appendChild(joinSel);
+          } else {
+            // Middle gaps: static label that mirrors joinSel's current value
+            var lbl = document.createElement("span");
+            lbl.textContent = op;
+            lbl.style.cssText = "font:600 11px -apple-system,sans-serif;color:#0d6efd;padding:0 4px;";
+            c.joinCell.appendChild(lbl);
+          }
+        }
       });
     }
     // combine all conditions into one WHERE (joined by AND/OR)
@@ -8907,9 +8933,13 @@
             timedOut = true; // reuse timedOut to block finish()
             spinnerEl.style.display = "none";
             applyF.disabled = false; applyF.textContent = _applyLabel;
-            fStatus.textContent = "Cancelled";
             _filterState[objectName] = null;
+            _filterCount[objectName] = 0;
             done = 2;
+            // Re-enable Clear so user can dismiss conditions after cancel
+            clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
+            fStatus.innerHTML = "<span style='color:#6b7280;'>Cancelled — click Clear to reset or edit conditions</span>";
+            updateFilterBtnStates();
           };
         }
         var _filterTimeout = setTimeout(function () {
@@ -8934,7 +8964,9 @@
             hideTableSpinner(panel);
             _filterCount[objectName] = 0;
             _filterState[objectName] = null;
-            fStatus.innerHTML = "<span style='color:#b45309;font-weight:600;'>No rows match this filter — showing previous results</span>";
+            // Enable Clear so user can dismiss conditions and try again
+            clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
+            fStatus.innerHTML = "<span style='color:#b45309;font-weight:600;'>No rows match — click Clear to reset</span>";
             updateFilterBtnStates();
             return;
           }
@@ -9005,13 +9037,24 @@
     }
     applyF.onclick = function () { const w = buildWhere(); if (!w) { fStatus.textContent = "add at least one condition with a value"; return; } runFilter(w); };
     clearF.onclick = function () {
-      // FIX 2: Early return if no filter is active
-      if (!_filterState[objectName] || !_filterState[objectName].active) return;
-      // FIX 2: Clear all condition DOM rows
+      // Allow clear if filter was active OR if conditions are shown after a zero-result run
+      var hasConditions = conditions.length > 0;
+      if ((!_filterState[objectName] || !_filterState[objectName].active) && !hasConditions) return;
+      // Clear condition rows visually
       while (condsWrap.firstChild) { condsWrap.removeChild(condsWrap.firstChild); }
-      conditions.length = 0; // empty the array
+      conditions.length = 0;
       _filterState[objectName] = null;
-      runFilter(null);
+      _filterCount[objectName] = 0;
+      // Restore from cache — zero API credits
+      if (_originalRows[objectName] && _originalRows[objectName].length) {
+        fStatus.textContent = "";
+        var origCols = _originalColumns[objectName] || columns;
+        var origWant = _originalWantRows[objectName] || wantRows;
+        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, allColumns);
+      } else {
+        // No cache (e.g. page was refreshed mid-session) — fall back to re-query
+        runFilter(null);
+      }
     };
     ctrlRow.appendChild(addBtn); ctrlRow.appendChild(applyF); ctrlRow.appendChild(clearF); ctrlRow.appendChild(fStatus);
     // FIX 3: Initial button state
@@ -9019,7 +9062,33 @@
     fbar.appendChild(condsWrap); fbar.appendChild(ctrlRow);
     // RESTORE persisted conditions (so an applied filter stays visible after re-render).
     const saved = _filterState[objectName];
-    if (saved && saved.conds && saved.conds.length) {
+    if (saved && saved.fromSql && saved.active) {
+      // SQL editor result — show "Back to original" instead of condition rows
+      var backBtn = document.createElement("button");
+      backBtn.textContent = "← Back to original";
+      backBtn.title = "Restore the original unfiltered rows — no extra query credits used.";
+      backBtn.style.cssText = "border:1px solid #7c3aed;background:#f5f3ff;color:#7c3aed;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+      backBtn.onclick = function () {
+        _filterState[objectName] = null;
+        _filterCount[objectName] = 0;
+        if (_originalRows[objectName] && _originalRows[objectName].length) {
+          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, allColumns);
+        } else {
+          // No cache — re-query without filter
+          var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+          var resetSql = "SELECT " + (allColumns || columns).map(function(c){ return '"' + c.replace(/"/g,'""') + '"'; }).join(", ") + " FROM " + sqlQuoteIdent(objectName) + " LIMIT " + DC_MAX_FETCH_ROWS;
+          backBtn.disabled = true; backBtn.textContent = "Loading…";
+          ensureQueryContext(function(ready) {
+            if (!ready) { backBtn.disabled = false; backBtn.textContent = "← Back to original"; return; }
+            runRawSql(resetSql, ds2, DC_MAX_FETCH_ROWS).then(function(res) {
+              showAllColumnsTable(objectName, res.columns, res.rows, res.rows.length, res.columns);
+            }).catch(function() { backBtn.disabled = false; backBtn.textContent = "← Back to original"; });
+          });
+        }
+      };
+      ctrlRow.insertBefore(backBtn, clearF);
+      fStatus.innerHTML = "<span style='color:#7c3aed;font-weight:600;'>SQL filter active — showing query results</span>";
+    } else if (saved && saved.conds && saved.conds.length) {
       saved.conds.forEach(function (c) { addCondition(c); });
       joinSel.value = saved.join || "AND"; relabelJoiners();
       if (saved.active) {
@@ -9096,15 +9165,13 @@
           _currentSortCol = fn;
           _currentSortDir = "asc";
         }
-        // Sort the rows array
-        rows.sort(function (a, b) {
+        // Sort a COPY so _originalRows / _lastTableState are never mutated
+        var sortedRows = rows.slice().sort(function (a, b) {
           var va = a[fn];
           var vb = b[fn];
-          // Nulls to bottom
           if (va == null && vb == null) return 0;
           if (va == null) return 1;
           if (vb == null) return -1;
-          // Type-aware comparison
           if (typeof va === "number" && typeof vb === "number") {
             return _currentSortDir === "asc" ? va - vb : vb - va;
           }
@@ -9113,7 +9180,7 @@
           return _currentSortDir === "asc" ? cmp : -cmp;
         });
         // Re-render from the top with the sorted set; scroll reveals all rows lazily.
-        renderRowsChunked(rows);
+        renderRowsChunked(sortedRows);
         scroll.scrollTop = 0;
         // Update header sort indicators (arrow lives in a dedicated span so we never
         // corrupt the label/api-name markup via string replace).
@@ -10123,9 +10190,44 @@
               showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
             }
           }).catch(function (err) {
+            var errMsg = String(err && err.message || err);
+            // Unknown column: auto-strip the bad column and retry once
+            var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s]+)['"`]?/i);
+            if (badColMatch && !soql._retried) {
+              var badCol = badColMatch[1].replace(/^"|"$/g, "");
+              // Remove the bad column from the SELECT list
+              var retrySql = soql.replace(new RegExp(',?\\s*"?' + badCol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '"?\\s*,?', "i"), function(m) {
+                return m.indexOf(",") !== -1 ? (m.trim().startsWith(",") ? "" : ",") : "";
+              });
+              // Clean up double commas / leading comma
+              retrySql = retrySql.replace(/SELECT\s*,/, "SELECT ").replace(/,\s*,/g, ",").replace(/,\s*FROM/i, " FROM");
+              if (retrySql !== soql) {
+                retrySql._retried = true;
+                setStatus("Column \"" + badCol + "\" not found — retrying without it…", "");
+                runRawSql(retrySql, ds, askRows).then(function(res2) {
+                  runBtn.disabled = false; runBtn.style.opacity = "1";
+                  if (!res2.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+                  setStatus("Column \"" + badCol + "\" was removed (not on this object). Showing remaining " + res2.columns.length + " columns.", "warn");
+                  _savedSoqlRanOk = true;
+                  textarea.value = retrySql;
+                  syncHighlight();
+                  try { closeSoqlEditor(); } catch(e) {}
+                  showAllColumnsTable(objName, res2.columns, res2.rows, res2.rows.length, res2.columns);
+                }).catch(function(err2) {
+                  runBtn.disabled = false; runBtn.style.opacity = "1";
+                  _savedSoqlRanOk = false;
+                  setStatus(String(err2 && err2.message || err2), "err");
+                });
+                return;
+              }
+            }
             runBtn.disabled = false; runBtn.style.opacity = "1";
             _savedSoqlRanOk = false;
-            setStatus(String(err && err.message || err), "err");
+            var friendly = errMsg;
+            if (/unknown column/i.test(errMsg)) {
+              friendly = errMsg + " — Check the column name in your query; it may be misspelled or not exist on this object.";
+            }
+            setStatus(friendly, "err");
           });
         });
       };
