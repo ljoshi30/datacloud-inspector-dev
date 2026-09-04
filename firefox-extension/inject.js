@@ -8218,6 +8218,9 @@
   var _originalRows = {};
   var _originalColumns = {};
   var _originalWantRows = {};
+  // Per-object set of fieldNames the user has hidden via the column-visibility toggle.
+  // Pure view filter — doesn't affect the in-memory data or CSV export.
+  var _hiddenColumns = {};
   // SQL editor state — hoisted to module scope so background _buildExploreModal rebuilds
   // don't wipe a successfully-run query (#4)
   var _savedSoqlText = "";
@@ -8511,6 +8514,124 @@
       showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
     };
     if (emptyCount > 0) hdr.appendChild(hideWrap);
+
+    // ── Column visibility toggle ─────────────────────────────────────────────────
+    // Client-side only — hides/shows loaded columns with zero query credits. Uses a
+    // <colgroup>/<col> per column so a single style change hides both <th> and all <td>s.
+    // _hiddenColumns[objectName] persists across re-renders so the choice survives
+    // a filter apply/clear cycle.
+    if (!_hiddenColumns[objectName]) _hiddenColumns[objectName] = {};
+    var _colVizHidden = _hiddenColumns[objectName]; // shorthand reference for this closure
+
+    var colVizBtn = document.createElement("button");
+    colVizBtn.textContent = "Columns ▾";
+    colVizBtn.title = "Show or hide individual columns — no re-query needed.";
+    colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
+    hdr.appendChild(colVizBtn);
+
+    var colVizPanel = null;
+    function openColVizPanel() {
+      if (colVizPanel && colVizPanel.isConnected) { colVizPanel.remove(); colVizPanel = null; return; }
+      if (colVizPanel) { colVizPanel = null; }
+      var pop = document.createElement("div");
+      colVizPanel = pop;
+      pop.style.cssText = "position:fixed;z-index:2147483647;background:#fff;border:1px solid #c9d0da;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px 0;min-width:220px;max-height:60vh;overflow-y:auto;font:12px -apple-system,sans-serif;";
+      // Position below the button
+      var br = colVizBtn.getBoundingClientRect();
+      pop.style.left = Math.min(br.left, window.innerWidth - 240) + "px";
+      pop.style.top = (br.bottom + 4) + "px";
+
+      // Select all / none row
+      var selRow = document.createElement("div");
+      selRow.style.cssText = "display:flex;gap:6px;padding:4px 10px 6px;border-bottom:1px solid #e0e5ee;margin-bottom:4px;";
+      var selAll = document.createElement("button");
+      selAll.textContent = "Show all";
+      selAll.style.cssText = "border:1px solid #c9d0da;background:#f3f6fb;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px -apple-system,sans-serif;color:#1e3a5f;";
+      var selNone = document.createElement("button");
+      selNone.textContent = "Hide all";
+      selNone.style.cssText = "border:1px solid #c9d0da;background:#f3f6fb;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px -apple-system,sans-serif;color:#1e3a5f;";
+      selRow.appendChild(selAll);
+      selRow.appendChild(selNone);
+      pop.appendChild(selRow);
+
+      var colCbs = [];
+      columns.forEach(function (fn, idx) {
+        var row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:center;gap:7px;padding:3px 10px;cursor:pointer;";
+        row.addEventListener("mouseenter", function () { row.style.background = "#f3f6fb"; });
+        row.addEventListener("mouseleave", function () { row.style.background = ""; });
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !_colVizHidden[fn];
+        cb.style.cssText = "cursor:pointer;";
+        var lbl = document.createElement("span");
+        lbl.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        lbl.title = fn;
+        lbl.textContent = (meta[fn] || fn) + (meta[fn] && meta[fn] !== fn ? " (" + fn + ")" : "");
+        row.appendChild(cb);
+        row.appendChild(lbl);
+        pop.appendChild(row);
+        colCbs.push({ cb: cb, fn: fn, idx: idx });
+        cb.addEventListener("change", function () { applyColViz(fn, idx, cb.checked); updateColVizBtn(); });
+      });
+
+      function applyColViz(fn, idx, visible) {
+        if (visible) {
+          delete _colVizHidden[fn];
+        } else {
+          // Don't allow hiding the last visible column
+          var visibleCount = columns.filter(function (f) { return !_colVizHidden[f]; }).length;
+          if (visibleCount <= 1) { return; }
+          _colVizHidden[fn] = true;
+        }
+        // Hide/show the <col> element — browser propagates to all <td>/<th> in that column
+        var col = table.querySelector("colgroup col:nth-child(" + (idx + 1) + ")");
+        if (col) col.style.display = visible ? "" : "none";
+      }
+
+      selAll.onclick = function () {
+        colCbs.forEach(function (c) {
+          delete _colVizHidden[c.fn];
+          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
+          if (col) col.style.display = "";
+          c.cb.checked = true;
+        });
+        updateColVizBtn();
+      };
+      selNone.onclick = function () {
+        // Leave the first visible column shown (can't hide everything)
+        var first = true;
+        colCbs.forEach(function (c) {
+          if (first) { first = false; return; }
+          _colVizHidden[c.fn] = true;
+          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
+          if (col) col.style.display = "none";
+          c.cb.checked = false;
+        });
+        updateColVizBtn();
+      };
+
+      document.body.appendChild(pop);
+      // Click outside closes the panel
+      var closePop = function (e) {
+        if (!pop.contains(e.target) && e.target !== colVizBtn) {
+          pop.remove(); colVizPanel = null;
+          document.removeEventListener("mousedown", closePop, true);
+        }
+      };
+      document.addEventListener("mousedown", closePop, true);
+    }
+
+    function updateColVizBtn() {
+      var hiddenCount = columns.filter(function (fn) { return _colVizHidden[fn]; }).length;
+      colVizBtn.textContent = hiddenCount > 0 ? "Columns ▾ (" + hiddenCount + " hidden)" : "Columns ▾";
+      colVizBtn.style.background = hiddenCount > 0 ? "#fef3c7" : "#fff";
+      colVizBtn.style.borderColor = hiddenCount > 0 ? "#d97706" : "#c9d0da";
+      colVizBtn.style.color = hiddenCount > 0 ? "#92400e" : "#1e3a5f";
+    }
+
+    colVizBtn.onclick = function (e) { e.stopPropagation(); openColVizPanel(); };
+    updateColVizBtn(); // reflect any persisted hidden columns from a previous render
 
     // Relaunch the SQL editor from the results table (the editor closes on a
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
@@ -9122,6 +9243,16 @@
     table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;";
     // header row: one <th> per selected column (no internal Id column — it's the
     // opaque record key and is empty/meaningless for many objects).
+    // <colgroup> with one <col> per column — used by the column-visibility toggle to
+    // hide/show entire columns via a single display:none without touching any <td>/<th>.
+    var colgroup = document.createElement("colgroup");
+    columns.forEach(function (fn) {
+      var col = document.createElement("col");
+      if (_colVizHidden[fn]) col.style.display = "none";
+      colgroup.appendChild(col);
+    });
+    table.appendChild(colgroup);
+
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
     const thStyle = "position:sticky;top:0;z-index:2;background:#1f3864;color:#fff;font-weight:700;text-align:left;padding:7px 10px;border-right:1px solid #33507f;border-bottom:1px solid #33507f;";
@@ -10558,10 +10689,34 @@
       // Persist immediately so the work survives a tab close, even before viewing.
       try { lsSave(objectName, cols.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn })); } catch (e) {}
       exploreCache(objectName).lastApplied = cols.slice();
+
+      // ── Incremental fetch: reuse already-loaded rows, query only NEW columns ──────
+      // If ALL selected columns are already in the in-memory cache (_originalRows),
+      // just re-render from cache — zero credits. If SOME are new, fetch only those
+      // new columns (SELECT newcol1,newcol2 FROM ... LIMIT <already-loaded count>),
+      // merge by row index, update the cache, then render. Full re-fetch only when
+      // there is no cache at all (first load, or after Reload cleared the cache).
+      var cachedRows    = _originalRows[objectName];
+      var cachedColObjs = _originalColumns[objectName];
+      var cachedWant    = _originalWantRows[objectName];
+      var loadedFns     = cachedColObjs ? cachedColObjs.map(function (c) { return c.fieldName; }) : [];
+      var newCols       = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
+      var allCached     = cachedRows && cachedRows.length > 0 && newCols.length === 0;
+      var partialCache  = cachedRows && cachedRows.length > 0 && newCols.length > 0;
+
+      if (allCached) {
+        // Every selected column is already in memory — render immediately, no query.
+        var orderedCols = cols.map(function (fn) {
+          return (cachedColObjs && cachedColObjs.find(function (c) { return c.fieldName === fn; }))
+              || all.find(function (c) { return c.fieldName === fn; })
+              || { fieldName: fn, label: fn, type: "formattedText" };
+        });
+        savedNote.textContent = "Showing " + cachedRows.length + " cached rows × " + cols.length + " columns (no query used — columns were already loaded).";
+        showAllColumnsTable(objectName, orderedCols, cachedRows, cachedWant || cachedRows.length, cachedColObjs || orderedCols);
+        return;
+      }
+
       // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
-      // This works reliably on every org because the Data Explorer page always shows a
-      // visible "Data Space" selector. Storing it here means the query always has a
-      // dataspace even on a cold-start bookmarklet inject (before any Aura query has fired).
       try {
         var _preDs = readPageDataSpace();
         if (_preDs) {
@@ -10570,6 +10725,52 @@
         }
       } catch (e) {}
       viewAllBtn.disabled = true;
+      var wantRows = (cachedRows && cachedRows.length > 0) ? cachedRows.length : 1000;
+
+      if (partialCache) {
+        // Some new columns — fetch only those, then merge into cached rows by index.
+        showSpinner("Fetching " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + " (reusing " + loadedFns.length + " cached)…");
+        ensureQueryContext(function (ready) {
+          if (!ready) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = "";
+            var connectWrap2 = document.createElement("div");
+            savedNote.appendChild(connectWrap2);
+            renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
+            return;
+          }
+          loadColumnsDataCached(objectName, newCols, wantRows, true).then(function (newRows) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            // Merge new column values into cached rows by position index
+            var mergedRows = cachedRows.map(function (row, i) {
+              var extra = newRows[i] || {};
+              return Object.assign({}, row, extra);
+            });
+            // Merge server row count hint if present
+            if (newRows.__serverRowCount) mergedRows.__serverRowCount = newRows.__serverRowCount;
+            // Expand the column cache so future selections of these cols also hit cache
+            var mergedColObjs = (cachedColObjs ? cachedColObjs.slice() : []);
+            newCols.forEach(function (fn) {
+              if (!mergedColObjs.find(function (c) { return c.fieldName === fn; })) {
+                mergedColObjs.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" });
+              }
+            });
+            _originalRows[objectName]    = mergedRows;
+            _originalColumns[objectName] = mergedColObjs;
+            var orderedCols = cols.map(function (fn) {
+              return mergedColObjs.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" };
+            });
+            savedNote.textContent = "Fetched " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + "; reused " + loadedFns.length + " cached — " + mergedRows.length + " rows total.";
+            showAllColumnsTable(objectName, orderedCols, mergedRows, cachedWant || mergedRows.length, mergedColObjs);
+          }).catch(function (err) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = String(err && err.message || err);
+          });
+        });
+        return;
+      }
+
+      // Full fetch (no cache yet, or cache was cleared by Reload)
       showSpinner("Loading " + cols.length + " columns…");
       // Make sure we have live query credentials first (bootstraps invisibly if the
       // page hasn't fired a query since the tool loaded), THEN run the one-shot query.
