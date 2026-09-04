@@ -8376,6 +8376,8 @@
         // force:true — Reload is an explicit action; the user wants CURRENT data, not cache.
         // Always clear filter state first — Reload fetches unfiltered data, so any active
         // filter (UI or SQL) would be misleading if left set (#2, #10).
+        var prevFilterState = _filterState[objectName];
+        var prevFilterCount = _filterCount[objectName];
         _filterState[objectName] = null;
         _filterCount[objectName] = 0;
         loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
@@ -8384,7 +8386,12 @@
           _originalColumns[objectName] = columns;
           _originalWantRows[objectName] = want;
           showAllColumnsTable(objectName, columns, newRows, want);
-        }).catch(fail);
+        }).catch(function(err) {
+          // Restore filter state so the stale-but-visible data still matches the shown filter label
+          _filterState[objectName] = prevFilterState;
+          _filterCount[objectName] = prevFilterCount;
+          fail(err);
+        });
       });
     };
 
@@ -8954,10 +8961,10 @@
             _filterState[objectName] = null;
             _filterCount[objectName] = 0;
             done = 2;
-            // Re-enable Clear so user can dismiss conditions after cancel
+            // Force-enable Clear so user can dismiss conditions after cancel.
+            // Do NOT call updateFilterBtnStates — it re-disables clearF when _filterState is null.
             clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
             fStatus.innerHTML = "<span style='color:#6b7280;'>Cancelled — click Clear to reset or edit conditions</span>";
-            updateFilterBtnStates();
           };
         }
         var _filterTimeout = setTimeout(function () {
@@ -8982,10 +8989,12 @@
             hideTableSpinner(panel);
             _filterCount[objectName] = 0;
             _filterState[objectName] = null;
-            // Enable Clear so user can dismiss conditions and try again
+            applyF.disabled = false; applyF.style.opacity = "1"; applyF.style.cursor = "pointer";
+            // Force-enable Clear so user can dismiss conditions and try again.
+            // Do NOT call updateFilterBtnStates here — it would re-disable clearF because
+            // _filterState is null, but we want it enabled so the user can clear conditions.
             clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
             fStatus.innerHTML = "<span style='color:#b45309;font-weight:600;'>No rows match — click Clear to reset</span>";
-            updateFilterBtnStates();
             return;
           }
           var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
@@ -9887,6 +9896,7 @@
       if (soqlPanelEl) { closeSoqlEditor(); return; }
       if (_soqlEditorOpen) return; // another closure already has an editor open — don't duplicate
       _soqlEditorOpen = true;
+      try {
 
       // ── Syntax token regexes ──────────────────────────────────────────────
       const SOQL_KW  = /\b(SELECT|FROM|WHERE|AND|OR|NOT|IN|LIKE|INCLUDES|EXCLUDES|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|OFFSET|ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST|NULL|TRUE|FALSE|TODAY|YESTERDAY|TOMORROW|THIS_WEEK|LAST_WEEK|NEXT_WEEK|THIS_MONTH|LAST_MONTH|THIS_QUARTER|LAST_QUARTER|THIS_YEAR|LAST_YEAR|LAST_N_DAYS|NEXT_N_DAYS|LAST_N_MONTHS|NEXT_N_MONTHS)\b/gi;
@@ -10218,13 +10228,24 @@
             var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s]+)['"`]?/i);
             if (badColMatch && !isRetry) {
               var badCol = badColMatch[1].replace(/^"|"$/g, "");
-              // Build a regex that matches the quoted or unquoted column name
-              var escapedCol = badCol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-              var retrySql = soql.replace(new RegExp(',?\\s*"?' + escapedCol + '"?\\s*,?', "i"), function(m) {
-                // If match contains a comma keep one comma; if it's the only thing, drop it
-                return m.trim() === "" ? "" : (m.indexOf(",") !== -1 ? (m.trimStart().startsWith(",") ? "" : ",") : "");
-              });
-              retrySql = retrySql.replace(/SELECT\s*,/i, "SELECT ").replace(/,\s*,/g, ",").replace(/,\s*FROM\b/i, " FROM");
+              // Strip the bad column by parsing SELECT … FROM, filtering the column list,
+              // and rebuilding — avoids regex comma-handling bugs for first/middle/last position.
+              var retrySql = soql;
+              var selFromMatch = soql.match(/^(SELECT\s+)([\s\S]+?)(\s+FROM\b[\s\S]*)$/i);
+              if (selFromMatch) {
+                var selectKw = selFromMatch[1];
+                var colsPart  = selFromMatch[2];
+                var rest      = selFromMatch[3];
+                // Split on commas that are NOT inside quotes
+                var colTokens = colsPart.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+                var filtered = colTokens.filter(function(tok) {
+                  var bare = tok.trim().replace(/^"|"$/g, "");
+                  return bare.toLowerCase() !== badCol.toLowerCase();
+                });
+                if (filtered.length > 0 && filtered.length < colTokens.length) {
+                  retrySql = selectKw + filtered.join(",") + rest;
+                }
+              }
               if (retrySql !== soql) {
                 isRetry = true; // prevent further retries if the stripped SQL also errors
                 setStatus("Column \"" + badCol + "\" not found — retrying without it…", "");
@@ -10397,6 +10418,11 @@
       try { attachInstantTooltips(soqlPanelEl); } catch (e) {}   // fast tooltips for Run/Copy/Reset
       syncHighlight();
       textarea.focus();
+      } catch(e) {
+        // If editor failed to build, release the lock so it can be retried
+        if (!soqlPanelEl) _soqlEditorOpen = false;
+        throw e;
+      }
     }
 
     // ── Footer ────────────────────────────────────────────────────────────────
