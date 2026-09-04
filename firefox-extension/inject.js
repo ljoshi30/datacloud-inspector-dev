@@ -8300,7 +8300,7 @@
     rowsWrap.innerHTML = "<span>Rows:</span>";
     const rowsInput = document.createElement("input");
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
-    rowsInput.value = String(rows.length || 1000);
+    rowsInput.value = String(wantRows || rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
     rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
     rowsInput.addEventListener("input", function () {
@@ -8867,6 +8867,8 @@
       const dataSql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
                   " FROM " + sqlQuoteIdent(objectName) + wherePart + " LIMIT " + DC_MAX_FETCH_ROWS;
       const countSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + wherePart;
+      // capture user's current Rows setting so re-render keeps it
+      var _wantBeforeFilter = parseInt(rowsInput.value, 10) || wantRows || 1000;
       applyF.disabled = true;
       var _applyLabel = applyF.textContent;
       applyF.textContent = whereClause ? "Filtering…" : "Clearing…";
@@ -8904,8 +8906,11 @@
           } else if (countResult > 0) {
             msg = "<b>" + countResult.toLocaleString() + "</b> rows match";
           }
+          // stash message so the rebuilt modal can restore it
+          if (_filterState[objectName]) _filterState[objectName]._statusMsg = msg;
           fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
-          showAllColumnsTable(objectName, cols, dataResult.rows, dataResult.rows.length, cols);
+          // pass _wantBeforeFilter so Rows input keeps the user's value, not filtered row count
+          showAllColumnsTable(objectName, cols, dataResult.rows, _wantBeforeFilter, cols);
           updateFilterBtnStates(); // FIX 3: Update button states after applying filter
         }
         runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
@@ -8970,7 +8975,13 @@
     if (saved && saved.conds && saved.conds.length) {
       saved.conds.forEach(function (c) { addCondition(c); });
       joinSel.value = saved.join || "AND"; relabelJoiners();
-      if (saved.active) fStatus.textContent = "✓ filter active (" + saved.conds.length + " condition" + (saved.conds.length > 1 ? "s" : "") + ")";
+      if (saved.active) {
+        if (saved._statusMsg) {
+          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + saved._statusMsg + "</span>";
+        } else {
+          fStatus.textContent = "✓ filter active (" + saved.conds.length + " condition" + (saved.conds.length > 1 ? "s" : "") + ")";
+        }
+      }
     }
     panel.appendChild(fbar);
 
