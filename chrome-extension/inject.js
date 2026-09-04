@@ -8231,12 +8231,27 @@
   var _countCache = {};
   function showTableSpinner(panel, msg) {
     var existing = panel.querySelector(".dc-table-spinner");
-    if (existing) { existing.querySelector("span").textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
+    if (existing) { var lbl = existing.querySelector(".dc-spin-msg"); if (lbl) lbl.textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
     var overlay = document.createElement("div");
     overlay.className = "dc-table-spinner";
-    overlay.style.cssText = "display:flex;position:absolute;inset:0;background:rgba(255,255,255,.8);z-index:20;align-items:center;justify-content:center;flex-direction:column;gap:10px;border-radius:12px;";
-    overlay.innerHTML = "<div style='width:32px;height:32px;border:3px solid #d0d5de;border-top-color:#5b4f9e;border-radius:50%;animation:dc-spin 0.7s linear infinite'></div><span style='font:600 13px -apple-system,sans-serif;color:#1e3a5f;'>" + (msg || "Loading…") + "</span>";
+    overlay.style.cssText = "display:flex;position:absolute;inset:0;background:rgba(255,255,255,.88);z-index:20;align-items:center;justify-content:center;flex-direction:column;gap:10px;border-radius:12px;";
     if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
+    var wheel = document.createElement("div");
+    wheel.style.cssText = "width:32px;height:32px;border:3px solid #d0d5de;border-top-color:#5b4f9e;border-radius:50%;animation:dc-spin 0.7s linear infinite;flex-shrink:0;";
+    var lbl = document.createElement("span");
+    lbl.className = "dc-spin-msg";
+    lbl.style.cssText = "font:600 13px -apple-system,sans-serif;color:#1e3a5f;";
+    lbl.textContent = msg || "Loading…";
+    // Always show a Cancel button so user can escape a stuck state
+    var cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = "margin-top:4px;padding:5px 18px;font:600 11px -apple-system,sans-serif;color:#5c6b8a;background:#fff;border:1px solid #c9d0da;border-radius:5px;cursor:pointer;";
+    cancelBtn.onclick = function () {
+      overlay.style.display = "none";
+    };
+    overlay.appendChild(wheel);
+    overlay.appendChild(lbl);
+    overlay.appendChild(cancelBtn);
     panel.style.position = "relative";
     panel.appendChild(overlay);
   }
@@ -9865,7 +9880,7 @@
         if (ds0 && rawObjName.indexOf(ds0 + "_") === 0) {
           from = rawObjName.slice(ds0.length + 1);
         }
-        const fieldStr = fields.length ? fields.join(", ") : "Id";
+        const fieldStr = fields.length ? fields.map(function(fn){ return '"' + fn.replace(/"/g,'""') + '"'; }).join(", ") : '"Id"';
         // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
         var fs = _filterState[from];
@@ -9890,7 +9905,7 @@
         // Use current rowsInput value as the LIMIT (editable by user)
         var lim = DC_MAX_FETCH_ROWS;
         try { var ri = panel.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
-        return "SELECT " + fieldStr + "\nFROM " + from + whereClause + "\nLIMIT " + lim;
+        return "SELECT " + fieldStr + "\nFROM " + sqlQuoteIdent(from) + whereClause + "\nLIMIT " + lim;
       };
 
       const editorWrap = document.createElement("div");
@@ -9960,6 +9975,43 @@
         statusSpan.textContent = msg;
       }
 
+      // Auto-quote bare SF identifiers (word__c / word__dll etc) in SQL that the user typed
+      // without quotes. Skips already-quoted tokens and SQL keywords/literals.
+      function autoQuoteSql(sql) {
+        var SQL_KW = /^(SELECT|FROM|WHERE|AND|OR|NOT|IN|LIKE|IS|NULL|TRUE|FALSE|AS|BY|ORDER|GROUP|HAVING|LIMIT|OFFSET|ASC|DESC|DISTINCT|COUNT|MIN|MAX|SUM|AVG)$/i;
+        var out = []; var i = 0; var len = sql.length;
+        while (i < len) {
+          var ch = sql[i];
+          // already-quoted identifier — pass through unchanged
+          if (ch === '"') {
+            var j = i + 1;
+            while (j < len) { if (sql[j] === '"') { j++; if (sql[j] === '"') { j++; continue; } break; } j++; }
+            out.push(sql.slice(i, j)); i = j; continue;
+          }
+          // string literal — pass through unchanged
+          if (ch === "'") {
+            var k = i + 1;
+            while (k < len) { if (sql[k] === "'") { k++; if (sql[k] === "'") { k++; continue; } break; } k++; }
+            out.push(sql.slice(i, k)); i = k; continue;
+          }
+          // bare word — check if SF identifier (contains __ or ends __c/__dll/__dlm/__dlo/__dim etc)
+          if (/[A-Za-z_]/.test(ch)) {
+            var m = i;
+            while (m < len && /[A-Za-z0-9_]/.test(sql[m])) m++;
+            var word = sql.slice(i, m);
+            var isSfIdent = /__/.test(word) || /^[A-Za-z][A-Za-z0-9_]*__[a-z]/.test(word);
+            if (isSfIdent && !SQL_KW.test(word)) {
+              out.push('"' + word.replace(/"/g, '""') + '"');
+            } else {
+              out.push(word);
+            }
+            i = m; continue;
+          }
+          out.push(ch); i++;
+        }
+        return out.join("");
+      }
+
       runBtn.onclick = () => {
         hideAc();
         var soql = textarea.value.trim();
@@ -9969,9 +10021,11 @@
           setStatus("Only simple queries (single table) are supported. JOIN and UNION are not supported.", "err");
           return;
         }
+        // Auto-quote any bare SF identifiers (e.g. phone_cell__c → "phone_cell__c")
+        soql = autoQuoteSql(soql);
         var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
         if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
-        var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
+        var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/^"|"$/g, "").replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
         var objName = (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
         // Run the user's REAL SQL server-side (WHERE / ORDER BY / LIMIT all honored) via
         // the documented endpoint (extension) or /aura (bookmarklet), then render the
@@ -10003,7 +10057,7 @@
             if (whereMatch && whereMatch[1]) {
               var whereClause2 = whereMatch[1].trim();
               _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
-              var countSql2 = "SELECT COUNT(*) FROM " + objName + " WHERE " + whereClause2;
+              var countSql2 = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objName) + " WHERE " + whereClause2;
               runRawSql(countSql2, ds, 1).then(function (cntRes) {
                 var cnt = 0;
                 if (cntRes.rows.length > 0) { var fc = cntRes.columns[0] || "count"; cnt = parseInt(cntRes.rows[0][fc], 10) || 0; }
