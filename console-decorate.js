@@ -8528,8 +8528,14 @@
     sqlBtn.textContent = "Edit SQL";
     sqlBtn.title = "Open a SQL editor to write your own query for this object (single-table SELECT). Advanced alternative to the filter bar.";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
-    // onclick wired below after openSoqlEditor is defined in this same closure
-    var _sqlBtnPendingWire = true;
+    sqlBtn.onclick = () => {
+      var activeFilter = _filterState[objectName];
+      if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
+        if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
+        _filterState[objectName] = null;
+      }
+      try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {}
+    };
 
     const csvBtn = document.createElement("button");
     // FIX 5: Download CSV label shows loaded row count
@@ -9877,19 +9883,6 @@
       _soqlEditorOpen = false;
     }
     _openSoqlEditor = openSoqlEditor;   // expose for external callers (e.g. column picker button)
-    // Wire the results-table SQL button directly to THIS closure's openSoqlEditor so
-    // reopening a last-table never calls the wrong object's editor (#3)
-    if (_sqlBtnPendingWire) {
-      _sqlBtnPendingWire = false;
-      sqlBtn.onclick = function () {
-        var activeFilter = _filterState[objectName];
-        if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
-          if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
-          _filterState[objectName] = null;
-        }
-        openSoqlEditor();
-      };
-    }
     function openSoqlEditor() {
       if (soqlPanelEl) { closeSoqlEditor(); return; }
       if (_soqlEditorOpen) return; // another closure already has an editor open — don't duplicate
