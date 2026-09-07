@@ -8597,8 +8597,14 @@
           // Update the subtitle with count info + rows-processed & credit estimate (like SF).
           var sub = panel.querySelector(".dc-ac-sub");
           if (sub) {
+            // Live timestamp — this COUNT hits the live query engine, so on an ingesting
+            // stream it reflects rows AT THIS INSTANT (differs from SF's cached Data Stream
+            // page total, which only updates on refresh). Showing the time makes that clear.
+            var _cntTime = "";
+            try { _cntTime = new Date().toLocaleTimeString(); } catch (e) {}
             var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
             info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
+            if (_cntTime) info += " <span style='font-size:10px;color:#94a3b8;'>(live count as of " + _cntTime + ")</span>";
             if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
             if (rowsProcessed != null && rowsProcessed >= 0) {
               var est = (rowsProcessed / 1000000 * _dxRate);
