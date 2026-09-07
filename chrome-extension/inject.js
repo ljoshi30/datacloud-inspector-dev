@@ -8582,6 +8582,18 @@
           countBtn.disabled = false;
           countBtn.textContent = "Total: " + cnt.toLocaleString();
           countBtn.style.background = "#059669"; countBtn.style.borderColor = "#059669";
+          // Sync the fresh count into __serverRowCount so the FOOTER hint and the HEADER agree
+          // (previously the footer kept the older count captured at data-load time, so a live-
+          // ingesting stream showed two different "totals" in the same panel). Then refresh
+          // the footer text if the hint updater is available.
+          try {
+            rows.__serverRowCount = cnt;
+            var _hintEl = panel.querySelector(".dc-scroll-hint");
+            if (_hintEl) {
+              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total (Download CSV for all)" : "";
+              _hintEl.textContent = rows.length.toLocaleString() + " rows loaded" + _more + " · scroll freely — all rows & columns available, no extra queries.";
+            }
+          } catch (e) {}
           // Update the subtitle with count info + rows-processed & credit estimate (like SF).
           var sub = panel.querySelector(".dc-ac-sub");
           if (sub) {
