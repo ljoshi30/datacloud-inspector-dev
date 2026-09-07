@@ -5503,18 +5503,20 @@
   //   2) LWC/object-selector props, if exposed
   //   3) the most-recent sniffed space (same page session)
   // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
+  // UI placeholder text that must never be treated as a real dataspace name.
+  var _badDsNames = /^(Selected|Select|Sort|Filter|Edit|View|Loading|None|All|Default selection)$/i;
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
     if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
     // 2) LWC props (usually undefined, but authoritative when present)
     var rl = findRecordListEl();
     var cand = ["dataSpace", "dataspace", "selectedDataSpaceName", "dataSpaceName", "space"];
-    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string") return v; } catch (e) {} } }
+    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string" && !_badDsNames.test(v)) return v; } catch (e) {} } }
     var sel = null;
     eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
-    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string") return v2; } catch (e) {} } }
+    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string" && !_badDsNames.test(v2)) return v2; } catch (e) {} } }
     // 3) last sniffed space this session (the object currently open usually matches)
-    if (_auraSniff.dataSpace != null) return _auraSniff.dataSpace;
+    if (_auraSniff.dataSpace != null && !_badDsNames.test(_auraSniff.dataSpace)) return _auraSniff.dataSpace;
     return "";   // unknown → caller tries candidate spaces (incl. "default")
   }
   // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
@@ -6297,7 +6299,7 @@
     var isValidDs = function (s) {
       if (!s || s.length === 0 || s.length >= 30) return false;
       if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
-      if (/^(Sort|Filter|Select|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
+      if (/^(Sort|Filter|Select|Selected|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
       return true;
     };
     // Strategy 1: find the "Data Space" label element, read sibling/child for the value
