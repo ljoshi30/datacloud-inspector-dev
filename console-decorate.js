@@ -6302,14 +6302,64 @@
       if (/^(Sort|Filter|Select|Selected|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
       return true;
     };
+
+    // Strategy 0 (most reliable): read the VALUE attribute of the selected <option> in any
+    // <select> whose label/aria-label mentions "Data Space" or "Workspace". The option's
+    // value is the API name even when the visible text is "Selected" or a display label.
+    try {
+      var selEls = document.querySelectorAll("select");
+      for (var si = 0; si < selEls.length && !ds; si++) {
+        var se = selEls[si];
+        var seLabel = (se.getAttribute("aria-label") || se.getAttribute("title") || "").toLowerCase();
+        var seId = se.id || "";
+        var nearLabel = "";
+        // look for a <label for="..."> referencing this <select>
+        if (seId) { try { var lf = document.querySelector('label[for="' + seId + '"]'); if (lf) nearLabel = (lf.textContent || "").toLowerCase(); } catch(e){} }
+        if (/data.?space|workspace/i.test(seLabel + nearLabel)) {
+          var selVal = se.value;
+          if (isValidDs(selVal)) { ds = selVal; break; }
+          var selOpt = se.options && se.options[se.selectedIndex];
+          if (selOpt && isValidDs(selOpt.value)) { ds = selOpt.value; break; }
+        }
+      }
+    } catch (e) {}
+    if (ds) return ds;
+
+    // Strategy 0b: Lightning combobox — data-value attribute on the selected button/option
+    try {
+      eachElement(document, function (el) {
+        if (ds) return;
+        var role = el.getAttribute && el.getAttribute("role");
+        if (role !== "option" && role !== "combobox") return;
+        // Check if this combobox/option is inside a "Data Space" labelled group
+        var ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        var dv = el.getAttribute("data-value") || "";
+        if (isValidDs(dv) && /data.?space|workspace/i.test(ariaLabel)) { ds = dv; return; }
+        // Also check aria-selected="true" options near a Data Space heading
+        if (role === "option" && el.getAttribute("aria-selected") === "true") {
+          var parent = el.parentElement;
+          var ancestor = parent;
+          for (var depth = 0; depth < 6 && ancestor && !ds; depth++) {
+            if (/data.?space|workspace/i.test((ancestor.textContent || "").slice(0, 80))) {
+              if (isValidDs(dv)) { ds = dv; return; }
+            }
+            ancestor = ancestor.parentElement;
+          }
+        }
+      });
+    } catch (e) {}
+    if (ds) return ds;
+
     // Strategy 1: find the "Data Space" label element, read sibling/child for the value
     eachElement(document, function (el) {
       if (ds) return;
       var txt = (el.textContent || "").trim();
       if (/^Data\s*Space$/i.test(txt) && el.children.length === 0) {
-        // Look at next sibling element
+        // First try: next sibling's value attribute (covers Lightning button triggers)
         var next = el.nextElementSibling;
         if (next) {
+          var attrVal = next.getAttribute("data-value") || next.getAttribute("value") || "";
+          if (isValidDs(attrVal)) { ds = attrVal; return; }
           var val = next.textContent.trim().split("\n")[0].trim();
           if (val && val.length > 0 && val.length < 40) _pageDataSpaceLabel = val;
           if (isValidDs(val)) { ds = val; return; }
@@ -10698,23 +10748,19 @@
       // new columns (SELECT newcol1,newcol2 FROM ... LIMIT <already-loaded count>),
       // merge by row index, update the cache, then render. Full re-fetch only when
       // there is no cache at all (first load, or after Reload cleared the cache).
-      var cachedRows    = _originalRows[objectName];
-      var cachedColObjs = _originalColumns[objectName];
-      var cachedWant    = _originalWantRows[objectName];
-      var loadedFns     = cachedColObjs ? cachedColObjs.map(function (c) { return c.fieldName; }) : [];
-      var newCols       = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
-      var allCached     = cachedRows && cachedRows.length > 0 && newCols.length === 0;
-      var partialCache  = cachedRows && cachedRows.length > 0 && newCols.length > 0;
+      // _originalColumns stores field name STRINGS (same type as `cols`).
+      var cachedRows   = _originalRows[objectName];
+      var loadedFns    = _originalColumns[objectName] || [];  // array of strings
+      var cachedWant   = _originalWantRows[objectName];
+      var newCols      = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
+      var allCached    = cachedRows && cachedRows.length > 0 && newCols.length === 0;
+      var partialCache = cachedRows && cachedRows.length > 0 && newCols.length > 0;
 
       if (allCached) {
         // Every selected column is already in memory — render immediately, no query.
-        var orderedCols = cols.map(function (fn) {
-          return (cachedColObjs && cachedColObjs.find(function (c) { return c.fieldName === fn; }))
-              || all.find(function (c) { return c.fieldName === fn; })
-              || { fieldName: fn, label: fn, type: "formattedText" };
-        });
         savedNote.textContent = "Showing " + cachedRows.length + " cached rows × " + cols.length + " columns (no query used — columns were already loaded).";
-        showAllColumnsTable(objectName, orderedCols, cachedRows, cachedWant || cachedRows.length, cachedColObjs || orderedCols);
+        // cols is already an array of field name strings — pass directly
+        showAllColumnsTable(objectName, cols, cachedRows, cachedWant || cachedRows.length);
         return;
       }
 
@@ -10748,22 +10794,25 @@
               var extra = newRows[i] || {};
               return Object.assign({}, row, extra);
             });
-            // Merge server row count hint if present
             if (newRows.__serverRowCount) mergedRows.__serverRowCount = newRows.__serverRowCount;
-            // Expand the column cache so future selections of these cols also hit cache
-            var mergedColObjs = (cachedColObjs ? cachedColObjs.slice() : []);
-            newCols.forEach(function (fn) {
-              if (!mergedColObjs.find(function (c) { return c.fieldName === fn; })) {
-                mergedColObjs.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" });
-              }
-            });
+            // Expand the field-name string cache so future re-selections also hit cache
+            var mergedFns = loadedFns.slice();
+            newCols.forEach(function (fn) { if (mergedFns.indexOf(fn) === -1) mergedFns.push(fn); });
             _originalRows[objectName]    = mergedRows;
-            _originalColumns[objectName] = mergedColObjs;
-            var orderedCols = cols.map(function (fn) {
-              return mergedColObjs.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" };
-            });
+            _originalColumns[objectName] = mergedFns;
+            _originalWantRows[objectName] = cachedWant || mergedRows.length;
+            // Also add new col objects to exploreCache so labels show correctly
+            var ec = exploreCache(objectName);
+            if (ec.allColumns) {
+              newCols.forEach(function (fn) {
+                if (!ec.allColumns.find(function (c) { return c.fieldName === fn; })) {
+                  ec.allColumns.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn });
+                }
+              });
+            }
             savedNote.textContent = "Fetched " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + "; reused " + loadedFns.length + " cached — " + mergedRows.length + " rows total.";
-            showAllColumnsTable(objectName, orderedCols, mergedRows, cachedWant || mergedRows.length, mergedColObjs);
+            // cols is field name strings — pass directly
+            showAllColumnsTable(objectName, cols, mergedRows, cachedWant || mergedRows.length);
           }).catch(function (err) {
             hideSpinner(); viewAllBtn.disabled = false;
             savedNote.textContent = String(err && err.message || err);
@@ -10792,12 +10841,11 @@
         }).catch((err) => {
           hideSpinner(); viewAllBtn.disabled = false;
           var msg = String(err && err.message || err);
-          // dataspace="" means the bookmarklet hasn't captured a dataspace yet.
-          // Give the user a plain actionable message instead of the raw SQL error.
-          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace=""/.test(msg) || /does not exist/i.test(msg)) {
-            msg = "Could not detect the Data Space for this object. " +
-              "Sort or filter any column in Salesforce's own Data Explorer table first — " +
-              "that establishes the session and dataspace, then try Show selected columns' data again.";
+          // When every dataspace candidate failed (incl. "default" and object prefix),
+          // show a clear actionable message. The raw "[tried table=... dataspace=...]"
+          // prefix is already included in the error and gives the user the exact context.
+          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg)) {
+            msg = msg + "\n\nTip: Sort or filter any column in the Salesforce Data Explorer table first — that establishes the session and the correct dataspace.";
           }
           savedNote.textContent = msg;
         });
