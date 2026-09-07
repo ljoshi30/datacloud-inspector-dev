@@ -9306,7 +9306,7 @@
     const scroll = document.createElement("div");
     scroll.style.cssText = "flex:1;overflow:auto;position:relative;";
     const table = document.createElement("table");
-    table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;";
+    table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;width:100%;table-layout:auto;";
     // header row: one <th> per selected column (no internal Id column — it's the
     // opaque record key and is empty/meaningless for many objects).
 
