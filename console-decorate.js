@@ -11043,11 +11043,22 @@
       try { var _preDs2 = readPageDataSpace(); if (_preDs2) { if (_auraSniff) _auraSniff.dataSpace = _preDs2; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs2; } } catch (e) {}
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
-        loadColumnsDataCached(objectName, fns, 1000, false).then((rows) => {
-          hideSpinner();
-          savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded." + (rows.__fromCache ? " (from cache — no query used)" : "");
-          showAllColumnsTable(objectName, fns, rows);
-        }).catch((err) => { hideSpinner(); savedNote.textContent = String(err && err.message || err); });
+        // Same auto-dataspace step as "Show selected columns' data" so Restore works on
+        // non-default-dataspace orgs too (consistency — was missing, causing a dataspace error).
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, fns, 1000, false).then((rows) => {
+            hideSpinner();
+            savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded." + (rows.__fromCache ? " (from cache — no query used)" : "");
+            showAllColumnsTable(objectName, fns, rows);
+          }).catch((err) => {
+            hideSpinner();
+            var rmsg = String(err && err.message || err);
+            if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
+              rmsg = "Couldn't load the saved set — Data Space couldn't be determined automatically. Sort any column in the Salesforce table behind this panel, then click Restore again.";
+            }
+            savedNote.textContent = rmsg;
+          });
+        });
       });
     };
     clearBtn.onclick = () => {
@@ -11065,15 +11076,19 @@
       // Export via the SAME one-shot query as the full-table view, so ALL selected
       // columns land in the CSV with real data — not just SF's 10.
       ensureQueryContext(function () {
-        loadColumnsDataCached(objectName, ordered, 1000, false).then((rows) => {
-          exportBtn.disabled = false;
-          downloadRowsCsv(objectName, ordered, rows);
-          savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns." + (rows.__fromCache ? " (from cache)" : "");
-        }).catch((err) => {
-          // Fallback to SF's ≤10-column data if the query path isn't ready.
-          exportBtn.disabled = false;
-          savedNote.textContent = String(err && err.message || err) + " — exporting visible columns instead.";
-          const rl = findRecordListEl(); if (rl) exportExploreCsv(rl);
+        // Auto-establish dataspace first (same as Show data / Restore) so Export works on
+        // non-default-dataspace orgs instead of erroring / falling back to SF's 10 columns.
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, ordered, 1000, false).then((rows) => {
+            exportBtn.disabled = false;
+            downloadRowsCsv(objectName, ordered, rows);
+            savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns." + (rows.__fromCache ? " (from cache)" : "");
+          }).catch((err) => {
+            // Fallback to SF's ≤10-column data if the query path isn't ready.
+            exportBtn.disabled = false;
+            savedNote.textContent = String(err && err.message || err) + " — exporting visible columns instead.";
+            const rl = findRecordListEl(); if (rl) exportExploreCsv(rl);
+          });
         });
       });
     };
