@@ -5807,9 +5807,24 @@
       if (candidates.length) {
         var target = candidates[0];
         fired = true;
-        try { target.click(); } catch (e) {}
-        // Restore original order with a second click (best-effort).
-        setTimeout(function () { try { target.click(); } catch (e) {} }, 700);
+        // LWC sort handlers often ignore a synthetic .click() but respond to a REAL
+        // pointer/mouse event sequence. Dispatch the full sequence, then also call
+        // .click() as a belt-and-suspenders. Wrapped in try/catch — if anything throws
+        // the poll simply times out and the existing manual-sort fallback message shows,
+        // so this can never break the normal flow.
+        var realClick = function (elm) {
+          try {
+            var opts = { bubbles: true, cancelable: true, view: window };
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
+              var Ctor = (type.indexOf("pointer") === 0 && typeof PointerEvent === "function") ? PointerEvent : MouseEvent;
+              try { elm.dispatchEvent(new Ctor(type, opts)); } catch (e) { try { elm.dispatchEvent(new MouseEvent(type, opts)); } catch (e2) {} }
+            });
+            try { elm.click(); } catch (e) {}
+          } catch (e) {}
+        };
+        realClick(target);
+        // Restore original sort order with a second activation (best-effort).
+        setTimeout(function () { realClick(target); }, 700);
       }
     } catch (e) {}
     // Poll for the dataspace to show up (sniffer fills it when the query returns).
