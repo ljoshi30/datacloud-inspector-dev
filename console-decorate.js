@@ -8568,8 +8568,8 @@
     if (emptyCount > 0) hdr.appendChild(hideWrap);
 
     // ── Column visibility toggle ─────────────────────────────────────────────────
-    // Client-side only — hides/shows loaded columns with zero query credits. Uses a
-    // <colgroup>/<col> per column so a single style change hides both <th> and all <td>s.
+    // Client-side only — hides/shows loaded columns with zero query credits.
+    // Uses CSS nth-child injection (display:none on <col> is Firefox-only).
     // _hiddenColumns[objectName] persists across re-renders so the choice survives
     // a filter apply/clear cycle.
     if (!_hiddenColumns[objectName]) _hiddenColumns[objectName] = {};
@@ -8580,6 +8580,25 @@
     colVizBtn.title = "Show or hide individual columns — no re-query needed.";
     colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
     hdr.appendChild(colVizBtn);
+
+    // Inject/refresh a <style> block that hides columns via nth-child selectors.
+    // Must live outside openColVizPanel so it can be called at initial render too.
+    function applyColVizCss() {
+      var existing = panel.querySelector("#dc-colviz-style");
+      if (existing) existing.remove();
+      var rules = [];
+      columns.forEach(function (fn, i) {
+        if (_colVizHidden[fn]) {
+          var n = i + 1;
+          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:nth-child(" + n + "){display:none!important}");
+        }
+      });
+      if (!rules.length) return;
+      var st = document.createElement("style");
+      st.id = "dc-colviz-style";
+      st.textContent = rules.join("");
+      panel.appendChild(st);
+    }
 
     var colVizPanel = null;
     function openColVizPanel() {
@@ -8624,42 +8643,36 @@
         row.appendChild(lbl);
         pop.appendChild(row);
         colCbs.push({ cb: cb, fn: fn, idx: idx });
-        cb.addEventListener("change", function () { applyColViz(fn, idx, cb.checked); updateColVizBtn(); });
+        cb.addEventListener("change", function () { applyColViz(fn, cb.checked); updateColVizBtn(); });
       });
 
-      function applyColViz(fn, idx, visible) {
+      function applyColViz(fn, visible) {
         if (visible) {
           delete _colVizHidden[fn];
         } else {
-          // Don't allow hiding the last visible column
           var visibleCount = columns.filter(function (f) { return !_colVizHidden[f]; }).length;
           if (visibleCount <= 1) { return; }
           _colVizHidden[fn] = true;
         }
-        // Hide/show the <col> element — browser propagates to all <td>/<th> in that column
-        var col = table.querySelector("colgroup col:nth-child(" + (idx + 1) + ")");
-        if (col) col.style.display = visible ? "" : "none";
+        applyColVizCss();
       }
 
       selAll.onclick = function () {
         colCbs.forEach(function (c) {
           delete _colVizHidden[c.fn];
-          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
-          if (col) col.style.display = "";
           c.cb.checked = true;
         });
+        applyColVizCss();
         updateColVizBtn();
       };
       selNone.onclick = function () {
-        // Leave the first visible column shown (can't hide everything)
         var first = true;
         colCbs.forEach(function (c) {
           if (first) { first = false; return; }
           _colVizHidden[c.fn] = true;
-          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
-          if (col) col.style.display = "none";
           c.cb.checked = false;
         });
+        applyColVizCss();
         updateColVizBtn();
       };
 
@@ -8684,6 +8697,7 @@
 
     colVizBtn.onclick = function (e) { e.stopPropagation(); openColVizPanel(); };
     updateColVizBtn(); // reflect any persisted hidden columns from a previous render
+    applyColVizCss();  // apply CSS for any columns hidden from a prior render
 
     // Relaunch the SQL editor from the results table (the editor closes on a
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
@@ -9295,15 +9309,6 @@
     table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;";
     // header row: one <th> per selected column (no internal Id column — it's the
     // opaque record key and is empty/meaningless for many objects).
-    // <colgroup> with one <col> per column — used by the column-visibility toggle to
-    // hide/show entire columns via a single display:none without touching any <td>/<th>.
-    var colgroup = document.createElement("colgroup");
-    columns.forEach(function (fn) {
-      var col = document.createElement("col");
-      if (_colVizHidden[fn]) col.style.display = "none";
-      colgroup.appendChild(col);
-    });
-    table.appendChild(colgroup);
 
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
