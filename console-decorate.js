@@ -8312,6 +8312,9 @@
   // out of scope for the results table). Assigned when the modal builds; used by the
   // results table's "Edit SQL" button to relaunch the editor.
   var _openSoqlEditor = null;
+  // Module-level handle to the column picker opener — assigned in openExploreModal's
+  // enclosing scope so the results table "Change Columns" button can reopen the picker.
+  var _openColumnPicker = null;
   // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
@@ -8860,7 +8863,15 @@
     closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
     closeBtn.onclick = function () { _explorerExportCancel = true; closeAllColumnsTable(); };
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
+    var changeColsBtn = document.createElement("button");
+    changeColsBtn.textContent = "← Columns";
+    changeColsBtn.title = "Return to the column picker to add or remove columns. Columns already loaded will be reused (no extra query).";
+    changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+    changeColsBtn.onclick = function () {
+      try { if (typeof _openColumnPicker === "function") _openColumnPicker(); } catch (e) {}
+    };
+
+    hdr.appendChild(changeColsBtn); hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
@@ -9631,6 +9642,7 @@
   }
 
   function openExploreModal() {
+    _openColumnPicker = openExploreModal; // expose for results table "Change Columns" button
     // Detect the object CURRENTLY on the page (may have changed since last open).
     const curRecList = findRecordListEl();
     const curObject = curRecList ? (curRecList.objectName || "unknown") : null;
