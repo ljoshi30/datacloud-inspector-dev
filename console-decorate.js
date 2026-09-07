@@ -5779,18 +5779,36 @@
     var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
     if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
     var fired = false;
+    // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM, so document.querySelector
+    // can't see its sort headers. Use eachElement (shadow-piercing) to find a clickable sort
+    // control anywhere in the shadow tree. Clicking it makes SF fire CdpDataView.query, which
+    // the sniffer reads for selectedDataSpaceName.
     try {
-      // Broad selector set — covers Lightning datatable, aria-sort headers, and CDP grids.
-      var sortBtn = document.querySelector(
-        "th[aria-sort] button, th button[title*='Sort'], th button[aria-label*='Sort'], " +
-        "[role='columnheader'] button, [role='columnheader'] a[role='button'], " +
-        "lightning-datatable th a, th a[role='button'], .slds-th__action"
-      );
-      if (sortBtn) {
+      var candidates = [];
+      eachElement(document, function (el) {
+        if (fired || candidates.length >= 3) return;
+        var tag = tagOf(el);
+        var role = (el.getAttribute && el.getAttribute("role")) || "";
+        var aria = ((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || "").toLowerCase();
+        var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
+        cls = (cls || "").toLowerCase();
+        var isSortCtrl =
+          (tag === "th" && el.getAttribute && el.getAttribute("aria-sort") != null) ||
+          (role === "columnheader") ||
+          /sort/.test(aria) ||
+          /slds-th__action|sortable|columnheader/.test(cls);
+        if (!isSortCtrl) return;
+        // Find the actual clickable inside the header (button/anchor), else the header itself.
+        var btn = null;
+        try { btn = el.querySelector && el.querySelector("button, a[role='button'], a, span[role='button'], .slds-th__action"); } catch (e) {}
+        candidates.push(btn || el);
+      });
+      if (candidates.length) {
+        var target = candidates[0];
         fired = true;
-        sortBtn.click();
-        // Restore original order with a second click (best-effort; ignored if it fails).
-        setTimeout(function () { try { sortBtn.click(); } catch (e) {} }, 700);
+        try { target.click(); } catch (e) {}
+        // Restore original order with a second click (best-effort).
+        setTimeout(function () { try { target.click(); } catch (e) {} }, 700);
       }
     } catch (e) {}
     // Poll for the dataspace to show up (sniffer fills it when the query returns).
@@ -5798,7 +5816,7 @@
     (function poll() {
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       if (ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null)) { cb(true); return; }
-      if (!fired || tries++ > 15) { cb(false); return; }  // ~3s max, or no button to click
+      if (!fired || tries++ > 20) { cb(false); return; }  // ~4s max, or no button found
       setTimeout(poll, 200);
     })();
   }
