@@ -8508,6 +8508,17 @@
     // ".sandbox."). Rate card: Data Queries = 2 credits/1M rows processed (Prod), 1.6 (Sb).
     var _dxSandbox = false; try { _dxSandbox = /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) {}
     var _dxRate = _dxSandbox ? 1.6 : 2, _dxEnv = _dxSandbox ? "Sandbox" : "Production";
+    // Data-Explorer-OWNED credit formatter (independent of Query Editor's qeCreditStr — no
+    // shared code, per the keep-features-separate rule). Graduated precision so tiny costs
+    // stay legible instead of collapsing to "<0.01": whole-ish → 2dp, small → 4dp,
+    // very small → 4 significant digits. rowsProcessed is the billing basis.
+    function _dxCreditStr(rowsProcessed) {
+      var c = (Number(rowsProcessed) / 1000000) * _dxRate;
+      if (!isFinite(c) || c <= 0) return "0";
+      if (c >= 1) return c.toFixed(2);
+      if (c >= 0.0001) return c.toFixed(4);
+      return c.toPrecision(4).replace(/0+$/, "").replace(/\.$/, "");
+    }
     // Explorer-OWNED count runner: resolves { count, rowsProcessed }. Extension path reuses
     // the shared runRawSql (clean rows) but can't read rowsProcessed there → null. Bookmarklet
     // path does its OWN aura call so it can read status.rowsProcessed (the credit basis).
@@ -8606,10 +8617,14 @@
             info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
             if (_cntTime) info += " <span style='font-size:10px;color:#94a3b8;'>(live count as of " + _cntTime + ")</span>";
             if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
-            if (rowsProcessed != null && rowsProcessed >= 0) {
-              var est = (rowsProcessed / 1000000 * _dxRate);
-              var estStr = est >= 0.01 ? est.toFixed(2) : "<0.01";
-              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + estStr + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
+            if (rowsProcessed != null && rowsProcessed > 0) {
+              // Actual billing basis reported by the engine.
+              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + _dxCreditStr(rowsProcessed) + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
+            } else if (cnt > 0) {
+              // Engine reported 0 / no rows-processed for this COUNT (common — COUNT(*) can
+              // be answered from metadata). Show an APPROXIMATE cost based on the row count
+              // so the user still sees a precise-ish credit figure, clearly labelled as an estimate.
+              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: not reported — est. from " + cnt.toLocaleString() + " rows ≈ " + _dxCreditStr(cnt) + " credits @ " + _dxRate + "/1M, " + _dxEnv + " (approx.)</span>";
             }
             sub.innerHTML = info;
           }
