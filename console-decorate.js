@@ -5767,6 +5767,42 @@
     } catch (e) {}
   }
 
+  // Auto-establish the page's dataspace WITHOUT asking the user to sort manually.
+  // On some orgs the object lives in a non-default dataspace that we can't read from
+  // the DOM until the page fires its own query. This clicks a sortable column header
+  // (which makes SF fire CdpDataView.query → the sniffer captures selectedDataSpaceName),
+  // then polls until _auraSniff.dataSpace / _dsByObject is populated. Calls cb(true) as
+  // soon as a dataspace is known, or cb(false) after ~3s so the caller can proceed and
+  // fall back to the candidate list. Idempotent-safe: clicks twice to restore sort order.
+  function establishDataSpace(objectName, cb) {
+    // Already known? Done immediately — no page interaction needed.
+    var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+    if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
+    var fired = false;
+    try {
+      // Broad selector set — covers Lightning datatable, aria-sort headers, and CDP grids.
+      var sortBtn = document.querySelector(
+        "th[aria-sort] button, th button[title*='Sort'], th button[aria-label*='Sort'], " +
+        "[role='columnheader'] button, [role='columnheader'] a[role='button'], " +
+        "lightning-datatable th a, th a[role='button'], .slds-th__action"
+      );
+      if (sortBtn) {
+        fired = true;
+        sortBtn.click();
+        // Restore original order with a second click (best-effort; ignored if it fails).
+        setTimeout(function () { try { sortBtn.click(); } catch (e) {} }, 700);
+      }
+    } catch (e) {}
+    // Poll for the dataspace to show up (sniffer fills it when the query returns).
+    var tries = 0;
+    (function poll() {
+      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      if (ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null)) { cb(true); return; }
+      if (!fired || tries++ > 15) { cb(false); return; }  // ~3s max, or no button to click
+      setTimeout(poll, 200);
+    })();
+  }
+
   function ensureQueryContext(cb) {
     if (extBridgePresent()) { cb(true); return; }
     if (primeCredsFromAura()) { cb(true); return; }
@@ -10913,20 +10949,26 @@
           renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
           return;
         }
-        loadColumnsDataCached(objectName, cols, 1000, false).then((rows) => {
-          hideSpinner(); viewAllBtn.disabled = false;
-          savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns." + (rows.__fromCache ? " (from cache — no query used)" : "");
-          showAllColumnsTable(objectName, cols, rows);
-        }).catch((err) => {
-          hideSpinner(); viewAllBtn.disabled = false;
-          var msg = String(err && err.message || err);
-          // When every dataspace candidate failed (incl. "default" and object prefix),
-          // show a clear actionable message. The raw "[tried table=... dataspace=...]"
-          // prefix is already included in the error and gives the user the exact context.
-          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg)) {
-            msg = msg + "\n\nTip: Sort or filter any column in the Salesforce Data Explorer table first — that establishes the session and the correct dataspace.";
-          }
-          savedNote.textContent = msg;
+        // Auto-establish the dataspace first (clicks the page's sort so SF fires its own
+        // query and we capture selectedDataSpaceName) — removes the manual "sort first" step
+        // on orgs where the object lives in a non-default dataspace.
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, cols, 1000, false).then((rows) => {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns." + (rows.__fromCache ? " (from cache — no query used)" : "");
+            showAllColumnsTable(objectName, cols, rows);
+          }).catch((err) => {
+            hideSpinner(); viewAllBtn.disabled = false;
+            var msg = String(err && err.message || err);
+            // We already auto-tried to establish the dataspace. If it STILL failed, the
+            // object likely isn't queryable from any detectable dataspace — give a clear,
+            // action-oriented message instead of the raw SQL error.
+            if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
+              msg = "Couldn't load this object — its Data Space couldn't be determined automatically.\n\n" +
+                    "Fix: in the Salesforce Data Explorer table behind this panel, click any column header to sort it (or apply a filter), then click \"Show selected columns' data\" again. That tells the tool which Data Space this object uses.";
+            }
+            savedNote.textContent = msg;
+          });
         });
       });
     };
