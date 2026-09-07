@@ -8583,21 +8583,57 @@
 
     // Inject/refresh a <style> block that hides columns via nth-child selectors.
     // Must live outside openColVizPanel so it can be called at initial render too.
+    // Also manages the "all columns hidden" overlay in the scroll area.
     function applyColVizCss() {
       var existing = panel.querySelector("#dc-colviz-style");
       if (existing) existing.remove();
       var rules = [];
+      var hiddenCount = 0;
       columns.forEach(function (fn, i) {
         if (_colVizHidden[fn]) {
+          hiddenCount++;
           var n = i + 1;
           rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:nth-child(" + n + "){display:none!important}");
         }
       });
-      if (!rules.length) return;
-      var st = document.createElement("style");
-      st.id = "dc-colviz-style";
-      st.textContent = rules.join("");
-      panel.appendChild(st);
+      if (rules.length) {
+        var st = document.createElement("style");
+        st.id = "dc-colviz-style";
+        st.textContent = rules.join("");
+        panel.appendChild(st);
+      }
+      // Show/hide the "all hidden" overlay. Handled here so every code path
+      // that changes visibility (checkbox, Show all, Hide all, initial render) gets it.
+      var allHiddenEl = panel.querySelector("#dc-allcols-hidden-msg");
+      if (hiddenCount >= columns.length) {
+        if (!allHiddenEl) {
+          var msg = document.createElement("div");
+          msg.id = "dc-allcols-hidden-msg";
+          msg.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(255,255,255,.95);z-index:10;font:14px -apple-system,sans-serif;color:#5c6b8a;pointer-events:auto;";
+          msg.innerHTML = "<span style='font-size:28px'>👁</span>" +
+            "<span style='font-weight:600;color:#1e3a5f;'>All columns are hidden</span>" +
+            "<span style='font-size:12px;'>Use <strong>Columns ▾</strong> above to show columns.</span>";
+          var showAllLink = document.createElement("button");
+          showAllLink.textContent = "Show all columns";
+          showAllLink.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:7px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;";
+          showAllLink.onclick = function () {
+            columns.forEach(function (fn) { delete _colVizHidden[fn]; });
+            applyColVizCss();
+            updateColVizBtn();
+            // Sync checkboxes if the dropdown is open
+            if (colVizPanel && colVizPanel.isConnected) {
+              colVizPanel.querySelectorAll("input[type=checkbox]").forEach(function (cb) { cb.checked = true; });
+            }
+          };
+          msg.appendChild(showAllLink);
+          // Insert into the scroll area so it sits over the table
+          var scrollEl = panel.querySelector("div[style*='flex:1']");
+          if (scrollEl) { scrollEl.style.position = "relative"; scrollEl.appendChild(msg); }
+          else { panel.appendChild(msg); }
+        }
+      } else {
+        if (allHiddenEl) allHiddenEl.remove();
+      }
     }
 
     var colVizPanel = null;
@@ -8852,15 +8888,30 @@
     closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
     closeBtn.onclick = function () { _explorerExportCancel = true; closeAllColumnsTable(); };
-    var changeColsBtn = document.createElement("button");
-    changeColsBtn.textContent = "← Columns";
-    changeColsBtn.title = "Return to the column picker to add or remove columns. Columns already loaded will be reused (no extra query).";
-    changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
-    changeColsBtn.onclick = function () {
-      try { openExploreModal(); } catch (e) {}
-    };
+    // "← Columns" — show only when there are more columns available than loaded.
+    // Scenarios:
+    //   • Not all loaded (most common) → show: user can go back and tick more columns.
+    //   • All available columns already loaded → hide: nothing to add.
+    //   • "Hide empty" is on (fewer cols shown) → still compare TOTAL available vs LOADED set.
+    //   • Column visibility toggle hides some → irrelevant (client-side only, not about loaded set).
+    // `pool` = all available columns for this object; `fullCols` = all LOADED column names.
+    var _loadedSet   = (allColumns || columns);  // fullCols if hide-empty is on
+    var _hasMoreCols = pool.length > 0 && _loadedSet.length < pool.length;
 
-    hdr.appendChild(changeColsBtn); hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
+    var changeColsBtn = null;
+    if (_hasMoreCols) {
+      changeColsBtn = document.createElement("button");
+      var _remaining = pool.length - _loadedSet.length;
+      changeColsBtn.textContent = "← Columns (" + _remaining + " more)";
+      changeColsBtn.title = _remaining + " column" + (_remaining === 1 ? "" : "s") + " not yet loaded. Click to go back to the column picker and add them — already-loaded columns are reused at zero credits.";
+      changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+      changeColsBtn.onclick = function () {
+        try { openExploreModal(); } catch (e) {}
+      };
+    }
+
+    if (changeColsBtn) hdr.appendChild(changeColsBtn);
+    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
@@ -9307,6 +9358,11 @@
     scroll.style.cssText = "flex:1;overflow:auto;position:relative;";
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;width:100%;table-layout:auto;";
+    // Cap column width so few loaded/visible columns don't stretch across the full panel.
+    // min-width ensures narrow data (booleans, short keys) has enough room to read.
+    var colCapStyle = document.createElement("style");
+    colCapStyle.textContent = "#dc-allcols-table th,#dc-allcols-table td{min-width:80px;max-width:420px;overflow:hidden;text-overflow:ellipsis;}";
+    panel.appendChild(colCapStyle);
     // header row: one <th> per selected column (no internal Id column — it's the
     // opaque record key and is empty/meaningless for many objects).
 
@@ -9556,12 +9612,16 @@
     const positionTools = (td) => {
       var r = td.getBoundingClientRect();
       cellTools.style.display = "flex";
-      // measure after display to place fully inside viewport
       var w = cellTools.offsetWidth || 90;
-      cellTools.style.top = Math.max(4, r.top + (r.height - (cellTools.offsetHeight || 22)) / 2) + "px";
-      // Position near the cell's left edge (not right) so it stays readable when columns are wide
-      var idealLeft = r.left + 6;
-      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(6, idealLeft)) + "px";
+      var h = cellTools.offsetHeight || 24;
+      cellTools.style.top = Math.max(4, r.top + (r.height - h) / 2) + "px";
+      // Place widget just after the cell's text content. For narrow cells, this is near the
+      // right edge (r.right - w - 6). For very wide cells (few columns + width:100%) we cap
+      // at 280px from cell left so it stays near the data rather than floating at screen right.
+      var nearRight = r.right - w - 6;
+      var cappedFromLeft = r.left + Math.min(r.width - w - 6, 260);
+      var idealLeft = Math.min(nearRight, cappedFromLeft);
+      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(r.left + 4, idealLeft)) + "px";
     };
     const scheduleHide = () => {
       if (_hideTimer) clearTimeout(_hideTimer);
