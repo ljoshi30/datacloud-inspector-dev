@@ -5503,18 +5503,20 @@
   //   2) LWC/object-selector props, if exposed
   //   3) the most-recent sniffed space (same page session)
   // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
+  // UI placeholder text that must never be treated as a real dataspace name.
+  var _badDsNames = /^(Selected|Select|Sort|Filter|Edit|View|Loading|None|All|Default selection)$/i;
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
     if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
     // 2) LWC props (usually undefined, but authoritative when present)
     var rl = findRecordListEl();
     var cand = ["dataSpace", "dataspace", "selectedDataSpaceName", "dataSpaceName", "space"];
-    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string") return v; } catch (e) {} } }
+    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string" && !_badDsNames.test(v)) return v; } catch (e) {} } }
     var sel = null;
     eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
-    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string") return v2; } catch (e) {} } }
+    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string" && !_badDsNames.test(v2)) return v2; } catch (e) {} } }
     // 3) last sniffed space this session (the object currently open usually matches)
-    if (_auraSniff.dataSpace != null) return _auraSniff.dataSpace;
+    if (_auraSniff.dataSpace != null && !_badDsNames.test(_auraSniff.dataSpace)) return _auraSniff.dataSpace;
     return "";   // unknown → caller tries candidate spaces (incl. "default")
   }
   // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
@@ -6297,17 +6299,67 @@
     var isValidDs = function (s) {
       if (!s || s.length === 0 || s.length >= 30) return false;
       if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
-      if (/^(Sort|Filter|Select|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
+      if (/^(Sort|Filter|Select|Selected|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
       return true;
     };
+
+    // Strategy 0 (most reliable): read the VALUE attribute of the selected <option> in any
+    // <select> whose label/aria-label mentions "Data Space" or "Workspace". The option's
+    // value is the API name even when the visible text is "Selected" or a display label.
+    try {
+      var selEls = document.querySelectorAll("select");
+      for (var si = 0; si < selEls.length && !ds; si++) {
+        var se = selEls[si];
+        var seLabel = (se.getAttribute("aria-label") || se.getAttribute("title") || "").toLowerCase();
+        var seId = se.id || "";
+        var nearLabel = "";
+        // look for a <label for="..."> referencing this <select>
+        if (seId) { try { var lf = document.querySelector('label[for="' + seId + '"]'); if (lf) nearLabel = (lf.textContent || "").toLowerCase(); } catch(e){} }
+        if (/data.?space|workspace/i.test(seLabel + nearLabel)) {
+          var selVal = se.value;
+          if (isValidDs(selVal)) { ds = selVal; break; }
+          var selOpt = se.options && se.options[se.selectedIndex];
+          if (selOpt && isValidDs(selOpt.value)) { ds = selOpt.value; break; }
+        }
+      }
+    } catch (e) {}
+    if (ds) return ds;
+
+    // Strategy 0b: Lightning combobox — data-value attribute on the selected button/option
+    try {
+      eachElement(document, function (el) {
+        if (ds) return;
+        var role = el.getAttribute && el.getAttribute("role");
+        if (role !== "option" && role !== "combobox") return;
+        // Check if this combobox/option is inside a "Data Space" labelled group
+        var ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        var dv = el.getAttribute("data-value") || "";
+        if (isValidDs(dv) && /data.?space|workspace/i.test(ariaLabel)) { ds = dv; return; }
+        // Also check aria-selected="true" options near a Data Space heading
+        if (role === "option" && el.getAttribute("aria-selected") === "true") {
+          var parent = el.parentElement;
+          var ancestor = parent;
+          for (var depth = 0; depth < 6 && ancestor && !ds; depth++) {
+            if (/data.?space|workspace/i.test((ancestor.textContent || "").slice(0, 80))) {
+              if (isValidDs(dv)) { ds = dv; return; }
+            }
+            ancestor = ancestor.parentElement;
+          }
+        }
+      });
+    } catch (e) {}
+    if (ds) return ds;
+
     // Strategy 1: find the "Data Space" label element, read sibling/child for the value
     eachElement(document, function (el) {
       if (ds) return;
       var txt = (el.textContent || "").trim();
       if (/^Data\s*Space$/i.test(txt) && el.children.length === 0) {
-        // Look at next sibling element
+        // First try: next sibling's value attribute (covers Lightning button triggers)
         var next = el.nextElementSibling;
         if (next) {
+          var attrVal = next.getAttribute("data-value") || next.getAttribute("value") || "";
+          if (isValidDs(attrVal)) { ds = attrVal; return; }
           var val = next.textContent.trim().split("\n")[0].trim();
           if (val && val.length > 0 && val.length < 40) _pageDataSpaceLabel = val;
           if (isValidDs(val)) { ds = val; return; }
@@ -8516,8 +8568,8 @@
     if (emptyCount > 0) hdr.appendChild(hideWrap);
 
     // ── Column visibility toggle ─────────────────────────────────────────────────
-    // Client-side only — hides/shows loaded columns with zero query credits. Uses a
-    // <colgroup>/<col> per column so a single style change hides both <th> and all <td>s.
+    // Client-side only — hides/shows loaded columns with zero query credits.
+    // Uses CSS nth-child injection (display:none on <col> is Firefox-only).
     // _hiddenColumns[objectName] persists across re-renders so the choice survives
     // a filter apply/clear cycle.
     if (!_hiddenColumns[objectName]) _hiddenColumns[objectName] = {};
@@ -8528,6 +8580,61 @@
     colVizBtn.title = "Show or hide individual columns — no re-query needed.";
     colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
     hdr.appendChild(colVizBtn);
+
+    // Inject/refresh a <style> block that hides columns via nth-child selectors.
+    // Must live outside openColVizPanel so it can be called at initial render too.
+    // Also manages the "all columns hidden" overlay in the scroll area.
+    function applyColVizCss() {
+      var existing = panel.querySelector("#dc-colviz-style");
+      if (existing) existing.remove();
+      var rules = [];
+      var hiddenCount = 0;
+      columns.forEach(function (fn, i) {
+        if (_colVizHidden[fn]) {
+          hiddenCount++;
+          var n = i + 1;
+          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:nth-child(" + n + "){display:none!important}");
+        }
+      });
+      if (rules.length) {
+        var st = document.createElement("style");
+        st.id = "dc-colviz-style";
+        st.textContent = rules.join("");
+        panel.appendChild(st);
+      }
+      // Show/hide the "all hidden" overlay. Handled here so every code path
+      // that changes visibility (checkbox, Show all, Hide all, initial render) gets it.
+      var allHiddenEl = panel.querySelector("#dc-allcols-hidden-msg");
+      if (hiddenCount >= columns.length) {
+        if (!allHiddenEl) {
+          var msg = document.createElement("div");
+          msg.id = "dc-allcols-hidden-msg";
+          msg.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(255,255,255,.95);z-index:10;font:14px -apple-system,sans-serif;color:#5c6b8a;pointer-events:auto;";
+          msg.innerHTML = "<span style='font-size:28px'>👁</span>" +
+            "<span style='font-weight:600;color:#1e3a5f;'>All columns are hidden</span>" +
+            "<span style='font-size:12px;'>Use <strong>Columns ▾</strong> above to show columns.</span>";
+          var showAllLink = document.createElement("button");
+          showAllLink.textContent = "Show all columns";
+          showAllLink.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:7px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;";
+          showAllLink.onclick = function () {
+            columns.forEach(function (fn) { delete _colVizHidden[fn]; });
+            applyColVizCss();
+            updateColVizBtn();
+            // Sync checkboxes if the dropdown is open
+            if (colVizPanel && colVizPanel.isConnected) {
+              colVizPanel.querySelectorAll("input[type=checkbox]").forEach(function (cb) { cb.checked = true; });
+            }
+          };
+          msg.appendChild(showAllLink);
+          // Insert into the scroll area so it sits over the table
+          var scrollEl = panel.querySelector("div[style*='flex:1']");
+          if (scrollEl) { scrollEl.style.position = "relative"; scrollEl.appendChild(msg); }
+          else { panel.appendChild(msg); }
+        }
+      } else {
+        if (allHiddenEl) allHiddenEl.remove();
+      }
+    }
 
     var colVizPanel = null;
     function openColVizPanel() {
@@ -8572,42 +8679,28 @@
         row.appendChild(lbl);
         pop.appendChild(row);
         colCbs.push({ cb: cb, fn: fn, idx: idx });
-        cb.addEventListener("change", function () { applyColViz(fn, idx, cb.checked); updateColVizBtn(); });
+        cb.addEventListener("change", function () { applyColViz(fn, cb.checked); updateColVizBtn(); });
       });
 
-      function applyColViz(fn, idx, visible) {
-        if (visible) {
-          delete _colVizHidden[fn];
-        } else {
-          // Don't allow hiding the last visible column
-          var visibleCount = columns.filter(function (f) { return !_colVizHidden[f]; }).length;
-          if (visibleCount <= 1) { return; }
-          _colVizHidden[fn] = true;
-        }
-        // Hide/show the <col> element — browser propagates to all <td>/<th> in that column
-        var col = table.querySelector("colgroup col:nth-child(" + (idx + 1) + ")");
-        if (col) col.style.display = visible ? "" : "none";
+      function applyColViz(fn, visible) {
+        if (visible) { delete _colVizHidden[fn]; } else { _colVizHidden[fn] = true; }
+        applyColVizCss();
       }
 
       selAll.onclick = function () {
         colCbs.forEach(function (c) {
           delete _colVizHidden[c.fn];
-          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
-          if (col) col.style.display = "";
           c.cb.checked = true;
         });
+        applyColVizCss();
         updateColVizBtn();
       };
       selNone.onclick = function () {
-        // Leave the first visible column shown (can't hide everything)
-        var first = true;
         colCbs.forEach(function (c) {
-          if (first) { first = false; return; }
           _colVizHidden[c.fn] = true;
-          var col = table.querySelector("colgroup col:nth-child(" + (c.idx + 1) + ")");
-          if (col) col.style.display = "none";
           c.cb.checked = false;
         });
+        applyColVizCss();
         updateColVizBtn();
       };
 
@@ -8632,6 +8725,7 @@
 
     colVizBtn.onclick = function (e) { e.stopPropagation(); openColVizPanel(); };
     updateColVizBtn(); // reflect any persisted hidden columns from a previous render
+    applyColVizCss();  // apply CSS for any columns hidden from a prior render
 
     // Relaunch the SQL editor from the results table (the editor closes on a
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
@@ -8794,6 +8888,29 @@
     closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
     closeBtn.onclick = function () { _explorerExportCancel = true; closeAllColumnsTable(); };
+    // "← Columns" — show only when there are more columns available than loaded.
+    // Scenarios:
+    //   • Not all loaded (most common) → show: user can go back and tick more columns.
+    //   • All available columns already loaded → hide: nothing to add.
+    //   • "Hide empty" is on (fewer cols shown) → still compare TOTAL available vs LOADED set.
+    //   • Column visibility toggle hides some → irrelevant (client-side only, not about loaded set).
+    // `pool` = all available columns for this object; `fullCols` = all LOADED column names.
+    var _loadedSet   = (allColumns || columns);  // fullCols if hide-empty is on
+    var _hasMoreCols = pool.length > 0 && _loadedSet.length < pool.length;
+
+    var changeColsBtn = null;
+    if (_hasMoreCols) {
+      changeColsBtn = document.createElement("button");
+      var _remaining = pool.length - _loadedSet.length;
+      changeColsBtn.textContent = "← Columns (" + _remaining + " more)";
+      changeColsBtn.title = _remaining + " column" + (_remaining === 1 ? "" : "s") + " not yet loaded. Click to go back to the column picker and add them — already-loaded columns are reused at zero credits.";
+      changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+      changeColsBtn.onclick = function () {
+        try { openExploreModal(); } catch (e) {}
+      };
+    }
+
+    if (changeColsBtn) hdr.appendChild(changeColsBtn);
     hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
@@ -9240,18 +9357,14 @@
     const scroll = document.createElement("div");
     scroll.style.cssText = "flex:1;overflow:auto;position:relative;";
     const table = document.createElement("table");
-    table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;";
+    table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;width:100%;table-layout:auto;";
+    // Cap column width so few loaded/visible columns don't stretch across the full panel.
+    // min-width ensures narrow data (booleans, short keys) has enough room to read.
+    var colCapStyle = document.createElement("style");
+    colCapStyle.textContent = "#dc-allcols-table th,#dc-allcols-table td{min-width:80px;max-width:420px;overflow:hidden;text-overflow:ellipsis;}";
+    panel.appendChild(colCapStyle);
     // header row: one <th> per selected column (no internal Id column — it's the
     // opaque record key and is empty/meaningless for many objects).
-    // <colgroup> with one <col> per column — used by the column-visibility toggle to
-    // hide/show entire columns via a single display:none without touching any <td>/<th>.
-    var colgroup = document.createElement("colgroup");
-    columns.forEach(function (fn) {
-      var col = document.createElement("col");
-      if (_colVizHidden[fn]) col.style.display = "none";
-      colgroup.appendChild(col);
-    });
-    table.appendChild(colgroup);
 
     const thead = document.createElement("thead");
     const htr = document.createElement("tr");
@@ -9499,10 +9612,16 @@
     const positionTools = (td) => {
       var r = td.getBoundingClientRect();
       cellTools.style.display = "flex";
-      // measure after display to place fully inside viewport
       var w = cellTools.offsetWidth || 90;
-      cellTools.style.top = Math.max(4, r.top + (r.height - (cellTools.offsetHeight || 22)) / 2) + "px";
-      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(6, r.right - w - 4)) + "px";
+      var h = cellTools.offsetHeight || 24;
+      cellTools.style.top = Math.max(4, r.top + (r.height - h) / 2) + "px";
+      // Place widget just after the cell's text content. For narrow cells, this is near the
+      // right edge (r.right - w - 6). For very wide cells (few columns + width:100%) we cap
+      // at 280px from cell left so it stays near the data rather than floating at screen right.
+      var nearRight = r.right - w - 6;
+      var cappedFromLeft = r.left + Math.min(r.width - w - 6, 260);
+      var idealLeft = Math.min(nearRight, cappedFromLeft);
+      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(r.left + 4, idealLeft)) + "px";
     };
     const scheduleHide = () => {
       if (_hideTimer) clearTimeout(_hideTimer);
@@ -10696,23 +10815,19 @@
       // new columns (SELECT newcol1,newcol2 FROM ... LIMIT <already-loaded count>),
       // merge by row index, update the cache, then render. Full re-fetch only when
       // there is no cache at all (first load, or after Reload cleared the cache).
-      var cachedRows    = _originalRows[objectName];
-      var cachedColObjs = _originalColumns[objectName];
-      var cachedWant    = _originalWantRows[objectName];
-      var loadedFns     = cachedColObjs ? cachedColObjs.map(function (c) { return c.fieldName; }) : [];
-      var newCols       = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
-      var allCached     = cachedRows && cachedRows.length > 0 && newCols.length === 0;
-      var partialCache  = cachedRows && cachedRows.length > 0 && newCols.length > 0;
+      // _originalColumns stores field name STRINGS (same type as `cols`).
+      var cachedRows   = _originalRows[objectName];
+      var loadedFns    = _originalColumns[objectName] || [];  // array of strings
+      var cachedWant   = _originalWantRows[objectName];
+      var newCols      = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
+      var allCached    = cachedRows && cachedRows.length > 0 && newCols.length === 0;
+      var partialCache = cachedRows && cachedRows.length > 0 && newCols.length > 0;
 
       if (allCached) {
         // Every selected column is already in memory — render immediately, no query.
-        var orderedCols = cols.map(function (fn) {
-          return (cachedColObjs && cachedColObjs.find(function (c) { return c.fieldName === fn; }))
-              || all.find(function (c) { return c.fieldName === fn; })
-              || { fieldName: fn, label: fn, type: "formattedText" };
-        });
         savedNote.textContent = "Showing " + cachedRows.length + " cached rows × " + cols.length + " columns (no query used — columns were already loaded).";
-        showAllColumnsTable(objectName, orderedCols, cachedRows, cachedWant || cachedRows.length, cachedColObjs || orderedCols);
+        // cols is already an array of field name strings — pass directly
+        showAllColumnsTable(objectName, cols, cachedRows, cachedWant || cachedRows.length);
         return;
       }
 
@@ -10746,22 +10861,25 @@
               var extra = newRows[i] || {};
               return Object.assign({}, row, extra);
             });
-            // Merge server row count hint if present
             if (newRows.__serverRowCount) mergedRows.__serverRowCount = newRows.__serverRowCount;
-            // Expand the column cache so future selections of these cols also hit cache
-            var mergedColObjs = (cachedColObjs ? cachedColObjs.slice() : []);
-            newCols.forEach(function (fn) {
-              if (!mergedColObjs.find(function (c) { return c.fieldName === fn; })) {
-                mergedColObjs.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" });
-              }
-            });
+            // Expand the field-name string cache so future re-selections also hit cache
+            var mergedFns = loadedFns.slice();
+            newCols.forEach(function (fn) { if (mergedFns.indexOf(fn) === -1) mergedFns.push(fn); });
             _originalRows[objectName]    = mergedRows;
-            _originalColumns[objectName] = mergedColObjs;
-            var orderedCols = cols.map(function (fn) {
-              return mergedColObjs.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn, type: "formattedText" };
-            });
+            _originalColumns[objectName] = mergedFns;
+            _originalWantRows[objectName] = cachedWant || mergedRows.length;
+            // Also add new col objects to exploreCache so labels show correctly
+            var ec = exploreCache(objectName);
+            if (ec.allColumns) {
+              newCols.forEach(function (fn) {
+                if (!ec.allColumns.find(function (c) { return c.fieldName === fn; })) {
+                  ec.allColumns.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn });
+                }
+              });
+            }
             savedNote.textContent = "Fetched " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + "; reused " + loadedFns.length + " cached — " + mergedRows.length + " rows total.";
-            showAllColumnsTable(objectName, orderedCols, mergedRows, cachedWant || mergedRows.length, mergedColObjs);
+            // cols is field name strings — pass directly
+            showAllColumnsTable(objectName, cols, mergedRows, cachedWant || mergedRows.length);
           }).catch(function (err) {
             hideSpinner(); viewAllBtn.disabled = false;
             savedNote.textContent = String(err && err.message || err);
@@ -10790,12 +10908,11 @@
         }).catch((err) => {
           hideSpinner(); viewAllBtn.disabled = false;
           var msg = String(err && err.message || err);
-          // dataspace="" means the bookmarklet hasn't captured a dataspace yet.
-          // Give the user a plain actionable message instead of the raw SQL error.
-          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace=""/.test(msg) || /does not exist/i.test(msg)) {
-            msg = "Could not detect the Data Space for this object. " +
-              "Sort or filter any column in Salesforce's own Data Explorer table first — " +
-              "that establishes the session and dataspace, then try Show selected columns' data again.";
+          // When every dataspace candidate failed (incl. "default" and object prefix),
+          // show a clear actionable message. The raw "[tried table=... dataspace=...]"
+          // prefix is already included in the error and gives the user the exact context.
+          if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg)) {
+            msg = msg + "\n\nTip: Sort or filter any column in the Salesforce Data Explorer table first — that establishes the session and the correct dataspace.";
           }
           savedNote.textContent = msg;
         });
