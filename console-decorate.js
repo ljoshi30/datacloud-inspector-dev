@@ -9435,7 +9435,10 @@
 
     // scroll area + table
     const scroll = document.createElement("div");
-    scroll.style.cssText = "flex:1;overflow:auto;position:relative;";
+    // overscroll-behavior:contain stops a left/right overscroll from triggering the
+    // browser's swipe-to-go-back (which was navigating away / "closing" the page when
+    // scrolling back toward the left on wide tables). Also isolates vertical bounce.
+    scroll.style.cssText = "flex:1;overflow:auto;position:relative;overscroll-behavior:contain;";
     const table = document.createElement("table");
     table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;width:100%;table-layout:auto;";
     // Cap column width so few loaded/visible columns don't stretch across the full panel.
@@ -11131,7 +11134,26 @@
       const inSoql   = soqlPanelEl && soqlPanelEl.contains(e.target);
       const inAcDrop = soqlAcDropEl && soqlAcDropEl.contains(e.target);
       const inBar    = barEl && barEl.contains(e.target);
-      if (!inModal && !inSoql && !inAcDrop && !inBar) { closeExploreModal(); closeSoqlEditor(); document.removeEventListener("pointerdown", onOut, true); }
+      // Don't close when the user clicks the SF Data Explorer grid itself (e.g. sorting a
+      // column to establish the dataspace). The grid is in shadow DOM, so e.target is the
+      // shadow host — use composedPath() to see the real element chain and detect any CDP /
+      // data-view / datatable / column-header node. This lets users sort WITHOUT losing the
+      // open picker (previously any outside click closed it, forcing a reopen).
+      var inSfGrid = false;
+      try {
+        var path = (e.composedPath && e.composedPath()) || [];
+        for (var pi = 0; pi < path.length; pi++) {
+          var n = path[pi];
+          if (!n || n.nodeType !== 1) continue;
+          var t = (n.tagName || "").toLowerCase();
+          var role = (n.getAttribute && n.getAttribute("role")) || "";
+          var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
+          if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
+              role === "columnheader" || role === "grid" || role === "gridcell" ||
+              /slds-th__action|slds-table|slds-is-sortable/.test(cls)) { inSfGrid = true; break; }
+        }
+      } catch (ex) {}
+      if (!inModal && !inSoql && !inAcDrop && !inBar && !inSfGrid) { closeExploreModal(); closeSoqlEditor(); document.removeEventListener("pointerdown", onOut, true); }
     };
     setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
   }
