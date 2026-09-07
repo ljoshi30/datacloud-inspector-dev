@@ -1319,7 +1319,7 @@
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
-      ["dc-explore-modal", "dc-allcols-table", "dc-export", "dc-detail-export", "dc-hide-overlay", "dc-ai-settings-dialog"].forEach(function (id) {
+      ["dc-explore-modal", "dc-allcols-table", "dc-colviz-panel", "dc-cell-tools", "dc-export", "dc-detail-export", "dc-hide-overlay", "dc-ai-settings-dialog"].forEach(function (id) {
         var el = document.getElementById(id); if (el) el.remove();
       });
     } catch (e) {}
@@ -8075,7 +8075,7 @@
   // Remembers the last rendered results table so it can be REOPENED after the user
   // closes it (accidentally or not) WITHOUT re-querying — the rows are still in memory.
   let _lastTableState = null;   // { objectName, columns, rows, wantRows, allColumns }
-  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); }
+  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); }
   function reopenLastTable() {
     if (_lastTableState && typeof showAllColumnsTable === "function") {
       var s = _lastTableState;
@@ -8642,6 +8642,7 @@
       if (colVizPanel) { colVizPanel = null; }
       var pop = document.createElement("div");
       colVizPanel = pop;
+      pop.id = "dc-colviz-panel"; // stable id so closeAllColumnsTable/teardown can remove it
       pop.style.cssText = "position:fixed;z-index:2147483647;background:#fff;border:1px solid #c9d0da;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px 0;min-width:220px;max-height:60vh;overflow-y:auto;font:12px -apple-system,sans-serif;";
       // Position below the button
       var br = colVizBtn.getBoundingClientRect();
@@ -8906,6 +8907,15 @@
       changeColsBtn.title = _remaining + " column" + (_remaining === 1 ? "" : "s") + " not yet loaded. Click to go back to the column picker and add them — already-loaded columns are reused at zero credits.";
       changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
       changeColsBtn.onclick = function () {
+        // Persist the currently-loaded columns as lastApplied so the picker re-opens
+        // with exactly these fields pre-checked (not the SF page's 10-col default).
+        try { exploreCache(objectName).lastApplied = (allColumns || columns).slice(); } catch (e) {}
+        // Close THIS results table before opening the picker so it isn't left behind it.
+        try { closeAllColumnsTable(); } catch (e) {}
+        // Force a FRESH picker rebuild: openExploreModal reuses a cached hidden modal for
+        // the same object (just display:flex), which would ignore the lastApplied set above.
+        // Discarding the cached modal makes it rebuild with our loaded columns pre-checked.
+        try { if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; } } catch (e) {}
         try { openExploreModal(); } catch (e) {}
       };
     }
@@ -9856,19 +9866,21 @@
       toolbar.style.display = activeTab === "available" ? "flex" : "none";
     };
 
-    // Checked set — priority: last applied by us > savedColObjs (below) > SF's current columns.
+    // Checked set — priority: last applied by us > SF's current columns > all fields.
     // exploreCache survives SF re-rendering the DOM element (unlike storing on recList directly).
     const _cache = exploreCache(objectName);
-    // DEFAULT selection priority: the columns CURRENTLY in the SF table (what the user
-    // sees) win. Only if we somehow can't read those do we fall back to our last-applied
-    // set, and finally to all fields. This keeps the picker honest to the live table.
+    // DEFAULT selection priority: our LAST-APPLIED set wins when present — this is the
+    // column set the user actually loaded into the results table (and what "← Columns"
+    // writes before reopening), so re-opening the picker shows exactly those pre-checked
+    // and the user just adds more. Only if we've never applied a set do we fall back to
+    // the SF table's current columns, then to all fields.
     const curValid = currentFields.filter(fn => all.find(c => c.fieldName === fn));
     const lastApplied = _cache.lastApplied && _cache.lastApplied.length > 0
       ? _cache.lastApplied.filter(fn => all.find(c => c.fieldName === fn))
       : null;
-    let initFields = curValid.length > 0
-      ? curValid
-      : (lastApplied && lastApplied.length ? lastApplied : all.map(c => c.fieldName));
+    let initFields = (lastApplied && lastApplied.length)
+      ? lastApplied
+      : (curValid.length > 0 ? curValid : all.map(c => c.fieldName));
     const checked = new Set(initFields);
     // orderedSelected: maintains user-defined drag order, same initial order
     let orderedSelected = initFields.slice();

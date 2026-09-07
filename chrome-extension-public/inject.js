@@ -1319,7 +1319,7 @@
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
-      ["dc-explore-modal", "dc-allcols-table", "dc-export", "dc-detail-export", "dc-hide-overlay", "dc-ai-settings-dialog"].forEach(function (id) {
+      ["dc-explore-modal", "dc-allcols-table", "dc-colviz-panel", "dc-cell-tools", "dc-export", "dc-detail-export", "dc-hide-overlay", "dc-ai-settings-dialog"].forEach(function (id) {
         var el = document.getElementById(id); if (el) el.remove();
       });
     } catch (e) {}
