@@ -27,6 +27,18 @@ const { execFileSync } = require("child_process");
 
 const dir = __dirname;
 
+// ---- run logic tests FIRST — a failing test aborts the build (no untested push) ----
+(function runTests() {
+  const testFile = path.join(dir, "test", "explorer-logic.test.js");
+  if (!fs.existsSync(testFile)) { console.warn("WARN: test/explorer-logic.test.js missing — skipping tests."); return; }
+  try {
+    execFileSync(process.execPath, [testFile], { stdio: "inherit" });
+  } catch (e) {
+    console.error("\nERROR: logic tests FAILED — aborting build. Fix tests before building/pushing.");
+    process.exit(1);
+  }
+})();
+
 // ---- minify (bookmarklet payload only) ----
 // The inlined bookmarklet must stay under the browser's ~2MB bookmark-URL limit.
 // Raw source (~945KB) base64-encodes to ~2.1MB → OVER the limit. esbuild minify
