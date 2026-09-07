@@ -11035,7 +11035,7 @@
             // action-oriented message instead of the raw SQL error.
             if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
               msg = "Couldn't load this object — its Data Space couldn't be determined automatically.\n\n" +
-                    "Fix: in the Salesforce Data Explorer table behind this panel, click any column header to sort it (or apply a filter), then click \"Show selected columns' data\" again. That tells the tool which Data Space this object uses.";
+                    "Fix: in the Salesforce Data Explorer table (to the left / behind this picker — it stays open), click a column's ▾ menu and choose Sort. Once the table re-sorts, click \"Show selected columns' data\" again. That one sort tells the tool which Data Space this object uses.";
             }
             savedNote.textContent = msg;
           });
@@ -11087,7 +11087,7 @@
             hideSpinner();
             var rmsg = String(err && err.message || err);
             if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
-              rmsg = "Couldn't load the saved set — Data Space couldn't be determined automatically. Sort any column in the Salesforce table behind this panel, then click Restore again.";
+              rmsg = "Couldn't load the saved set — Data Space couldn't be determined automatically. In the Salesforce table (to the left / behind this picker), sort any column via its ▾ menu, then click Restore again.";
             }
             savedNote.textContent = rmsg;
           });
