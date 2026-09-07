@@ -23,8 +23,37 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 
 const dir = __dirname;
+
+// ---- minify (bookmarklet payload only) ----
+// The inlined bookmarklet must stay under the browser's ~2MB bookmark-URL limit.
+// Raw source (~945KB) base64-encodes to ~2.1MB → OVER the limit. esbuild minify
+// (comments + whitespace, string/regex-safe via a real parser) roughly halves it.
+// Only the BOOKMARKLET payload is minified; the extension inject.js keeps full
+// readable source (no size limit there). Falls back to raw source if esbuild is
+// missing so the build never hard-fails on a fresh checkout.
+const _esbuildBin = path.join(dir, "node_modules/.bin/esbuild");
+function minifyForBookmarklet(code, label) {
+  if (!fs.existsSync(_esbuildBin)) {
+    console.warn("WARN [" + label + "]: esbuild not found — bookmarklet uses UNMINIFIED source (may exceed 2MB). Run `npm install`.");
+    return code;
+  }
+  const tmp = path.join(dir, ".bm-min-" + label + ".tmp.js");
+  fs.writeFileSync(tmp, code);
+  try {
+    const out = execFileSync(_esbuildBin, [tmp, "--minify", "--legal-comments=none"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    // esbuild output must still parse and preserve behavior — verify it compiles.
+    try { new Function(out); } catch (e) {
+      console.error("ERROR [" + label + "]: minified bookmarklet has a syntax error: " + e.message + "; aborting.");
+      process.exit(1);
+    }
+    return out;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch (e) {}
+  }
+}
 const fullCode = fs.readFileSync(path.join(dir, "console-decorate.js"), "utf8");
 // Read current version from manifest (used in install page display)
 const _mfVer = (function() { try { return JSON.parse(fs.readFileSync(path.join(dir, "chrome-extension/manifest.json"), "utf8")).version; } catch(e) { return "dev"; } })();
@@ -398,7 +427,7 @@ function verifyHtml(html, loader, label) {
 }
 
 // ═══ PUBLIC build (shipped to GitHub Pages) ═══
-const pub = makePayload(publicCode, "public");
+const pub = makePayload(minifyForBookmarklet(publicCode, "public"), "public");
 fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);
 const pubHtml = makeHtml(pub.hrefSafe, false, buildIdOf(pub.b64));
@@ -406,7 +435,7 @@ verifyHtml(pubHtml, pub.loader, "public");
 fs.writeFileSync(path.join(dir, "install.html"), pubHtml);
 
 // ═══ FULL build (local dev only — DO NOT push) ═══
-const full = makePayload(fullCode, "full");
+const full = makePayload(minifyForBookmarklet(fullCode, "full"), "full");
 fs.writeFileSync(path.join(dir, "console-decorate-full.min.js"), full.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet-full.txt"), full.bm);
 const fullHtml = makeHtml(full.hrefSafe, true, buildIdOf(full.b64));

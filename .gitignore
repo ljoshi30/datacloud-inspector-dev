@@ -21,3 +21,6 @@ chrome-extension/.buildid
 probe-extension/
 impl-doc-prototype/
 preflight-research/
+
+# esbuild bookmarklet-minify temp files
+.bm-min-*.tmp.js

@@ -1,0 +1,24 @@
+{
+  "name": "datacloud-mapping-inspector",
+  "version": "1.0.0",
+  "description": "A browser tool (Chrome extension + bookmarklet) for Salesforce Data Cloud / Data 360. Adds a floating launcher on every Data 360 page that lets you inspect field mappings and export segment rules.",
+  "main": "build.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ljoshi30/datacloud-inspector-dev.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ljoshi30/datacloud-inspector-dev/issues"
+  },
+  "homepage": "https://github.com/ljoshi30/datacloud-inspector-dev#readme",
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
