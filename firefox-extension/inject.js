@@ -5779,29 +5779,30 @@
     var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
     if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
     var fired = false;
-    // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM, so document.querySelector
-    // can't see its sort headers. Use eachElement (shadow-piercing) to find a clickable sort
-    // control anywhere in the shadow tree. Clicking it makes SF fire CdpDataView.query, which
-    // the sniffer reads for selectedDataSpaceName.
+    // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM. The real sort trigger is
+    // an <a class="slds-th__action" role="button"> that sits INSIDE a
+    // <lightning-primitive-header-factory>'s OWN shadow root — i.e. one shadow level below the
+    // <th>. document.querySelector can't see it, and querySelector from the <th> can't cross
+    // into the factory's shadow either. So we walk the ENTIRE shadow tree with eachElement and
+    // match that anchor directly. Clicking it makes SF fire CdpDataView.query → the sniffer
+    // captures selectedDataSpaceName. Skip the row-select column (empty label / aria-sort=none).
     try {
       var candidates = [];
       eachElement(document, function (el) {
-        if (fired || candidates.length >= 3) return;
+        if (candidates.length >= 4) return;
         var tag = tagOf(el);
         var role = (el.getAttribute && el.getAttribute("role")) || "";
-        var aria = ((el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("title"))) || "").toLowerCase();
         var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
         cls = (cls || "").toLowerCase();
-        var isSortCtrl =
-          (tag === "th" && el.getAttribute && el.getAttribute("aria-sort") != null) ||
-          (role === "columnheader") ||
-          /sort/.test(aria) ||
-          /slds-th__action|sortable|columnheader/.test(cls);
-        if (!isSortCtrl) return;
-        // Find the actual clickable inside the header (button/anchor), else the header itself.
-        var btn = null;
-        try { btn = el.querySelector && el.querySelector("button, a[role='button'], a, span[role='button'], .slds-th__action"); } catch (e) {}
-        candidates.push(btn || el);
+        var aria = ((el.getAttribute && el.getAttribute("aria-label")) || "").toLowerCase();
+        // Primary target: the SLDS sort action anchor (proven markup on CDP grids).
+        if ((tag === "a" || role === "button") && /slds-th__action/.test(cls)) {
+          candidates.push(el); return;
+        }
+        // Fallback target: an explicit "sort" button (e.g. "Toggle sort order").
+        if ((tag === "button" || role === "button") && /sort/.test(aria)) {
+          candidates.push(el); return;
+        }
       });
       if (candidates.length) {
         var target = candidates[0];
