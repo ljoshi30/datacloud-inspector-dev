@@ -5779,6 +5779,7 @@
     var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
     if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
     var fired = false;
+    var _dxSortTarget = null;   // the sort control we click; reused for the restore-click
     // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM. The real sort trigger is
     // an <a class="slds-th__action" role="button"> that sits INSIDE a
     // <lightning-primitive-header-factory>'s OWN shadow root — i.e. one shadow level below the
@@ -5822,17 +5823,32 @@
             try { elm.click(); } catch (e) {}
           } catch (e) {}
         };
+        _dxSortTarget = target;   // remember for the deferred restore-click (see below)
         realClick(target);
-        // Restore original sort order with a second activation (best-effort).
-        setTimeout(function () { realClick(target); }, 700);
       }
     } catch (e) {}
     // Poll for the dataspace to show up (sniffer fills it when the query returns).
-    var tries = 0;
+    // DETERMINISTIC: the moment a dataspace is captured we (a) fire the restore-click ONCE
+    // to put the sort order back, then (b) call cb(true) AFTER a short settle so the restore
+    // query doesn't race the caller's data query. This removes the "sometimes works" timing:
+    // we act on capture, not on a fixed delay. Poll a bit longer (~6s) for slow orgs.
+    var tries = 0, done = false;
+    function finish(ok) {
+      if (done) return; done = true;
+      cb(ok);
+    }
     (function poll() {
+      if (done) return;
       var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-      if (ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null)) { cb(true); return; }
-      if (!fired || tries++ > 20) { cb(false); return; }  // ~4s max, or no button found
+      var got = ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null);
+      if (got) {
+        // Restore the original sort order once (best-effort), then proceed after a short
+        // settle so this restore query can't collide with the caller's upcoming data query.
+        if (fired && _dxSortTarget) { try { _dxSortTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window })); } catch (e) {} }
+        setTimeout(function () { finish(true); }, 250);
+        return;
+      }
+      if (!fired || tries++ > 30) { finish(false); return; }  // ~6s max, or no button found
       setTimeout(poll, 200);
     })();
   }
@@ -8415,9 +8431,11 @@
     panel.id = "dc-allcols-table";
     panel.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(1400px,96vw);height:min(86vh,900px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
 
-    // header
+    // header — flex-wrap so the action buttons (Reload/Count/Columns/Edit SQL/CSV/Export/✕)
+    // reflow onto a second line on narrow panels instead of overflowing off the right edge
+    // (they were getting clipped/unreachable on the bookmarklet's default panel width).
     const hdr = document.createElement("div");
-    hdr.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;flex-shrink:0;cursor:move;";
+    hdr.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;flex-shrink:0;cursor:move;";
     const titleWrap = document.createElement("div");
     titleWrap.style.cssText = "flex:1;user-select:text;cursor:text;";
     var serverTotal = rows.__serverRowCount || 0;
