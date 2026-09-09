@@ -11789,7 +11789,7 @@
         var BM_PAGE = 49999;
         var BM_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
         var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-        var csvOut = [], cols2 = [], totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
+        var csvOut = [], cols2 = [], colTypes2 = {}, totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
 
         var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
         var userLimit = userLimitMatch ? parseInt(userLimitMatch[1], 10) : 0;
@@ -11807,7 +11807,7 @@
 
         function finish() {
           var blob = new Blob(csvOut, { type: "text/csv" });
-          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null });
+          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null });
         }
 
         function fetchBatch(offset) {
@@ -11842,9 +11842,13 @@
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var meta = rv.metadata || [];
               var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
-              // Header from metadata (first batch that has columns).
+              // Header from metadata (first batch that has columns). Also remember each
+              // column's SQL type (e.g. "date", "timestamp", "text") so callers can filter
+              // a column dropdown to only date/timestamp fields — avoids "cannot compare
+              // 'text' and 'timestamp'" from picking a non-date column as a date filter.
               if (!cols2.length && meta && meta.length) {
                 cols2 = meta.map(function (m) { return m && m.name; });
+                meta.forEach(function (m) { if (m && m.name) colTypes2[m.name] = (m.type || "").toLowerCase(); });
                 csvOut.push(cols2.map(esc2).join(",") + "\n");
               }
               arrData.forEach(function (row) {
@@ -12042,13 +12046,17 @@
         if (fieldsCache[name]) { renderFields(); return; } // already have it (success OR failure noted)
         var ds = readPageDataSpace();
         qeFetchExport(qeTemplates.fieldsProbe(name), ds, function () {}, function () { return false; }).then(function (r) {
-          fieldsCache[name] = { columns: (r.columns || []).slice() };
+          fieldsCache[name] = { columns: (r.columns || []).slice(), types: r.columnTypes || {} };
           if (objInput.value.trim() === name) renderFields();
         }).catch(function () {
-          fieldsCache[name] = { columns: [] }; // failure → renderFields() falls back to free text
+          fieldsCache[name] = { columns: [], types: {} }; // failure → renderFields() falls back to free text
           if (objInput.value.trim() === name) renderFields();
         });
       }
+      // A dateColumn dropdown should only ever offer REAL date/timestamp columns — picking
+      // a text column there produces "cannot compare 'text' and 'timestamp'" from the
+      // engine. Matches on the SQL type name reported in query metadata.
+      function isDateType(t) { return /date|timestamp/i.test(String(t || "")); }
 
       function runProbe(name) {
         ensureQueryContext(function (ready) {
@@ -12108,7 +12116,7 @@
       checkBtn.textContent = "# Check (Count)";
       checkBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);";
       var sampleBtn = document.createElement("button");
-      sampleBtn.textContent = "👁 Fetch sample rows (100)";
+      sampleBtn.textContent = "👁 Fetch rows (up to 2,000)";
       sampleBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);";
       actionRow.appendChild(checkBtn);
       actionRow.appendChild(sampleBtn);
@@ -12170,25 +12178,38 @@
         helpText.textContent = def.help;
         var objName = objInput.value.trim();
         if (objName && typeof def.example === "function") { try { exampleText.textContent = "💡 " + def.example(objName); } catch (e) {} }
-        var fetchedCols = (fieldsCache[objName] || {}).columns || [];
+        var fieldsInfo = fieldsCache[objName] || {};
+        var fetchedCols = fieldsInfo.columns || [];
+        var fetchedTypes = fieldsInfo.types || {};
         def.fields.forEach(function (f) {
           var row = document.createElement("div");
           var lbl = document.createElement("label");
           lbl.style.cssText = "display:block;font-size:11px;font-weight:600;margin-bottom:3px;color:#475569;";
           lbl.textContent = FIELD_LABELS[f] || f;
           var inp;
-          if (OWN_OBJECT_COLUMN_FIELDS[f] && fetchedCols.length > 0) {
+          // dateColumn is restricted to columns whose reported SQL type is date/timestamp
+          // — every other fetchable field (column, fkColumn) offers all columns.
+          var optionsForField = f === "dateColumn" ? fetchedCols.filter(function (c) { return isDateType(fetchedTypes[c]); }) : fetchedCols;
+          if (OWN_OBJECT_COLUMN_FIELDS[f] && fetchedCols.length > 0 && (f !== "dateColumn" || optionsForField.length > 0)) {
             // Auto-fetch succeeded — real column names as a dropdown, can't be mistyped.
             inp = document.createElement("select");
             var placeholder = document.createElement("option");
             placeholder.value = ""; placeholder.textContent = "— choose a column —";
             inp.appendChild(placeholder);
-            fetchedCols.forEach(function (c) { var o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); });
+            optionsForField.forEach(function (c) { var o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); });
           } else {
             // No fetched fields yet, fetch failed, or this field isn't fetchable (e.g.
             // childFk/parentKey) — free-text fallback so the user is never blocked.
             inp = document.createElement("input");
             inp.type = "text";
+          }
+          var dateTypeWarning = null;
+          if (f === "dateColumn" && inp.tagName !== "SELECT" && fetchedCols.length > 0 && optionsForField.length === 0) {
+            // Fetch succeeded but found NO date/timestamp columns — say so explicitly,
+            // otherwise a bare free-text box looks like the fetch just failed.
+            dateTypeWarning = document.createElement("div");
+            dateTypeWarning.style.cssText = "font-size:10px;color:#b45309;margin-bottom:3px;";
+            dateTypeWarning.textContent = "No date/timestamp columns detected on this object — type the column name manually.";
           }
           inp.dataset.field = f;
           if (OBJECT_FIELDS[f]) {
@@ -12204,6 +12225,7 @@
           inp.addEventListener("input", updatePreview);
           inp.addEventListener("change", updatePreview);
           row.appendChild(lbl);
+          if (dateTypeWarning) row.appendChild(dateTypeWarning);
           if (f === "fromDate" || f === "toDate") {
             // Date/time fields get THREE ways to fill them (per user request: "if user
             // pastes [a timestamp] otherwise date picker will also helpful"):
@@ -12311,12 +12333,21 @@
               resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
             });
           } else {
-            var sampleSql = res.sql + " LIMIT 100";
-            qeFetchExport(sampleSql, ds, function () {}, function () { return false; }).then(function (r) {
+            // 2,000 rows — matches the View Results table's own display cap (see
+            // qeFetchExport's rowData.length < 2000 guard), so everything fetched here is
+            // viewable. The CSV download always contains every row that WAS fetched (up
+            // to this same 2,000) — raise SAMPLE_ROWS if you need more, or use ▶ Fetch &
+            // Export on the full query for the true unbounded export.
+            var SAMPLE_ROWS = 2000;
+            var sampleSql = res.sql + " LIMIT " + SAMPLE_ROWS;
+            qeFetchExport(sampleSql, ds, function (fetched) {
+              btn.textContent = "Fetching " + fetched.toLocaleString() + "…";
+            }, function () { return false; }).then(function (r) {
               btn.disabled = false; btn.textContent = origText;
               _lastResult = { blobUrl: r.blobUrl, filename: "helpful_query_sample.csv", rowCount: r.totalRows, cols: r.columns.length, columns: r.columns, tableName: objInput.value.trim(), data: r.rowData || [], sql: sampleSql };
               downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block";
-              resultArea.innerHTML = "<b>" + r.totalRows.toLocaleString() + "</b> sample row" + (r.totalRows === 1 ? "" : "s") + " fetched (capped at 100). Use <b>👁 View Results</b> or <b>⬇ Download CSV</b> above.";
+              var cappedNote = r.totalRows >= SAMPLE_ROWS ? " (capped at " + SAMPLE_ROWS.toLocaleString() + " — there may be more; download the CSV for everything fetched, or narrow the check first)" : "";
+              resultArea.innerHTML = "<b>" + r.totalRows.toLocaleString() + "</b> row" + (r.totalRows === 1 ? "" : "s") + " fetched" + cappedNote + ". Use <b>👁 View Results</b> or <b>⬇ Download CSV</b> above.";
             }).catch(function (err) {
               btn.disabled = false; btn.textContent = origText;
               resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
@@ -12735,10 +12766,14 @@
       modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
 
       var box = document.createElement("div");
-      box.style.cssText = "background:#fff;border-radius:12px;width:95vw;max-width:1400px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;";
+      // position:fixed + explicit top/left (not flex-centered via the backdrop) so the
+      // panel can actually be dragged/resized — makeDraggable sets left/top directly,
+      // which has no effect on a statically-positioned element. Same pattern as the
+      // Helpful Queries panel (dc-qe-templates-panel).
+      box.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:95vw;max-width:1400px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;";
 
       var hdr = document.createElement("div");
-      hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
+      hdr.style.cssText = "padding:14px 20px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;cursor:move;";
       hdr.innerHTML = "<div><div style='font:700 15px system-ui;'>Query Results</div><div style='font:400 11px system-ui;opacity:0.85;'>" + _lastResult.tableName + " — " + _lastResult.rowCount.toLocaleString() + " rows, " + allCols.length + " columns" + (showing < rows.length ? " (showing first " + showing + ")" : "") + "</div></div>";
       var closeX = document.createElement("button");
       closeX.innerHTML = "✕";
@@ -12882,6 +12917,10 @@
       modal.appendChild(box);
       modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
       document.body.appendChild(modal);
+      // Draggable by the header, resizable from the corner grip — same helpers used by
+      // every other floating panel in the tool (Helpful Queries, Data Explorer results).
+      try { makeDraggable(box, hdr); } catch (e) {}
+      try { addResizeHandle(box, 480, 320); } catch (e) {}
       // Attach sort handlers to header cells
       tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
         th.onclick = function () { sortRows(th.getAttribute("data-col")); };

@@ -345,5 +345,62 @@ console.log("\n6. fieldVal() selector guard (must match <select>, not just <inpu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 7. isDateType — the dateColumn dropdown must only offer columns whose reported SQL
+//    type is actually date/timestamp; picking a text column produced a real error from
+//    the engine ("cannot compare 'text' and 'timestamp'"). Mirrors console-decorate.js.
+// ─────────────────────────────────────────────────────────────────────────────
+function isDateType(t) { return /date|timestamp/i.test(String(t || "")); }
+console.log("\n7. isDateType (dateColumn dropdown filter)");
+{
+  ok("'date' is a date type", isDateType("date"));
+  ok("'timestamp' is a date type", isDateType("timestamp"));
+  ok("'timestamp with time zone' is a date type", isDateType("timestamp with time zone"));
+  ok("'DATE' (uppercase, as engines often report) is a date type", isDateType("DATE"));
+  ok("'text' is NOT a date type", !isDateType("text"));
+  ok("'varchar' is NOT a date type", !isDateType("varchar"));
+  ok("'integer' is NOT a date type", !isDateType("integer"));
+  ok("undefined/missing type is NOT a date type (fails closed, not open)", !isDateType(undefined));
+  ok("empty string is NOT a date type", !isDateType(""));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. dateColumn dropdown-population decision — given fetched columns + their types,
+//    only date/timestamp columns should appear as options. If NONE qualify, the UI
+//    must fall back to free text (never render an empty, unusable dropdown).
+// ─────────────────────────────────────────────────────────────────────────────
+function dateColumnOptions(columns, types) {
+  return columns.filter(function (c) { return isDateType(types[c]); });
+}
+console.log("\n8. dateColumn dropdown-population decision");
+{
+  const cols = ["created_date__c", "email__c", "DataSourceObjectId__c", "amount__c"];
+  const types = { created_date__c: "timestamp", email__c: "text", DataSourceObjectId__c: "text", amount__c: "numeric" };
+  const opts = dateColumnOptions(cols, types);
+  eq("only the timestamp column is offered", opts.length, 1);
+  eq("the offered column is the right one", opts[0], "created_date__c");
+
+  const noDatesCols = ["email__c", "amount__c"];
+  const noDatesTypes = { email__c: "text", amount__c: "numeric" };
+  eq("zero date columns → empty options (caller falls back to free text)", dateColumnOptions(noDatesCols, noDatesTypes).length, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Sample-fetch row cap — raised from the original 100 to 2,000 (matches the View
+//    Results table's own 2,000-row display cap in qeFetchExport, so nothing fetched
+//    is ever un-viewable). Verifies the LIMIT actually appended to the SQL and that
+//    the button label reflects the real cap (not a stale "100" that lies to the user).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n9. Sample-fetch row cap (100 -> 2,000)");
+{
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  ok("SAMPLE_ROWS is 2000, not the old 100", /SAMPLE_ROWS\s*=\s*2000/.test(src));
+  ok("sample fetch appends LIMIT + SAMPLE_ROWS to the query", /sampleSql\s*=\s*res\.sql\s*\+\s*"\s*LIMIT\s*"\s*\+\s*SAMPLE_ROWS/.test(src));
+  ok("button label says up to 2,000, not the stale 100", /Fetch rows \(up to 2,000\)/.test(src));
+  ok("old hard-coded 'LIMIT 100' sample query is gone", !/res\.sql\s*\+\s*"\s*LIMIT 100"/.test(src));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);
