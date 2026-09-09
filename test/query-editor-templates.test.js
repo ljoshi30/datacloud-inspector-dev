@@ -414,5 +414,27 @@ console.log("\n9. Sample-fetch row cap (100 -> 2,000)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 10. "Heavy query" Count error — runQeCount rejects a genuinely-heavy aggregate
+//    (e.g. IR consolidation rate's two APPROX_COUNT_DISTINCT over a GROUP BY) with
+//    an Error carrying .heavyCount=true and text that says "Use Fetch & Export
+//    instead" — that's the NATIVE Query Editor button's name, which doesn't exist
+//    inside the Helpful Queries panel. The panel's catch handler must rewrite this
+//    into a message that names its OWN button ("Fetch rows"), not a dead reference.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n10. Heavy-query Count error is rewritten to the panel's own button name");
+{
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  ok("panel's count catch handler checks err.heavyCount", /err\s*&&\s*err\.heavyCount/.test(src));
+  ok("rewritten message names the panel's OWN button (Fetch rows), not the native one", /Fetch rows \(up to 2,000\)/.test(src) &&
+    /hmsg\s*=\s*"This query is too heavy to count directly/.test(src));
+  ok("rewritten message does NOT tell the user to find a nonexistent \"Fetch & Export\" button", (function () {
+    const m = src.match(/if \(err && err\.heavyCount\) \{\s*hmsg = "([^"]*)"/);
+    return !!m && !/Fetch & Export/.test(m[1]);
+  })());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

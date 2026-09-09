@@ -12336,7 +12336,18 @@
                 (r.rowsProcessed != null ? " <span style='color:#94a3b8;font-size:10px;'>(" + r.rowsProcessed.toLocaleString() + " rows processed)</span>" : "");
             }).catch(function (err) {
               btn.disabled = false; btn.textContent = origText;
-              resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
+              var hmsg = String(err && err.message || err);
+              // runQeCount's own "too heavy" message says "Use Fetch & Export instead" —
+              // that's the NATIVE Query Editor button's name, which doesn't exist inside
+              // this panel. Point at the actual equivalent button here so the advice is
+              // followable, not a dead reference. (Templates with heavy aggregates —
+              // e.g. IR consolidation rate's two APPROX_COUNT_DISTINCT — are the ones
+              // most likely to hit this; it's Data Cloud genuinely needing to materialize
+              // the whole result, not a bug — Count and Fetch cost the same here anyway.)
+              if (err && err.heavyCount) {
+                hmsg = "This query is too heavy to count directly — it aggregates a large result, which Data Cloud must fully materialize either way. Click \"👁 Fetch rows (up to 2,000)\" below instead — it streams rows and shows the total when done.";
+              }
+              resultArea.innerHTML = "<span style='color:#dc2626;'>" + hmsg + "</span>";
             });
           } else {
             // 2,000 rows — matches the View Results table's own display cap (see
