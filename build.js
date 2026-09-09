@@ -28,15 +28,19 @@ const { execFileSync } = require("child_process");
 const dir = __dirname;
 
 // ---- run logic tests FIRST — a failing test aborts the build (no untested push) ----
+// One file per feature area (kept separate on purpose — Data Explorer and Query
+// Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  const testFile = path.join(dir, "test", "explorer-logic.test.js");
-  if (!fs.existsSync(testFile)) { console.warn("WARN: test/explorer-logic.test.js missing — skipping tests."); return; }
-  try {
-    execFileSync(process.execPath, [testFile], { stdio: "inherit" });
-  } catch (e) {
-    console.error("\nERROR: logic tests FAILED — aborting build. Fix tests before building/pushing.");
-    process.exit(1);
-  }
+  ["explorer-logic.test.js", "query-editor-templates.test.js"].forEach(function (name) {
+    const testFile = path.join(dir, "test", name);
+    if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
+    try {
+      execFileSync(process.execPath, [testFile], { stdio: "inherit" });
+    } catch (e) {
+      console.error("\nERROR: " + name + " FAILED — aborting build. Fix tests before building/pushing.");
+      process.exit(1);
+    }
+  });
 })();
 
 // ---- minify (bookmarklet payload only) ----

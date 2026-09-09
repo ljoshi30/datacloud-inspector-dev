@@ -11453,8 +11453,22 @@
       else { card.style.display = "none"; }
     };
 
+    // Helpful Queries — generates SQL for common data-quality/relational/date checks
+    // from a plain-language picker (object name + column(s), no SQL typing required).
+    // Independent of the rest of Query Editor's UI except that it hands its generated
+    // SQL to the SAME runQeCount/qeFetchExport runners as Count/Fetch — no new query
+    // execution path, no writes into SF's native editor.
+    var templatesBtn = document.createElement("button");
+    templatesBtn.textContent = "🔧 Helpful Queries";
+    templatesBtn.title = "Pick a common check (duplicates, nulls, stale records, orphaned keys, date filters…) and fill in an object + column — no SQL needed. Runs through Count/Fetch exactly like a hand-written query.";
+    templatesBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 2px 8px rgba(217,119,6,.3);transition:transform .1s;";
+    templatesBtn.onmouseenter = () => { templatesBtn.style.transform = "scale(1.03)"; templatesBtn.style.boxShadow = "0 4px 16px rgba(217,119,6,.4)"; };
+    templatesBtn.onmouseleave = () => { templatesBtn.style.transform = "scale(1)"; templatesBtn.style.boxShadow = "0 3px 12px rgba(217,119,6,.3)"; };
+    templatesBtn.onclick = function () { openTemplatesPanel(); };
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
+    btnRow.appendChild(templatesBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
     btnRow.appendChild(infoBtn);
@@ -11484,7 +11498,7 @@
       el.addEventListener("mouseleave", function () { qeTip.style.display = "none"; });
       el.addEventListener("click", function () { qeTip.style.display = "none"; });
     };
-    [countBtn, runBtn, downloadBtn, viewBtn, infoBtn].forEach(qeTipFor);
+    [countBtn, runBtn, templatesBtn, downloadBtn, viewBtn, infoBtn].forEach(qeTipFor);
 
     // FAB icon — always visible, toggles the panel
     var fab = document.createElement("button");
@@ -11855,6 +11869,319 @@
         }
         fetchBatch(0);
       });
+    }
+
+    // ── Helpful Queries: template SQL builders ──────────────────────────────────
+    // Every function used here (TRIM, UPPER, CURRENT_DATE, INTERVAL, DATE_TRUNC,
+    // LEFT JOIN, GROUP BY/HAVING, TRY_CAST) is documented in the Data 360 SQL
+    // reference — verified before writing this, nothing invented. Mirrored 1:1 in
+    // test/query-editor-templates.test.js; keep both in sync if you change these.
+    var qeTemplates = {
+      existsProbe:          (obj)                       => `SELECT COUNT(*) AS row_count FROM ${sqlQuoteIdent(obj)}`,
+      exactDuplicates:      (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} HAVING COUNT(*) > 1`,
+      nullsOrBlanks:        (obj, col)                  => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(col)} IS NULL OR TRIM(${sqlQuoteIdent(col)}) = ''`,
+      valueDistribution:    (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS value_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} ORDER BY COUNT(*) DESC`,
+      normalizedDuplicates: (obj, col)                  => `SELECT UPPER(TRIM(${sqlQuoteIdent(col)})) AS normalized_value, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY UPPER(TRIM(${sqlQuoteIdent(col)})) HAVING COUNT(*) > 1`,
+      staleRecords:         (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} < CURRENT_DATE - INTERVAL '${Number(days)} days'`,
+      orphanedForeignKey:   (childObj, childFk, parentObj, parentKey) => `SELECT c.* FROM ${sqlQuoteIdent(childObj)} c LEFT JOIN ${sqlQuoteIdent(parentObj)} p ON c.${sqlQuoteIdent(childFk)} = p.${sqlQuoteIdent(parentKey)} WHERE p.${sqlQuoteIdent(parentKey)} IS NULL`,
+      cardinalityCheck:     (obj, fkCol, expected)       => `SELECT ${sqlQuoteIdent(fkCol)}, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
+      irConsolidationRate:  ()                          => `SELECT IndividualIdentityLink__dlm.ssot__DataSourceId__c AS DataSourceId__c, IndividualIdentityLink__dlm.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(IndividualIdentityLink__dlm.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c)/COUNT(IndividualIdentityLink__dlm.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM IndividualIdentityLink__dlm GROUP BY DataSourceId__c, DataSourceObjectId__c`,
+      safeTypeCheck:        (obj, col, type)             => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE TRY_CAST(${sqlQuoteIdent(col)} AS ${type}) IS NULL AND ${sqlQuoteIdent(col)} IS NOT NULL`,
+      freshnessCheck:       (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} < CURRENT_DATE - INTERVAL '${Number(days)} days'`,
+      recordAge:            (obj, dateCol)               => `SELECT *, CURRENT_DATE - ${sqlQuoteIdent(dateCol)} AS days_old FROM ${sqlQuoteIdent(obj)}`,
+      rollingWindow:        (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} >= CURRENT_DATE - INTERVAL '${Number(days)} days'`,
+      trendByPeriod:        (obj, dateCol, period)       => `SELECT DATE_TRUNC('${period}', ${sqlQuoteIdent(dateCol)}) AS period, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY DATE_TRUNC('${period}', ${sqlQuoteIdent(dateCol)}) ORDER BY period`,
+    };
+
+    // Identifier-safety validation — mirrors test/query-editor-templates.test.js
+    // validateTemplateInputs. Rejects blank/invalid names BEFORE building any SQL
+    // (a bad name should never silently produce a query that "looks" runnable).
+    function qeValidIdent(s) { return !!s && /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s).trim()); }
+    function qeValidatePositiveInt(n) { var v = Number(n); return Number.isFinite(v) && v > 0 && Math.floor(v) === v; }
+    function qeValidateNonNegativeInt(n) { var v = Number(n); return Number.isFinite(v) && v >= 0 && Math.floor(v) === v; }
+
+    var TEMPLATE_DEFS = [
+      { key: "exactDuplicates",      label: "Exact duplicates",              group: "Data quality", fields: ["object", "column"],
+        help: "Finds rows where a column's value repeats exactly (e.g. same email twice)." },
+      { key: "nullsOrBlanks",        label: "Nulls / blanks in a field",     group: "Data quality", fields: ["object", "column"],
+        help: "Finds rows where a field is empty or blank." },
+      { key: "valueDistribution",    label: "Value distribution",            group: "Data quality", fields: ["object", "column"],
+        help: "Counts how many rows have each distinct value — good for spotting typos/variants (e.g. 'CA' vs 'California')." },
+      { key: "normalizedDuplicates", label: "Normalized duplicate check",    group: "Data quality", fields: ["object", "column"],
+        help: "Like exact duplicates, but ignores case and leading/trailing spaces (e.g. 'John Smith' vs 'john smith  ')." },
+      { key: "safeTypeCheck",        label: "Invalid values for a type",     group: "Data quality", fields: ["object", "column", "type"],
+        help: "Finds non-empty values that can't actually convert to the type they should be (e.g. text that isn't really a date)." },
+      { key: "orphanedForeignKey",   label: "Orphaned foreign key",          group: "Relationships", fields: ["childObject", "childFk", "parentObject", "parentKey"],
+        help: "Finds child rows whose foreign key doesn't match any row in the parent object." },
+      { key: "cardinalityCheck",     label: "Relationship cardinality check", group: "Relationships", fields: ["object", "fkColumn", "expected"],
+        help: "Finds foreign-key groups that don't have the expected number of rows (e.g. should be exactly 1 primary contact per account)." },
+      { key: "irConsolidationRate",  label: "Identity Resolution consolidation rate", group: "Relationships", fields: [],
+        help: "Salesforce-documented check: consolidation rate per source in IndividualIdentityLink__dlm. An unexpectedly high rate can flag data-quality issues in a source." },
+      { key: "freshnessCheck",       label: "Freshness check",               group: "Date", fields: ["object", "dateColumn", "days"],
+        help: "Finds rows OLDER than N days by a date column — 'has this stopped updating?'" },
+      { key: "rollingWindow",        label: "Rolling window (last N days)",  group: "Date", fields: ["object", "dateColumn", "days"],
+        help: "Finds rows from the last N days — a ready-made recent-activity filter." },
+      { key: "recordAge",            label: "Record age",                    group: "Date", fields: ["object", "dateColumn"],
+        help: "Adds a days_old column so you can sort/filter by how old each row is." },
+      { key: "trendByPeriod",        label: "Trend by period",               group: "Date", fields: ["object", "dateColumn", "period"],
+        help: "Counts rows per day/week/month/quarter/year — a quick trend rollup." },
+      { key: "staleRecords",         label: "Stale records",                 group: "Date", fields: ["object", "dateColumn", "days"],
+        help: "Same idea as Freshness check — rows older than N days." },
+    ];
+
+    var templatesPanelEl = null;
+    function closeTemplatesPanel() { if (templatesPanelEl) { templatesPanelEl.remove(); templatesPanelEl = null; } }
+
+    function openTemplatesPanel() {
+      closeTemplatesPanel();
+      var panel = document.createElement("div");
+      templatesPanelEl = panel;
+      panel.id = "dc-qe-templates-panel";
+      panel.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(560px,92vw);max-height:82vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;";
+
+      var hdr = document.createElement("div");
+      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;";
+      hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries</div>";
+      var closeX = document.createElement("button");
+      closeX.innerHTML = "✕";
+      closeX.style.cssText = "border:none;background:none;font-size:16px;color:#92400e;cursor:pointer;padding:4px 8px;";
+      closeX.onclick = closeTemplatesPanel;
+      hdr.appendChild(closeX);
+      panel.appendChild(hdr);
+
+      var body = document.createElement("div");
+      body.style.cssText = "padding:16px 18px;";
+      panel.appendChild(body);
+
+      // Step 1: object name (free text — works for ANY DLO/DMO, on any page, unlike a
+      // scraped dropdown which only works when that exact object happens to be on screen).
+      var objRow = document.createElement("div");
+      objRow.style.cssText = "margin-bottom:12px;";
+      objRow.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Object (DLO/DMO) name</label>";
+      var objInput = document.createElement("input");
+      objInput.type = "text";
+      objInput.placeholder = "e.g. TDI_Individual__dlm";
+      objInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
+      objRow.appendChild(objInput);
+      var objStatus = document.createElement("div");
+      objStatus.style.cssText = "margin-top:6px;font-size:11px;color:#64748b;min-height:14px;";
+      objRow.appendChild(objStatus);
+      body.appendChild(objRow);
+
+      // Size/existence probe result — cached per object name so retyping the same name
+      // doesn't re-probe. A plain COUNT(*) with no WHERE/GROUP BY/JOIN is usually
+      // answerable from stored metadata (near-free) — this both validates the name
+      // AND gives an honest heads-up about scan cost for the templates below.
+      var probeCache = {};
+      var probeTimer = null;
+      objInput.addEventListener("input", function () {
+        clearTimeout(probeTimer);
+        var name = objInput.value.trim();
+        templateArea.style.display = "none";
+        if (!name) { objStatus.textContent = ""; return; }
+        if (!qeValidIdent(name)) { objStatus.innerHTML = "<span style='color:#dc2626;'>Only letters, numbers, and underscores — no spaces or quotes.</span>"; return; }
+        if (probeCache[name]) { showProbeResult(probeCache[name]); return; }
+        objStatus.innerHTML = "<span style='color:#64748b;'>Checking object…</span>";
+        probeTimer = setTimeout(function () { runProbe(name); }, 500); // debounce while typing
+      });
+
+      function showProbeResult(res) {
+        if (res.error) {
+          objStatus.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>";
+          templateArea.style.display = "none";
+          return;
+        }
+        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " +
+          "<span style='color:#92400e;'>Templates below scan the whole table (billed on rows processed) — cost is roughly the same whether you Count or Fetch a sample.</span>";
+        templateArea.style.display = "block";
+      }
+
+      function runProbe(name) {
+        ensureQueryContext(function (ready) {
+          if (!ready) { objStatus.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
+          var ds = readPageDataSpace();
+          var sql = qeTemplates.existsProbe(name);
+          runQeCount(sql, ds).then(function (r) {
+            var result = { count: r.count || 0 };
+            probeCache[name] = result;
+            if (objInput.value.trim() === name) showProbeResult(result);
+          }).catch(function (err) {
+            var msg = String(err && err.message || err);
+            var result = { error: /does not exist/i.test(msg) ? "Object not found — check the name and Data Space." : msg };
+            probeCache[name] = result;
+            if (objInput.value.trim() === name) showProbeResult(result);
+          });
+        });
+      }
+
+      // Step 2: template picker + dynamic fields (shown once the object probe succeeds).
+      var templateArea = document.createElement("div");
+      templateArea.style.display = "none";
+      body.appendChild(templateArea);
+
+      var groupSel = document.createElement("select");
+      groupSel.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;margin-bottom:8px;";
+      var groups = Array.from(new Set(TEMPLATE_DEFS.map(function (t) { return t.group; })));
+      groups.forEach(function (g) { var o = document.createElement("option"); o.value = g; o.textContent = g; groupSel.appendChild(o); });
+      templateArea.appendChild(groupSel);
+
+      var templateSel = document.createElement("select");
+      templateSel.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;margin-bottom:8px;";
+      templateArea.appendChild(templateSel);
+
+      var helpText = document.createElement("div");
+      helpText.style.cssText = "font-size:11px;color:#64748b;margin-bottom:10px;line-height:1.5;";
+      templateArea.appendChild(helpText);
+
+      var fieldsWrap = document.createElement("div");
+      fieldsWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:10px;";
+      templateArea.appendChild(fieldsWrap);
+
+      var sqlPreview = document.createElement("pre");
+      sqlPreview.style.cssText = "background:#0f172a;color:#e2e8f0;border-radius:8px;padding:10px 12px;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin-bottom:10px;min-height:20px;";
+      templateArea.appendChild(sqlPreview);
+
+      var actionRow = document.createElement("div");
+      actionRow.style.cssText = "display:flex;gap:8px;";
+      var checkBtn = document.createElement("button");
+      checkBtn.textContent = "# Check (Count)";
+      checkBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);";
+      var sampleBtn = document.createElement("button");
+      sampleBtn.textContent = "👁 Fetch sample rows (100)";
+      sampleBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);";
+      actionRow.appendChild(checkBtn);
+      actionRow.appendChild(sampleBtn);
+      templateArea.appendChild(actionRow);
+
+      var resultArea = document.createElement("div");
+      resultArea.style.cssText = "margin-top:10px;font-size:12px;color:#334155;line-height:1.6;";
+      templateArea.appendChild(resultArea);
+
+      function currentDef() { return TEMPLATE_DEFS.find(function (t) { return t.key === templateSel.value; }); }
+
+      function populateTemplateSel() {
+        templateSel.innerHTML = "";
+        TEMPLATE_DEFS.filter(function (t) { return t.group === groupSel.value; }).forEach(function (t) {
+          var o = document.createElement("option"); o.value = t.key; o.textContent = t.label; templateSel.appendChild(o);
+        });
+        renderFields();
+      }
+      groupSel.onchange = populateTemplateSel;
+
+      var FIELD_LABELS = {
+        object: "Column to check", column: "Column to check", childObject: "Child object (has the FK)",
+        childFk: "Child's FK column", parentObject: "Parent object", parentKey: "Parent's key column",
+        fkColumn: "Foreign key column", expected: "Expected count (e.g. 1)", dateColumn: "Date column",
+        days: "Days", type: "Expected type (e.g. DATE, INTEGER, NUMERIC)", period: "Period (day/week/month/quarter/year)",
+      };
+      var FIELD_DEFAULTS = { days: "90", expected: "1", type: "DATE", period: "month" };
+
+      function renderFields() {
+        fieldsWrap.innerHTML = "";
+        helpText.textContent = "";
+        var def = currentDef();
+        if (!def) return;
+        helpText.textContent = def.help;
+        def.fields.forEach(function (f) {
+          var row = document.createElement("div");
+          var lbl = document.createElement("label");
+          lbl.style.cssText = "display:block;font-size:11px;font-weight:600;margin-bottom:3px;color:#475569;";
+          lbl.textContent = (f === "object" && def.fields.indexOf("column") === -1 ? "Object" : FIELD_LABELS[f]) || f;
+          var inp = document.createElement("input");
+          inp.type = "text";
+          inp.dataset.field = f;
+          inp.value = FIELD_DEFAULTS[f] || (f === "object" || f === "childObject" || f === "parentObject" ? objInput.value.trim() : "");
+          inp.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
+          inp.addEventListener("input", updatePreview);
+          row.appendChild(lbl); row.appendChild(inp);
+          fieldsWrap.appendChild(row);
+        });
+        updatePreview();
+      }
+      templateSel.onchange = renderFields;
+
+      function fieldVal(name) { var el = fieldsWrap.querySelector("input[data-field='" + name + "']"); return el ? el.value.trim() : ""; }
+
+      // Builds the SQL for the current template + field values, or returns {error} if
+      // any input fails validation. NEVER returns a SQL string built from bad input.
+      function buildCurrentSql() {
+        var def = currentDef();
+        if (!def) return { error: "Pick a template." };
+        var vals = {};
+        for (var i = 0; i < def.fields.length; i++) {
+          var f = def.fields[i], v = fieldVal(f);
+          if (f === "days") { if (!qeValidatePositiveInt(v)) return { error: "Days must be a positive whole number." }; vals[f] = parseInt(v, 10); continue; }
+          if (f === "expected") { if (!qeValidateNonNegativeInt(v)) return { error: "Expected count must be a non-negative whole number." }; vals[f] = parseInt(v, 10); continue; }
+          if (f === "type") { if (!/^[A-Za-z]+$/.test(v)) return { error: "Type must be a plain SQL type name (e.g. DATE, INTEGER)." }; vals[f] = v.toUpperCase(); continue; }
+          if (f === "period") { if (!/^(day|week|month|quarter|year)$/i.test(v)) return { error: "Period must be day, week, month, quarter, or year." }; vals[f] = v.toLowerCase(); continue; }
+          if (!qeValidIdent(v)) return { error: (FIELD_LABELS[f] || f) + " must contain only letters, numbers, and underscores." };
+          vals[f] = v;
+        }
+        try {
+          switch (def.key) {
+            case "exactDuplicates":      return { sql: qeTemplates.exactDuplicates(vals.object, vals.column) };
+            case "nullsOrBlanks":        return { sql: qeTemplates.nullsOrBlanks(vals.object, vals.column) };
+            case "valueDistribution":    return { sql: qeTemplates.valueDistribution(vals.object, vals.column) };
+            case "normalizedDuplicates": return { sql: qeTemplates.normalizedDuplicates(vals.object, vals.column) };
+            case "safeTypeCheck":        return { sql: qeTemplates.safeTypeCheck(vals.object, vals.column, vals.type) };
+            case "orphanedForeignKey":   return { sql: qeTemplates.orphanedForeignKey(vals.childObject, vals.childFk, vals.parentObject, vals.parentKey) };
+            case "cardinalityCheck":     return { sql: qeTemplates.cardinalityCheck(vals.object, vals.fkColumn, vals.expected) };
+            case "irConsolidationRate":  return { sql: qeTemplates.irConsolidationRate() };
+            case "freshnessCheck":       return { sql: qeTemplates.freshnessCheck(vals.object, vals.dateColumn, vals.days) };
+            case "staleRecords":         return { sql: qeTemplates.staleRecords(vals.object, vals.dateColumn, vals.days) };
+            case "rollingWindow":        return { sql: qeTemplates.rollingWindow(vals.object, vals.dateColumn, vals.days) };
+            case "recordAge":            return { sql: qeTemplates.recordAge(vals.object, vals.dateColumn) };
+            case "trendByPeriod":        return { sql: qeTemplates.trendByPeriod(vals.object, vals.dateColumn, vals.period) };
+            default: return { error: "Unknown template." };
+          }
+        } catch (e) { return { error: "Could not build SQL: " + e.message }; }
+      }
+
+      function updatePreview() {
+        var res = buildCurrentSql();
+        if (res.error) { sqlPreview.textContent = res.error; sqlPreview.style.color = "#f87171"; }
+        else { sqlPreview.textContent = res.sql; sqlPreview.style.color = "#e2e8f0"; }
+      }
+
+      function runTemplate(mode) {
+        var res = buildCurrentSql();
+        if (res.error) { resultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
+        var ds = readPageDataSpace();
+        var btn = mode === "count" ? checkBtn : sampleBtn;
+        var origText = btn.textContent;
+        btn.disabled = true; btn.textContent = "Running…";
+        resultArea.textContent = "";
+        ensureQueryContext(function (ready) {
+          if (!ready) { btn.disabled = false; btn.textContent = origText; resultArea.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
+          if (mode === "count") {
+            runQeCount(res.sql, ds).then(function (r) {
+              btn.disabled = false; btn.textContent = origText;
+              resultArea.innerHTML = "<b>" + (r.count || 0).toLocaleString() + "</b> matching row" + ((r.count === 1) ? "" : "s") +
+                (r.rowsProcessed != null ? " <span style='color:#94a3b8;font-size:10px;'>(" + r.rowsProcessed.toLocaleString() + " rows processed)</span>" : "");
+            }).catch(function (err) {
+              btn.disabled = false; btn.textContent = origText;
+              resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
+            });
+          } else {
+            var sampleSql = res.sql + " LIMIT 100";
+            qeFetchExport(sampleSql, ds, function () {}, function () { return false; }).then(function (r) {
+              btn.disabled = false; btn.textContent = origText;
+              _lastResult = { blobUrl: r.blobUrl, filename: "helpful_query_sample.csv", rowCount: r.totalRows, cols: r.columns.length, columns: r.columns, tableName: objInput.value.trim(), data: r.rowData || [], sql: sampleSql };
+              downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block";
+              resultArea.innerHTML = "<b>" + r.totalRows.toLocaleString() + "</b> sample row" + (r.totalRows === 1 ? "" : "s") + " fetched (capped at 100). Use <b>👁 View Results</b> or <b>⬇ Download CSV</b> above.";
+            }).catch(function (err) {
+              btn.disabled = false; btn.textContent = origText;
+              resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
+            });
+          }
+        });
+      }
+      checkBtn.onclick = function () { runTemplate("count"); };
+      sampleBtn.onclick = function () { runTemplate("sample"); };
+
+      populateTemplateSel();
+      document.body.appendChild(panel);
+      objInput.focus();
     }
 
     // Build the Count result HTML (shared by a fresh count and a cache hit so they look
