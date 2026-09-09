@@ -11878,6 +11878,7 @@
     // test/query-editor-templates.test.js; keep both in sync if you change these.
     var qeTemplates = {
       existsProbe:          (obj)                       => `SELECT COUNT(*) AS row_count FROM ${sqlQuoteIdent(obj)}`,
+      fieldsProbe:          (obj)                       => `SELECT * FROM ${sqlQuoteIdent(obj)} LIMIT 1`,
       exactDuplicates:      (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} HAVING COUNT(*) > 1`,
       nullsOrBlanks:        (obj, col)                  => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(col)} IS NULL OR TRIM(${sqlQuoteIdent(col)}) = ''`,
       valueDistribution:    (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS value_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} ORDER BY COUNT(*) DESC`,
@@ -11985,6 +11986,12 @@
         probeTimer = setTimeout(function () { runProbe(name); }, 500); // debounce while typing
       });
 
+      // Field-name cache per object. Populated by fetchFieldsFor() after the object probe
+      // succeeds. ANY failure (network, permissions, empty result, timeout) leaves this
+      // unset for that object — renderFields() then falls back to a free-text input, so
+      // the user is NEVER blocked from proceeding even if the auto-fetch doesn't work.
+      var fieldsCache = {};
+
       function showProbeResult(res) {
         if (res.error) {
           objStatus.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>";
@@ -11994,6 +12001,24 @@
         objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " +
           "<span style='color:#92400e;'>Templates below scan the whole table (billed on rows processed) — cost is roughly the same whether you Count or Fetch a sample.</span>";
         templateArea.style.display = "block";
+        populateTemplateSel(); // refresh field inputs now that display is visible
+        fetchFieldsFor(objInput.value.trim());
+      }
+
+      // One extra tiny query (SELECT * LIMIT 1) to read real column names from the
+      // query's own result metadata — reuses the EXISTING qeFetchExport runner, no new
+      // query path. LIMIT 1 means at most one row of data is ever pulled, and it still
+      // returns column metadata even when the table has ZERO rows.
+      function fetchFieldsFor(name) {
+        if (fieldsCache[name]) { renderFields(); return; } // already have it (success OR failure noted)
+        var ds = readPageDataSpace();
+        qeFetchExport(qeTemplates.fieldsProbe(name), ds, function () {}, function () { return false; }).then(function (r) {
+          fieldsCache[name] = { columns: (r.columns || []).slice() };
+          if (objInput.value.trim() === name) renderFields();
+        }).catch(function () {
+          fieldsCache[name] = { columns: [] }; // failure → renderFields() falls back to free text
+          if (objInput.value.trim() === name) renderFields();
+        });
       }
 
       function runProbe(name) {
@@ -12092,6 +12117,13 @@
       // them read-only there so the object name can only ever be entered ONCE, in ONE
       // place, removing any chance of it landing in the wrong box.
       var OBJECT_FIELDS = { object: 1, childObject: 1, parentObject: 1 };
+      // Fields that name a column ON THE OBJECT TYPED ABOVE — these become a dropdown of
+      // real field names once fetchFieldsFor() succeeds for that object. NOTE: childFk and
+      // parentKey are NOT in this set — they belong to childObject/parentObject, which the
+      // user can edit to a DIFFERENT object we haven't fetched fields for. Auto-fetching
+      // for those too would mean fetching on every keystroke of two more text boxes; kept
+      // as free text intentionally rather than half-building that.
+      var OWN_OBJECT_COLUMN_FIELDS = { column: 1, dateColumn: 1, fkColumn: 1 };
 
       function renderFields() {
         fieldsWrap.innerHTML = "";
@@ -12099,13 +12131,26 @@
         var def = currentDef();
         if (!def) return;
         helpText.textContent = def.help;
+        var fetchedCols = (fieldsCache[objInput.value.trim()] || {}).columns || [];
         def.fields.forEach(function (f) {
           var row = document.createElement("div");
           var lbl = document.createElement("label");
           lbl.style.cssText = "display:block;font-size:11px;font-weight:600;margin-bottom:3px;color:#475569;";
           lbl.textContent = FIELD_LABELS[f] || f;
-          var inp = document.createElement("input");
-          inp.type = "text";
+          var inp;
+          if (OWN_OBJECT_COLUMN_FIELDS[f] && fetchedCols.length > 0) {
+            // Auto-fetch succeeded — real column names as a dropdown, can't be mistyped.
+            inp = document.createElement("select");
+            var placeholder = document.createElement("option");
+            placeholder.value = ""; placeholder.textContent = "— choose a column —";
+            inp.appendChild(placeholder);
+            fetchedCols.forEach(function (c) { var o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); });
+          } else {
+            // No fetched fields yet, fetch failed, or this field isn't fetchable (e.g.
+            // childFk/parentKey) — free-text fallback so the user is never blocked.
+            inp = document.createElement("input");
+            inp.type = "text";
+          }
           inp.dataset.field = f;
           if (OBJECT_FIELDS[f]) {
             // "object" is always THIS object — pre-filled + read-only, can't be mistyped
@@ -12113,11 +12158,12 @@
             // orphaned-FK template are editable (they name TWO different objects).
             inp.value = objInput.value.trim();
             if (f === "object") { inp.readOnly = true; inp.style.background = "#f1f5f9"; inp.style.color = "#64748b"; }
-          } else {
+          } else if (inp.tagName !== "SELECT") {
             inp.value = FIELD_DEFAULTS[f] || "";
           }
           inp.style.cssText += "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
           inp.addEventListener("input", updatePreview);
+          inp.addEventListener("change", updatePreview);
           row.appendChild(lbl); row.appendChild(inp);
           fieldsWrap.appendChild(row);
         });

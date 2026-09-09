@@ -47,6 +47,7 @@ console.log("\n1. Identifier quoting (injection-safety)");
 // ─────────────────────────────────────────────────────────────────────────────
 const T = {
   existsProbe: (obj) => `SELECT COUNT(*) AS row_count FROM ${qId(obj)}`,
+  fieldsProbe: (obj) => `SELECT * FROM ${qId(obj)} LIMIT 1`,
 
   exactDuplicates: (obj, col) =>
     `SELECT ${qId(col)}, COUNT(*) AS dup_count FROM ${qId(obj)} GROUP BY ${qId(col)} HAVING COUNT(*) > 1`,
@@ -139,6 +140,31 @@ console.log("\n3. Existence/size probe SQL");
   eq("plain COUNT(*), no WHERE/GROUP BY (metadata-answerable)", T.existsProbe("TDI_Individual__dlm"),
     'SELECT COUNT(*) AS row_count FROM "TDI_Individual__dlm"');
   ok("probe has no WHERE/GROUP BY/JOIN (stays cheap)", !/WHERE|GROUP BY|JOIN/i.test(T.existsProbe("X__dlm")));
+
+  eq("fields probe: SELECT * LIMIT 1 (works even on an empty table)", T.fieldsProbe("TDI_Individual__dlm"),
+    'SELECT * FROM "TDI_Individual__dlm" LIMIT 1');
+  ok("fields probe has LIMIT so it can never fetch a real row's worth of data", /LIMIT 1$/.test(T.fieldsProbe("X__dlm")));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Field auto-fetch → dropdown, with a free-text fallback if the fetch fails.
+// The user chose "auto-fetch + dropdown with manual fallback": success shows a
+// dropdown of real column names; ANY failure (network, permissions, timeout)
+// must fall back to a free-text input, NEVER block the user from proceeding.
+// ─────────────────────────────────────────────────────────────────────────────
+function decideColumnInputMode(fetchResult) {
+  if (!fetchResult) return "text"; // never fetched (e.g. fetch not yet attempted)
+  if (fetchResult.error) return "text"; // any failure → fallback, never block
+  if (!Array.isArray(fetchResult.columns) || fetchResult.columns.length === 0) return "text"; // empty/malformed → fallback
+  return "dropdown";
+}
+console.log("\n3b. Field auto-fetch → dropdown-or-fallback decision");
+{
+  eq("no fetch attempted yet → text fallback", decideColumnInputMode(null), "text");
+  eq("fetch succeeded with columns → dropdown", decideColumnInputMode({ columns: ["email__c", "phone__c"] }), "dropdown");
+  eq("fetch errored → text fallback (never blocks the user)", decideColumnInputMode({ error: "timeout" }), "text");
+  eq("fetch succeeded but empty columns array → text fallback", decideColumnInputMode({ columns: [] }), "text");
+  eq("fetch returned malformed (non-array) columns → text fallback", decideColumnInputMode({ columns: "not-an-array" }), "text");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
