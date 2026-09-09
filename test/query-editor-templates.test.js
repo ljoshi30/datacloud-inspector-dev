@@ -45,6 +45,18 @@ console.log("\n1. Identifier quoting (injection-safety)");
 //    strings (object name, column name(s), N) and returns the exact SQL string
 //    that would be handed to runQeCount/qeFetchExport.
 // ─────────────────────────────────────────────────────────────────────────────
+// Accepts EITHER a plain date (YYYY-MM-DD) or a full timestamp (YYYY-MM-DD HH:MM:SS,
+// optionally with fractional seconds; "T" separator from a datetime-local picker is
+// normalized to a space). Returns the correctly-typed SQL literal (DATE '...' vs
+// TIMESTAMP '...' — both confirmed in the Data 360 SQL reference), or null if the
+// input matches neither shape (caller must reject, never guess).
+function dateOrTimestampLiteral(raw) {
+  const v = String(raw).trim().replace("T", " ");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return "DATE '" + v + "'";
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) return "TIMESTAMP '" + v + "'";
+  return null;
+}
+
 const T = {
   existsProbe: (obj) => `SELECT COUNT(*) AS row_count FROM ${qId(obj)}`,
   fieldsProbe: (obj) => `SELECT * FROM ${qId(obj)} LIMIT 1`,
@@ -62,7 +74,7 @@ const T = {
     `SELECT UPPER(TRIM(${qId(col)})) AS normalized_value, COUNT(*) AS dup_count FROM ${qId(obj)} GROUP BY UPPER(TRIM(${qId(col)})) HAVING COUNT(*) > 1`,
 
   betweenDates: (obj, dateCol, from, to) =>
-    `SELECT * FROM ${qId(obj)} WHERE ${qId(dateCol)} BETWEEN DATE '${from}' AND DATE '${to}'`,
+    `SELECT * FROM ${qId(obj)} WHERE ${qId(dateCol)} BETWEEN ${dateOrTimestampLiteral(from)} AND ${dateOrTimestampLiteral(to)}`,
 
   orphanedForeignKey: (childObj, childFk, parentObj, parentKey) =>
     `SELECT c.* FROM ${qId(childObj)} c LEFT JOIN ${qId(parentObj)} p ON c.${qId(childFk)} = p.${qId(parentKey)} WHERE p.${qId(parentKey)} IS NULL`,
@@ -103,8 +115,12 @@ console.log("\n2. Template SQL builders (exact output)");
   eq("normalizedDuplicates", T.normalizedDuplicates("Contact__dlm", "name__c"),
     'SELECT UPPER(TRIM("name__c")) AS normalized_value, COUNT(*) AS dup_count FROM "Contact__dlm" GROUP BY UPPER(TRIM("name__c")) HAVING COUNT(*) > 1');
 
-  eq("betweenDates", T.betweenDates("Order__dlm", "order_date__c", "2026-01-01", "2026-03-31"),
+  eq("betweenDates with plain dates", T.betweenDates("Order__dlm", "order_date__c", "2026-01-01", "2026-03-31"),
     `SELECT * FROM "Order__dlm" WHERE "order_date__c" BETWEEN DATE '2026-01-01' AND DATE '2026-03-31'`);
+  eq("betweenDates with full timestamps", T.betweenDates("Order__dlm", "order_date__c", "2026-01-01 09:00:00", "2026-01-01 17:30:00"),
+    `SELECT * FROM "Order__dlm" WHERE "order_date__c" BETWEEN TIMESTAMP '2026-01-01 09:00:00' AND TIMESTAMP '2026-01-01 17:30:00'`);
+  eq("betweenDates mixing date + timestamp (both forms independently valid)", T.betweenDates("Order__dlm", "order_date__c", "2026-01-01", "2026-01-01 17:30:00"),
+    `SELECT * FROM "Order__dlm" WHERE "order_date__c" BETWEEN DATE '2026-01-01' AND TIMESTAMP '2026-01-01 17:30:00'`);
 
   eq("orphanedForeignKey", T.orphanedForeignKey("ContactPointEmail__dlm", "PartyId__c", "Individual__dlm", "Id__c"),
     'SELECT c.* FROM "ContactPointEmail__dlm" c LEFT JOIN "Individual__dlm" p ON c."PartyId__c" = p."Id__c" WHERE p."Id__c" IS NULL');
@@ -129,6 +145,25 @@ console.log("\n2. Template SQL builders (exact output)");
 
   eq("trendByPeriod month", T.trendByPeriod("Order__dlm", "order_date__c", "month"),
     "SELECT DATE_TRUNC('month', \"order_date__c\") AS period, COUNT(*) AS record_count FROM \"Order__dlm\" GROUP BY DATE_TRUNC('month', \"order_date__c\") ORDER BY period");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b. dateOrTimestampLiteral — accepts a plain date OR a full timestamp so users
+//    can filter down to the hour/minute/second, not just whole days. Both forms
+//    are documented (DATE '...' and TIMESTAMP '...' literals). Rejects anything
+//    that matches neither shape rather than guessing.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n2b. dateOrTimestampLiteral (date-only OR full timestamp)");
+{
+  eq("plain date", dateOrTimestampLiteral("2026-01-01"), "DATE '2026-01-01'");
+  eq("timestamp with seconds", dateOrTimestampLiteral("2026-01-01 09:30:00"), "TIMESTAMP '2026-01-01 09:30:00'");
+  eq("timestamp without seconds (HH:MM only)", dateOrTimestampLiteral("2026-01-01 09:30"), "TIMESTAMP '2026-01-01 09:30'");
+  eq("timestamp with fractional seconds", dateOrTimestampLiteral("2026-01-01 09:30:00.123"), "TIMESTAMP '2026-01-01 09:30:00.123'");
+  eq("datetime-local picker's 'T' separator is normalized to a space", dateOrTimestampLiteral("2026-01-01T09:30:00"), "TIMESTAMP '2026-01-01 09:30:00'");
+  eq("surrounding whitespace trimmed", dateOrTimestampLiteral("  2026-01-01  "), "DATE '2026-01-01'");
+  eq("garbage input rejected (null, not a guess)", dateOrTimestampLiteral("01/01/2026"), null);
+  eq("empty string rejected", dateOrTimestampLiteral(""), null);
+  eq("SQL-injection-shaped input rejected, not passed through", dateOrTimestampLiteral("2026-01-01' OR '1'='1"), null);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +315,32 @@ console.log("\n5. Field-label collision guard (real source, not a copy)");
     TEMPLATE_DEFS.forEach(function (def) { def.fields.forEach(function (f) { allFields.add(f); }); });
     var missingLabel = [...allFields].filter(function (f) { return !FIELD_LABELS[f]; });
     eq("every field used by a template has an explicit label", missingLabel.length, 0);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. fieldVal() selector guard — regression test for a REAL bug: a column dropdown
+//    renders as <select>, but fieldVal() originally used the selector
+//    "input[data-field='x']" which only matches <input> — so a chosen dropdown value
+//    was silently ignored (fieldVal always returned "" for a <select>). Extracts the
+//    REAL function source from console-decorate.js and asserts the selector can match
+//    ANY tag with that data-field attribute, not just <input>.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n6. fieldVal() selector guard (must match <select>, not just <input>)");
+{
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const m = src.match(/function fieldVal\([^)]*\)\s*\{[^}]*\}/);
+  ok("fieldVal() found in source", !!m);
+  if (m) {
+    const fnSrc = m[0];
+    // The exact regression: a selector hard-coded to the "input" tag can never match a
+    // <select data-field="..."> dropdown.
+    ok("selector is NOT restricted to input[data-field=...] (the exact bug)", !/input\[data-field/.test(fnSrc), fnSrc);
+    // A bare attribute selector — [data-field='x'] — matches any element regardless of
+    // tag name, which is what's needed since fields render as either <input> or <select>.
+    ok("selector uses a bare [data-field=...] attribute match (works for input AND select)", /(?<!input|select)\[data-field/.test(fnSrc), fnSrc);
   }
 }
 

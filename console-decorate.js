@@ -11872,6 +11872,18 @@
     }
 
     // ── Helpful Queries: template SQL builders ──────────────────────────────────
+    // Accepts EITHER a plain date (YYYY-MM-DD) or a full timestamp (YYYY-MM-DD HH:MM:SS,
+    // optional fractional seconds; "T" from a datetime-local picker normalized to a
+    // space) and returns the correctly-typed SQL literal — DATE '...' or TIMESTAMP '...',
+    // both confirmed in the Data 360 SQL reference. Returns null (never a guess) if the
+    // input matches neither shape. Mirrored in test/query-editor-templates.test.js.
+    function dateOrTimestampLiteral(raw) {
+      var v = String(raw).trim().replace("T", " ");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return "DATE '" + v + "'";
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) return "TIMESTAMP '" + v + "'";
+      return null;
+    }
+
     // Every function used here (TRIM, UPPER, CURRENT_DATE, INTERVAL, DATE_TRUNC,
     // LEFT JOIN, GROUP BY/HAVING, TRY_CAST) is documented in the Data 360 SQL
     // reference — verified before writing this, nothing invented. Mirrored 1:1 in
@@ -11883,7 +11895,7 @@
       nullsOrBlanks:        (obj, col)                  => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(col)} IS NULL OR TRIM(${sqlQuoteIdent(col)}) = ''`,
       valueDistribution:    (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS value_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} ORDER BY COUNT(*) DESC`,
       normalizedDuplicates: (obj, col)                  => `SELECT UPPER(TRIM(${sqlQuoteIdent(col)})) AS normalized_value, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY UPPER(TRIM(${sqlQuoteIdent(col)})) HAVING COUNT(*) > 1`,
-      betweenDates:         (obj, dateCol, from, to)      => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} BETWEEN DATE '${from}' AND DATE '${to}'`,
+      betweenDates:         (obj, dateCol, from, to)      => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} BETWEEN ${dateOrTimestampLiteral(from)} AND ${dateOrTimestampLiteral(to)}`,
       orphanedForeignKey:   (childObj, childFk, parentObj, parentKey) => `SELECT c.* FROM ${sqlQuoteIdent(childObj)} c LEFT JOIN ${sqlQuoteIdent(parentObj)} p ON c.${sqlQuoteIdent(childFk)} = p.${sqlQuoteIdent(parentKey)} WHERE p.${sqlQuoteIdent(parentKey)} IS NULL`,
       cardinalityCheck:     (obj, fkCol, expected)       => `SELECT ${sqlQuoteIdent(fkCol)}, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
       irConsolidationRate:  ()                          => `SELECT IndividualIdentityLink__dlm.ssot__DataSourceId__c AS DataSourceId__c, IndividualIdentityLink__dlm.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(IndividualIdentityLink__dlm.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c)/COUNT(IndividualIdentityLink__dlm.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM IndividualIdentityLink__dlm GROUP BY DataSourceId__c, DataSourceObjectId__c`,
@@ -11901,33 +11913,50 @@
     function qeValidatePositiveInt(n) { var v = Number(n); return Number.isFinite(v) && v > 0 && Math.floor(v) === v; }
     function qeValidateNonNegativeInt(n) { var v = Number(n); return Number.isFinite(v) && v >= 0 && Math.floor(v) === v; }
 
+    // `example(obj)` returns a ONE-SENTENCE, OBJECT-SPECIFIC instantiation of the
+    // template, shown live under the help text as soon as an object name is typed —
+    // per user request, so it's obvious what a template does BEFORE picking columns,
+    // not just a generic description. obj is always the (already-validated) object name.
     var TEMPLATE_DEFS = [
       { key: "exactDuplicates",      label: "Exact duplicates",              group: "Data quality", fields: ["object", "column"],
-        help: "Finds rows where a column's value repeats exactly (e.g. same email twice)." },
+        help: "Finds rows where a column's value repeats exactly (e.g. same email twice).",
+        example: function (obj) { return "Example: finds every value in a column of " + obj + " that appears on 2 or more rows — e.g. the same email twice."; } },
       { key: "nullsOrBlanks",        label: "Nulls / blanks in a field",     group: "Data quality", fields: ["object", "column"],
-        help: "Finds rows where a field is empty or blank." },
+        help: "Finds rows where a field is empty or blank.",
+        example: function (obj) { return "Example: finds every row in " + obj + " where the column you pick is empty or blank."; } },
       { key: "valueDistribution",    label: "Value distribution",            group: "Data quality", fields: ["object", "column"],
-        help: "Counts how many rows have each distinct value — good for spotting typos/variants (e.g. 'CA' vs 'California')." },
+        help: "Counts how many rows have each distinct value — good for spotting typos/variants (e.g. 'CA' vs 'California').",
+        example: function (obj) { return "Example: lists every distinct value in a column of " + obj + " with a count, most common first — good for spotting 'CA' vs 'California'."; } },
       { key: "normalizedDuplicates", label: "Normalized duplicate check",    group: "Data quality", fields: ["object", "column"],
-        help: "Like exact duplicates, but ignores case and leading/trailing spaces (e.g. 'John Smith' vs 'john smith  ')." },
+        help: "Like exact duplicates, but ignores case and leading/trailing spaces (e.g. 'John Smith' vs 'john smith  ').",
+        example: function (obj) { return "Example: in " + obj + ", finds 'John Smith', 'john smith', and 'JOHN SMITH  ' as ONE duplicate, not three separate values."; } },
       { key: "safeTypeCheck",        label: "Invalid values for a type",     group: "Data quality", fields: ["object", "column", "type"],
-        help: "Finds non-empty values that can't actually convert to the type they should be (e.g. text that isn't really a date)." },
+        help: "Finds non-empty values that can't actually convert to the type they should be (e.g. text that isn't really a date).",
+        example: function (obj) { return "Example: finds rows in " + obj + " where a column has text that can't actually convert to the type you expect (e.g. \"N/A\" in a column that should be a date)."; } },
       { key: "orphanedForeignKey",   label: "Orphaned foreign key",          group: "Relationships", fields: ["childObject", "childFk", "parentObject", "parentKey"],
-        help: "Finds child rows whose foreign key doesn't match any row in the parent object. Both object boxes below start filled with the object you typed above — change \"Parent object\" to the RELATED object you're checking against." },
+        help: "Finds child rows whose foreign key doesn't match any row in the parent object. Both object boxes below start filled with the object you typed above — change \"Parent object\" to the RELATED object you're checking against.",
+        example: function (obj) { return "Example: finds rows in " + obj + " whose foreign key points to a record that doesn't exist in the related (parent) object — a broken link."; } },
       { key: "cardinalityCheck",     label: "Relationship cardinality check", group: "Relationships", fields: ["object", "fkColumn", "expected"],
-        help: "Finds foreign-key groups that don't have the expected number of rows (e.g. should be exactly 1 primary contact per account)." },
+        help: "Finds foreign-key groups that don't have the expected number of rows (e.g. should be exactly 1 primary contact per account).",
+        example: function (obj) { return "Example: groups " + obj + " by a foreign key and flags any group that doesn't have exactly the count you expect (e.g. should be exactly 1 primary contact per account)."; } },
       { key: "irConsolidationRate",  label: "Identity Resolution consolidation rate", group: "Relationships", fields: [],
-        help: "Salesforce-documented check: consolidation rate per source in IndividualIdentityLink__dlm. An unexpectedly high rate can flag data-quality issues in a source." },
+        help: "Salesforce-documented check: consolidation rate per source in IndividualIdentityLink__dlm. An unexpectedly high rate can flag data-quality issues in a source.",
+        example: function () { return "Example: shows, per source system, what % of source records got merged into fewer unified profiles — a surprisingly HIGH rate can mean that source has data-quality issues."; } },
       { key: "freshnessCheck",       label: "Freshness check (older than N days)", group: "Date", fields: ["object", "dateColumn", "days"],
-        help: "\"Has this stopped updating?\" — finds rows where the date column is MORE than N days in the past. Example: Days=90 on last_modified_date finds every row not touched in the last 3 months. Uses today's date automatically — you never type a date." },
+        help: "\"Has this stopped updating?\" — finds rows where the date column is MORE than N days in the past. Example: Days=90 on last_modified_date finds every row not touched in the last 3 months. Uses today's date automatically — you never type a date.",
+        example: function (obj) { return "Example: finds rows in " + obj + " where a date column is MORE than N days old as of right now — \"has this stopped updating?\" You never type today's date, it's automatic."; } },
       { key: "rollingWindow",        label: "Rolling window (last N days)",  group: "Date", fields: ["object", "dateColumn", "days"],
-        help: "The opposite of Freshness check — finds rows WITHIN the last N days (recent activity). Example: Days=7 on created_date finds everything created this week. Uses today's date automatically." },
+        help: "The opposite of Freshness check — finds rows WITHIN the last N days (recent activity). Example: Days=7 on created_date finds everything created this week. Uses today's date automatically.",
+        example: function (obj) { return "Example: finds rows in " + obj + " from the last N days as of right now — recent activity. Also automatic, no date typing."; } },
       { key: "betweenDates",         label: "Records between two dates",     group: "Date", fields: ["object", "dateColumn", "fromDate", "toDate"],
-        help: "Finds rows where the date column falls between two SPECIFIC dates you choose (not relative to today). Example: From=2026-01-01, To=2026-03-31 finds every row in Q1. Type dates as YYYY-MM-DD." },
+        help: "Finds rows where the date column falls between two SPECIFIC points in time you choose (not relative to today). Example: From=2026-01-01, To=2026-03-31 finds every row in Q1. Accepts a plain date (2026-01-01) OR a full timestamp with time (2026-01-01 14:30:00) — paste one, use the picker, or click \"Now\" for the current moment.",
+        example: function (obj) { return "Example: finds rows in " + obj + " between two SPECIFIC points in time you choose yourself — not relative to today. Use this instead of Freshness/Rolling window when you need an exact range (e.g. all of Q1), not \"the last N days\"."; } },
       { key: "recordAge",            label: "Record age (add a days-old column)", group: "Date", fields: ["object", "dateColumn"],
-        help: "Doesn't filter anything — just ADDS a days_old column to every row so you can see/sort by age. Example: on created_date, a row created 45 days ago shows days_old=45." },
+        help: "Doesn't filter anything — just ADDS a days_old column to every row so you can see/sort by age. Example: on created_date, a row created 45 days ago shows days_old=45.",
+        example: function (obj) { return "Example: shows every row of " + obj + " with a NEW days_old column added — doesn't filter anything, just lets you see/sort by age."; } },
       { key: "trendByPeriod",        label: "Trend by period (rows per day/week/month…)", group: "Date", fields: ["object", "dateColumn", "period"],
-        help: "Counts how many rows fall into each day/week/month/quarter/year — a quick trend rollup, e.g. \"how many records were created each month?\" Type one word for Period: day, week, month, quarter, or year." },
+        help: "Counts how many rows fall into each day/week/month/quarter/year — a quick trend rollup, e.g. \"how many records were created each month?\" Type one word for Period: day, week, month, quarter, or year.",
+        example: function (obj) { return "Example: counts how many rows of " + obj + " fall into each day/week/month/quarter/year you pick — \"how many were created each month?\""; } },
     ];
 
     var templatesPanelEl = null;
@@ -12055,8 +12084,15 @@
       templateArea.appendChild(templateSel);
 
       var helpText = document.createElement("div");
-      helpText.style.cssText = "font-size:11px;color:#64748b;margin-bottom:10px;line-height:1.5;";
+      helpText.style.cssText = "font-size:11px;color:#64748b;margin-bottom:6px;line-height:1.5;";
       templateArea.appendChild(helpText);
+
+      // Live, OBJECT-SPECIFIC example — instantiates the template's example() with the
+      // object name actually typed above, so it's obvious what will happen before
+      // picking any columns (per user request — a generic description wasn't enough).
+      var exampleText = document.createElement("div");
+      exampleText.style.cssText = "font-size:11px;color:#0d6efd;background:#eff6ff;border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.5;";
+      templateArea.appendChild(exampleText);
 
       var fieldsWrap = document.createElement("div");
       fieldsWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:10px;";
@@ -12109,8 +12145,8 @@
         days: "Days (whole number)",
         type: "Expected type (e.g. DATE, INTEGER, NUMERIC)",
         period: "Period — type one: day, week, month, quarter, year",
-        fromDate: "From date (YYYY-MM-DD)",
-        toDate: "To date (YYYY-MM-DD)",
+        fromDate: "From — type/paste a date or timestamp, use the picker, or click Now",
+        toDate: "To — type/paste a date or timestamp, use the picker, or click Now",
       };
       var FIELD_DEFAULTS = { days: "90", expected: "1", type: "DATE", period: "month" };
       // Fields that mean "an object name" — pre-fill from the Object box above and lock
@@ -12128,10 +12164,13 @@
       function renderFields() {
         fieldsWrap.innerHTML = "";
         helpText.textContent = "";
+        exampleText.textContent = "";
         var def = currentDef();
         if (!def) return;
         helpText.textContent = def.help;
-        var fetchedCols = (fieldsCache[objInput.value.trim()] || {}).columns || [];
+        var objName = objInput.value.trim();
+        if (objName && typeof def.example === "function") { try { exampleText.textContent = "💡 " + def.example(objName); } catch (e) {} }
+        var fetchedCols = (fieldsCache[objName] || {}).columns || [];
         def.fields.forEach(function (f) {
           var row = document.createElement("div");
           var lbl = document.createElement("label");
@@ -12164,14 +12203,50 @@
           inp.style.cssText += "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
           inp.addEventListener("input", updatePreview);
           inp.addEventListener("change", updatePreview);
-          row.appendChild(lbl); row.appendChild(inp);
+          row.appendChild(lbl);
+          if (f === "fromDate" || f === "toDate") {
+            // Date/time fields get THREE ways to fill them (per user request: "if user
+            // pastes [a timestamp] otherwise date picker will also helpful"):
+            //   1. Type/paste directly into the text box (accepts date OR full timestamp)
+            //   2. A native datetime-local picker — click the calendar icon, pick visually
+            //   3. "Now" button — one click = today's date + current time, no typing at all
+            var inputRow = document.createElement("div");
+            inputRow.style.cssText = "display:flex;gap:6px;";
+            inp.style.flex = "1";
+            var picker = document.createElement("input");
+            picker.type = "datetime-local";
+            picker.title = "Pick a date and time visually — fills the box on the left";
+            picker.style.cssText = "border:1px solid #cbd5e1;border-radius:6px;padding:6px 6px;font:12px -apple-system,sans-serif;width:130px;";
+            picker.addEventListener("change", function () {
+              if (picker.value) { inp.value = picker.value.replace("T", " ") + ":00"; updatePreview(); }
+            });
+            var nowBtn = document.createElement("button");
+            nowBtn.type = "button";
+            nowBtn.textContent = "Now";
+            nowBtn.title = "Fill with today's date and the current time";
+            nowBtn.style.cssText = "border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px;padding:6px 10px;font:600 11px -apple-system,sans-serif;color:#1e3a5f;cursor:pointer;white-space:nowrap;";
+            nowBtn.addEventListener("click", function () {
+              var d = new Date();
+              var pad = function (n) { return String(n).padStart(2, "0"); };
+              inp.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+              updatePreview();
+            });
+            inputRow.appendChild(inp); inputRow.appendChild(picker); inputRow.appendChild(nowBtn);
+            row.appendChild(inputRow);
+          } else {
+            row.appendChild(inp);
+          }
           fieldsWrap.appendChild(row);
         });
         updatePreview();
       }
       templateSel.onchange = renderFields;
 
-      function fieldVal(name) { var el = fieldsWrap.querySelector("input[data-field='" + name + "']"); return el ? el.value.trim() : ""; }
+      // BUG FIX: a column dropdown renders as <select>, not <input> — the old selector
+      // ("input[data-field=...]") never matched it, so a chosen dropdown value was
+      // silently ignored and validation always saw "" ("must contain only letters,
+      // numbers, underscores") even with a value visibly selected. Match either tag.
+      function fieldVal(name) { var el = fieldsWrap.querySelector("[data-field='" + name + "']"); return el ? el.value.trim() : ""; }
 
       // Builds the SQL for the current template + field values, or returns {error} if
       // any input fails validation. NEVER returns a SQL string built from bad input.
@@ -12185,7 +12260,7 @@
           if (f === "expected") { if (!qeValidateNonNegativeInt(v)) return { error: "Expected count must be a non-negative whole number." }; vals[f] = parseInt(v, 10); continue; }
           if (f === "type") { if (!/^[A-Za-z]+$/.test(v)) return { error: "Type must be a plain SQL type name (e.g. DATE, INTEGER)." }; vals[f] = v.toUpperCase(); continue; }
           if (f === "period") { if (!/^(day|week|month|quarter|year)$/i.test(v)) return { error: "Period must be day, week, month, quarter, or year." }; vals[f] = v.toLowerCase(); continue; }
-          if (f === "fromDate" || f === "toDate") { if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return { error: (FIELD_LABELS[f] || f) + " must be in YYYY-MM-DD format (e.g. 2026-01-31)." }; vals[f] = v; continue; }
+          if (f === "fromDate" || f === "toDate") { if (!dateOrTimestampLiteral(v)) return { error: (FIELD_LABELS[f] || f) + " must be a date (2026-01-31) or a full timestamp (2026-01-31 14:30:00)." }; vals[f] = v; continue; }
           if (!qeValidIdent(v)) return { error: (FIELD_LABELS[f] || f) + " must contain only letters, numbers, and underscores." };
           vals[f] = v;
         }
