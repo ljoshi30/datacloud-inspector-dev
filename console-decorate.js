@@ -11902,7 +11902,12 @@
       betweenDates:         (obj, dateCol, from, to)      => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} BETWEEN ${dateOrTimestampLiteral(from)} AND ${dateOrTimestampLiteral(to)}`,
       orphanedForeignKey:   (childObj, childFk, parentObj, parentKey) => `SELECT c.* FROM ${sqlQuoteIdent(childObj)} c LEFT JOIN ${sqlQuoteIdent(parentObj)} p ON c.${sqlQuoteIdent(childFk)} = p.${sqlQuoteIdent(parentKey)} WHERE p.${sqlQuoteIdent(parentKey)} IS NULL`,
       cardinalityCheck:     (obj, fkCol, expected)       => `SELECT ${sqlQuoteIdent(fkCol)}, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
-      irConsolidationRate:  ()                          => `SELECT IndividualIdentityLink__dlm.ssot__DataSourceId__c AS DataSourceId__c, IndividualIdentityLink__dlm.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(IndividualIdentityLink__dlm.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c)/COUNT(IndividualIdentityLink__dlm.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM IndividualIdentityLink__dlm GROUP BY DataSourceId__c, DataSourceObjectId__c`,
+      // linkDmo is user-supplied — an org can have MULTIPLE Identity Resolution rulesets,
+      // each producing its own separately-named link DMO (e.g. IndividualIdentityLink__dlm,
+      // UnifiedLinkssotAccount001__dlm, ...). There is no single universal name and no
+      // SQL-queryable catalog to auto-discover it, so — same as every other object field
+      // in this panel — the user types the exact one they want to check.
+      irConsolidationRate:  (linkDmo) => { var t = sqlQuoteIdent(linkDmo); return `SELECT ${t}.ssot__DataSourceId__c AS DataSourceId__c, ${t}.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(${t}.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c)/COUNT(${t}.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM ${t} GROUP BY DataSourceId__c, DataSourceObjectId__c`; },
       safeTypeCheck:        (obj, col, type)             => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE TRY_CAST(${sqlQuoteIdent(col)} AS ${type}) IS NULL AND ${sqlQuoteIdent(col)} IS NOT NULL`,
       freshnessCheck:       (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} < CURRENT_DATE - INTERVAL '${Number(days)} days'`,
       recordAge:            (obj, dateCol)               => `SELECT *, CURRENT_DATE - ${sqlQuoteIdent(dateCol)} AS days_old FROM ${sqlQuoteIdent(obj)}`,
@@ -11943,9 +11948,9 @@
       { key: "cardinalityCheck",     label: "Relationship cardinality check", group: "Relationships", fields: ["object", "fkColumn", "expected"],
         help: "Finds foreign-key groups that don't have the expected number of rows (e.g. should be exactly 1 primary contact per account).",
         example: function (obj) { return "Example: groups " + obj + " by a foreign key and flags any group that doesn't have exactly the count you expect (e.g. should be exactly 1 primary contact per account)."; } },
-      { key: "irConsolidationRate",  label: "Identity Resolution consolidation rate", group: "Relationships", fields: [],
-        help: "Salesforce-documented check: consolidation rate per source in IndividualIdentityLink__dlm. An unexpectedly high rate can flag data-quality issues in a source.",
-        example: function () { return "Example: shows, per source system, what % of source records got merged into fewer unified profiles — a surprisingly HIGH rate can mean that source has data-quality issues."; } },
+      { key: "irConsolidationRate",  label: "Identity Resolution consolidation rate", group: "Relationships", fields: ["linkDmo"],
+        help: "Salesforce-documented check: consolidation rate per source, using the Identity Resolution LINK DMO for one ruleset (e.g. IndividualIdentityLink__dlm, UnifiedLinkssotAccount001__dlm). An org can have MULTIPLE IDR rulesets, each with its OWN link DMO — type the exact name of the one you want to check (see it under Data Model / your ruleset's summary page). An unexpectedly high rate can flag data-quality issues in a source.",
+        example: function () { return "Example: for the link DMO you type below, shows per source system what % of source records got merged into fewer unified profiles — a surprisingly HIGH rate can mean that source has data-quality issues. Run it again with a different org's link DMO to check another IDR ruleset."; } },
       { key: "freshnessCheck",       label: "Freshness check (older than N days)", group: "Date", fields: ["object", "dateColumn", "days"],
         help: "\"Has this stopped updating?\" — finds rows where the date column is MORE than N days in the past. Example: Days=90 on last_modified_date finds every row not touched in the last 3 months. Uses today's date automatically — you never type a date.",
         example: function (obj) { return "Example: finds rows in " + obj + " where a date column is MORE than N days old as of right now — \"has this stopped updating?\" You never type today's date, it's automatic."; } },
@@ -12155,6 +12160,7 @@
         period: "Period — type one: day, week, month, quarter, year",
         fromDate: "From — type/paste a date or timestamp, use the picker, or click Now",
         toDate: "To — type/paste a date or timestamp, use the picker, or click Now",
+        linkDmo: "Identity Resolution link DMO (e.g. IndividualIdentityLink__dlm)",
       };
       var FIELD_DEFAULTS = { days: "90", expected: "1", type: "DATE", period: "month" };
       // Fields that mean "an object name" — pre-fill from the Object box above and lock
@@ -12296,7 +12302,7 @@
             case "safeTypeCheck":        return { sql: qeTemplates.safeTypeCheck(vals.object, vals.column, vals.type) };
             case "orphanedForeignKey":   return { sql: qeTemplates.orphanedForeignKey(vals.childObject, vals.childFk, vals.parentObject, vals.parentKey) };
             case "cardinalityCheck":     return { sql: qeTemplates.cardinalityCheck(vals.object, vals.fkColumn, vals.expected) };
-            case "irConsolidationRate":  return { sql: qeTemplates.irConsolidationRate() };
+            case "irConsolidationRate":  return { sql: qeTemplates.irConsolidationRate(vals.linkDmo) };
             case "freshnessCheck":       return { sql: qeTemplates.freshnessCheck(vals.object, vals.dateColumn, vals.days) };
             case "betweenDates":         return { sql: qeTemplates.betweenDates(vals.object, vals.dateColumn, vals.fromDate, vals.toDate) };
             case "rollingWindow":        return { sql: qeTemplates.rollingWindow(vals.object, vals.dateColumn, vals.days) };

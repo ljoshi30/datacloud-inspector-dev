@@ -82,8 +82,15 @@ const T = {
   cardinalityCheck: (obj, fkCol, expected) =>
     `SELECT ${qId(fkCol)}, COUNT(*) AS record_count FROM ${qId(obj)} GROUP BY ${qId(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
 
-  irConsolidationRate: () =>
-    `SELECT IndividualIdentityLink__dlm.ssot__DataSourceId__c AS DataSourceId__c, IndividualIdentityLink__dlm.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(IndividualIdentityLink__dlm.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c)/COUNT(IndividualIdentityLink__dlm.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM IndividualIdentityLink__dlm GROUP BY DataSourceId__c, DataSourceObjectId__c`,
+  // linkDmo is now a user-supplied field — orgs can have MULTIPLE Identity Resolution
+  // rulesets, each producing its own separately-named link DMO (e.g.
+  // IndividualIdentityLink__dlm, UnifiedLinkssotAccount001__dlm, ...); there is no single
+  // universal name, so we can no longer hardcode it. Query shape otherwise unchanged from
+  // Salesforce's own documented example — only the FROM/table-reference is now dynamic.
+  irConsolidationRate: (linkDmo) => {
+    const t = qId(linkDmo);
+    return `SELECT ${t}.ssot__DataSourceId__c AS DataSourceId__c, ${t}.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(${t}.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c)/COUNT(${t}.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM ${t} GROUP BY DataSourceId__c, DataSourceObjectId__c`;
+  },
 
   safeTypeCheck: (obj, col, type) =>
     `SELECT * FROM ${qId(obj)} WHERE TRY_CAST(${qId(col)} AS ${type}) IS NULL AND ${qId(col)} IS NOT NULL`,
@@ -128,8 +135,13 @@ console.log("\n2. Template SQL builders (exact output)");
   eq("cardinalityCheck expected=1", T.cardinalityCheck("ContactPointPhone__dlm", "PartyId__c", 1),
     'SELECT "PartyId__c", COUNT(*) AS record_count FROM "ContactPointPhone__dlm" GROUP BY "PartyId__c" HAVING COUNT(*) <> 1');
 
-  ok("irConsolidationRate matches documented query shape", /IndividualIdentityLink__dlm/.test(T.irConsolidationRate()) &&
-    /APPROX_COUNT_DISTINCT/.test(T.irConsolidationRate()) && /GROUP BY DataSourceId__c, DataSourceObjectId__c/.test(T.irConsolidationRate()));
+  ok("irConsolidationRate uses the user-supplied link DMO name", /"IndividualIdentityLink__dlm"/.test(T.irConsolidationRate("IndividualIdentityLink__dlm")) &&
+    /APPROX_COUNT_DISTINCT/.test(T.irConsolidationRate("IndividualIdentityLink__dlm")) && /GROUP BY DataSourceId__c, DataSourceObjectId__c/.test(T.irConsolidationRate("IndividualIdentityLink__dlm")));
+  ok("irConsolidationRate is DYNAMIC — a DIFFERENT link DMO produces a DIFFERENT query (multi-IDR support)",
+    T.irConsolidationRate("UnifiedLinkssotAccount001__dlm").includes('"UnifiedLinkssotAccount001__dlm"') &&
+    !T.irConsolidationRate("UnifiedLinkssotAccount001__dlm").includes("IndividualIdentityLink__dlm"));
+  eq("irConsolidationRate quotes+escapes the link DMO identifier (same safety as every other object field)",
+    T.irConsolidationRate('Weird"Dmo').includes('"Weird""Dmo"'), true);
 
   eq("safeTypeCheck DATE", T.safeTypeCheck("Order__dlm", "order_date__c", "DATE"),
     'SELECT * FROM "Order__dlm" WHERE TRY_CAST("order_date__c" AS DATE) IS NULL AND "order_date__c" IS NOT NULL');
