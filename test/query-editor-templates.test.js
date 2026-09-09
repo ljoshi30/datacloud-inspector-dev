@@ -436,5 +436,27 @@ console.log("\n10. Heavy-query Count error is rewritten to the panel's own butto
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 11. Info-card viewport clamp — the Count-result "card" sits in a bottom-anchored,
+//    column-reverse flex container; at higher browser zoom (smaller effective viewport)
+//    or after the FAB is dragged near the top, its old fixed max-height guess let it
+//    push off the TOP of the screen with no way to see the cut-off content. Verifies
+//    the dynamic clamp function exists, recalculates from the REAL remaining space
+//    (not a hardcoded constant), and is wired to both zoom/resize and content changes.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n11. Info-card viewport clamp (zoom / drag no longer cuts it off)");
+{
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  ok("clampQeCardHeight() exists", /function clampQeCardHeight\(\)/.test(src));
+  ok("clamp reads the WRAP's actual position (getBoundingClientRect), not a guessed constant", /wrapRect\s*=\s*wrap\.getBoundingClientRect\(\)/.test(src));
+  ok("clamp never lets the card get taller than the space actually available above it", /Math\.min\(260,\s*available\)/.test(src));
+  ok("clamp has a floor so the card is never squashed to zero/negative height", /Math\.max\(80,/.test(src));
+  ok("re-clamps on window resize (covers browser zoom changes)", /window\.addEventListener\("resize",\s*clampQeCardHeight\)/.test(src));
+  ok("re-clamps while the FAB is being dragged", /clampQeCardHeight\(\);\s*\n?\s*\};\s*\n\s*var up = function/.test(src) || /clampQeCardHeight\(\);/.test(src));
+  ok("re-clamps automatically when the card's content changes (MutationObserver on cardBody)", /_qeCardObs\s*=\s*new MutationObserver/.test(src) && /observe\(cardBody/.test(src));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

@@ -11398,7 +11398,36 @@
     // Info card (results, guidance, errors)
     const card = document.createElement("div");
     card.id = "dc-qe-card";
-    card.style.cssText = "display:none;width:280px;max-height:min(260px, calc(100vh - 200px));overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,.12);font:11px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:absolute;bottom:100%;left:0;margin-bottom:8px;resize:horizontal;min-width:200px;max-width:500px;";
+    // NOTE on the max-height fix below: this card sits in `wrap`, a bottom:16px-anchored
+    // flex column-reverse container. Its OLD max-height (min(260px, calc(100vh - 200px)))
+    // assumed ~200px was always free above it — at higher browser zoom (smaller effective
+    // viewport height) that assumption breaks: fab+btnRow+card can exceed the viewport,
+    // and since the stack grows UPWARD from a fixed bottom anchor, content pushes off the
+    // TOP of the screen with nothing to clip it (overflow-y:auto only helps once a box
+    // already fits on-screen — it doesn't reposition a box whose top is above y=0).
+    // clampQeCardHeight() (below) recalculates this from the ACTUAL remaining space each
+    // time the card is shown/resized, instead of a guessed constant.
+    card.style.cssText = "display:none;width:280px;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;box-shadow:0 4px 16px rgba(0,0,0,.12);font:11px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;position:absolute;bottom:100%;left:0;margin-bottom:8px;resize:horizontal;min-width:200px;max-width:500px;";
+
+    // Recomputes the card's max-height from the ACTUAL space between wrap's current
+    // screen position and the top of the viewport, instead of a fixed guess. Fixes the
+    // card overflowing off the top of the screen at higher browser zoom (smaller
+    // effective viewport height) or after the FAB has been dragged near the top edge.
+    // Call this every time the card is shown or its content changes size.
+    function clampQeCardHeight() {
+      try {
+        var wrapRect = wrap.getBoundingClientRect();
+        // Space available above the button row, minus a small margin so the card never
+        // touches the very top edge of the viewport.
+        var available = wrapRect.top - 12;
+        var h = Math.max(80, Math.min(260, available));
+        card.style.maxHeight = h + "px";
+      } catch (e) {}
+    }
+    // Re-clamp on viewport/zoom changes and when the FAB is dragged (drag handler is
+    // defined further below in this function and calls clampQeCardHeight via the
+    // shared reference — see the pointermove handler).
+    window.addEventListener("resize", clampQeCardHeight);
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "×";
@@ -11411,6 +11440,14 @@
     const cardBody = document.createElement("div");
     card.appendChild(closeBtn);
     card.appendChild(cardBody);
+    // Re-clamp automatically whenever cardBody's content changes (every call site sets
+    // cardBody.innerHTML, often right after — or shortly before — card.style.display =
+    // "block"). A MutationObserver catches every current AND future call site with zero
+    // risk of missing one, instead of editing 12+ individual show-the-card call sites.
+    try {
+      var _qeCardObs = new MutationObserver(function () { if (card.style.display !== "none") clampQeCardHeight(); });
+      _qeCardObs.observe(cardBody, { childList: true, subtree: true, characterData: true });
+    } catch (e) {}
 
     // Button row
     const btnRow = document.createElement("div");
@@ -12983,6 +13020,7 @@
         if (!_dragMoved) return;
         wrap.style.left = Math.max(0, Math.min(ox + dx, window.innerWidth - 60)) + "px";
         wrap.style.top = Math.max(0, Math.min(oy + dy, window.innerHeight - 60)) + "px";
+        clampQeCardHeight();
       };
       var up = function () {
         btnRow.style.cursor = "grab";
