@@ -11882,7 +11882,7 @@
       nullsOrBlanks:        (obj, col)                  => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(col)} IS NULL OR TRIM(${sqlQuoteIdent(col)}) = ''`,
       valueDistribution:    (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS value_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} ORDER BY COUNT(*) DESC`,
       normalizedDuplicates: (obj, col)                  => `SELECT UPPER(TRIM(${sqlQuoteIdent(col)})) AS normalized_value, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY UPPER(TRIM(${sqlQuoteIdent(col)})) HAVING COUNT(*) > 1`,
-      staleRecords:         (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} < CURRENT_DATE - INTERVAL '${Number(days)} days'`,
+      betweenDates:         (obj, dateCol, from, to)      => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} BETWEEN DATE '${from}' AND DATE '${to}'`,
       orphanedForeignKey:   (childObj, childFk, parentObj, parentKey) => `SELECT c.* FROM ${sqlQuoteIdent(childObj)} c LEFT JOIN ${sqlQuoteIdent(parentObj)} p ON c.${sqlQuoteIdent(childFk)} = p.${sqlQuoteIdent(parentKey)} WHERE p.${sqlQuoteIdent(parentKey)} IS NULL`,
       cardinalityCheck:     (obj, fkCol, expected)       => `SELECT ${sqlQuoteIdent(fkCol)}, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
       irConsolidationRate:  ()                          => `SELECT IndividualIdentityLink__dlm.ssot__DataSourceId__c AS DataSourceId__c, IndividualIdentityLink__dlm.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(IndividualIdentityLink__dlm.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(IndividualIdentityLink__dlm.UnifiedRecordId__c)/COUNT(IndividualIdentityLink__dlm.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM IndividualIdentityLink__dlm GROUP BY DataSourceId__c, DataSourceObjectId__c`,
@@ -11912,21 +11912,21 @@
       { key: "safeTypeCheck",        label: "Invalid values for a type",     group: "Data quality", fields: ["object", "column", "type"],
         help: "Finds non-empty values that can't actually convert to the type they should be (e.g. text that isn't really a date)." },
       { key: "orphanedForeignKey",   label: "Orphaned foreign key",          group: "Relationships", fields: ["childObject", "childFk", "parentObject", "parentKey"],
-        help: "Finds child rows whose foreign key doesn't match any row in the parent object." },
+        help: "Finds child rows whose foreign key doesn't match any row in the parent object. Both object boxes below start filled with the object you typed above — change \"Parent object\" to the RELATED object you're checking against." },
       { key: "cardinalityCheck",     label: "Relationship cardinality check", group: "Relationships", fields: ["object", "fkColumn", "expected"],
         help: "Finds foreign-key groups that don't have the expected number of rows (e.g. should be exactly 1 primary contact per account)." },
       { key: "irConsolidationRate",  label: "Identity Resolution consolidation rate", group: "Relationships", fields: [],
         help: "Salesforce-documented check: consolidation rate per source in IndividualIdentityLink__dlm. An unexpectedly high rate can flag data-quality issues in a source." },
-      { key: "freshnessCheck",       label: "Freshness check",               group: "Date", fields: ["object", "dateColumn", "days"],
-        help: "Finds rows OLDER than N days by a date column — 'has this stopped updating?'" },
+      { key: "freshnessCheck",       label: "Freshness check (older than N days)", group: "Date", fields: ["object", "dateColumn", "days"],
+        help: "\"Has this stopped updating?\" — finds rows where the date column is MORE than N days in the past. Example: Days=90 on last_modified_date finds every row not touched in the last 3 months. Uses today's date automatically — you never type a date." },
       { key: "rollingWindow",        label: "Rolling window (last N days)",  group: "Date", fields: ["object", "dateColumn", "days"],
-        help: "Finds rows from the last N days — a ready-made recent-activity filter." },
-      { key: "recordAge",            label: "Record age",                    group: "Date", fields: ["object", "dateColumn"],
-        help: "Adds a days_old column so you can sort/filter by how old each row is." },
-      { key: "trendByPeriod",        label: "Trend by period",               group: "Date", fields: ["object", "dateColumn", "period"],
-        help: "Counts rows per day/week/month/quarter/year — a quick trend rollup." },
-      { key: "staleRecords",         label: "Stale records",                 group: "Date", fields: ["object", "dateColumn", "days"],
-        help: "Same idea as Freshness check — rows older than N days." },
+        help: "The opposite of Freshness check — finds rows WITHIN the last N days (recent activity). Example: Days=7 on created_date finds everything created this week. Uses today's date automatically." },
+      { key: "betweenDates",         label: "Records between two dates",     group: "Date", fields: ["object", "dateColumn", "fromDate", "toDate"],
+        help: "Finds rows where the date column falls between two SPECIFIC dates you choose (not relative to today). Example: From=2026-01-01, To=2026-03-31 finds every row in Q1. Type dates as YYYY-MM-DD." },
+      { key: "recordAge",            label: "Record age (add a days-old column)", group: "Date", fields: ["object", "dateColumn"],
+        help: "Doesn't filter anything — just ADDS a days_old column to every row so you can see/sort by age. Example: on created_date, a row created 45 days ago shows days_old=45." },
+      { key: "trendByPeriod",        label: "Trend by period (rows per day/week/month…)", group: "Date", fields: ["object", "dateColumn", "period"],
+        help: "Counts how many rows fall into each day/week/month/quarter/year — a quick trend rollup, e.g. \"how many records were created each month?\" Type one word for Period: day, week, month, quarter, or year." },
     ];
 
     var templatesPanelEl = null;
@@ -11940,7 +11940,7 @@
       panel.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(560px,92vw);max-height:82vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;";
 
       var hdr = document.createElement("div");
-      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;";
+      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;cursor:move;";
       hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries</div>";
       var closeX = document.createElement("button");
       closeX.innerHTML = "✕";
@@ -12068,13 +12068,30 @@
       }
       groupSel.onchange = populateTemplateSel;
 
+      // Every field key gets its OWN distinct label — "object" must never say "Column",
+      // and vice versa, or the user can't tell which box the object name goes in (this
+      // is exactly the bug that produced FROM "<column name>" instead of FROM "<object>").
       var FIELD_LABELS = {
-        object: "Column to check", column: "Column to check", childObject: "Child object (has the FK)",
-        childFk: "Child's FK column", parentObject: "Parent object", parentKey: "Parent's key column",
-        fkColumn: "Foreign key column", expected: "Expected count (e.g. 1)", dateColumn: "Date column",
-        days: "Days", type: "Expected type (e.g. DATE, INTEGER, NUMERIC)", period: "Period (day/week/month/quarter/year)",
+        object: "Object (DLO/DMO) name — already filled in from above",
+        column: "Column to check",
+        childObject: "Child object (the one WITH the foreign key)",
+        childFk: "Child object's foreign-key column",
+        parentObject: "Parent object (the one the FK should point to)",
+        parentKey: "Parent object's key column",
+        fkColumn: "Foreign-key column (groups rows by this)",
+        expected: "Expected count per group (e.g. 1)",
+        dateColumn: "Date column (must be a date/timestamp field)",
+        days: "Days (whole number)",
+        type: "Expected type (e.g. DATE, INTEGER, NUMERIC)",
+        period: "Period — type one: day, week, month, quarter, year",
+        fromDate: "From date (YYYY-MM-DD)",
+        toDate: "To date (YYYY-MM-DD)",
       };
       var FIELD_DEFAULTS = { days: "90", expected: "1", type: "DATE", period: "month" };
+      // Fields that mean "an object name" — pre-fill from the Object box above and lock
+      // them read-only there so the object name can only ever be entered ONCE, in ONE
+      // place, removing any chance of it landing in the wrong box.
+      var OBJECT_FIELDS = { object: 1, childObject: 1, parentObject: 1 };
 
       function renderFields() {
         fieldsWrap.innerHTML = "";
@@ -12086,12 +12103,20 @@
           var row = document.createElement("div");
           var lbl = document.createElement("label");
           lbl.style.cssText = "display:block;font-size:11px;font-weight:600;margin-bottom:3px;color:#475569;";
-          lbl.textContent = (f === "object" && def.fields.indexOf("column") === -1 ? "Object" : FIELD_LABELS[f]) || f;
+          lbl.textContent = FIELD_LABELS[f] || f;
           var inp = document.createElement("input");
           inp.type = "text";
           inp.dataset.field = f;
-          inp.value = FIELD_DEFAULTS[f] || (f === "object" || f === "childObject" || f === "parentObject" ? objInput.value.trim() : "");
-          inp.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
+          if (OBJECT_FIELDS[f]) {
+            // "object" is always THIS object — pre-filled + read-only, can't be mistyped
+            // or confused with a column field. childObject/parentObject for the
+            // orphaned-FK template are editable (they name TWO different objects).
+            inp.value = objInput.value.trim();
+            if (f === "object") { inp.readOnly = true; inp.style.background = "#f1f5f9"; inp.style.color = "#64748b"; }
+          } else {
+            inp.value = FIELD_DEFAULTS[f] || "";
+          }
+          inp.style.cssText += "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
           inp.addEventListener("input", updatePreview);
           row.appendChild(lbl); row.appendChild(inp);
           fieldsWrap.appendChild(row);
@@ -12114,9 +12139,11 @@
           if (f === "expected") { if (!qeValidateNonNegativeInt(v)) return { error: "Expected count must be a non-negative whole number." }; vals[f] = parseInt(v, 10); continue; }
           if (f === "type") { if (!/^[A-Za-z]+$/.test(v)) return { error: "Type must be a plain SQL type name (e.g. DATE, INTEGER)." }; vals[f] = v.toUpperCase(); continue; }
           if (f === "period") { if (!/^(day|week|month|quarter|year)$/i.test(v)) return { error: "Period must be day, week, month, quarter, or year." }; vals[f] = v.toLowerCase(); continue; }
+          if (f === "fromDate" || f === "toDate") { if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return { error: (FIELD_LABELS[f] || f) + " must be in YYYY-MM-DD format (e.g. 2026-01-31)." }; vals[f] = v; continue; }
           if (!qeValidIdent(v)) return { error: (FIELD_LABELS[f] || f) + " must contain only letters, numbers, and underscores." };
           vals[f] = v;
         }
+        if (def.key === "betweenDates" && vals.fromDate > vals.toDate) return { error: "\"From date\" must be on or before \"To date\"." };
         try {
           switch (def.key) {
             case "exactDuplicates":      return { sql: qeTemplates.exactDuplicates(vals.object, vals.column) };
@@ -12128,7 +12155,7 @@
             case "cardinalityCheck":     return { sql: qeTemplates.cardinalityCheck(vals.object, vals.fkColumn, vals.expected) };
             case "irConsolidationRate":  return { sql: qeTemplates.irConsolidationRate() };
             case "freshnessCheck":       return { sql: qeTemplates.freshnessCheck(vals.object, vals.dateColumn, vals.days) };
-            case "staleRecords":         return { sql: qeTemplates.staleRecords(vals.object, vals.dateColumn, vals.days) };
+            case "betweenDates":         return { sql: qeTemplates.betweenDates(vals.object, vals.dateColumn, vals.fromDate, vals.toDate) };
             case "rollingWindow":        return { sql: qeTemplates.rollingWindow(vals.object, vals.dateColumn, vals.days) };
             case "recordAge":            return { sql: qeTemplates.recordAge(vals.object, vals.dateColumn) };
             case "trendByPeriod":        return { sql: qeTemplates.trendByPeriod(vals.object, vals.dateColumn, vals.period) };
@@ -12181,6 +12208,11 @@
 
       populateTemplateSel();
       document.body.appendChild(panel);
+      // Make the panel movable/resizable like the other floating panels (Data Explorer's
+      // results table, SQL editor) — drag by the header, resize from the bottom-right grip.
+      // Wasn't wired up before, so the panel was stuck in one spot for every user.
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      try { addResizeHandle(panel, 380, 300); } catch (e) {}
       objInput.focus();
     }
 
