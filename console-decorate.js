@@ -11503,9 +11503,25 @@
     templatesBtn.onmouseleave = () => { templatesBtn.style.transform = "scale(1)"; templatesBtn.style.boxShadow = "0 3px 12px rgba(217,119,6,.3)"; };
     templatesBtn.onclick = function () { openTemplatesPanel(); };
 
+    // Segment Criteria Builder — generates the REAL, engine-executed query a Data
+    // Cloud segment runs (SELECT DISTINCT ... WHERE EXISTS for related-object
+    // filters, quoted "<DMO>__0" aliases), confirmed against an actual generated
+    // segment query (not the strict/narrow SQL you'd submit via POST /ssot/segments
+    // to create a segment — a different, unquoted dialect). Own separate button:
+    // its input shape (multi-condition rows, AND/OR groups, optional related-object
+    // join) is structurally different from the simple object+column Helpful Queries.
+    var segmentBtn = document.createElement("button");
+    segmentBtn.textContent = "🎯 Segment Criteria";
+    segmentBtn.title = "Build filter conditions (AND/OR, optionally on a related object) and get the single, merged query a Data Cloud segment with that criteria would actually run — one query, not one per container/UNION.";
+    segmentBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);box-shadow:0 2px 8px rgba(3,105,161,.3);transition:transform .1s;";
+    segmentBtn.onmouseenter = () => { segmentBtn.style.transform = "scale(1.03)"; segmentBtn.style.boxShadow = "0 4px 16px rgba(3,105,161,.4)"; };
+    segmentBtn.onmouseleave = () => { segmentBtn.style.transform = "scale(1)"; segmentBtn.style.boxShadow = "0 3px 12px rgba(3,105,161,.3)"; };
+    segmentBtn.onclick = function () { openSegmentCriteriaPanel(); };
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
     btnRow.appendChild(templatesBtn);
+    btnRow.appendChild(segmentBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
     btnRow.appendChild(infoBtn);
@@ -11535,7 +11551,7 @@
       el.addEventListener("mouseleave", function () { qeTip.style.display = "none"; });
       el.addEventListener("click", function () { qeTip.style.display = "none"; });
     };
-    [countBtn, runBtn, templatesBtn, downloadBtn, viewBtn, infoBtn].forEach(qeTipFor);
+    [countBtn, runBtn, templatesBtn, segmentBtn, downloadBtn, viewBtn, infoBtn].forEach(qeTipFor);
 
     // FAB icon — always visible, toggles the panel
     var fab = document.createElement("button");
@@ -12420,6 +12436,374 @@
       try { makeDraggable(panel, hdr); } catch (e) {}
       try { addResizeHandle(panel, 380, 300); } catch (e) {}
       objInput.focus();
+    }
+
+    // ── Segment Criteria Builder ─────────────────────────────────────────────────
+    // Generates the REAL, engine-EXECUTED query a Data Cloud segment with the given
+    // criteria actually runs — confirmed against an actual generated segment query
+    // (blog: Darshna Sharma / salesforceblogger.com, segmentation deep-dive) and
+    // cross-checked against Salesforce's own documented Connect API validation rules
+    // (IS NOT DISTINCT FROM key-qualifier join pattern) and SQL reference (TIMESTAMP/
+    // DATE literals). This is DIFFERENT from the narrow, unquoted-PK-only dialect you
+    // SUBMIT to POST/PATCH /ssot/segments to create a segment — that's an API payload
+    // grammar, not a runnable query. Mirrored 1:1 in test/segment-sql-generator.test.js.
+    //
+    //   1. SELECT DISTINCT <segment-on PK column(s)>, quoted + fully qualified.
+    //   2. Segment-on table aliased "<DMOName>__0"; each DISTINCT related object gets
+    //      its own "<DMOName>__0" alias too.
+    //   3. Own-object conditions filter directly in the outer WHERE.
+    //   4. EVERY condition on a related object folds into ONE correlated EXISTS
+    //      subquery per related object — multiple conditions on the SAME related
+    //      object merge into that SAME EXISTS (never duplicated).
+    //   5. Conditions in one group combine with inline AND/OR — this is what makes
+    //      the whole thing ONE merged query instead of a per-container UNION (the
+    //      "not container-wise" requirement).
+    function segQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+    function segLiteral(v, type) {
+      if (v === null || v === undefined) return "null";
+      var t = String(type || "text").toLowerCase();
+      if (t === "number" || t === "integer" || t === "numeric" || t === "boolean") return String(v);
+      if (t === "date") return "date '" + String(v).replace(/'/g, "''") + "'";
+      if (t === "timestamp" || t === "datetime") return "timestamp '" + String(v).replace(/'/g, "''") + "'";
+      return "'" + String(v).replace(/'/g, "''") + "'";
+    }
+    function segTableAlias(dmoName, index) { return dmoName + "__" + (index || 0); }
+    var SEG_OPS = {
+      "=":            function (col, v) { return col + " = " + v; },
+      "!=":           function (col, v) { return col + " != " + v; },
+      ">":            function (col, v) { return col + " > " + v; },
+      ">=":           function (col, v) { return col + " >= " + v; },
+      "<":            function (col, v) { return col + " < " + v; },
+      "<=":           function (col, v) { return col + " <= " + v; },
+      "LIKE":         function (col, v) { return col + " LIKE " + v; },
+      "IN":           function (col, v) { return col + " IN (" + v + ")"; },
+      "IS NULL":      function (col) { return col + " IS NULL"; },
+      "IS NOT NULL":  function (col) { return col + " IS NOT NULL"; },
+    };
+    function segBuildWhereFragment(cond, alias) {
+      var col = segQuoteIdent(alias) + "." + segQuoteIdent(cond.column);
+      var fn = SEG_OPS[cond.op];
+      if (!fn) throw new Error("Unsupported operator: " + cond.op);
+      if (cond.op === "IS NULL" || cond.op === "IS NOT NULL") return fn(col);
+      if (cond.op === "IN") return fn(col, cond.value.map(function (v) { return segLiteral(v, cond.type); }).join(","));
+      return fn(col, segLiteral(cond.value, cond.type));
+    }
+    function segRenderGroup(group, resolveAlias) {
+      if (!group) return "";
+      var parts = [];
+      (group.conditions || []).forEach(function (c) { parts.push(segBuildWhereFragment(c, resolveAlias(c))); });
+      (group.groups || []).forEach(function (sub) {
+        var inner = segRenderGroup(sub, resolveAlias);
+        if (inner) parts.push("(" + inner + ")");
+      });
+      var joiner = (group.join === "OR") ? " OR " : " AND ";
+      return parts.join(joiner);
+    }
+    function segValidateSpec(spec) {
+      var errors = [];
+      if (!spec || !spec.segmentOnObject) errors.push("Segment-on object is required.");
+      if (!Array.isArray(spec.primaryKeyColumns) || spec.primaryKeyColumns.length === 0) errors.push("At least one primary key column is required.");
+      return errors;
+    }
+    function buildSegmentSql(spec) {
+      var errors = segValidateSpec(spec);
+      if (errors.length) return { error: errors[0] };
+      var mainAlias = segTableAlias(spec.segmentOnObject, 0);
+      var selectCols = spec.primaryKeyColumns.map(function (c) { return segQuoteIdent(mainAlias) + "." + segQuoteIdent(c); }).join(", ");
+      var sql = "SELECT DISTINCT " + selectCols + " FROM " + segQuoteIdent(spec.segmentOnObject) + " " + segQuoteIdent(mainAlias);
+
+      var relatedAliasByObject = {}, relatedOrder = [];
+      function collectRelated(group) {
+        (group.conditions || []).forEach(function (c) {
+          if (c.object && c.object !== spec.segmentOnObject && !relatedAliasByObject[c.object]) {
+            relatedAliasByObject[c.object] = segTableAlias(c.object, relatedOrder.length);
+            relatedOrder.push(c.object);
+          }
+        });
+        (group.groups || []).forEach(collectRelated);
+      }
+      collectRelated(spec.rootGroup || {});
+
+      function resolveAlias(cond) {
+        if (!cond.object || cond.object === spec.segmentOnObject) return mainAlias;
+        return relatedAliasByObject[cond.object];
+      }
+      function partition(group) {
+        var ownConds = [], relatedConds = {};
+        (group.conditions || []).forEach(function (c) {
+          if (!c.object || c.object === spec.segmentOnObject) ownConds.push(c);
+          else { (relatedConds[c.object] = relatedConds[c.object] || []).push(c); }
+        });
+        return { ownConds: ownConds, relatedConds: relatedConds, join: group.join };
+      }
+      var top = partition(spec.rootGroup || {});
+      var wherePieces = [];
+      var ownGroupForRender = { join: top.join, conditions: top.ownConds, groups: (spec.rootGroup && spec.rootGroup.groups) || [] };
+      var ownWhere = segRenderGroup(ownGroupForRender, resolveAlias);
+      if (ownWhere) wherePieces.push(ownWhere);
+
+      (spec.joins || []).forEach(function (j) {
+        var relAlias = relatedAliasByObject[j.object];
+        if (!relAlias) return;
+        var conds = top.relatedConds[j.object] || [];
+        var joinOn = segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.leftKey) + " = " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.rightKey);
+        if (j.keyQualifier) {
+          joinOn += " AND " + segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.keyQualifier.left) + " IS NOT DISTINCT FROM " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.keyQualifier.right);
+        }
+        var innerWhere = conds.map(function (c) { return segBuildWhereFragment(c, relAlias); }).join(" AND ");
+        wherePieces.push("EXISTS (SELECT 1 FROM " + segQuoteIdent(j.object) + " " + segQuoteIdent(relAlias) + " WHERE " + joinOn + (innerWhere ? " AND " + innerWhere : "") + ")");
+      });
+
+      if (wherePieces.length) sql += " WHERE " + wherePieces.join(" AND ");
+      if (spec.limit != null) sql += " LIMIT " + Number(spec.limit);
+      return { sql: sql };
+    }
+
+    var segmentPanelEl = null;
+    function closeSegmentPanel() { if (segmentPanelEl) { segmentPanelEl.remove(); segmentPanelEl = null; } }
+
+    function openSegmentCriteriaPanel() {
+      closeSegmentPanel();
+      var panel = document.createElement("div");
+      segmentPanelEl = panel;
+      panel.id = "dc-qe-segment-panel";
+      panel.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);width:min(640px,94vw);max-height:88vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;";
+
+      var hdr = document.createElement("div");
+      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#eff6ff;border-radius:12px 12px 0 0;cursor:move;";
+      hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#0369a1;'>🎯 Segment Criteria</div>";
+      var closeX = document.createElement("button");
+      closeX.innerHTML = "✕";
+      closeX.style.cssText = "border:none;background:none;font-size:16px;color:#0369a1;cursor:pointer;padding:4px 8px;";
+      closeX.onclick = closeSegmentPanel;
+      hdr.appendChild(closeX);
+      panel.appendChild(hdr);
+
+      var body = document.createElement("div");
+      body.style.cssText = "padding:16px 18px;";
+      panel.appendChild(body);
+
+      var note = document.createElement("div");
+      note.style.cssText = "font-size:11px;color:#64748b;margin-bottom:12px;line-height:1.5;background:#f8fafc;border-radius:6px;padding:8px 10px;";
+      note.textContent = "Builds the query a Data Cloud segment with this criteria actually runs — one merged query (not a UNION per AND/OR group). This is NOT the payload you'd submit to create a segment via API; it's the real executable query, runnable in Query Editor.";
+      body.appendChild(note);
+
+      // Segment-on object + primary key
+      var objRow = document.createElement("div");
+      objRow.style.cssText = "display:flex;gap:8px;margin-bottom:10px;";
+      var objCol = document.createElement("div"); objCol.style.cssText = "flex:2;";
+      objCol.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Segment-on object (DMO)</label>";
+      var segObjInput = document.createElement("input");
+      segObjInput.type = "text"; segObjInput.placeholder = "e.g. ssot__Account__dlm";
+      segObjInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
+      objCol.appendChild(segObjInput);
+      var pkCol = document.createElement("div"); pkCol.style.cssText = "flex:1;";
+      pkCol.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Primary key column</label>";
+      var segPkInput = document.createElement("input");
+      segPkInput.type = "text"; segPkInput.placeholder = "e.g. ssot__Id__c";
+      segPkInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
+      pkCol.appendChild(segPkInput);
+      objRow.appendChild(objCol); objRow.appendChild(pkCol);
+      body.appendChild(objRow);
+
+      // Condition rows — each: [object (blank = segment-on), column, operator, value]
+      var condsWrap = document.createElement("div");
+      condsWrap.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-bottom:8px;";
+      body.appendChild(condsWrap);
+
+      var groupJoinSel = document.createElement("select");
+      ["AND", "OR"].forEach(function (j) { var o = document.createElement("option"); o.value = j; o.textContent = j; groupJoinSel.appendChild(o); });
+      groupJoinSel.style.cssText = "border:1px solid #cbd5e1;border-radius:5px;padding:3px 6px;font:600 11px -apple-system,sans-serif;margin-bottom:8px;";
+      var groupJoinRow = document.createElement("div");
+      groupJoinRow.innerHTML = "<label style='font-size:11px;font-weight:600;color:#475569;margin-right:6px;'>Combine all conditions with:</label>";
+      groupJoinRow.appendChild(groupJoinSel);
+      groupJoinRow.style.cssText = "margin-bottom:8px;";
+      body.appendChild(groupJoinRow);
+
+      var SEG_OP_LIST = ["=", "!=", ">", ">=", "<", "<=", "LIKE", "IN", "IS NULL", "IS NOT NULL"];
+      var condRows = [];
+      function addCondRow() {
+        var row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:6px;align-items:center;";
+        var objIn = document.createElement("input");
+        objIn.type = "text"; objIn.placeholder = "Object (blank = segment-on)"; objIn.title = "Leave blank to filter the segment-on object itself, or type a RELATED object's DMO name to filter through a join.";
+        objIn.style.cssText = "flex:1.4;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;";
+        var colIn = document.createElement("input");
+        colIn.type = "text"; colIn.placeholder = "Column";
+        colIn.style.cssText = "flex:1.2;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;";
+        var opSel = document.createElement("select");
+        SEG_OP_LIST.forEach(function (o) { var opt = document.createElement("option"); opt.value = o; opt.textContent = o; opSel.appendChild(opt); });
+        opSel.style.cssText = "flex:1;border:1px solid #cbd5e1;border-radius:5px;padding:5px 3px;font:11px -apple-system,sans-serif;";
+        var valIn = document.createElement("input");
+        valIn.type = "text"; valIn.placeholder = "Value (comma-list for IN)";
+        valIn.style.cssText = "flex:1.3;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;";
+        var typeSel = document.createElement("select");
+        ["text", "number", "date", "timestamp", "boolean"].forEach(function (t) { var opt = document.createElement("option"); opt.value = t; opt.textContent = t; typeSel.appendChild(opt); });
+        typeSel.style.cssText = "flex:0.9;border:1px solid #cbd5e1;border-radius:5px;padding:5px 3px;font:11px -apple-system,sans-serif;";
+        var rmBtn = document.createElement("button");
+        rmBtn.textContent = "✕"; rmBtn.title = "Remove this condition";
+        rmBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;border-radius:5px;padding:4px 8px;cursor:pointer;color:#dc2626;font:700 11px system-ui;";
+        function updateValVisibility() {
+          var isNullOp = opSel.value === "IS NULL" || opSel.value === "IS NOT NULL";
+          valIn.style.display = isNullOp ? "none" : "";
+          typeSel.style.display = isNullOp ? "none" : "";
+        }
+        opSel.addEventListener("change", function () { updateValVisibility(); updatePreview(); });
+        [objIn, colIn, valIn, typeSel].forEach(function (el) { el.addEventListener("input", updatePreview); el.addEventListener("change", updatePreview); });
+        rmBtn.onclick = function () { row.remove(); condRows = condRows.filter(function (r) { return r.row !== row; }); updatePreview(); };
+        row.appendChild(objIn); row.appendChild(colIn); row.appendChild(opSel); row.appendChild(valIn); row.appendChild(typeSel); row.appendChild(rmBtn);
+        condsWrap.appendChild(row);
+        condRows.push({ row: row, objIn: objIn, colIn: colIn, opSel: opSel, valIn: valIn, typeSel: typeSel });
+        updateValVisibility();
+      }
+
+      var addCondBtn = document.createElement("button");
+      addCondBtn.textContent = "+ Add condition";
+      addCondBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;margin-bottom:10px;align-self:flex-start;";
+      addCondBtn.onclick = function () { addCondRow(); };
+      body.appendChild(addCondBtn);
+
+      // Optional single related-object join (used when any condition names a related object)
+      var joinNote = document.createElement("div");
+      joinNote.style.cssText = "font-size:11px;color:#64748b;margin:4px 0 6px;line-height:1.5;";
+      joinNote.textContent = "If any condition above uses a related object, describe how it joins back to the segment-on object:";
+      body.appendChild(joinNote);
+      var joinRow = document.createElement("div");
+      joinRow.style.cssText = "display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;";
+      function mkJoinInput(placeholder, flex) {
+        var i = document.createElement("input");
+        i.type = "text"; i.placeholder = placeholder;
+        i.style.cssText = "flex:" + flex + ";min-width:120px;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;";
+        i.addEventListener("input", updatePreview);
+        return i;
+      }
+      var joinLeftKey = mkJoinInput("Segment-on join key (e.g. ssot__Id__c)", 1.3);
+      var joinRightKey = mkJoinInput("Related object's join key (e.g. ssot__AccountId__c)", 1.5);
+      joinRow.appendChild(joinLeftKey); joinRow.appendChild(joinRightKey);
+      body.appendChild(joinRow);
+      var kqRow = document.createElement("div");
+      kqRow.style.cssText = "display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;";
+      var kqLeft = mkJoinInput("Optional: segment-on key qualifier (e.g. KQ_Id__c)", 1.3);
+      var kqRight = mkJoinInput("Optional: related key qualifier (e.g. KQ_AccountId__c)", 1.5);
+      kqRow.appendChild(kqLeft); kqRow.appendChild(kqRight);
+      body.appendChild(kqRow);
+
+      var limitRow = document.createElement("div");
+      limitRow.style.cssText = "margin-bottom:10px;";
+      limitRow.innerHTML = "<label style='font-size:11px;font-weight:600;color:#475569;margin-right:6px;'>Limit (optional):</label>";
+      var limitIn = document.createElement("input");
+      limitIn.type = "text"; limitIn.placeholder = "e.g. 100"; limitIn.style.cssText = "width:80px;border:1px solid #cbd5e1;border-radius:5px;padding:4px 7px;font:11px -apple-system,sans-serif;";
+      limitIn.addEventListener("input", updatePreview);
+      limitRow.appendChild(limitIn);
+      body.appendChild(limitRow);
+
+      var sqlPreview = document.createElement("pre");
+      sqlPreview.style.cssText = "background:#0f172a;color:#e2e8f0;border-radius:8px;padding:10px 12px;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin-bottom:10px;min-height:20px;";
+      body.appendChild(sqlPreview);
+
+      var actionRow = document.createElement("div");
+      actionRow.style.cssText = "display:flex;gap:8px;";
+      var copyBtn = document.createElement("button");
+      copyBtn.textContent = "📋 Copy SQL";
+      copyBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);";
+      var checkSegBtn = document.createElement("button");
+      checkSegBtn.textContent = "# Check (Count)";
+      checkSegBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);";
+      actionRow.appendChild(copyBtn); actionRow.appendChild(checkSegBtn);
+      body.appendChild(actionRow);
+
+      var segResultArea = document.createElement("div");
+      segResultArea.style.cssText = "margin-top:10px;font-size:12px;color:#334155;line-height:1.6;";
+      body.appendChild(segResultArea);
+
+      function buildSpecFromForm() {
+        var segObj = segObjInput.value.trim();
+        var pk = segPkInput.value.trim();
+        if (!segObj) return { error: "Segment-on object is required." };
+        if (!pk) return { error: "Primary key column is required." };
+        var conditions = [];
+        for (var i = 0; i < condRows.length; i++) {
+          var r = condRows[i];
+          var col = r.colIn.value.trim();
+          if (!col) continue; // skip fully-empty rows
+          var cond = { column: col, op: r.opSel.value };
+          var obj = r.objIn.value.trim();
+          if (obj && obj !== segObj) cond.object = obj;
+          if (r.opSel.value !== "IS NULL" && r.opSel.value !== "IS NOT NULL") {
+            var rawVal = r.valIn.value;
+            if (r.opSel.value === "IN") cond.value = rawVal.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+            else cond.value = rawVal;
+            cond.type = r.typeSel.value;
+          }
+          conditions.push(cond);
+        }
+        if (!conditions.length) return { error: "Add at least one condition." };
+        var spec = {
+          segmentOnObject: segObj,
+          primaryKeyColumns: [pk],
+          rootGroup: { join: groupJoinSel.value, conditions: conditions },
+        };
+        var relatedObjNames = conditions.filter(function (c) { return c.object; }).map(function (c) { return c.object; });
+        if (relatedObjNames.length) {
+          var relObj = relatedObjNames[0];
+          if (!joinLeftKey.value.trim() || !joinRightKey.value.trim()) {
+            return { error: "A condition uses a related object (" + relObj + ") — fill in the join keys below." };
+          }
+          spec.joins = [{
+            object: relObj,
+            leftKey: joinLeftKey.value.trim(),
+            rightKey: joinRightKey.value.trim(),
+            keyQualifier: (kqLeft.value.trim() && kqRight.value.trim()) ? { left: kqLeft.value.trim(), right: kqRight.value.trim() } : null,
+          }];
+        }
+        if (limitIn.value.trim()) {
+          if (!/^\d+$/.test(limitIn.value.trim())) return { error: "Limit must be a whole number." };
+          spec.limit = parseInt(limitIn.value.trim(), 10);
+        }
+        try { return buildSegmentSql(spec); } catch (e) { return { error: e.message }; }
+      }
+
+      function updatePreview() {
+        var res = buildSpecFromForm();
+        if (res.error) { sqlPreview.textContent = res.error; sqlPreview.style.color = "#f87171"; }
+        else { sqlPreview.textContent = res.sql; sqlPreview.style.color = "#e2e8f0"; }
+      }
+
+      copyBtn.onclick = function () {
+        var res = buildSpecFromForm();
+        if (res.error) { segResultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
+        try { navigator.clipboard.writeText(res.sql); copyBtn.textContent = "✓ Copied"; setTimeout(function () { copyBtn.textContent = "📋 Copy SQL"; }, 1200); } catch (e) {}
+      };
+      checkSegBtn.onclick = function () {
+        var res = buildSpecFromForm();
+        if (res.error) { segResultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
+        var origText = checkSegBtn.textContent;
+        checkSegBtn.disabled = true; checkSegBtn.textContent = "Running…";
+        segResultArea.textContent = "";
+        var ds = readPageDataSpace();
+        ensureQueryContext(function (ready) {
+          if (!ready) { checkSegBtn.disabled = false; checkSegBtn.textContent = origText; segResultArea.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
+          runQeCount(res.sql, ds).then(function (r) {
+            checkSegBtn.disabled = false; checkSegBtn.textContent = origText;
+            segResultArea.innerHTML = "<b>" + (r.count || 0).toLocaleString() + "</b> matching row" + ((r.count === 1) ? "" : "s") +
+              (r.rowsProcessed != null ? " <span style='color:#94a3b8;font-size:10px;'>(" + r.rowsProcessed.toLocaleString() + " rows processed)</span>" : "");
+          }).catch(function (err) {
+            checkSegBtn.disabled = false; checkSegBtn.textContent = origText;
+            var hmsg = String(err && err.message || err);
+            if (err && err.heavyCount) hmsg = "This query is too heavy to count directly. Copy the SQL and run it in Query Editor's own Fetch & Export instead.";
+            segResultArea.innerHTML = "<span style='color:#dc2626;'>" + hmsg + "</span>";
+          });
+        });
+      };
+
+      [segObjInput, segPkInput].forEach(function (el) { el.addEventListener("input", updatePreview); });
+      groupJoinSel.addEventListener("change", updatePreview);
+      addCondRow();
+      updatePreview();
+      document.body.appendChild(panel);
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      try { addResizeHandle(panel, 420, 340); } catch (e) {}
+      segObjInput.focus();
     }
 
     // Build the Count result HTML (shared by a fresh count and a cache hit so they look
