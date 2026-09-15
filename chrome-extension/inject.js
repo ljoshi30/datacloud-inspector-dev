@@ -5419,6 +5419,260 @@
     setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
   }
 
+  // ── Segment page: "Generate SQL" — converts the criteria readSegmentRules() already
+  // extracted into the real, engine-executed query this segment would run (buildSegmentSql,
+  // shared module-level generator). fieldApi/objApi from the scraper are BEST-EFFORT
+  // (label-matched LWC props) and are never trusted/shown elsewhere in this tool, so this
+  // panel REQUIRES the user to confirm (or correct) each distinct object/field's real API
+  // name before any SQL is built — a pre-filled guess is never itself confirmation.
+  var OP_PHRASE_TO_SQL = {
+    "is equal to": "=", "is not equal to": "!=", "greater than": ">", "is greater than": ">",
+    "at least": ">=", "less than": "<", "is less than": "<", "at most": "<=", "exactly": "=",
+    "contains": "LIKE", "does not contain": "NOT LIKE", "starts with": "LIKE", "ends with": "LIKE",
+    "is in": "IN", "is not in": "NOT IN", "has value": "IS NOT NULL", "has no value": "IS NULL",
+    "is null": "IS NULL", "is not null": "IS NOT NULL", "is true": "= true", "is false": "= false",
+  };
+  function mapSegOperator(phrase) { return OP_PHRASE_TO_SQL[String(phrase || "").trim().toLowerCase()] || null; }
+  function segLikeValueFor(opPhrase, rawValue) {
+    var p = String(opPhrase || "").trim().toLowerCase();
+    if (p === "contains") return "%" + rawValue + "%";
+    if (p === "starts with") return rawValue + "%";
+    if (p === "ends with") return "%" + rawValue;
+    return rawValue;
+  }
+  function collectDistinctSegFields(tree) {
+    var seen = {}, out = [];
+    function walk(node) {
+      if (!node) return;
+      if (node.type === "set") { (node.items || []).forEach(walk); return; }
+      if (node.type === "aggregation") { (node.subFilters || []).forEach(function (sf) { walk(Object.assign({ type: "simple" }, sf)); }); return; }
+      if (node.type === "nested-segment") return;
+      var key = (node.objectLabel || "") + "::" + (node.fieldLabel || "");
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({ objectLabel: node.objectLabel || "", fieldLabel: node.fieldLabel || "", objApiGuess: node.objApi || "", fieldApiGuess: node.fieldApi || "" });
+    }
+    walk(tree);
+    return out;
+  }
+  function segTreeToConditionGroup(node, confirmedMap, segmentOnObjApi) {
+    if (!node) return { join: "AND", conditions: [] };
+    if (node.type === "set") {
+      var conditions = [], groups = [];
+      (node.items || []).forEach(function (item) {
+        if (item.type === "set") { groups.push(segTreeToConditionGroup(item, confirmedMap, segmentOnObjApi)); return; }
+        if (item.type === "nested-segment") return;
+        var key = (item.objectLabel || "") + "::" + (item.fieldLabel || "");
+        var c = confirmedMap[key];
+        if (!c) throw new Error("Unconfirmed field: " + key);
+        if (/^is (not )?between$/i.test(item.operator || "")) throw new Error("The \"" + item.operator + "\" operator needs two values and isn't supported yet — remove or manually adjust this condition.");
+        var opSql = mapSegOperator(item.operator);
+        if (!opSql) throw new Error("Unsupported operator: " + item.operator);
+        var cond = { column: c.fieldApi };
+        if (c.objApi && c.objApi !== segmentOnObjApi) cond.object = c.objApi;
+        if (/^= (true|false)$/.test(opSql)) { cond.op = "="; cond.value = opSql.indexOf("true") >= 0; cond.type = "boolean"; }
+        else if (opSql === "IS NULL" || opSql === "IS NOT NULL") { cond.op = opSql; }
+        else {
+          cond.op = opSql;
+          var val = (opSql === "LIKE" || opSql === "NOT LIKE") ? segLikeValueFor(item.operator, item.values) : item.values;
+          cond.value = (opSql === "IN" || opSql === "NOT IN") ? String(val).split(",").map(function (s) { return s.trim(); }) : val;
+          cond.type = c.type || "text";
+        }
+        conditions.push(cond);
+      });
+      return { join: node.join || "AND", conditions: conditions, groups: groups };
+    }
+    return { join: "AND", conditions: [] };
+  }
+
+  var segSqlPanelEl = null;
+  function closeSegmentSqlPanel() { if (segSqlPanelEl) { segSqlPanelEl.remove(); segSqlPanelEl = null; } }
+
+  function openSegmentSqlPanel() {
+    closeSegmentSqlPanel();
+    var meta = readSegmentMeta();
+    var rules = readSegmentRules();
+    var distinctFields = collectDistinctSegFields(rules.tree);
+
+    var panel = document.createElement("div");
+    segSqlPanelEl = panel;
+    panel.id = "dc-segment-sql-panel";
+    panel.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);width:min(620px,94vw);max-height:88vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;";
+
+    var hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#eff6ff;border-radius:12px 12px 0 0;cursor:move;";
+    hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#0369a1;'>Generate SQL — this segment's real query</div>";
+    var closeX = document.createElement("button");
+    closeX.innerHTML = "✕";
+    closeX.style.cssText = "border:none;background:none;font-size:16px;color:#0369a1;cursor:pointer;padding:4px 8px;";
+    closeX.onclick = closeSegmentSqlPanel;
+    hdr.appendChild(closeX);
+    panel.appendChild(hdr);
+
+    var body = document.createElement("div");
+    body.style.cssText = "padding:16px 18px;";
+    panel.appendChild(body);
+
+    var note = document.createElement("div");
+    note.style.cssText = "font-size:11px;color:#64748b;margin-bottom:12px;line-height:1.5;background:#f8fafc;border-radius:6px;padding:8px 10px;";
+    note.textContent = "Read " + distinctFields.length + " distinct field" + (distinctFields.length === 1 ? "" : "s") + " from this segment's criteria. API names below are a best-effort GUESS from the page — confirm or correct each one before generating SQL (this tool never trusts an unconfirmed name).";
+    body.appendChild(note);
+
+    if (!rules.tree || !(rules.tree.items || []).length) {
+      var emptyMsg = document.createElement("div");
+      emptyMsg.style.cssText = "color:#dc2626;font-size:12px;";
+      emptyMsg.textContent = "No conditions found on the currently active tab (" + rules.activeTab + "). Switch to the Include/Exclude tab with your criteria, then reopen this panel.";
+      body.appendChild(emptyMsg);
+      document.body.appendChild(panel);
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      return;
+    }
+
+    // Segment-on object API name — same confirm-first treatment as every other field.
+    var segOnRow = document.createElement("div");
+    segOnRow.style.cssText = "margin-bottom:10px;";
+    segOnRow.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Segment-on object API name" + (meta.segmentOn ? " (page shows: \"" + meta.segmentOn + "\")" : "") + "</label>";
+    var segOnInput = document.createElement("input");
+    segOnInput.type = "text";
+    segOnInput.placeholder = "e.g. ssot__Individual__dlm";
+    segOnInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
+    segOnRow.appendChild(segOnInput);
+    body.appendChild(segOnRow);
+
+    var pkRow = document.createElement("div");
+    pkRow.style.cssText = "margin-bottom:14px;";
+    pkRow.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Segment-on primary key column</label>";
+    var pkInput = document.createElement("input");
+    pkInput.type = "text";
+    pkInput.placeholder = "e.g. ssot__Id__c";
+    pkInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
+    pkRow.appendChild(pkInput);
+    body.appendChild(pkRow);
+
+    // One confirmation row per distinct (object, field) — pre-filled from the scraper's
+    // best-effort guess, but the user must review/correct + the row has NO default
+    // "confirmed" state until they interact with it.
+    var fieldsHeader = document.createElement("div");
+    fieldsHeader.style.cssText = "font-weight:600;margin-bottom:6px;";
+    fieldsHeader.textContent = "Confirm each field's real API name:";
+    body.appendChild(fieldsHeader);
+
+    var fieldsWrap = document.createElement("div");
+    fieldsWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:12px;";
+    body.appendChild(fieldsWrap);
+
+    var fieldRows = distinctFields.map(function (f) {
+      var row = document.createElement("div");
+      row.style.cssText = "border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;";
+      var lbl = document.createElement("div");
+      lbl.style.cssText = "font-size:11px;color:#475569;margin-bottom:4px;";
+      lbl.textContent = f.objectLabel + " → " + f.fieldLabel;
+      row.appendChild(lbl);
+      var inputRow = document.createElement("div");
+      inputRow.style.cssText = "display:flex;gap:6px;";
+      var objApiInput = document.createElement("input");
+      objApiInput.type = "text"; objApiInput.placeholder = "Object API name";
+      objApiInput.value = f.objApiGuess || "";
+      objApiInput.style.cssText = "flex:1.3;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;" + (f.objApiGuess ? "background:#fffbeb;" : "");
+      var fieldApiInput = document.createElement("input");
+      fieldApiInput.type = "text"; fieldApiInput.placeholder = "Field API name";
+      fieldApiInput.value = f.fieldApiGuess || "";
+      fieldApiInput.style.cssText = "flex:1.3;border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;font:11px -apple-system,sans-serif;" + (f.fieldApiGuess ? "background:#fffbeb;" : "");
+      var typeSel = document.createElement("select");
+      ["text", "number", "date", "timestamp", "boolean"].forEach(function (t) { var o = document.createElement("option"); o.value = t; o.textContent = t; typeSel.appendChild(o); });
+      typeSel.style.cssText = "flex:0.8;border:1px solid #cbd5e1;border-radius:5px;padding:5px 3px;font:11px -apple-system,sans-serif;";
+      var confirmBtn = document.createElement("button");
+      confirmBtn.textContent = "Confirm";
+      confirmBtn.style.cssText = "border:1px solid #059669;background:#fff;color:#059669;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
+      var confirmed = false;
+      function markUnconfirmed() {
+        confirmed = false;
+        confirmBtn.textContent = "Confirm";
+        confirmBtn.style.background = "#fff"; confirmBtn.style.color = "#059669";
+        row.style.borderColor = "#e2e8f0";
+        updatePreview();
+      }
+      confirmBtn.onclick = function () {
+        if (!objApiInput.value.trim() || !fieldApiInput.value.trim()) { objApiInput.style.borderColor = "#dc2626"; fieldApiInput.style.borderColor = "#dc2626"; return; }
+        confirmed = true;
+        confirmBtn.textContent = "✓ Confirmed";
+        confirmBtn.style.background = "#059669"; confirmBtn.style.color = "#fff";
+        row.style.borderColor = "#059669";
+        updatePreview();
+      };
+      objApiInput.addEventListener("input", markUnconfirmed);
+      fieldApiInput.addEventListener("input", markUnconfirmed);
+      inputRow.appendChild(objApiInput); inputRow.appendChild(fieldApiInput); inputRow.appendChild(typeSel); inputRow.appendChild(confirmBtn);
+      row.appendChild(inputRow);
+      fieldsWrap.appendChild(row);
+      return { def: f, objApiInput: objApiInput, fieldApiInput: fieldApiInput, typeSel: typeSel, isConfirmed: function () { return confirmed; } };
+    });
+
+    var sqlPreview = document.createElement("pre");
+    sqlPreview.style.cssText = "background:#0f172a;color:#e2e8f0;border-radius:8px;padding:10px 12px;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin-bottom:10px;min-height:20px;";
+    body.appendChild(sqlPreview);
+
+    var actionRow = document.createElement("div");
+    actionRow.style.cssText = "display:flex;gap:8px;";
+    var copyBtn = document.createElement("button");
+    copyBtn.textContent = "📋 Copy SQL";
+    copyBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);";
+    actionRow.appendChild(copyBtn);
+    body.appendChild(actionRow);
+
+    var resultArea = document.createElement("div");
+    resultArea.style.cssText = "margin-top:10px;font-size:12px;color:#334155;line-height:1.6;";
+    body.appendChild(resultArea);
+
+    function buildConfirmedMap() {
+      var map = {}, allConfirmed = true;
+      fieldRows.forEach(function (r) {
+        var key = r.def.objectLabel + "::" + r.def.fieldLabel;
+        var ok = r.isConfirmed() && r.objApiInput.value.trim() && r.fieldApiInput.value.trim();
+        if (!ok) allConfirmed = false;
+        map[key] = { objApi: r.objApiInput.value.trim(), fieldApi: r.fieldApiInput.value.trim(), type: r.typeSel.value, confirmed: r.isConfirmed() };
+      });
+      return { map: map, allConfirmed: allConfirmed };
+    }
+
+    function updatePreview() {
+      var segOn = segOnInput.value.trim(), pk = pkInput.value.trim();
+      if (!segOn) { sqlPreview.textContent = "Enter the segment-on object's API name above."; sqlPreview.style.color = "#f87171"; return; }
+      if (!pk) { sqlPreview.textContent = "Enter the segment-on object's primary key column."; sqlPreview.style.color = "#f87171"; return; }
+      var cm = buildConfirmedMap();
+      if (!cm.allConfirmed) { sqlPreview.textContent = "Confirm every field above (click each \"Confirm\" button) to generate SQL."; sqlPreview.style.color = "#f87171"; return; }
+      try {
+        var group = segTreeToConditionGroup(rules.tree, cm.map, segOn);
+        var relatedObjNames = [];
+        (function collect(g) { (g.conditions || []).forEach(function (c) { if (c.object && relatedObjNames.indexOf(c.object) < 0) relatedObjNames.push(c.object); }); (g.groups || []).forEach(collect); })(group);
+        var spec = { segmentOnObject: segOn, primaryKeyColumns: [pk], rootGroup: group };
+        if (relatedObjNames.length) {
+          resultArea.innerHTML = "<span style='color:#b45309;'>Note: this criteria references a related object (" + relatedObjNames.join(", ") + "). This generator doesn't yet know the join keys between it and the segment-on object — the SQL below OMITS those related-object conditions. Add them manually if needed.</span>";
+        } else {
+          resultArea.textContent = "";
+        }
+        var res = buildSegmentSql(spec);
+        if (res.error) { sqlPreview.textContent = res.error; sqlPreview.style.color = "#f87171"; }
+        else { sqlPreview.textContent = res.sql; sqlPreview.style.color = "#e2e8f0"; }
+      } catch (e) {
+        sqlPreview.textContent = e.message; sqlPreview.style.color = "#f87171";
+      }
+    }
+
+    copyBtn.onclick = function () {
+      try { navigator.clipboard.writeText(sqlPreview.textContent); copyBtn.textContent = "✓ Copied"; setTimeout(function () { copyBtn.textContent = "📋 Copy SQL"; }, 1200); } catch (e) {}
+    };
+
+    segOnInput.addEventListener("input", updatePreview);
+    pkInput.addEventListener("input", updatePreview);
+    if (meta.segmentOn) { /* leave blank — meta.segmentOn is a LABEL, not confirmed API name; shown as a hint in the label above only */ }
+    updatePreview();
+    document.body.appendChild(panel);
+    try { makeDraggable(panel, hdr); } catch (e) {}
+    try { addResizeHandle(panel, 420, 340); } catch (e) {}
+    segOnInput.focus();
+  }
+
   // ===== DATA EXPLORE PAGE =====
   // Detects runtime_cdp-data-view-record-list (Data Explore / Data View tab).
   // Features:
@@ -6063,6 +6317,128 @@
   // Requires the same aura creds the sniffer already captured. Reject with the SF
   // error verbatim so SQL-dialect edge cases are visible.
   function sqlQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+
+  // ── Segment Criteria Builder ─────────────────────────────────────────────────
+  // Generates the REAL, engine-EXECUTED query a Data Cloud segment with the given
+  // criteria actually runs — confirmed against an actual generated segment query
+  // (blog: Darshna Sharma / salesforceblogger.com, segmentation deep-dive) and
+  // cross-checked against Salesforce's own documented Connect API validation rules
+  // (IS NOT DISTINCT FROM key-qualifier join pattern) and SQL reference (TIMESTAMP/
+  // DATE literals). This is DIFFERENT from the narrow, unquoted-PK-only dialect you
+  // SUBMIT to POST/PATCH /ssot/segments to create a segment — that's an API payload
+  // grammar, not a runnable query. Mirrored 1:1 in test/segment-sql-generator.test.js.
+  //
+  //   1. SELECT DISTINCT <segment-on PK column(s)>, quoted + fully qualified.
+  //   2. Segment-on table aliased "<DMOName>__0"; each DISTINCT related object gets
+  //      its own "<DMOName>__0" alias too.
+  //   3. Own-object conditions filter directly in the outer WHERE.
+  //   4. EVERY condition on a related object folds into ONE correlated EXISTS
+  //      subquery per related object — multiple conditions on the SAME related
+  //      object merge into that SAME EXISTS (never duplicated).
+  //   5. Conditions in one group combine with inline AND/OR — this is what makes
+  //      the whole thing ONE merged query instead of a per-container UNION (the
+  //      "not container-wise" requirement).
+  function segQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+  function segLiteral(v, type) {
+    if (v === null || v === undefined) return "null";
+    var t = String(type || "text").toLowerCase();
+    if (t === "number" || t === "integer" || t === "numeric" || t === "boolean") return String(v);
+    if (t === "date") return "date '" + String(v).replace(/'/g, "''") + "'";
+    if (t === "timestamp" || t === "datetime") return "timestamp '" + String(v).replace(/'/g, "''") + "'";
+    return "'" + String(v).replace(/'/g, "''") + "'";
+  }
+  function segTableAlias(dmoName, index) { return dmoName + "__" + (index || 0); }
+  var SEG_OPS = {
+    "=":            function (col, v) { return col + " = " + v; },
+    "!=":           function (col, v) { return col + " != " + v; },
+    ">":            function (col, v) { return col + " > " + v; },
+    ">=":           function (col, v) { return col + " >= " + v; },
+    "<":            function (col, v) { return col + " < " + v; },
+    "<=":           function (col, v) { return col + " <= " + v; },
+    "LIKE":         function (col, v) { return col + " LIKE " + v; },
+    "IN":           function (col, v) { return col + " IN (" + v + ")"; },
+    "IS NULL":      function (col) { return col + " IS NULL"; },
+    "IS NOT NULL":  function (col) { return col + " IS NOT NULL"; },
+  };
+  function segBuildWhereFragment(cond, alias) {
+    var col = segQuoteIdent(alias) + "." + segQuoteIdent(cond.column);
+    var fn = SEG_OPS[cond.op];
+    if (!fn) throw new Error("Unsupported operator: " + cond.op);
+    if (cond.op === "IS NULL" || cond.op === "IS NOT NULL") return fn(col);
+    if (cond.op === "IN") return fn(col, cond.value.map(function (v) { return segLiteral(v, cond.type); }).join(","));
+    return fn(col, segLiteral(cond.value, cond.type));
+  }
+  function segRenderGroup(group, resolveAlias) {
+    if (!group) return "";
+    var parts = [];
+    (group.conditions || []).forEach(function (c) { parts.push(segBuildWhereFragment(c, resolveAlias(c))); });
+    (group.groups || []).forEach(function (sub) {
+      var inner = segRenderGroup(sub, resolveAlias);
+      if (inner) parts.push("(" + inner + ")");
+    });
+    var joiner = (group.join === "OR") ? " OR " : " AND ";
+    return parts.join(joiner);
+  }
+  function segValidateSpec(spec) {
+    var errors = [];
+    if (!spec || !spec.segmentOnObject) errors.push("Segment-on object is required.");
+    if (!Array.isArray(spec.primaryKeyColumns) || spec.primaryKeyColumns.length === 0) errors.push("At least one primary key column is required.");
+    return errors;
+  }
+  function buildSegmentSql(spec) {
+    var errors = segValidateSpec(spec);
+    if (errors.length) return { error: errors[0] };
+    var mainAlias = segTableAlias(spec.segmentOnObject, 0);
+    var selectCols = spec.primaryKeyColumns.map(function (c) { return segQuoteIdent(mainAlias) + "." + segQuoteIdent(c); }).join(", ");
+    var sql = "SELECT DISTINCT " + selectCols + " FROM " + segQuoteIdent(spec.segmentOnObject) + " " + segQuoteIdent(mainAlias);
+
+    var relatedAliasByObject = {}, relatedOrder = [];
+    function collectRelated(group) {
+      (group.conditions || []).forEach(function (c) {
+        if (c.object && c.object !== spec.segmentOnObject && !relatedAliasByObject[c.object]) {
+          relatedAliasByObject[c.object] = segTableAlias(c.object, relatedOrder.length);
+          relatedOrder.push(c.object);
+        }
+      });
+      (group.groups || []).forEach(collectRelated);
+    }
+    collectRelated(spec.rootGroup || {});
+
+    function resolveAlias(cond) {
+      if (!cond.object || cond.object === spec.segmentOnObject) return mainAlias;
+      return relatedAliasByObject[cond.object];
+    }
+    function partition(group) {
+      var ownConds = [], relatedConds = {};
+      (group.conditions || []).forEach(function (c) {
+        if (!c.object || c.object === spec.segmentOnObject) ownConds.push(c);
+        else { (relatedConds[c.object] = relatedConds[c.object] || []).push(c); }
+      });
+      return { ownConds: ownConds, relatedConds: relatedConds, join: group.join };
+    }
+    var top = partition(spec.rootGroup || {});
+    var wherePieces = [];
+    var ownGroupForRender = { join: top.join, conditions: top.ownConds, groups: (spec.rootGroup && spec.rootGroup.groups) || [] };
+    var ownWhere = segRenderGroup(ownGroupForRender, resolveAlias);
+    if (ownWhere) wherePieces.push(ownWhere);
+
+    (spec.joins || []).forEach(function (j) {
+      var relAlias = relatedAliasByObject[j.object];
+      if (!relAlias) return;
+      var conds = top.relatedConds[j.object] || [];
+      var joinOn = segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.leftKey) + " = " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.rightKey);
+      if (j.keyQualifier) {
+        joinOn += " AND " + segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.keyQualifier.left) + " IS NOT DISTINCT FROM " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.keyQualifier.right);
+      }
+      var innerWhere = conds.map(function (c) { return segBuildWhereFragment(c, relAlias); }).join(" AND ");
+      wherePieces.push("EXISTS (SELECT 1 FROM " + segQuoteIdent(j.object) + " " + segQuoteIdent(relAlias) + " WHERE " + joinOn + (innerWhere ? " AND " + innerWhere : "") + ")");
+    });
+
+    if (wherePieces.length) sql += " WHERE " + wherePieces.join(" AND ");
+    if (spec.limit != null) sql += " LIMIT " + Number(spec.limit);
+    return { sql: sql };
+  }
+
 
   // Are we running as the browser EXTENSION (bridge.js present)? It stamps this attr.
   // Extension mode unlocks the DOCUMENTED /ssot/query-sql endpoint (via the bridge →
@@ -12438,126 +12814,6 @@
       objInput.focus();
     }
 
-    // ── Segment Criteria Builder ─────────────────────────────────────────────────
-    // Generates the REAL, engine-EXECUTED query a Data Cloud segment with the given
-    // criteria actually runs — confirmed against an actual generated segment query
-    // (blog: Darshna Sharma / salesforceblogger.com, segmentation deep-dive) and
-    // cross-checked against Salesforce's own documented Connect API validation rules
-    // (IS NOT DISTINCT FROM key-qualifier join pattern) and SQL reference (TIMESTAMP/
-    // DATE literals). This is DIFFERENT from the narrow, unquoted-PK-only dialect you
-    // SUBMIT to POST/PATCH /ssot/segments to create a segment — that's an API payload
-    // grammar, not a runnable query. Mirrored 1:1 in test/segment-sql-generator.test.js.
-    //
-    //   1. SELECT DISTINCT <segment-on PK column(s)>, quoted + fully qualified.
-    //   2. Segment-on table aliased "<DMOName>__0"; each DISTINCT related object gets
-    //      its own "<DMOName>__0" alias too.
-    //   3. Own-object conditions filter directly in the outer WHERE.
-    //   4. EVERY condition on a related object folds into ONE correlated EXISTS
-    //      subquery per related object — multiple conditions on the SAME related
-    //      object merge into that SAME EXISTS (never duplicated).
-    //   5. Conditions in one group combine with inline AND/OR — this is what makes
-    //      the whole thing ONE merged query instead of a per-container UNION (the
-    //      "not container-wise" requirement).
-    function segQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
-    function segLiteral(v, type) {
-      if (v === null || v === undefined) return "null";
-      var t = String(type || "text").toLowerCase();
-      if (t === "number" || t === "integer" || t === "numeric" || t === "boolean") return String(v);
-      if (t === "date") return "date '" + String(v).replace(/'/g, "''") + "'";
-      if (t === "timestamp" || t === "datetime") return "timestamp '" + String(v).replace(/'/g, "''") + "'";
-      return "'" + String(v).replace(/'/g, "''") + "'";
-    }
-    function segTableAlias(dmoName, index) { return dmoName + "__" + (index || 0); }
-    var SEG_OPS = {
-      "=":            function (col, v) { return col + " = " + v; },
-      "!=":           function (col, v) { return col + " != " + v; },
-      ">":            function (col, v) { return col + " > " + v; },
-      ">=":           function (col, v) { return col + " >= " + v; },
-      "<":            function (col, v) { return col + " < " + v; },
-      "<=":           function (col, v) { return col + " <= " + v; },
-      "LIKE":         function (col, v) { return col + " LIKE " + v; },
-      "IN":           function (col, v) { return col + " IN (" + v + ")"; },
-      "IS NULL":      function (col) { return col + " IS NULL"; },
-      "IS NOT NULL":  function (col) { return col + " IS NOT NULL"; },
-    };
-    function segBuildWhereFragment(cond, alias) {
-      var col = segQuoteIdent(alias) + "." + segQuoteIdent(cond.column);
-      var fn = SEG_OPS[cond.op];
-      if (!fn) throw new Error("Unsupported operator: " + cond.op);
-      if (cond.op === "IS NULL" || cond.op === "IS NOT NULL") return fn(col);
-      if (cond.op === "IN") return fn(col, cond.value.map(function (v) { return segLiteral(v, cond.type); }).join(","));
-      return fn(col, segLiteral(cond.value, cond.type));
-    }
-    function segRenderGroup(group, resolveAlias) {
-      if (!group) return "";
-      var parts = [];
-      (group.conditions || []).forEach(function (c) { parts.push(segBuildWhereFragment(c, resolveAlias(c))); });
-      (group.groups || []).forEach(function (sub) {
-        var inner = segRenderGroup(sub, resolveAlias);
-        if (inner) parts.push("(" + inner + ")");
-      });
-      var joiner = (group.join === "OR") ? " OR " : " AND ";
-      return parts.join(joiner);
-    }
-    function segValidateSpec(spec) {
-      var errors = [];
-      if (!spec || !spec.segmentOnObject) errors.push("Segment-on object is required.");
-      if (!Array.isArray(spec.primaryKeyColumns) || spec.primaryKeyColumns.length === 0) errors.push("At least one primary key column is required.");
-      return errors;
-    }
-    function buildSegmentSql(spec) {
-      var errors = segValidateSpec(spec);
-      if (errors.length) return { error: errors[0] };
-      var mainAlias = segTableAlias(spec.segmentOnObject, 0);
-      var selectCols = spec.primaryKeyColumns.map(function (c) { return segQuoteIdent(mainAlias) + "." + segQuoteIdent(c); }).join(", ");
-      var sql = "SELECT DISTINCT " + selectCols + " FROM " + segQuoteIdent(spec.segmentOnObject) + " " + segQuoteIdent(mainAlias);
-
-      var relatedAliasByObject = {}, relatedOrder = [];
-      function collectRelated(group) {
-        (group.conditions || []).forEach(function (c) {
-          if (c.object && c.object !== spec.segmentOnObject && !relatedAliasByObject[c.object]) {
-            relatedAliasByObject[c.object] = segTableAlias(c.object, relatedOrder.length);
-            relatedOrder.push(c.object);
-          }
-        });
-        (group.groups || []).forEach(collectRelated);
-      }
-      collectRelated(spec.rootGroup || {});
-
-      function resolveAlias(cond) {
-        if (!cond.object || cond.object === spec.segmentOnObject) return mainAlias;
-        return relatedAliasByObject[cond.object];
-      }
-      function partition(group) {
-        var ownConds = [], relatedConds = {};
-        (group.conditions || []).forEach(function (c) {
-          if (!c.object || c.object === spec.segmentOnObject) ownConds.push(c);
-          else { (relatedConds[c.object] = relatedConds[c.object] || []).push(c); }
-        });
-        return { ownConds: ownConds, relatedConds: relatedConds, join: group.join };
-      }
-      var top = partition(spec.rootGroup || {});
-      var wherePieces = [];
-      var ownGroupForRender = { join: top.join, conditions: top.ownConds, groups: (spec.rootGroup && spec.rootGroup.groups) || [] };
-      var ownWhere = segRenderGroup(ownGroupForRender, resolveAlias);
-      if (ownWhere) wherePieces.push(ownWhere);
-
-      (spec.joins || []).forEach(function (j) {
-        var relAlias = relatedAliasByObject[j.object];
-        if (!relAlias) return;
-        var conds = top.relatedConds[j.object] || [];
-        var joinOn = segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.leftKey) + " = " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.rightKey);
-        if (j.keyQualifier) {
-          joinOn += " AND " + segQuoteIdent(mainAlias) + "." + segQuoteIdent(j.keyQualifier.left) + " IS NOT DISTINCT FROM " + segQuoteIdent(relAlias) + "." + segQuoteIdent(j.keyQualifier.right);
-        }
-        var innerWhere = conds.map(function (c) { return segBuildWhereFragment(c, relAlias); }).join(" AND ");
-        wherePieces.push("EXISTS (SELECT 1 FROM " + segQuoteIdent(j.object) + " " + segQuoteIdent(relAlias) + " WHERE " + joinOn + (innerWhere ? " AND " + innerWhere : "") + ")");
-      });
-
-      if (wherePieces.length) sql += " WHERE " + wherePieces.join(" AND ");
-      if (spec.limit != null) sql += " LIMIT " + Number(spec.limit);
-      return { sql: sql };
-    }
 
     var segmentPanelEl = null;
     function closeSegmentPanel() { if (segmentPanelEl) { segmentPanelEl.remove(); segmentPanelEl = null; } }
@@ -16497,6 +16753,19 @@ processJSON();
       const dl = mkBtn("dc-detail-btn", btnLabel, btnLabel, btnGrad, btnIconSvg, btnSubtitle);
       dl.onclick = (e) => { e.stopPropagation(); if (detailPageType === "DataStream") openDsExport(); else if (detailPageType === "DLO") openDloExport(); else if (detailPageType === "Segment" && typeof openSegmentExport === "function") openSegmentExport(); else openDmoExport(); };
 
+      // Segment page ONLY: a second button that converts the criteria ALREADY
+      // extracted by readSegmentRules() (same scraper "Export Rules" uses) into the
+      // real, engine-executed SQL a segment with that criteria would run. Requires
+      // the user to CONFIRM each field's API name first — the scraper's fieldApi is
+      // best-effort (label-matched LWC props) and is never shown/trusted elsewhere
+      // in this tool, so this generator won't silently emit an unconfirmed one either.
+      const sqlIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M2 3h12M2 8h12M2 13h8'/></svg>";
+      let sqlBtn = null;
+      if (isSegment) {
+        sqlBtn = mkBtn("dc-segment-sql-btn", "Generate SQL", "Generate SQL", "linear-gradient(135deg,#0ea5e9,#0369a1)", sqlIconSvg, "Real query this segment would run");
+        sqlBtn.onclick = (e) => { e.stopPropagation(); if (typeof openSegmentSqlPanel === "function") openSegmentSqlPanel(); };
+      }
+
       const separator = document.createElement("div");
       separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
 
@@ -16509,6 +16778,7 @@ processJSON();
       dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
 
       menu.appendChild(dl);
+      if (sqlBtn) menu.appendChild(sqlBtn);
       menu.appendChild(separator);
       menu.appendChild(dismissRow);
 
