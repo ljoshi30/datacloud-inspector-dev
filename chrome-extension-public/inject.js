@@ -5618,19 +5618,6 @@ processJSON();
       const dl = mkBtn("dc-detail-btn", btnLabel, btnLabel, btnGrad, btnIconSvg, btnSubtitle);
       dl.onclick = (e) => { e.stopPropagation(); if (detailPageType === "DataStream") openDsExport(); else if (detailPageType === "DLO") openDloExport(); else if (detailPageType === "Segment" && typeof openSegmentExport === "function") openSegmentExport(); else openDmoExport(); };
 
-      // Segment page ONLY: a second button that converts the criteria ALREADY
-      // extracted by readSegmentRules() (same scraper "Export Rules" uses) into the
-      // real, engine-executed SQL a segment with that criteria would run. Requires
-      // the user to CONFIRM each field's API name first — the scraper's fieldApi is
-      // best-effort (label-matched LWC props) and is never shown/trusted elsewhere
-      // in this tool, so this generator won't silently emit an unconfirmed one either.
-      const sqlIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M2 3h12M2 8h12M2 13h8'/></svg>";
-      let sqlBtn = null;
-      if (isSegment) {
-        sqlBtn = mkBtn("dc-segment-sql-btn", "Generate SQL", "Generate SQL", "linear-gradient(135deg,#0ea5e9,#0369a1)", sqlIconSvg, "Real query this segment would run");
-        sqlBtn.onclick = (e) => { e.stopPropagation(); if (typeof openSegmentSqlPanel === "function") openSegmentSqlPanel(); };
-      }
-
       const separator = document.createElement("div");
       separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
 
@@ -5643,7 +5630,6 @@ processJSON();
       dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
 
       menu.appendChild(dl);
-      if (sqlBtn) menu.appendChild(sqlBtn);
       menu.appendChild(separator);
       menu.appendChild(dismissRow);
 
