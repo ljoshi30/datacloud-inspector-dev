@@ -197,8 +197,8 @@
   // DMO's own list is what disambiguates them.
   function targetLists() {
     return findByTag(TGT_CONTAINER).map((listEl) => {
-      const { map, entityName } = entityFieldMap(listEl);
-      return { listEl, map, entityName };
+      const { map, labelNames, entityName } = entityFieldMap(listEl);
+      return { listEl, map, labelNames, entityName };
     });
   }
 
@@ -210,6 +210,61 @@
     const norm = String(label).replace(/\s+/g, " ").trim();
     for (const [k, v] of map) { if (String(k).replace(/\s+/g, " ").trim() === norm) return v; }
     return null;
+  }
+
+  // Set of "dmoEntityName::targetFieldApi" pairs that are ACTUALLY mapped, read
+  // from the authoritative container.mapping[] (same data the export + table view
+  // use). Used to disambiguate a DMO's colliding labels — see makeTargetResolver.
+  function mappedTargetSet() {
+    const set = new Set();
+    try {
+      const cont = findByTag(TAGGING_CMP).find(isVisible) || findByTag(TAGGING_CMP)[0];
+      const raw = cont && safeGet(cont, "mapping");
+      if (Array.isArray(raw)) {
+        for (const it of raw) {
+          const tgt = it && safeGet(it, "target");
+          const en = tgt && safeGet(tgt, "entityName");
+          const fn = tgt && safeGet(tgt, "fieldName");
+          if (en && fn) set.add(en + "::" + fn);
+        }
+      }
+    } catch (e) {}
+    return set;
+  }
+
+  // TARGET-side resolver (fixes the DMO label-collision bug — mirror of the
+  // source/DLO fix). A DMO can carry TWO fields with the SAME label (e.g. "Birth
+  // Date" = ssot__BirthDate__c AND BirthDt__c). Matching purely by label returned
+  // the FIRST field, which is often the standard (unmapped) one, not the field the
+  // stream actually maps to. The DMO list also renders "Is Mapped" BEFORE
+  // "Unmapped", so a plain field-order cursor would still pick the wrong one — so
+  // for a colliding label we order candidates MAPPED-FIRST (via mappedTargetSet),
+  // then hand successive rendered rows the next candidate. Returns {api, sure};
+  // sure=false when it genuinely can't disambiguate (e.g. two DIFFERENT mapped
+  // fields share the label) so the caller can flag it "(?)" instead of lying.
+  //   labelNames : Map<label, [apiName,...]> from entityFieldMap()
+  //   mset       : mappedTargetSet()
+  //   dmoApi     : entity.name of the DMO whose list this is
+  function makeTargetResolver(labelNames, mset, dmoApi) {
+    const cursor = new Map();
+    return function nextForLabelTarget(label) {
+      let arr = labelNames.get(label);
+      if (!arr) {
+        const norm = String(label).replace(/\s+/g, " ").trim();
+        for (const [k, v] of labelNames) { if (String(k).replace(/\s+/g, " ").trim() === norm) { arr = v; label = k; break; } }
+      }
+      if (!arr || !arr.length) return null;
+      const distinct = Array.from(new Set(arr));
+      if (distinct.length === 1) return { api: distinct[0], sure: true }; // unique / all identical
+      const mapped = arr.filter((a) => mset.has(dmoApi + "::" + a));
+      const unmapped = arr.filter((a) => !mset.has(dmoApi + "::" + a));
+      const ordered = mapped.concat(unmapped);
+      const used = cursor.get(label) || 0;
+      const idx = used < ordered.length ? used : ordered.length - 1; // clamp; never overrun
+      cursor.set(label, used + 1);
+      const bucket = idx < mapped.length ? mapped : unmapped;
+      return { api: ordered[idx], sure: Array.from(new Set(bucket)).length === 1 };
+    };
   }
 
   // ---------- decoration ----------
@@ -271,22 +326,23 @@
       if (!state.on) return;
       let name = null;
       const path = (e.composedPath && e.composedPath()) || [];
+      let uncertain = false;
       for (const n of path) {
         if (n && n.nodeType === 1) {
           const v = n.dcApiName || (n.getAttribute && n.getAttribute("data-dc-api-name"));
-          if (v) { name = v; break; }
+          if (v) { name = v; uncertain = !!(n.dcUncertain || (n.getAttribute && n.getAttribute("data-dc-uncertain"))); break; }
         }
       }
-      if (name) showTip(name, e.clientX, e.clientY);
+      if (name) showTip(name + (uncertain ? " (?)" : ""), e.clientX, e.clientY, uncertain ? "duplicate label — verify; click to copy" : null);
       else hideTip();
     };
     const onMove = (e) => {
       if (!state.on || !tipEl || tipEl.style.display === "none") return;
       // keep following the cursor while over a tagged element
       const path = (e.composedPath && e.composedPath()) || [];
-      let name = null;
-      for (const n of path) { if (n && n.nodeType === 1) { const v = n.dcApiName || (n.getAttribute && n.getAttribute("data-dc-api-name")); if (v) { name = v; break; } } }
-      if (name) showTip(name, e.clientX, e.clientY); else hideTip();
+      let name = null, uncertain = false;
+      for (const n of path) { if (n && n.nodeType === 1) { const v = n.dcApiName || (n.getAttribute && n.getAttribute("data-dc-api-name")); if (v) { name = v; uncertain = !!(n.dcUncertain || (n.getAttribute && n.getAttribute("data-dc-uncertain"))); break; } } }
+      if (name) showTip(name + (uncertain ? " (?)" : ""), e.clientX, e.clientY, uncertain ? "duplicate label — verify; click to copy" : null); else hideTip();
     };
     // Click the field label/name to COPY its api name. We only act when the
     // click path contains a tagged host AND does NOT contain the mapping dot /
@@ -323,7 +379,11 @@
   }
 
   // Tag a field row's host with its api name (no visible node inserted).
-  function decorate(item, apiName) {
+  // `uncertain` (target side only): the api name is a best-effort pick for a
+  // colliding label we couldn't fully disambiguate. We still store the CLEAN name
+  // (so click-to-copy copies a real, usable api name), but the hover tooltip shows
+  // a " (?)" suffix via the data-dc-uncertain flag so the user knows to verify.
+  function decorate(item, apiName, uncertain) {
     if (!apiName) return false;
     let sr = null; try { sr = item.shadowRoot; } catch (e) {}
     if (!sr) return false;
@@ -336,6 +396,8 @@
       // also tag the item host so hovering anywhere on the row works
       item.dcApiName = apiName;
       if (item.setAttribute) item.setAttribute("data-dc-api-name", apiName);
+      if (uncertain) { host.dcUncertain = true; item.dcUncertain = true; if (host.setAttribute) host.setAttribute("data-dc-uncertain", "1"); if (item.setAttribute) item.setAttribute("data-dc-uncertain", "1"); }
+      else { host.dcUncertain = false; item.dcUncertain = false; if (host.removeAttribute) host.removeAttribute("data-dc-uncertain"); if (item.removeAttribute) item.removeAttribute("data-dc-uncertain"); }
       if (host.style && host.style.setProperty) host.style.setProperty("cursor", "help", "important");
     } catch (e) { return false; }
     return true;
@@ -361,6 +423,8 @@
       try {
         if (el.dcApiName != null) { try { delete el.dcApiName; } catch (e) { el.dcApiName = null; } }
         if (el.hasAttribute && el.hasAttribute("data-dc-api-name")) el.removeAttribute("data-dc-api-name");
+        if (el.dcUncertain != null) { try { delete el.dcUncertain; } catch (e) { el.dcUncertain = null; } }
+        if (el.hasAttribute && el.hasAttribute("data-dc-uncertain")) el.removeAttribute("data-dc-uncertain");
       } catch (e) {}
     });
     removeTip(); // fully remove the tooltip element (Hide API names)
@@ -376,8 +440,9 @@
   // and distorted the canvas). Pure inline + small explicit line-height keeps
   // the row's line-box height unchanged, so ◉ anchors / connector lines don't
   // move. Idempotent; a MutationObserver-driven redraw re-applies after renders.
-  function inlineDecorate(item, apiName) {
+  function inlineDecorate(item, apiName, uncertain) {
     if (!apiName) return false;
+    const shownName = apiName + (uncertain ? " (?)" : ""); // display marker; copy/title stays clean
     let sr = null; try { sr = item.shadowRoot; } catch (e) {}
     if (!sr) return false;
     let labelEl = null;
@@ -397,7 +462,7 @@
     if (!root) return false;
     try {
       let span = root.querySelector(":scope > .dc-api-inline");
-      if (span && span.textContent === apiName) return true;
+      if (span && span.textContent === shownName) return true;
       if (!span) {
         span = document.createElement("span");
         span.className = "dc-api-inline";
@@ -405,7 +470,7 @@
         span.addEventListener("click", (e) => e.stopPropagation());
         root.appendChild(span);
       }
-      span.textContent = apiName;
+      span.textContent = shownName;
       const set = (p, v) => { try { span.style.setProperty(p, v, "important"); } catch (e) {} };
       set("position", "absolute"); set("display", "block"); set("line-height", "1");
       set("font-family", "'SF Mono',Menlo,Consolas,monospace"); set("font-size", "9px");
@@ -799,21 +864,29 @@
     // "Unmapped (n)") AND internal data-tid ids ("add-new-field-btn").
     const NON_FIELD = /^(Add New Field|Unmapped|Is Mapped|Mapped|Show more|Show less)\b/i;
     const NON_FIELD_TID = /^(add-new-field-btn|.*-btn|entity-list|search-input|main-container)$/i;
-    for (const { listEl, map, entityName } of targetLists()) {
+    const mset = mappedTargetSet(); // authoritative "dmo::field" pairs for collision disambiguation
+    for (const { listEl, map, labelNames, entityName } of targetLists()) {
       // entity header (DMO title) -> hover mode only (fields-only for inline)
       if (state.on && entityName && decorateHeader(listEl, entityName)) hdrDone++;
       const items = itemsUnder(listEl).filter((it) => {
         const t = labelOf(it);
         return t && !HEADER.test(t) && !NON_FIELD.test(t) && !NON_FIELD_TID.test(t);
       });
+      // Per-list resolver: for a label shared by >1 field, order candidates
+      // mapped-first and hand each rendered row the next one; returns {api, sure}.
+      const nextForLabelTarget = makeTargetResolver(labelNames || new Map(), mset, entityName);
       for (const it of items) {
         tgtCount++;
         const label = labelOf(it);
-        const name = lookupByLabel(map, label);
+        const resolved = nextForLabelTarget(label);
+        // Fall back to the plain first-match only if the resolver found nothing
+        // (e.g. labelNames unavailable): still better than a miss.
+        const name = resolved ? resolved.api : lookupByLabel(map, label);
+        const uncertain = resolved ? !resolved.sure : false;
         if (name) {
-          if (state.on && decorate(it, name)) td++;
-          if (state.inline) inlineDecorate(it, name);
-          if (tgtPairs.length < 300) tgtPairs.push([entityName, label, name]);
+          if (state.on && decorate(it, name, uncertain)) td++;
+          if (state.inline) inlineDecorate(it, name, uncertain);
+          if (tgtPairs.length < 300) tgtPairs.push([entityName, label, name, uncertain]);
         } else {
           miss++;
           if (tgtMissLabels.length < 40) tgtMissLabels.push([entityName, label]);
