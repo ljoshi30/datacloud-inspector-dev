@@ -212,42 +212,48 @@
     return null;
   }
 
-  // Set of "dmoEntityName::targetFieldApi" pairs that are ACTUALLY mapped, read
-  // from the authoritative container.mapping[] (same data the export + table view
-  // use). Used to disambiguate a DMO's colliding labels — see makeTargetResolver.
-  function mappedTargetSet() {
+  // Set of "entityName::fieldApi" pairs that are ACTUALLY mapped, read from the
+  // authoritative container.mapping[] (same data the export + table view use).
+  // `side` = "target" (target.entityName::target.fieldName, DMO) or "source"
+  // (source.entityName::source.fieldName, DLO). Used to disambiguate colliding
+  // labels on either side — see makeCollisionResolver.
+  function mappedFieldSet(side) {
+    const key = side === "source" ? "source" : "target";
     const set = new Set();
     try {
       const cont = findByTag(TAGGING_CMP).find(isVisible) || findByTag(TAGGING_CMP)[0];
       const raw = cont && safeGet(cont, "mapping");
       if (Array.isArray(raw)) {
         for (const it of raw) {
-          const tgt = it && safeGet(it, "target");
-          const en = tgt && safeGet(tgt, "entityName");
-          const fn = tgt && safeGet(tgt, "fieldName");
+          const node = it && safeGet(it, key);
+          const en = node && safeGet(node, "entityName");
+          const fn = node && safeGet(node, "fieldName");
           if (en && fn) set.add(en + "::" + fn);
         }
       }
     } catch (e) {}
     return set;
   }
+  function mappedTargetSet() { return mappedFieldSet("target"); }
+  function mappedSourceSet() { return mappedFieldSet("source"); }
 
-  // TARGET-side resolver (fixes the DMO label-collision bug — mirror of the
-  // source/DLO fix). A DMO can carry TWO fields with the SAME label (e.g. "Birth
-  // Date" = ssot__BirthDate__c AND BirthDt__c). Matching purely by label returned
-  // the FIRST field, which is often the standard (unmapped) one, not the field the
-  // stream actually maps to. The DMO list also renders "Is Mapped" BEFORE
-  // "Unmapped", so a plain field-order cursor would still pick the wrong one — so
-  // for a colliding label we order candidates MAPPED-FIRST (via mappedTargetSet),
-  // then hand successive rendered rows the next candidate. Returns {api, sure};
-  // sure=false when it genuinely can't disambiguate (e.g. two DIFFERENT mapped
-  // fields share the label) so the caller can flag it "(?)" instead of lying.
+  // Collision resolver — fixes the label-collision bug on BOTH sides of the canvas.
+  // An entity (DLO or DMO) can carry TWO+ fields with the SAME label (DMO: "Birth
+  // Date" = ssot__BirthDate__c AND BirthDt__c; DLO: three "Account Number" fields).
+  // Matching purely by label returned the FIRST field, which is often the standard
+  // (unmapped) one, not the field the stream actually maps to. The lists also
+  // render "Is Mapped" BEFORE "Unmapped", so a plain render-order cursor still
+  // mispicks — so for a colliding label we order candidates MAPPED-FIRST (via the
+  // authoritative mapping set), then hand successive rendered rows the next
+  // candidate. Returns {api, sure}; sure=false when it genuinely can't
+  // disambiguate (e.g. two DIFFERENT mapped fields share the label, or a collision
+  // where none is mapped) so the caller can flag it "(?)" instead of lying.
   //   labelNames : Map<label, [apiName,...]> from entityFieldMap()
-  //   mset       : mappedTargetSet()
-  //   dmoApi     : entity.name of the DMO whose list this is
-  function makeTargetResolver(labelNames, mset, dmoApi) {
+  //   mset       : mappedTargetSet() / mappedSourceSet()
+  //   entityApi  : entity.name of the list this resolver serves
+  function makeCollisionResolver(labelNames, mset, entityApi) {
     const cursor = new Map();
-    return function nextForLabelTarget(label) {
+    return function next(label) {
       let arr = labelNames.get(label);
       if (!arr) {
         const norm = String(label).replace(/\s+/g, " ").trim();
@@ -256,8 +262,8 @@
       if (!arr || !arr.length) return null;
       const distinct = Array.from(new Set(arr));
       if (distinct.length === 1) return { api: distinct[0], sure: true }; // unique / all identical
-      const mapped = arr.filter((a) => mset.has(dmoApi + "::" + a));
-      const unmapped = arr.filter((a) => !mset.has(dmoApi + "::" + a));
+      const mapped = arr.filter((a) => mset.has(entityApi + "::" + a));
+      const unmapped = arr.filter((a) => !mset.has(entityApi + "::" + a));
       const ordered = mapped.concat(unmapped);
       const used = cursor.get(label) || 0;
       const idx = used < ordered.length ? used : ordered.length - 1; // clamp; never overrun
@@ -266,6 +272,8 @@
       return { api: ordered[idx], sure: Array.from(new Set(bucket)).length === 1 };
     };
   }
+  // Back-compat alias (target loop calls this name).
+  function makeTargetResolver(labelNames, mset, dmoApi) { return makeCollisionResolver(labelNames, mset, dmoApi); }
 
   // ---------- decoration ----------
   // We render the api name as a REAL <span> child (not a CSS ::after) so the
@@ -798,8 +806,9 @@
     const pairs = [];
     const NON_FIELD_S = /^(Add New Field|Unmapped|Is Mapped|Mapped|Show more|Show less)\b/i;
     const NON_FIELD_TID_S = /^(add-new-field-btn|.*-btn|entity-list|search-input|main-container)$/i;
+    const smset = mappedSourceSet(); // authoritative "dlo::field" pairs for collision disambiguation
     for (const listEl of findByTag(SRC_LIST)) {
-      const { map, labelNames } = entityFieldMap(listEl); // label -> apiName + label -> [all apis]
+      const { map, labelNames, entityName } = entityFieldMap(listEl); // label -> apiName + label -> [all apis]
       const attrApis = attrApiNames(listEl);           // ordered fallback
       apiTotal += (map.size || attrApis.length);
       // rows that belong to THIS list (nearest attribute-list ancestor is it)
@@ -809,33 +818,23 @@
         return t && !HEADER.test(t) && !NON_FIELD_S.test(t) && !NON_FIELD_TID_S.test(t);
       });
       const useLabels = map.size > 0;
-      // Per-label cursor: when a label maps to MULTIPLE fields (e.g. three
-      // "Account Number"), hand each rendered row the NEXT distinct API for that
-      // label in field order, instead of all rows getting the first (old bug).
-      // For a UNIQUE label this is identical to lookupByLabel(map,label).
-      const labelCursor = new Map();
-      const nextForLabel = (label) => {
-        // exact, then whitespace-normalised match against labelNames keys
-        let arr = labelNames.get(label);
-        if (!arr) {
-          const norm = String(label).replace(/\s+/g, " ").trim();
-          for (const [k, v] of labelNames) { if (String(k).replace(/\s+/g, " ").trim() === norm) { arr = v; label = k; break; } }
-        }
-        if (!arr || !arr.length) return null;
-        const used = labelCursor.get(label) || 0;
-        const idx = used < arr.length ? used : arr.length - 1; // clamp; never overrun
-        labelCursor.set(label, used + 1);
-        return arr[idx];
-      };
+      // Collision-aware resolver: for a label shared by MULTIPLE fields (e.g. three
+      // "Account Number"), order candidates MAPPED-FIRST via the authoritative
+      // mapping[] set, then hand each rendered row the next one. Returns {api, sure}
+      // so a genuinely ambiguous pick can be flagged "(?)" instead of shown as fact.
+      // For a UNIQUE label this is identical to a plain lookup.
+      const nextForLabel = makeCollisionResolver(labelNames || new Map(), smset, entityName);
       for (let i = 0; i < rows.length; i++) {
         const label = labelOf(rows[i]);
         // by label (robust, collision-aware) if available, else positional attribute name
-        const name = useLabels ? nextForLabel(label) : attrApis[i];
+        const resolved = useLabels ? nextForLabel(label) : null;
+        const name = resolved ? resolved.api : attrApis[i];
+        const uncertain = resolved ? !resolved.sure : false;
         if (!name) continue;
         srcCount++;
-        if (pairs.length < 300) pairs.push([label, name]);
-        if (state.on && decorate(rows[i], name)) sd++;
-        if (state.inline) inlineDecorate(rows[i], name);
+        if (pairs.length < 300) pairs.push([label, name, uncertain]);
+        if (state.on && decorate(rows[i], name, uncertain)) sd++;
+        if (state.inline) inlineDecorate(rows[i], name, uncertain);
       }
     }
     state.srcDone = sd;
