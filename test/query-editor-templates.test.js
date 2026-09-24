@@ -273,7 +273,7 @@ console.log("\n5. Field-label collision guard (real source, not a copy)");
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
 
   function extractBlock(startMarker) {
     const startIdx = src.indexOf(startMarker);
@@ -342,7 +342,7 @@ console.log("\n6. fieldVal() selector guard (must match <select>, not just <inpu
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   const m = src.match(/function fieldVal\([^)]*\)\s*\{[^}]*\}/);
   ok("fieldVal() found in source", !!m);
   if (m) {
@@ -406,7 +406,7 @@ console.log("\n9. Sample-fetch row cap (100 -> 2,000)");
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("SAMPLE_ROWS is 2000, not the old 100", /SAMPLE_ROWS\s*=\s*2000/.test(src));
   ok("sample fetch appends LIMIT + SAMPLE_ROWS to the query", /sampleSql\s*=\s*res\.sql\s*\+\s*"\s*LIMIT\s*"\s*\+\s*SAMPLE_ROWS/.test(src));
   ok("button label says up to 2,000, not the stale 100", /Fetch rows \(up to 2,000\)/.test(src));
@@ -425,7 +425,7 @@ console.log("\n10. Heavy-query Count error is rewritten to the panel's own butto
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("panel's count catch handler checks err.heavyCount", /err\s*&&\s*err\.heavyCount/.test(src));
   ok("rewritten message names the panel's OWN button (Fetch rows), not the native one", /Fetch rows \(up to 2,000\)/.test(src) &&
     /hmsg\s*=\s*"This query is too heavy to count directly/.test(src));
@@ -447,7 +447,7 @@ console.log("\n11. Info-card viewport clamp (zoom / drag no longer cuts it off)"
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("clampQeCardHeight() exists", /function clampQeCardHeight\(\)/.test(src));
   ok("clamp reads the WRAP's actual position (getBoundingClientRect), not a guessed constant", /wrapRect\s*=\s*wrap\.getBoundingClientRect\(\)/.test(src));
   ok("clamp never lets the card get taller than the space actually available above it", /Math\.min\(260,\s*available\)/.test(src));

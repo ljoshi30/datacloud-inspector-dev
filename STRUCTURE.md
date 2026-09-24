@@ -7,12 +7,35 @@ every shareable artifact. This doc explains what each file is, how the build wor
 
 ---
 
-## 1. The single source of truth
+## 1. The two forked sources
+
+The bookmarklet and the extension are now **separate source files** (forked on
+2026-09-24) so extension-only work can never grow or break the bookmarklet:
 
 | File | Role |
 |---|---|
-| **`console-decorate.js`** | **The only file you edit.** ~434 KB. Contains ALL features. In-development features (Data Explorer, Segment export) are wrapped in `/* @strip:start dev */ … /* @strip:end */` markers so the build can physically remove them from the public version. |
-| **`build.js`** | The build pipeline. Run `node build.js` after every edit. |
+| **`console-decorate.extension.js`** | Extension source (the **superset**). Shared core + extension-only code wrapped in `/* @ext-only:start */ … /* @ext-only:end */`. Drives the Chrome/Firefox `inject.js`. |
+| **`console-decorate.bookmarklet.js`** | Bookmarklet source. Shared core ONLY — no `@ext-only` blocks. Drives the bookmarklet payloads (keeps them small / under the 2 MB limit). |
+| **`build.js`** | Build pipeline. Run `node build.js` after every edit. |
+| **`sync-shared.js`** | Shared-code helper: `--check` reports drift; `--from-ext` regenerates the bookmarklet source from the extension source (removes `@ext-only`). |
+
+### The rule that keeps the fork safe
+Everything **outside** `@ext-only` blocks is SHARED and **must be identical** in both
+files. `build.js` enforces this with a **drift check** — if the shared code differs, the
+build **aborts** and points at the first differing line. So a shared fix applied to only
+one file can never silently ship.
+
+- **Shared change** (bug fix, feature both need): make it in **both** files. Easiest path —
+  edit `console-decorate.extension.js`, then run `node sync-shared.js --from-ext` to mirror
+  the shared part into the bookmarklet source.
+- **Extension-only change** (extended API calls, bridge features): put it inside an
+  `/* @ext-only:start */ … /* @ext-only:end */` block in `console-decorate.extension.js`
+  ONLY. It's physically absent from the bookmarklet.
+- Still unsure where a change goes? Ask — misplacing it either drifts or bloats.
+
+In-development features (Data Explorer, Segment export) remain wrapped in
+`/* @strip:start dev */ … /* @strip:end */` markers (independent axis) so the build can
+physically remove them from the PUBLIC variant.
 
 Everything else in the top level is **generated** by `build.js` — never edit generated
 files by hand (they'll be overwritten).
@@ -157,20 +180,26 @@ build. Safe to ignore; safe to delete if you want.
 ## 8. Quick reference
 
 ```bash
-# Edit the source
-$EDITOR console-decorate.js
+# Edit the source(s)
+$EDITOR console-decorate.extension.js     # extension + shared code
+# shared change? mirror it into the bookmarklet source:
+node sync-shared.js --from-ext
+# (or edit console-decorate.bookmarklet.js directly for a shared change, then
+#  copy the same change into the extension source — build's drift check enforces parity)
 
-# Rebuild everything (verifies round-trip, browser-decode, syntax, strip-symbols)
+# Rebuild everything (drift check + round-trip + syntax + strip-symbols + tests)
 node build.js
+
+# One-command release (build + commit + push all repos):
+./release.sh "what you changed"
 
 # Test locally: drag bookmarklet from Data360-Inspector-FULL-internal.html
 #   OR reload the extension at chrome://extensions
-
-# Publish PUBLIC build only — see §3
 ```
 
 **Golden rules:**
-1. Only ever edit `console-decorate.js`.
+1. Shared code lives in BOTH sources identically (build's drift check enforces it).
+   Extension-only code goes in `@ext-only:start … @ext-only:end` in the extension source ONLY.
 2. Keep in-dev features inside `@strip:start dev … @strip:end`.
 3. Never publish the FULL build or the readable source. Only the stripped `install.html`.
 4. Re-drag the bookmarklet (or reload the extension) after every build.

@@ -135,7 +135,7 @@ console.log("\n8. Source presence (target resolver wired into console-decorate.j
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("makeTargetResolver() defined", /function makeTargetResolver\s*\(/.test(src));
   ok("builds a mapped-target set from container.mapping[] (entityName::fieldName)", /mappedTargetSet|targetMappedSet|mappedSet/.test(src));
   ok("target redraw loop uses the resolver (not raw lookupByLabel)", /nextForLabelTarget|makeTargetResolver/.test(src));

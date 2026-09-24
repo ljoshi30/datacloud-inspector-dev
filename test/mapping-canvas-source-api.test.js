@@ -122,7 +122,7 @@ console.log("\n7. Source presence (source resolver + shared helper wired up)");
 {
   const fs = require("fs");
   const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("a shared collision resolver exists (makeCollisionResolver or makeTargetResolver)",
     /function makeCollisionResolver\s*\(/.test(src) || /function makeTargetResolver\s*\(/.test(src));
   ok("builds a mapped-SOURCE set from container.mapping[] (source.fieldName)",

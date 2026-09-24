@@ -70,7 +70,18 @@ function minifyForBookmarklet(code, label) {
     try { fs.unlinkSync(tmp); } catch (e) {}
   }
 }
-const fullCode = fs.readFileSync(path.join(dir, "console-decorate.js"), "utf8");
+// TWO forked sources (no shared file): the extension source is the superset;
+// the bookmarklet source omits extension-only code so the bookmarklet stays small
+// and can't be affected by extension work. The SHARED code (everything outside
+// @ext-only blocks) MUST stay identical between them — enforced by drift-check
+// below, so a shared fix applied to only one file fails the build instead of
+// silently diverging.
+const extSourcePath = path.join(dir, "console-decorate.extension.js");
+const bmSourcePath  = path.join(dir, "console-decorate.bookmarklet.js");
+const extCode = fs.readFileSync(extSourcePath, "utf8");   // extension source (superset)
+const bmSource = fs.readFileSync(bmSourcePath, "utf8");   // bookmarklet source
+// `fullCode` name kept for the rest of the script = the EXTENSION source (drives inject.js).
+const fullCode = extCode;
 // Read current version from manifest (used in install page display)
 const _mfVer = (function() { try { return JSON.parse(fs.readFileSync(path.join(dir, "chrome-extension/manifest.json"), "utf8")).version; } catch(e) { return "dev"; } })();
 
@@ -112,6 +123,27 @@ function stripExtOnly(src) {
   }
   return out;
 }
+
+// ---- DRIFT CHECK: the two forked sources must share identical NON-ext-only code ----
+// Invariant that keeps the fork safe: console-decorate.bookmarklet.js must equal
+// console-decorate.extension.js with the @ext-only blocks removed. If they differ,
+// a shared change was applied to one file but not the other → the two builds would
+// silently diverge. We abort with a diff hint instead of shipping drift.
+(function checkForkDrift() {
+  const extSharedShape = stripExtOnly(extCode); // extension source minus ext-only blocks
+  if (extSharedShape === bmSource) return;      // shared code identical → good
+  // find the first differing line to point the user at it
+  const a = extSharedShape.split("\n"), b = bmSource.split("\n");
+  let ln = 0; const max = Math.min(a.length, b.length);
+  while (ln < max && a[ln] === b[ln]) ln++;
+  console.error("ERROR: fork drift — shared (non-@ext-only) code differs between the two sources.");
+  console.error("  console-decorate.extension.js (ext-only stripped) != console-decorate.bookmarklet.js");
+  console.error("  First difference around line " + (ln + 1) + ":");
+  console.error("    extension : " + JSON.stringify((a[ln] || "").slice(0, 120)));
+  console.error("    bookmarklet: " + JSON.stringify((b[ln] || "").slice(0, 120)));
+  console.error("  A shared fix must be applied to BOTH files. See `node sync-shared.js --check`.");
+  process.exit(1);
+})();
 
 const publicCode = stripDev(fullCode);
 
@@ -490,9 +522,9 @@ function verifyHtml(html, loader, label) {
 }
 
 // ═══ PUBLIC build (shipped to GitHub Pages) ═══
-// Bookmarklet payload = public code with EXTENSION-ONLY blocks also removed (the
-// bookmarklet can't run them). Extension inject.js (below) keeps them.
-const publicBmCode = stripExtOnly(publicCode);
+// Bookmarklet payload comes from the BOOKMARKLET source (already ext-only-free, per
+// the drift check). Public = that source with in-dev @strip blocks removed.
+const publicBmCode = stripDev(bmSource);
 const pub = makePayload(minifyForBookmarklet(publicBmCode, "public"), "public");
 fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);
@@ -501,8 +533,8 @@ verifyHtml(pubHtml, pub.loader, "public");
 fs.writeFileSync(path.join(dir, "install.html"), pubHtml);
 
 // ═══ FULL build (local dev only — DO NOT push) ═══
-// Bookmarklet payload = full code with EXTENSION-ONLY blocks removed.
-const fullBmCode = stripExtOnly(fullCode);
+// Full bookmarklet = the bookmarklet source as-is (ext-only-free by construction).
+const fullBmCode = bmSource;
 const full = makePayload(minifyForBookmarklet(fullBmCode, "full"), "full");
 fs.writeFileSync(path.join(dir, "console-decorate-full.min.js"), full.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet-full.txt"), full.bm);

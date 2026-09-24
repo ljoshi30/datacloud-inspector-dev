@@ -83,17 +83,24 @@ console.log("\n5. Stripped result stays valid JS (no syntax break at boundaries)
   ok("bookmarklet code compiles after strip", good);
 }
 
-// ── Source presence: build.js actually wires this up ────────────────────────────
-console.log("\n6. Source presence (build.js wires the @ext-only axis for bookmarklet only)");
+// ── Source presence: build.js wires the forked-source model ──────────────────────
+// Post-fork: there are TWO source files. The bookmarklet builds from the
+// bookmarklet source (already ext-only-free); the extension builds from the
+// extension source. stripExtOnly() is still used by the DRIFT CHECK to prove the
+// bookmarklet source == extension source minus @ext-only blocks.
+console.log("\n6. Source presence (build.js wires the forked bookmarklet/extension sources)");
 {
   const fs = require("fs");
   const path = require("path");
   const b = fs.readFileSync(path.join(__dirname, "..", "build.js"), "utf8");
   ok("stripExtOnly() defined in build.js", /function stripExtOnly\s*\(/.test(b));
-  ok("applied to the PUBLIC bookmarklet payload", /publicBmCode\s*=\s*stripExtOnly\(/.test(b));
-  ok("applied to the FULL bookmarklet payload", /fullBmCode\s*=\s*stripExtOnly\(/.test(b));
-  ok("extension inject.js still written from UN-stripped code (keeps ext-only)",
-    /inject\.js"\),\s*fullCode\)/.test(b) && /inject\.js"\),\s*publicCode\)/.test(b));
+  ok("reads the two forked sources (extension + bookmarklet)",
+    /console-decorate\.extension\.js/.test(b) && /console-decorate\.bookmarklet\.js/.test(b));
+  ok("PUBLIC bookmarklet builds from the bookmarklet source (stripDev of bmSource)",
+    /publicBmCode\s*=\s*stripDev\(bmSource\)/.test(b));
+  ok("FULL bookmarklet builds from the bookmarklet source", /fullBmCode\s*=\s*bmSource/.test(b));
+  ok("drift check enforces shared code identical between the two sources", /checkForkDrift/.test(b));
+  ok("extension inject.js written from the extension source", /inject\.js"\),\s*fullCode\)/.test(b));
   ok("balance/compile validation present", /validateExtOnly/.test(b));
 }
 

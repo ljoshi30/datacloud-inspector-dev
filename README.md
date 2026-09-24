@@ -79,8 +79,10 @@ The floating launcher appears at the top of the page after activation. It is dra
 
 | File | Purpose |
 |------|---------|
-| `console-decorate.js` | Full source (private — do not share) |
-| `build.js` | Run `node build.js` to rebuild all artifacts |
+| `console-decorate.extension.js` | Extension source — superset (shared core + `@ext-only` blocks). Private — do not share. |
+| `console-decorate.bookmarklet.js` | Bookmarklet source — shared core only. Private — do not share. |
+| `sync-shared.js` | `--check` drift / `--from-ext` mirror shared code between the two sources |
+| `build.js` | Run `node build.js` to rebuild all artifacts (includes drift check) |
 | `install.html` | Bookmarklet installer page |
 | `bookmarklet.txt` | Raw bookmarklet code |
 | `chrome-extension/manifest.json` | MV3 extension manifest |
@@ -89,7 +91,9 @@ The floating launcher appears at the top of the page after activation. It is dra
 | `chrome-extension/icons/` | Extension icons (16 / 48 / 128 px) |
 | `data360-inspector-extension.zip` | Ready-to-load extension zip |
 
-To rebuild after editing `console-decorate.js`:
+To rebuild after editing a source (`console-decorate.extension.js` and/or
+`console-decorate.bookmarklet.js` — shared code must match in both; run
+`node sync-shared.js --from-ext` to mirror a shared fix):
 ```
 node build.js
 ```
