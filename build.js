@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -90,6 +90,29 @@ function stripDev(src) {
   return out;
 }
 
+// ---- strip EXTENSION-ONLY sections for the BOOKMARKLET builds ----
+// SECOND, INDEPENDENT axis from @strip (public/full). @ext-only marks code that
+// exists ONLY in the browser extension (inject.js) — typically extended API-call
+// features that the bookmarklet can't support (CSP-blocked fetches, higher row
+// caps via the bridge, etc.). build.js removes every /* @ext-only:start ... */ ...
+// /* @ext-only:end */ block from the BOOKMARKLET payloads, so:
+//   • extension inject.js  = full source (keeps @ext-only code)  ← shared core + ext-only
+//   • bookmarklet payloads = @ext-only PHYSICALLY REMOVED        ← shared core only
+// Shared code (everything NOT inside a marker) stays in BOTH — so a shared fix
+// (Birth Date, Account Number, segment scraper …) lands everywhere automatically
+// with no drift, while extension-only work can never reach — or break — the
+// bookmarklet. Orthogonal to @strip: an @ext-only block may sit inside or outside
+// an @strip block; both strippers run independently and idempotently.
+function stripExtOnly(src) {
+  const re = /\/\* @ext-only:start[\s\S]*?@ext-only:end \*\//g;
+  const out = src.replace(re, "/* [extension-only feature — not available in bookmarklet] */");
+  if (/@ext-only:(start|end)/.test(out)) {
+    console.error("ERROR: unbalanced or leftover @ext-only markers after stripping; aborting.");
+    process.exit(1);
+  }
+  return out;
+}
+
 const publicCode = stripDev(fullCode);
 
 // sanity: stripping must have removed a meaningful amount of code
@@ -109,6 +132,30 @@ try { new Function(publicCode); } catch (e) {
     process.exit(1);
   }
 });
+
+// sanity: @ext-only markers are balanced, and (when present) the bookmarklet strip
+// actually removes them + still compiles. Runs on BOTH the full and public source
+// so a malformed extension-only block can never silently ship in a bookmarklet.
+(function validateExtOnly() {
+  const starts = (fullCode.match(/@ext-only:start/g) || []).length;
+  const ends = (fullCode.match(/@ext-only:end/g) || []).length;
+  if (starts !== ends) {
+    console.error("ERROR: @ext-only markers unbalanced (" + starts + " start / " + ends + " end); aborting.");
+    process.exit(1);
+  }
+  if (starts === 0) return; // none defined yet — nothing to check
+  [["full", fullCode], ["public", publicCode]].forEach(([label, code]) => {
+    const bm = stripExtOnly(code);
+    if (bm.length >= code.length) {
+      console.error("ERROR: stripExtOnly removed nothing from " + label + " — check @ext-only markers; aborting.");
+      process.exit(1);
+    }
+    try { new Function(bm); } catch (e) {
+      console.error("ERROR: " + label + " bookmarklet code (ext-only stripped) has a syntax error: " + e.message + "; aborting.");
+      process.exit(1);
+    }
+  });
+})();
 
 // ---- obfuscation payload builder ----
 // realCode -> encodeURIComponent -> base64 (no % / no quotes / no backslash).
@@ -443,7 +490,10 @@ function verifyHtml(html, loader, label) {
 }
 
 // ═══ PUBLIC build (shipped to GitHub Pages) ═══
-const pub = makePayload(minifyForBookmarklet(publicCode, "public"), "public");
+// Bookmarklet payload = public code with EXTENSION-ONLY blocks also removed (the
+// bookmarklet can't run them). Extension inject.js (below) keeps them.
+const publicBmCode = stripExtOnly(publicCode);
+const pub = makePayload(minifyForBookmarklet(publicBmCode, "public"), "public");
 fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);
 const pubHtml = makeHtml(pub.hrefSafe, false, buildIdOf(pub.b64));
@@ -451,7 +501,9 @@ verifyHtml(pubHtml, pub.loader, "public");
 fs.writeFileSync(path.join(dir, "install.html"), pubHtml);
 
 // ═══ FULL build (local dev only — DO NOT push) ═══
-const full = makePayload(minifyForBookmarklet(fullCode, "full"), "full");
+// Bookmarklet payload = full code with EXTENSION-ONLY blocks removed.
+const fullBmCode = stripExtOnly(fullCode);
+const full = makePayload(minifyForBookmarklet(fullBmCode, "full"), "full");
 fs.writeFileSync(path.join(dir, "console-decorate-full.min.js"), full.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet-full.txt"), full.bm);
 const fullHtml = makeHtml(full.hrefSafe, true, buildIdOf(full.b64));
