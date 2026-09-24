@@ -279,7 +279,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
         <tr><td><strong>Data Explorer &mdash; Columns</strong></td><td>Add and reorder fields to view <strong>all available columns</strong> in the Data Explorer &mdash; beyond the default set SF shows &mdash; with save / restore of your column selections and a built-in SOQL editor.</td></tr>
       </tbody>
     </table>
-    <div class="note">Have a request or found a bug? Reach out &mdash; feedback shapes what ships next. &#128231; <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=ljoshi@salesforce.com&amp;su=Data%20360%20Inspector%20feedback" target="_blank" rel="noopener">ljoshi@salesforce.com</a> &nbsp;&middot;&nbsp; &#128172; <a href="https://salesforce.enterprise.slack.com/team/U06F0T5PFUP" target="_blank" rel="noopener">Slack</a> <span style="opacity:.7">(Salesforce internal)</span></div>
+    <div class="note">Have a request or found a bug? Reach out &mdash; feedback shapes what ships next. &#128231; <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=ljoshi@salesforce.com&amp;su=Data%20360%20Inspector%20feedback" target="_blank" rel="noopener">ljoshi@salesforce.com</a> <button type="button" class="dc-copy-email" data-email="ljoshi@salesforce.com" title="Copy email address" style="border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:5px;padding:1px 7px;font-size:11px;cursor:pointer;vertical-align:middle">Copy</button> &nbsp;&middot;&nbsp; &#128172; <a href="https://salesforce.enterprise.slack.com/team/U06F0T5PFUP" target="_blank" rel="noopener">Slack</a> <span style="opacity:.7">(Salesforce internal)</span></div>
   </div>`;
 
   // "Supported pages" tiles that only the FULL build actually handles. The public
@@ -447,11 +447,28 @@ ${roadmapSection}
 
   <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:26px;line-height:1.7">
     Data 360 Inspector &middot; internal tool for Salesforce Data Cloud<br>
-    Questions, bugs, or ideas? &#128231; <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=ljoshi@salesforce.com&amp;su=Data%20360%20Inspector" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">ljoshi@salesforce.com</a> &nbsp;&middot;&nbsp; &#128172; <a href="https://salesforce.enterprise.slack.com/team/U06F0T5PFUP" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">Slack</a>
+    Questions, bugs, or ideas? &#128231; <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=ljoshi@salesforce.com&amp;su=Data%20360%20Inspector" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">ljoshi@salesforce.com</a> <button type="button" class="dc-copy-email" data-email="ljoshi@salesforce.com" title="Copy email address" style="border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:5px;padding:1px 7px;font-size:11px;cursor:pointer;vertical-align:middle">Copy</button> &nbsp;&middot;&nbsp; &#128172; <a href="https://salesforce.enterprise.slack.com/team/U06F0T5PFUP" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">Slack</a>
   </div>
 
 </div>
 <script>
+// Copy-email buttons — universal fallback when the Gmail link can't open (multiple
+// Google accounts, non-Gmail mail client, etc.). Click = copy address + confirm.
+(function(){
+  function copyEmail(btn){
+    var email = btn.getAttribute("data-email") || "";
+    var done = function(){ var t = btn.textContent; btn.textContent = "✓ Copied"; setTimeout(function(){ btn.textContent = t; }, 1400); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(email).then(done).catch(function(){ legacy(); }); }
+      else legacy();
+    } catch(e){ legacy(); }
+    function legacy(){
+      try { var ta = document.createElement("textarea"); ta.value = email; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); done(); } catch(e2){}
+    }
+  }
+  var btns = document.querySelectorAll(".dc-copy-email");
+  for (var i=0;i<btns.length;i++){ btns[i].addEventListener("click", function(e){ e.preventDefault(); copyEmail(this); }); }
+})();
 (function(){
   var BUILD_ID = ${JSON.stringify(buildId || "")};
   var KEY = "dc-inspector-installed-build";
