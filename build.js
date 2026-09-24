@@ -368,10 +368,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       <div class="badge rec">&#9679; Read-only &middot; nothing leaves your browser</div>
     </div>
     <div class="hero-cta">
-      <a class="bm" href="${hrefSafe}" draggable="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="1.2" fill="currentColor"/><circle cx="17.7" cy="6.3" r="1.2" fill="currentColor"/><circle cx="20" cy="12" r="1.2" fill="currentColor"/><circle cx="17.7" cy="17.7" r="1.2" fill="currentColor"/><circle cx="12" cy="20" r="1.2" fill="currentColor"/><circle cx="6.3" cy="17.7" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="6.3" cy="6.3" r="1.2" fill="currentColor"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/><path d="M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        Data 360 Inspector
-      </a>
+      <a class="bm" href="${hrefSafe}" draggable="true">&#128269; Data 360 Inspector</a>
       <span class="hero-cta-hint">&#8598; Drag me to your bookmarks bar</span>
     </div>
   </div>
