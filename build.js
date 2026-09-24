@@ -279,7 +279,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   :root{--blue:#0d6efd;--dark:#1e3a5f;--ink:#16325c;--muted:#5c6b8a;--line:#e0e5ee;--bg:#f3f6fb;--green:#0a6b2d;--greenbg:#d4f0db}
   *{box-sizing:border-box}
   body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:#f7f9fc}
-  .wrap{max-width:860px;margin:0 auto;padding:36px 24px 72px}
+  .wrap{max-width:860px;margin:0 auto;padding:20px 24px 32px}
   .hero{background:linear-gradient(135deg,var(--dark) 0%,var(--blue) 100%);border-radius:14px;padding:20px 24px;margin-bottom:10px;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
   .hero-info{flex:1;min-width:250px}
   .hero h1{font-size:22px;margin:0 0 5px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
@@ -289,15 +289,15 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .hero-cta .bm{background:#fff;color:var(--dark);box-shadow:0 4px 14px rgba(0,0,0,.25)}
   .hero-cta-hint{font-size:11.5px;opacity:.85;white-space:nowrap}
   /* slim update reminder */
-  .upd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:#78350f;background:#fffbeb;border:1px solid #fcd34d;border-radius:9px;padding:8px 13px;margin-bottom:16px}
+  .upd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:#78350f;background:#fffbeb;border:1px solid #fcd34d;border-radius:9px;padding:7px 13px;margin-bottom:10px}
   .upd-status{font-weight:600}
   @media(max-width:560px){.hero{padding:16px 18px}.hero h1{font-size:20px}.hero-cta{align-items:flex-start}}
   .badge{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:12px;margin-bottom:12px}
   .badge.rec{background:rgba(255,255,255,.2);color:#fff}
   .badge.tip{background:var(--bg);color:var(--blue)}
-  .card{border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:12px 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.05)}
   .card.rec{border-color:#93c5fd;box-shadow:0 2px 14px rgba(13,110,253,.1)}
-  .card h2{margin:0 0 6px;font-size:17px;color:var(--ink)}
+  .card h2{margin:0 0 6px;font-size:16px;color:var(--ink)}
   .card h3{margin:14px 0 6px;font-size:14px;font-weight:700;color:var(--dark)}
   .bm{display:inline-flex;align-items:center;gap:7px;background:linear-gradient(135deg,var(--dark),var(--blue));color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:11px 20px;border-radius:24px;box-shadow:0 3px 12px rgba(13,110,253,.35);cursor:grab;user-select:none;transition:opacity .15s}
   .bm:hover{opacity:.88}.bm:active{cursor:grabbing}
@@ -316,9 +316,9 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{font-size:12px;font-weight:600;color:var(--dark);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
   /* accordion rows */
-  .acc{border:1px solid var(--line);border-radius:10px;margin:7px 0;background:#fff;overflow:hidden}
+  .acc{border:1px solid var(--line);border-radius:10px;margin:5px 0;background:#fff;overflow:hidden}
   .acc[open]{border-color:#bcd3f7;box-shadow:0 1px 6px rgba(13,110,253,.07)}
-  .acc summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:11px 14px;font-size:14px;user-select:none}
+  .acc summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:9px 14px;font-size:14px;user-select:none}
   .acc summary::-webkit-details-marker{display:none}
   .acc summary::after{content:"\\203A";margin-left:auto;color:var(--muted);font-size:18px;transform:rotate(90deg);transition:transform .15s}
   .acc[open] summary::after{transform:rotate(-90deg)}
@@ -375,11 +375,10 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 
   <div class="card">
     <h2>What it does</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Works on these pages &mdash; open the launcher (purple button, bottom-right) and only that page&rsquo;s buttons show. Everything is read-only.</p>
-    <div class="chips">${chips}</div>
-    <p style="font-size:12px;color:var(--muted);margin:14px 0 8px">Click a page to see what you can do:</p>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Works on these pages (the launcher shows only that page&rsquo;s buttons) &mdash; click a row to see what you can do. All read-only.</p>
+    <div class="chips" style="margin-bottom:10px">${chips}</div>
     ${sharedRows}${devRows}
-    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>${roadmapNote}
+    <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Modals are draggable &amp; resizable. Click <strong>Remove</strong> in the menu to take the tool off the page.</p>${roadmapNote}
   </div>
   <details class="acc" style="margin-top:16px">
     <summary><span class="acc-ic">&#128274;</span><span class="acc-nm">Privacy &amp; safety</span></summary>
