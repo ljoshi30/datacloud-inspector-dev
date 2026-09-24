@@ -340,6 +340,13 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 <body>
 <div class="wrap">
 
+  <!-- Slim update reminder — FIRST thing on the page so an alert is seen immediately.
+       Turns red via script when a newer build is detected; hides once you drag/click. -->
+  <div id="dc-update-banner" class="upd">
+    <span class="upd-txt">&#128260; Always re-drag to get the latest build &mdash; delete your old bookmark first, then drag the button below.</span>
+    <span id="dc-update-status" class="upd-status"></span>
+  </div>
+
   <!-- Hero = title + blurb + the drag CTA, all in one compact block. -->
   <div class="hero">
     <div class="hero-info">
@@ -354,13 +361,6 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </a>
       <span class="hero-cta-hint">&#8598; Drag me to your bookmarks bar</span>
     </div>
-  </div>
-
-  <!-- Slim update reminder (stale-bookmarklet is the #1 support issue). Turns red
-       via script when a newer build is detected; hides once you drag/click. -->
-  <div id="dc-update-banner" class="upd">
-    <span class="upd-txt">&#128260; Always re-drag to get the latest build &mdash; delete your old bookmark first, then drag the button above.</span>
-    <span id="dc-update-status" class="upd-status"></span>
   </div>
 
   <details class="acc" style="margin:2px 0 16px">
@@ -444,7 +444,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   }
   if (seen) {
     // Outdated — red urgent banner
-    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Delete your old bookmark and re-drag the button above.";
+    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Delete your old bookmark and re-drag the button below.";
     statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
     if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
   }
