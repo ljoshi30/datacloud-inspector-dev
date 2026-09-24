@@ -399,6 +399,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     <ul>
       <li><span class="pill">API Tooltip</span> &mdash; hover any field to see its API name in a tooltip; click to copy to clipboard</li>
       <li><span class="pill">Pin API names</span> &mdash; pins all API names directly on the canvas at once; click <strong>Unpin names</strong> to clear</li>
+      <li><span class="pill new">Duplicate-label safe</span> &mdash; when a DLO/DMO has several fields sharing one label, the tool resolves each to the field that&rsquo;s <strong>actually mapped</strong> (read from the mapping itself, not guessed by label). If it genuinely can&rsquo;t tell them apart, it appends <strong>(?)</strong> so you know to verify &mdash; it never silently shows a wrong API name.</li>
       <li><span class="pill">Export</span> &mdash; full DLO&rarr;DMO mapping table filterable by DMO &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
     </ul>
 
