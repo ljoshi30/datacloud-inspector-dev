@@ -218,8 +218,8 @@ function makePayload(code, label) {
 // ---- install.html builder (feature list gated by includeDev) ----
 function makeHtml(hrefSafe, includeDev, buildId) {
   const heroBlurb = includeDev
-    ? `All-in-one toolkit for Salesforce Data Cloud &mdash; explore data without limits, export segment rules, understand transforms instantly, and query any object with full CSV export. Zero setup, read-only, works on any org.`
-    : `Floating toolkit for Salesforce Data Cloud &mdash; reveals API names on the DLO&rarr;DMO mapping canvas and exports Data&nbsp;Stream, DLO, and DMO fields to Sheets, CSV, or Excel.`;
+    ? `All-in-one toolkit for Salesforce Data Cloud &mdash; explore data, export segment rules &amp; transforms, query any object to CSV. Read-only, zero setup.`
+    : `Reveals API names on the DLO&rarr;DMO mapping canvas and exports Data&nbsp;Stream, DLO &amp; DMO fields to Sheets, CSV, or Excel. Read-only, zero setup.`;
 
   // ── ONE consolidated "What it does" grid — one card per supported page ──────────
   // Replaces the old 3 redundant sections (Supported-pages tiles + Features-by-page
@@ -280,9 +280,18 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   *{box-sizing:border-box}
   body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:#f7f9fc}
   .wrap{max-width:860px;margin:0 auto;padding:36px 24px 72px}
-  .hero{background:linear-gradient(135deg,var(--dark) 0%,var(--blue) 100%);border-radius:16px;padding:32px 32px 28px;margin-bottom:24px;color:#fff}
-  .hero h1{font-size:28px;margin:0 0 8px;font-weight:800;letter-spacing:-.02em}
-  .hero p{margin:0;font-size:14px;opacity:.85;max-width:580px;line-height:1.55}
+  .hero{background:linear-gradient(135deg,var(--dark) 0%,var(--blue) 100%);border-radius:14px;padding:20px 24px;margin-bottom:10px;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .hero-info{flex:1;min-width:250px}
+  .hero h1{font-size:22px;margin:0 0 5px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
+  .hero p{margin:0 0 9px;font-size:13px;opacity:.85;line-height:1.45;max-width:520px}
+  .hero .badge{margin:0}
+  .hero-cta{display:flex;flex-direction:column;align-items:center;gap:7px;flex-shrink:0}
+  .hero-cta .bm{background:#fff;color:var(--dark);box-shadow:0 4px 14px rgba(0,0,0,.25)}
+  .hero-cta-hint{font-size:11.5px;opacity:.85;white-space:nowrap}
+  /* slim update reminder */
+  .upd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:#78350f;background:#fffbeb;border:1px solid #fcd34d;border-radius:9px;padding:8px 13px;margin-bottom:16px}
+  .upd-status{font-weight:600}
+  @media(max-width:560px){.hero{padding:16px 18px}.hero h1{font-size:20px}.hero-cta{align-items:flex-start}}
   .badge{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:12px;margin-bottom:12px}
   .badge.rec{background:rgba(255,255,255,.2);color:#fff}
   .badge.tip{background:var(--bg);color:var(--blue)}
@@ -331,44 +340,38 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 <body>
 <div class="wrap">
 
-  <!-- Always-visible update banner: tells user to delete old + re-drag on every visit -->
-  <div id="dc-update-banner" style="border-radius:12px;padding:16px 20px;margin-bottom:18px;font-size:14px;line-height:1.6;border:2px solid #f59e0b;background:#fffbeb;color:#78350f">
-    <div style="display:flex;align-items:flex-start;gap:12px">
-      <span style="font-size:22px;line-height:1.2">&#128260;</span>
-      <div style="flex:1">
-        <strong id="dc-update-title" style="font-size:15px;color:#92400e;">Always grab the latest version</strong>
-        <div id="dc-update-sub" style="margin-top:4px;font-size:13px;color:#92400e;">
-          <strong>1.</strong> Delete your old <em>Data 360 Inspector</em> bookmark &nbsp;&rarr;&nbsp;
-          <strong>2.</strong> Drag the button below to your bookmarks bar &nbsp;&rarr;&nbsp;
-          <strong>3.</strong> Done! You now have the latest build.
-        </div>
-        <div id="dc-update-status" style="margin-top:8px;font-size:12px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,.05);display:inline-block;"></div>
-      </div>
+  <!-- Hero = title + blurb + the drag CTA, all in one compact block. -->
+  <div class="hero">
+    <div class="hero-info">
+      <h1>Data 360 Inspector</h1>
+      <p>${heroBlurb}</p>
+      <div class="badge rec">&#9679; Read-only &middot; nothing leaves your browser</div>
+    </div>
+    <div class="hero-cta">
+      <a class="bm" href="${hrefSafe}" draggable="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="1.2" fill="currentColor"/><circle cx="17.7" cy="6.3" r="1.2" fill="currentColor"/><circle cx="20" cy="12" r="1.2" fill="currentColor"/><circle cx="17.7" cy="17.7" r="1.2" fill="currentColor"/><circle cx="12" cy="20" r="1.2" fill="currentColor"/><circle cx="6.3" cy="17.7" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="6.3" cy="6.3" r="1.2" fill="currentColor"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/><path d="M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Data 360 Inspector
+      </a>
+      <span class="hero-cta-hint">&#8598; Drag me to your bookmarks bar</span>
     </div>
   </div>
 
-  <div class="hero">
-    <div class="badge rec">&#9679; Read-only &nbsp;&middot;&nbsp; Nothing leaves your browser</div>
-    <h1>Data 360 Inspector</h1>
-    <p>${heroBlurb}</p>
+  <!-- Slim update reminder (stale-bookmarklet is the #1 support issue). Turns red
+       via script when a newer build is detected; hides once you drag/click. -->
+  <div id="dc-update-banner" class="upd">
+    <span class="upd-txt">&#128260; Always re-drag to get the latest build &mdash; delete your old bookmark first, then drag the button above.</span>
+    <span id="dc-update-status" class="upd-status"></span>
   </div>
 
-  <div class="card rec">
-    <div class="badge tip">No install &middot; works in any browser</div>
-    <h2>Add the bookmarklet</h2>
-    <ol>
-      <li>Show your <strong>bookmarks bar</strong>: <kbd>&#8984;&#8679;B</kbd> on Mac &nbsp;/&nbsp; <kbd>Ctrl&#8679;B</kbd> on Windows.</li>
-      <li><strong>Drag</strong> this button to your bookmarks bar:&nbsp;&nbsp;
-        <a class="bm" href="${hrefSafe}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="1.2" fill="currentColor"/><circle cx="17.7" cy="6.3" r="1.2" fill="currentColor"/><circle cx="20" cy="12" r="1.2" fill="currentColor"/><circle cx="17.7" cy="17.7" r="1.2" fill="currentColor"/><circle cx="12" cy="20" r="1.2" fill="currentColor"/><circle cx="6.3" cy="17.7" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="6.3" cy="6.3" r="1.2" fill="currentColor"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/><path d="M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Data 360 Inspector
-        </a>
-      </li>
-      <li>Open any Data Cloud / Data 360 page in Salesforce and <strong>click the bookmark</strong>. A purple circle button appears in the bottom-right corner &mdash; click it to open the action menu.</li>
-      <li>Click the bookmark again at any time to remove the tool.</li>
-    </ol>
-    <div class="note">The launcher sits in the bottom-right corner and never overlaps the Salesforce navigation. Click the purple circle button to expand the menu; click outside or click it again to collapse.</div>
-  </div>
+  <details class="acc" style="margin:2px 0 16px">
+    <summary><span class="acc-ic">&#10067;</span><span class="acc-nm">How to install &amp; use</span></summary>
+    <div class="acc-body">
+      <b>1.</b> Show your bookmarks bar &mdash; <kbd>&#8984;&#8679;B</kbd> (Mac) / <kbd>Ctrl&#8679;B</kbd> (Windows).<br>
+      <b>2.</b> Drag the <b>Data 360 Inspector</b> button above onto the bookmarks bar. No install, no permissions.<br>
+      <b>3.</b> On any Data Cloud / Data 360 page, click the bookmark &mdash; a purple circle button appears bottom-right; click it for the menu.<br>
+      <b>4.</b> Click the bookmark again anytime to remove the tool. It never overlaps the Salesforce nav.
+    </div>
+  </details>
 
   <div class="card">
     <h2>What it does</h2>
@@ -441,7 +444,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   }
   if (seen) {
     // Outdated — red urgent banner
-    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Delete your old bookmark and re-drag below.";
+    statusEl.innerHTML = "&#128680; <strong>NEW UPDATE AVAILABLE!</strong> Delete your old bookmark and re-drag the button above.";
     statusEl.style.background = "#fef2f2"; statusEl.style.color = "#dc2626";
     if (banner) { banner.style.borderColor = "#dc2626"; banner.style.background = "#fef2f2"; banner.style.animation = "dcpulse 1.5s infinite"; }
   }
