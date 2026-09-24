@@ -52,5 +52,16 @@ console.log("\n4. The public MAPPING-canvas copy stays generic (no internal jarg
   ok("does not advertise 'Duplicate-label safe' on the page", !/Duplicate-label safe/.test(b));
 }
 
+console.log("\n5. Row-limit claims match the code (no false/guessed numbers)");
+{
+  // The old "bypasses SF's 2,000-row UI limit" was FALSE — 2,000 is our own render cap
+  // (DC_MAX_RENDER_ROWS), not an SF UI limit. Must never return.
+  ok("no false 'SF 2,000-row UI limit' claim", !/2,?000-row UI limit/.test(b));
+  // Verified facts that SHOULD be present in the dev feature copy.
+  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /1,000 rows<\/strong> the Query Editor grid/.test(b));
+  ok("Explorer's 100-row own-view load is stated", /loads only 100 rows|only 100 rows/.test(b));
+  ok("CSV export cap stated as 500K (matches DC_MAX_TOTAL_EXPORT=500000)", /500K rows/.test(b));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

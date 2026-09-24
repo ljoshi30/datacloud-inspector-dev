@@ -120,44 +120,24 @@
       <li><span class="pill">Export Fields</span> &mdash; <strong>Fields</strong> tab (API name, type, mapped status, key qualifier) and <strong>Relationships</strong> tab (related objects and join fields) &middot; <strong>Copy for Sheets</strong> or <strong>Download XLS</strong></li>
     </ul>
 
-    <h3>&#127937; Segment Export</h3>
-    <ul>
-      <li>Reads all segment conditions (Include, Exclude, Rank &amp; Limit) directly from the builder canvas</li>
-      <li>Exports full rule logic with AND/OR joiners, nested segments, and sub-filters</li>
-      <li>Copy to Google Sheets or download as formatted HTML/Excel</li>
-      <li>Share segment documentation with stakeholders without SF access</li>
-    </ul>
-
-    <h3>&#128202; Data Explorer</h3>
-    <ul>
-      <li>View <strong>ALL columns</strong> of any DLO/DMO (breaks SF&rsquo;s 10-column display limit)</li>
-      <li>Column selector with search, reorder, and <strong>save/restore</strong> (persists across sessions)</li>
-      <li>Sort any column directly in the table</li>
-      <li>Multi-condition filter (AND/OR) with type-aware controls</li>
-      <li>Real-time record count (shows exact total in the object)</li>
-      <li><strong>Export All</strong> &mdash; paginated CSV download of the entire object (up to 500K rows) with cancel option</li>
-      <li><strong>Download CSV</strong> &mdash; downloads loaded or filtered data instantly</li>
-      <li><strong>Edit SQL</strong> &mdash; inline SQL editor with editable WHERE and LIMIT</li>
-      <li>Hide empty columns toggle to declutter sparse objects</li>
-    </ul>
-
-    <h3>&#128270; Query Editor</h3>
-    <ul>
-      <li><strong>Run &amp; Export</strong> &mdash; run any SQL query and export full results as CSV (bypasses SF&rsquo;s 2,000-row UI limit)</li>
-      <li>Paginated export (up to 500K rows) with progress indicator and cancel button</li>
-      <li>Select query with mouse or Cmd+A / Ctrl+A</li>
-      <li>Actionable error messages for common issues</li>
-    </ul>
-
-    <h3>&#9881;&#65039; Data Transform</h3>
-    <ul>
-      <li><strong>Auto-reads</strong> the transform definition (no manual steps needed)</li>
-      <li>Plain-English summary explaining what the transform does, branch by branch</li>
-      <li>Shows: sources, filters, formulas, joins, outputs with field mappings</li>
-      <li>Column details: which fields are kept, dropped, or renamed</li>
-      <li><strong>Download Summary</strong> &mdash; styled HTML file, printable as PDF for documentation</li>
-      <li>AI-powered explanation (optional, with API key) for deeper business context</li>
-    </ul>
+    <div class="feat-grid" style="margin-top:14px">
+      <div class="feat">
+        <div class="icon">&#127937;</div><strong>Segment Export</strong>
+        <span>Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder canvas &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel to share without SF access.</span>
+      </div>
+      <div class="feat">
+        <div class="icon">&#128202;</div><strong>Data Explorer</strong>
+        <span>See <strong>all columns</strong> (past SF&rsquo;s 10-column view) &mdash; the object&rsquo;s own view loads only 100 rows, this pulls more. Pick / reorder / save columns, sort, multi-filter (AND/OR), live record count, hide-empty toggle, inline <strong>Edit SQL</strong>. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).</span>
+      </div>
+      <div class="feat">
+        <div class="icon">&#128270;</div><strong>Query Editor</strong>
+        <span><strong>Run &amp; Export</strong> &mdash; run any SQL and export the <strong>full</strong> result set as CSV up to 500K rows (paginated, with progress + cancel), beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen. Select with mouse or &#8984;A / Ctrl+A; clear error messages.</span>
+      </div>
+      <div class="feat">
+        <div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong>
+        <span><strong>Auto-reads</strong> the definition &mdash; plain-English summary, branch by branch: sources, filters, formulas, joins, outputs, and which fields are kept / dropped / renamed. <strong>Download</strong> as HTML (printable to PDF). Optional AI explanation (with API key).</span>
+      </div>
+    </div>
 
     <div class="note">
       <strong>How it works:</strong> Drag the bookmarklet to your bookmarks bar. Click it on any supported Data Cloud page. The tool detects the page type and shows the relevant features. Read-only &mdash; never modifies your data. Everything stays in your browser.
