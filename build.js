@@ -272,13 +272,24 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Data 360 Inspector — Install</title>
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="icon" type="image/x-icon" href="favicon.ico">
 <style>
-  :root{--blue:#0d6efd;--dark:#1e3a5f;--ink:#16325c;--muted:#5c6b8a;--line:#e0e5ee;--bg:#f3f6fb;--green:#0a6b2d;--greenbg:#d4f0db}
+  /* Light palette (default). --dark/--blue are BRAND colors for the hero gradient and
+     stay fixed; theme-varying surfaces/text use the vars below. */
+  :root{--blue:#0d6efd;--dark:#1e3a5f;--ink:#16325c;--muted:#5c6b8a;--line:#e0e5ee;--bg:#f3f6fb;--green:#0a6b2d;--greenbg:#d4f0db;--page:#f7f9fc;--card:#fff;--head:#1e3a5f;--pill-bg:#edf4ff}
+  /* Dark palette — auto-applied when the user's OS/browser is in dark mode. Only the
+     surface/text vars flip; the hero keeps its blue gradient (white text reads on it). */
+  @media (prefers-color-scheme: dark){
+    :root{--blue:#60a5fa;--ink:#e6edf6;--muted:#9fb0c6;--line:#2b3648;--bg:#1b2536;--head:#cbd8ee;--page:#0e1420;--card:#161f2e;--pill-bg:#1e2f4a;--greenbg:#173a2a;--green:#4ade80}
+    .upd{color:#fde9c8;background:#3a2c10;border-color:#7a5a1a}
+    .card{box-shadow:0 1px 4px rgba(0,0,0,.35)}
+    .hero-cta .bm{background:#e8eefb}
+  }
   *{box-sizing:border-box}
-  body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:#f7f9fc}
+  body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--page)}
   .wrap{max-width:860px;margin:0 auto;padding:8px 24px 10px}
   .hero{background:linear-gradient(135deg,var(--dark) 0%,var(--blue) 100%);border-radius:14px;padding:14px 22px;margin-bottom:8px;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
   .hero-info{flex:1;min-width:250px}
@@ -297,28 +308,28 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .badge{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:3px 10px;border-radius:12px;margin-bottom:12px}
   .badge.rec{background:rgba(255,255,255,.2);color:#fff}
   .badge.tip{background:var(--bg);color:var(--blue)}
-  .card{border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:12px 0;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:12px 0;background:var(--card);box-shadow:0 1px 4px rgba(0,0,0,.05)}
   .card.rec{border-color:#93c5fd;box-shadow:0 2px 14px rgba(13,110,253,.1)}
   .card h2{margin:0 0 6px;font-size:16px;color:var(--ink)}
-  .card h3{margin:14px 0 6px;font-size:14px;font-weight:700;color:var(--dark)}
+  .card h3{margin:14px 0 6px;font-size:14px;font-weight:700;color:var(--head)}
   .bm{display:inline-flex;align-items:center;gap:7px;background:linear-gradient(135deg,var(--dark),var(--blue));color:#fff;text-decoration:none;font-weight:700;font-size:14px;padding:11px 20px;border-radius:24px;box-shadow:0 3px 12px rgba(13,110,253,.35);cursor:grab;user-select:none;transition:opacity .15s,transform .12s,box-shadow .15s}
   .bm:hover{opacity:.88}.bm:active{cursor:grabbing;transform:scale(.98)}
   ol,ul{padding-left:22px}li{margin:7px 0}
-  kbd{font:12px "SF Mono",Menlo,monospace;background:#eef1f6;border:1px solid #d6dbe6;border-radius:4px;padding:1px 6px}
+  kbd{font:12px "SF Mono",Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
   .note{font-size:13px;color:var(--muted);background:var(--bg);border-radius:8px;padding:11px 15px;margin-top:14px;line-height:1.5}
-  code{font:12px "SF Mono",Menlo,monospace;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  code{font:12px "SF Mono",Menlo,monospace;background:var(--bg);padding:1px 5px;border-radius:4px}
   .feat-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
   .feat{background:var(--bg);border-radius:10px;padding:14px 16px}
   .feat .icon{font-size:20px;margin-bottom:6px}
   .feat strong{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
-  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);margin-right:4px}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:var(--pill-bg);color:var(--blue);margin-right:4px}
   .pill.new{background:var(--greenbg);color:var(--green)}
   /* page chips (at-a-glance list of supported pages) */
   .chips{display:flex;flex-wrap:wrap;gap:6px}
-  .chip{font-size:12px;font-weight:600;color:var(--dark);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
+  .chip{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
   /* accordion rows */
-  .acc{border:1px solid var(--line);border-radius:10px;margin:5px 0;background:#fff;overflow:hidden}
+  .acc{border:1px solid var(--line);border-radius:10px;margin:5px 0;background:var(--card);overflow:hidden}
   .acc[open]{border-color:#bcd3f7;box-shadow:0 1px 6px rgba(13,110,253,.07)}
   .acc summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:9px 14px;font-size:14px;user-select:none}
   .acc summary::-webkit-details-marker{display:none}
