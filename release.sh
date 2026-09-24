@@ -2,6 +2,7 @@
 # One-command release for the Data 360 Inspector.
 #
 #   ./release.sh "what you changed"
+#   ./release.sh "what you changed" --tag my-restore-point
 #
 # Does EVERYTHING so you never touch git per-repo:
 #   1. node build.js            → rebuild + run the test gate (aborts if a test fails)
@@ -10,6 +11,9 @@
 #   3. copy install.html → the public bookmarklet page repo, commit + push
 #   4. commit + push the PUBLIC extension repo
 #   5. commit + push the PRIVATE (dev/internal) extension repo
+#   6. (optional) --tag NAME → stamp a "restore point" tag on ALL repos + push it,
+#                  so you can always return to this exact known-good state later
+#                  (recover with ./restore.sh NAME).
 #
 # Skips any repo that has no changes. Safe to re-run. If a test fails, NOTHING is
 # pushed. Requires: `gh auth login` done once (already done on this machine).
@@ -18,14 +22,22 @@ set -euo pipefail
 
 MSG="${1:-}"
 if [ -z "$MSG" ]; then
-  echo "Usage: ./release.sh \"short message describing what changed\""
+  echo "Usage: ./release.sh \"short message describing what changed\" [--tag restore-point-name]"
   exit 1
+fi
+
+# optional --tag NAME
+TAG=""
+if [ "${2:-}" = "--tag" ]; then
+  TAG="${3:-}"
+  if [ -z "$TAG" ]; then echo "ERROR: --tag needs a name, e.g. --tag before-big-change"; exit 1; fi
 fi
 
 SRC="$HOME/datacloud-mapping-inspector"
 PAGES="$HOME/datacloud-inspector"                       # public bookmarklet install page (index.html)
 EXT_PUB="$HOME/datacloud-inspector-extension"           # public extension
 EXT_DEV="$HOME/datacloud-inspector-extension-dev"       # private/internal extension
+ALL_REPOS=("$SRC" "$PAGES" "$EXT_PUB" "$EXT_DEV")
 
 CO="Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
@@ -74,8 +86,22 @@ echo "  5/5  Private/internal extension"
 echo "──────────────────────────────────────────────"
 commit_push "$EXT_DEV" "dev extension (datacloud-inspector-extension-dev)"
 
+if [ -n "$TAG" ]; then
+  echo "──────────────────────────────────────────────"
+  echo "  6/6  Restore-point tag: $TAG"
+  echo "──────────────────────────────────────────────"
+  for dir in "${ALL_REPOS[@]}"; do
+    [ -d "$dir/.git" ] || continue
+    cd "$dir"
+    git tag -d "$TAG" >/dev/null 2>&1 || true
+    git tag -a "$TAG" -m "$MSG"
+    git push -q -f origin "$TAG"
+    echo "  ✓ $(basename "$dir"): tagged $TAG -> $(git rev-parse --short "$TAG")"
+  done
+fi
+
 echo "──────────────────────────────────────────────"
-echo "  ✅ Release complete."
+echo "  ✅ Release complete.${TAG:+  (restore point: $TAG)}"
 echo "  Reminder: re-drag the bookmarklet from the install page; reload the"
 echo "  unpacked extension in chrome://extensions to pick up the new build."
 echo "──────────────────────────────────────────────"
