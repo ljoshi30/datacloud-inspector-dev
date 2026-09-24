@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js", "bookmarklet-size.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js", "bookmarklet-size.test.js", "install-page-public.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -282,6 +282,14 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     <div class="note">Have a request? Reach out &mdash; feedback shapes what ships next.</div>
   </div>`;
 
+  // "Supported pages" tiles that only the FULL build actually handles. The public
+  // bookmarklet has these stripped, so the public page must NOT advertise them.
+  const devPageTiles = !includeDev ? "" : `
+      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
+      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
+      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
+      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>`;
+
   // Launcher-menu rows that belong to in-dev features.
   const devMenuRows = !includeDev ? "" : `
         <tr><td><strong>Export Rules</strong></td><td>Segment pages</td><td>Opens the segment rules export with Include / Exclude / Rank &amp; Limit tabs</td></tr>
@@ -384,11 +392,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       <div class="feat"><div class="icon">&#128257;</div><strong>Mapping Canvas</strong><span>DLO &rarr; DMO field mapping page</span></div>
       <div class="feat"><div class="icon">&#127760;</div><strong>Data Stream</strong><span>Data Stream detail page (with record ID in URL)</span></div>
       <div class="feat"><div class="icon">&#128451;</div><strong>DLO Detail</strong><span>Data Lake Object detail page</span></div>
-      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>
-      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
-      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
-      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
-      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>
+      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>${devPageTiles}
     </div>
   </div>
 
@@ -399,7 +403,6 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     <ul>
       <li><span class="pill">API Tooltip</span> &mdash; hover any field to see its API name in a tooltip; click to copy to clipboard</li>
       <li><span class="pill">Pin API names</span> &mdash; pins all API names directly on the canvas at once; click <strong>Unpin names</strong> to clear</li>
-      <li><span class="pill new">Duplicate-label safe</span> &mdash; when a DLO/DMO has several fields sharing one label, the tool resolves each to the field that&rsquo;s <strong>actually mapped</strong> (read from the mapping itself, not guessed by label). If it genuinely can&rsquo;t tell them apart, it appends <strong>(?)</strong> so you know to verify &mdash; it never silently shows a wrong API name.</li>
       <li><span class="pill">Export</span> &mdash; full DLO&rarr;DMO mapping table filterable by DMO &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
     </ul>
 
@@ -531,6 +534,28 @@ fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);
 const pubHtml = makeHtml(pub.hrefSafe, false, buildIdOf(pub.b64));
 verifyHtml(pubHtml, pub.loader, "public");
+// Accuracy guard: the PUBLIC page must not advertise features stripped from the
+// public bookmarklet, nor leak internal example field names. Checked on the fresh
+// HTML string (not a stale file) so it can never ship wrong.
+(function verifyPublicHtmlAccuracy(html) {
+  const forbidden = [
+    [/<strong>Data Explorer<\/strong>/, "Data Explorer page tile (stripped from public)"],
+    [/<strong>Segment<\/strong>/, "Segment page tile (stripped from public)"],
+    [/<strong>Query Editor<\/strong>/, "Query Editor page tile (stripped from public)"],
+    [/<strong>Data Transform<\/strong>/, "Data Transform page tile (stripped from public)"],
+    [/Export Rules/, "Export Rules launcher row (Segment)"],
+    [/Run &amp; Export/, "Run & Export launcher row (Query Editor)"],
+    [/View Definition/, "View Definition launcher row (Data Transform)"],
+    [/birth\s*date|birthdt|ssot__birthdate/i, "internal 'Birth Date' example"],
+    [/account number|customer_account_number/i, "internal 'Account Number' example"],
+  ];
+  for (const [re, what] of forbidden) {
+    if (re.test(html)) {
+      console.error("ERROR: public install page advertises/leaks '" + what + "' — public build must not. Aborting.");
+      process.exit(1);
+    }
+  }
+})(pubHtml);
 fs.writeFileSync(path.join(dir, "install.html"), pubHtml);
 
 // ═══ FULL build (local dev only — DO NOT push) ═══
