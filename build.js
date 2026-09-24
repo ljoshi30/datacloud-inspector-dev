@@ -242,12 +242,12 @@ function makeHtml(hrefSafe, includeDev, buildId) {
         <div class="acc-body">${desc}</div>
       </details>`;
   }
-  const chips = ["Mapping Canvas", "Data Stream", "DLO", "DMO"]
+  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
     .concat(includeDev ? ["Data Model (ERD)", "Data Explorer", "Segment", "Query Editor", "Data Transform"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
-    acc("&#128257;", "Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
+    acc("&#128257;", "DLO &rarr; DMO Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
       "Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <b>Export</b> the full mapping table (filter by DMO) to Sheets or CSV.") +
     acc("&#127760;", "Data Stream &amp; DLO", ["Export Fields"],
       "Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.") +
