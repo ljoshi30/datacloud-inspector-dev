@@ -221,68 +221,42 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     ? `All-in-one toolkit for Salesforce Data Cloud &mdash; explore data without limits, export segment rules, understand transforms instantly, and query any object with full CSV export. Zero setup, read-only, works on any org.`
     : `Floating toolkit for Salesforce Data Cloud &mdash; reveals API names on the DLO&rarr;DMO mapping canvas and exports Data&nbsp;Stream, DLO, and DMO fields to Sheets, CSV, or Excel.`;
 
-  // Feature sections for the FULL build. Compact 2-col cards (one per page) instead
-  // of long bullet walls, so it's scannable. Every claim here is verified against
-  // console-decorate.extension.js — no guessed numbers. Row-limit facts:
-  //   • Explorer's own query is hard-capped at 100 rows (code: "hard-capped at 100").
+  // ── ONE consolidated "What it does" grid — one card per supported page ──────────
+  // Replaces the old 3 redundant sections (Supported-pages tiles + Features-by-page
+  // lists + Launcher-menu table), which described every feature ~3× and made the page
+  // long. Each card = icon + page name + the buttons you get + what they do, in a
+  // single scannable line. Public build shows only the 4 always-shipped pages; the
+  // dev-only pages (Data Explorer, Segment, Query Editor, Data Transform) are gated.
+  //
+  // Every claim verified against console-decorate.extension.js — no guessed numbers:
+  //   • Explorer's own view loads 100 rows (code: "hard-capped at 100").
   //   • Query Editor grid shows 1,000 rows on screen (Salesforce product UI limit).
-  //   • Our tool renders up to 2,000 rows (DC_MAX_RENDER_ROWS) and exports the full
-  //     result set as CSV up to 500K rows (DC_MAX_TOTAL_EXPORT), paginated.
-  const devFeatureSections = !includeDev ? "" : `
-    <div class="feat-grid" style="margin-top:14px">
-      <div class="feat">
-        <div class="icon">&#127937;</div><strong>Segment Export</strong>
-        <span>Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder canvas &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel to share without SF access.</span>
-      </div>
-      <div class="feat">
-        <div class="icon">&#128202;</div><strong>Data Explorer</strong>
-        <span>See <strong>all columns</strong> (past SF&rsquo;s 10-column view) &mdash; the object&rsquo;s own view loads only 100 rows, this pulls more. Pick / reorder / save columns, sort, multi-filter (AND/OR), live record count, hide-empty toggle, inline <strong>Edit SQL</strong>. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).</span>
-      </div>
-      <div class="feat">
-        <div class="icon">&#128270;</div><strong>Query Editor</strong>
-        <span><strong>Run &amp; Export</strong> &mdash; run any SQL and export the <strong>full</strong> result set as CSV up to 500K rows (paginated, with progress + cancel), beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen. Select with mouse or &#8984;A / Ctrl+A; clear error messages.</span>
-      </div>
-      <div class="feat">
-        <div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong>
-        <span><strong>Auto-reads</strong> the definition &mdash; plain-English summary, branch by branch: sources, filters, formulas, joins, outputs, and which fields are kept / dropped / renamed. <strong>Download</strong> as HTML (printable to PDF). Optional AI explanation (with API key).</span>
-      </div>
-    </div>
-
-    <div class="note">
-      <strong>How it works:</strong> Drag the bookmarklet to your bookmarks bar. Click it on any supported Data Cloud page. The tool detects the page type and shows the relevant features. Read-only &mdash; never modifies your data. Everything stays in your browser.
-    </div>`;
-
-  // Roadmap — shown only in the PUBLIC build, since these are the in-dev features
-  // that were stripped out. In the FULL build they already exist, so no roadmap.
-  const roadmapSection = includeDev ? "" : `
-  <div class="card">
-    <h2>&#128736;&#65039; Roadmap &mdash; coming soon</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 12px">Features currently in development and rolling out in upcoming versions.</p>
-    <table>
-      <thead><tr><th>Feature</th><th>What it will do</th></tr></thead>
-      <tbody>
-        <tr><td><strong>Segment rule export</strong></td><td>Capture the full <strong>criteria used in a segment</strong> &mdash; Include / Exclude conditions, AND/OR logic, and Rank &amp; Limit &mdash; exported to Sheets or Excel.</td></tr>
-        <tr><td><strong>Data Explorer &mdash; Columns</strong></td><td>Add and reorder fields to view <strong>all available columns</strong> in the Data Explorer &mdash; beyond the default set SF shows &mdash; with save / restore of your column selections and a built-in SOQL editor.</td></tr>
-      </tbody>
-    </table>
-    <div class="note">Have a request or found a bug? Reach out &mdash; feedback shapes what ships next. &#128231; <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=ljoshi@salesforce.com&amp;su=Data%20360%20Inspector%20feedback" target="_blank" rel="noopener">ljoshi@salesforce.com</a> <button type="button" class="dc-copy-email" data-email="ljoshi@salesforce.com" title="Copy email address" style="border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:5px;padding:1px 7px;font-size:11px;cursor:pointer;vertical-align:middle">Copy</button> &nbsp;&middot;&nbsp; &#128172; <a href="https://salesforce.enterprise.slack.com/team/U06F0T5PFUP" target="_blank" rel="noopener">Slack</a> <span style="opacity:.7">(Salesforce internal)</span></div>
-  </div>`;
-
-  // "Supported pages" tiles that only the FULL build actually handles. The public
-  // bookmarklet has these stripped, so the public page must NOT advertise them.
-  const devPageTiles = !includeDev ? "" : `
-      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
-      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
-      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
-      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>`;
-
-  // Launcher-menu rows that belong to in-dev features.
-  const devMenuRows = !includeDev ? "" : `
-        <tr><td><strong>Export Rules</strong></td><td>Segment pages</td><td>Opens the segment rules export with Include / Exclude / Rank &amp; Limit tabs</td></tr>
-        <tr><td><strong>Columns</strong></td><td>Data Explorer</td><td>Opens Column Selector &mdash; pick, reorder, apply, save/restore, export CSV, filter, Export All</td></tr>
-        <tr><td><strong>Export CSV</strong></td><td>Data Explorer</td><td>Exports currently visible rows as CSV</td></tr>
-        <tr><td><strong>Run &amp; Export</strong></td><td>Query Editor</td><td>Runs highlighted SQL and exports full result as CSV with pagination</td></tr>
-        <tr><td><strong>View Definition</strong></td><td>Data Transform</td><td>Reads and displays the transform definition (batch graph or streaming SQL)</td></tr>`;
+  //   • CSV export cap = 500K rows (DC_MAX_TOTAL_EXPORT), paginated.
+  function pageCard(icon, name, buttons, desc) {
+    return `<div class="feat">
+        <div class="icon">${icon}</div><strong>${name}</strong>
+        <div style="margin:2px 0 5px">${buttons.map(b => '<span class="pill">' + b + '</span>').join(" ")}</div>
+        <span>${desc}</span>
+      </div>`;
+  }
+  const sharedCards =
+    pageCard("&#128257;", "Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
+      "Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <strong>Export</strong> the full mapping table (filter by DMO) to Sheets or CSV.") +
+    pageCard("&#127760;", "Data Stream &amp; DLO", ["Export Fields"],
+      "Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.") +
+    pageCard("&#128450;", "DMO Detail", ["Export Fields"],
+      "<strong>Fields</strong> tab (API name, type, mapped status, key qualifier) + <strong>Relationships</strong> tab (related objects, join fields). Copy for Sheets or Download XLS.");
+  const devCards = !includeDev ? "" :
+    pageCard("&#127937;", "Segment", ["Export Rules"],
+      "Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel.") +
+    pageCard("&#128202;", "Data Explorer", ["Columns", "Export CSV"],
+      "See <strong>all columns</strong> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).") +
+    pageCard("&#128270;", "Query Editor", ["Run &amp; Export"],
+      "Run any SQL and export the <strong>full</strong> result as CSV up to 500K rows (paginated, progress + cancel) &mdash; beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen.") +
+    pageCard("&#9881;&#65039;", "Data Transform", ["View Definition"],
+      "<strong>Auto-reads</strong> the definition into a plain-English, branch-by-branch summary: sources, filters, formulas, joins, outputs, fields kept / dropped / renamed. Download as HTML (printable to PDF). Optional AI explanation.");
+  const roadmapNote = includeDev ? "" : `
+    <p style="font-size:12px;color:var(--muted);margin:12px 0 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -372,54 +346,13 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   </div>
 
   <div class="card">
-    <h2>&#127919; Supported pages</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">The tool auto-detects the current page and shows only the relevant launcher. On unsupported pages you will see a brief toast message.</p>
+    <h2>What it does</h2>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 4px">Open the launcher (purple button, bottom-right) on any page below &mdash; only the buttons for that page show. Everything is read-only.</p>
     <div class="feat-grid">
-      <div class="feat"><div class="icon">&#128257;</div><strong>Mapping Canvas</strong><span>DLO &rarr; DMO field mapping page</span></div>
-      <div class="feat"><div class="icon">&#127760;</div><strong>Data Stream</strong><span>Data Stream detail page (with record ID in URL)</span></div>
-      <div class="feat"><div class="icon">&#128451;</div><strong>DLO Detail</strong><span>Data Lake Object detail page</span></div>
-      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>${devPageTiles}
+      ${sharedCards}${devCards}
     </div>
+    <p style="font-size:12px;color:var(--muted);margin:12px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>${roadmapNote}
   </div>
-
-  <div class="card">
-    <h2>Features by page</h2>
-
-    <h3>&#128257; DLO &rarr; DMO Mapping canvas</h3>
-    <ul>
-      <li><span class="pill">API Tooltip</span> &mdash; hover any field to see its API name in a tooltip; click to copy to clipboard</li>
-      <li><span class="pill">Pin API names</span> &mdash; pins all API names directly on the canvas at once; click <strong>Unpin names</strong> to clear</li>
-      <li><span class="pill">Export</span> &mdash; full DLO&rarr;DMO mapping table filterable by DMO &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
-    </ul>
-
-    <h3>&#127760; Data Stream &amp; DLO detail pages</h3>
-    <ul>
-      <li><span class="pill">Export Fields</span> &mdash; all fields with API name, label, data type, status, and key qualifier &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
-    </ul>
-
-    <h3>&#127760; DMO detail pages</h3>
-    <ul>
-      <li><span class="pill">Export Fields</span> &mdash; <strong>Fields</strong> tab (API name, type, mapped status, key qualifier) and <strong>Relationships</strong> tab (related objects and join fields) &middot; <strong>Copy for Sheets</strong> or <strong>Download XLS</strong></li>
-    </ul>
-${devFeatureSections}
-    <p style="font-size:12px;color:var(--muted);margin:10px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner).</p>
-  </div>
-
-  <div class="card">
-    <h2>Launcher menu</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Click the blue launcher button (bottom-right corner) to open the menu. Only buttons relevant to the current page are shown.</p>
-    <table>
-      <thead><tr><th>Button</th><th>Page</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr><td><strong>API Tooltip</strong></td><td>Mapping canvas</td><td>Hover tooltip showing API name; click field to copy. Turns blue when active.</td></tr>
-        <tr><td><strong>Pin API names</strong></td><td>Mapping canvas</td><td>Pins all API names on the canvas; button changes to <strong>Unpin names</strong> when active.</td></tr>
-        <tr><td><strong>Export</strong></td><td>Mapping canvas</td><td>Opens the full mapping export modal</td></tr>
-        <tr><td><strong>Export Fields</strong></td><td>DLO / Data Stream / DMO</td><td>Opens the field export modal</td></tr>${devMenuRows}
-        <tr><td><strong>Remove</strong></td><td>All pages</td><td>Removes the tool from the page</td></tr>
-      </tbody>
-    </table>
-  </div>
-${roadmapSection}
   <div class="card">
     <h2>Privacy &amp; safety</h2>
     <ul>

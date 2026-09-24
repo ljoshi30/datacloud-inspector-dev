@@ -86,85 +86,41 @@
   </div>
 
   <div class="card">
-    <h2>&#127919; Supported pages</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">The tool auto-detects the current page and shows only the relevant launcher. On unsupported pages you will see a brief toast message.</p>
+    <h2>What it does</h2>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 4px">Open the launcher (purple button, bottom-right) on any page below &mdash; only the buttons for that page show. Everything is read-only.</p>
     <div class="feat-grid">
-      <div class="feat"><div class="icon">&#128257;</div><strong>Mapping Canvas</strong><span>DLO &rarr; DMO field mapping page</span></div>
-      <div class="feat"><div class="icon">&#127760;</div><strong>Data Stream</strong><span>Data Stream detail page (with record ID in URL)</span></div>
-      <div class="feat"><div class="icon">&#128451;</div><strong>DLO Detail</strong><span>Data Lake Object detail page</span></div>
-      <div class="feat"><div class="icon">&#128450;</div><strong>DMO Detail</strong><span>Data Model Object detail page</span></div>
-      <div class="feat"><div class="icon">&#128202;</div><strong>Data Explorer</strong><span>DLO / DMO record view with data table</span></div>
-      <div class="feat"><div class="icon">&#127937;</div><strong>Segment</strong><span>Segment wizard / segment detail page</span></div>
-      <div class="feat"><div class="icon">&#128270;</div><strong>Query Editor</strong><span>Data Cloud SQL workspace (DataQueryWorkspace)</span></div>
-      <div class="feat"><div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong><span>Batch or streaming transform detail page</span></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Features by page</h2>
-
-    <h3>&#128257; DLO &rarr; DMO Mapping canvas</h3>
-    <ul>
-      <li><span class="pill">API Tooltip</span> &mdash; hover any field to see its API name in a tooltip; click to copy to clipboard</li>
-      <li><span class="pill">Pin API names</span> &mdash; pins all API names directly on the canvas at once; click <strong>Unpin names</strong> to clear</li>
-      <li><span class="pill">Export</span> &mdash; full DLO&rarr;DMO mapping table filterable by DMO &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
-    </ul>
-
-    <h3>&#127760; Data Stream &amp; DLO detail pages</h3>
-    <ul>
-      <li><span class="pill">Export Fields</span> &mdash; all fields with API name, label, data type, status, and key qualifier &middot; <strong>Copy for Sheets</strong> or <strong>Download CSV</strong></li>
-    </ul>
-
-    <h3>&#127760; DMO detail pages</h3>
-    <ul>
-      <li><span class="pill">Export Fields</span> &mdash; <strong>Fields</strong> tab (API name, type, mapped status, key qualifier) and <strong>Relationships</strong> tab (related objects and join fields) &middot; <strong>Copy for Sheets</strong> or <strong>Download XLS</strong></li>
-    </ul>
-
-    <div class="feat-grid" style="margin-top:14px">
       <div class="feat">
-        <div class="icon">&#127937;</div><strong>Segment Export</strong>
-        <span>Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder canvas &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel to share without SF access.</span>
-      </div>
-      <div class="feat">
+        <div class="icon">&#128257;</div><strong>Mapping Canvas</strong>
+        <div style="margin:2px 0 5px"><span class="pill">API Tooltip</span> <span class="pill">Pin API names</span> <span class="pill">Export</span></div>
+        <span>Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <strong>Export</strong> the full mapping table (filter by DMO) to Sheets or CSV.</span>
+      </div><div class="feat">
+        <div class="icon">&#127760;</div><strong>Data Stream &amp; DLO</strong>
+        <div style="margin:2px 0 5px"><span class="pill">Export Fields</span></div>
+        <span>Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.</span>
+      </div><div class="feat">
+        <div class="icon">&#128450;</div><strong>DMO Detail</strong>
+        <div style="margin:2px 0 5px"><span class="pill">Export Fields</span></div>
+        <span><strong>Fields</strong> tab (API name, type, mapped status, key qualifier) + <strong>Relationships</strong> tab (related objects, join fields). Copy for Sheets or Download XLS.</span>
+      </div><div class="feat">
+        <div class="icon">&#127937;</div><strong>Segment</strong>
+        <div style="margin:2px 0 5px"><span class="pill">Export Rules</span></div>
+        <span>Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel.</span>
+      </div><div class="feat">
         <div class="icon">&#128202;</div><strong>Data Explorer</strong>
-        <span>See <strong>all columns</strong> (past SF&rsquo;s 10-column view) &mdash; the object&rsquo;s own view loads only 100 rows, this pulls more. Pick / reorder / save columns, sort, multi-filter (AND/OR), live record count, hide-empty toggle, inline <strong>Edit SQL</strong>. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).</span>
-      </div>
-      <div class="feat">
+        <div style="margin:2px 0 5px"><span class="pill">Columns</span> <span class="pill">Export CSV</span></div>
+        <span>See <strong>all columns</strong> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).</span>
+      </div><div class="feat">
         <div class="icon">&#128270;</div><strong>Query Editor</strong>
-        <span><strong>Run &amp; Export</strong> &mdash; run any SQL and export the <strong>full</strong> result set as CSV up to 500K rows (paginated, with progress + cancel), beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen. Select with mouse or &#8984;A / Ctrl+A; clear error messages.</span>
-      </div>
-      <div class="feat">
+        <div style="margin:2px 0 5px"><span class="pill">Run &amp; Export</span></div>
+        <span>Run any SQL and export the <strong>full</strong> result as CSV up to 500K rows (paginated, progress + cancel) &mdash; beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen.</span>
+      </div><div class="feat">
         <div class="icon">&#9881;&#65039;</div><strong>Data Transform</strong>
-        <span><strong>Auto-reads</strong> the definition &mdash; plain-English summary, branch by branch: sources, filters, formulas, joins, outputs, and which fields are kept / dropped / renamed. <strong>Download</strong> as HTML (printable to PDF). Optional AI explanation (with API key).</span>
+        <div style="margin:2px 0 5px"><span class="pill">View Definition</span></div>
+        <span><strong>Auto-reads</strong> the definition into a plain-English, branch-by-branch summary: sources, filters, formulas, joins, outputs, fields kept / dropped / renamed. Download as HTML (printable to PDF). Optional AI explanation.</span>
       </div>
     </div>
-
-    <div class="note">
-      <strong>How it works:</strong> Drag the bookmarklet to your bookmarks bar. Click it on any supported Data Cloud page. The tool detects the page type and shows the relevant features. Read-only &mdash; never modifies your data. Everything stays in your browser.
-    </div>
-    <p style="font-size:12px;color:var(--muted);margin:10px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner).</p>
+    <p style="font-size:12px;color:var(--muted);margin:12px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>
   </div>
-
-  <div class="card">
-    <h2>Launcher menu</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Click the blue launcher button (bottom-right corner) to open the menu. Only buttons relevant to the current page are shown.</p>
-    <table>
-      <thead><tr><th>Button</th><th>Page</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr><td><strong>API Tooltip</strong></td><td>Mapping canvas</td><td>Hover tooltip showing API name; click field to copy. Turns blue when active.</td></tr>
-        <tr><td><strong>Pin API names</strong></td><td>Mapping canvas</td><td>Pins all API names on the canvas; button changes to <strong>Unpin names</strong> when active.</td></tr>
-        <tr><td><strong>Export</strong></td><td>Mapping canvas</td><td>Opens the full mapping export modal</td></tr>
-        <tr><td><strong>Export Fields</strong></td><td>DLO / Data Stream / DMO</td><td>Opens the field export modal</td></tr>
-        <tr><td><strong>Export Rules</strong></td><td>Segment pages</td><td>Opens the segment rules export with Include / Exclude / Rank &amp; Limit tabs</td></tr>
-        <tr><td><strong>Columns</strong></td><td>Data Explorer</td><td>Opens Column Selector &mdash; pick, reorder, apply, save/restore, export CSV, filter, Export All</td></tr>
-        <tr><td><strong>Export CSV</strong></td><td>Data Explorer</td><td>Exports currently visible rows as CSV</td></tr>
-        <tr><td><strong>Run &amp; Export</strong></td><td>Query Editor</td><td>Runs highlighted SQL and exports full result as CSV with pagination</td></tr>
-        <tr><td><strong>View Definition</strong></td><td>Data Transform</td><td>Reads and displays the transform definition (batch graph or streaming SQL)</td></tr>
-        <tr><td><strong>Remove</strong></td><td>All pages</td><td>Removes the tool from the page</td></tr>
-      </tbody>
-    </table>
-  </div>
-
   <div class="card">
     <h2>Privacy &amp; safety</h2>
     <ul>

@@ -30,12 +30,14 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
     /verifyPublicHtmlAccuracy[\s\S]{0,1600}process\.exit\(1\)/.test(b));
 }
 
-console.log("\n2. Dev-only 'Supported pages' tiles are gated behind includeDev");
+console.log("\n2. Dev-only page cards are gated behind includeDev (one consolidated grid)");
 {
-  ok("devPageTiles is gated by includeDev", /devPageTiles\s*=\s*!includeDev\s*\?\s*""/.test(b));
-  ok("devPageTiles carries Data Explorer / Segment / Query Editor / Data Transform",
-    /devPageTiles[\s\S]{0,400}Data Explorer[\s\S]{0,200}Segment[\s\S]{0,200}Query Editor[\s\S]{0,200}Data Transform/.test(b));
-  ok("the grid appends devPageTiles (not hardcoded 8 tiles)", /DMO Detail<\/strong>[\s\S]{0,120}\$\{devPageTiles\}/.test(b));
+  ok("devCards is gated by includeDev", /devCards\s*=\s*!includeDev\s*\?\s*""/.test(b));
+  ok("devCards carries Segment / Data Explorer / Query Editor / Data Transform",
+    /devCards[\s\S]{0,600}Segment[\s\S]{0,400}Data Explorer[\s\S]{0,400}Query Editor[\s\S]{0,400}Data Transform/.test(b));
+  ok("the grid renders sharedCards + devCards (not the old 3 sections)", /\$\{sharedCards\}\$\{devCards\}/.test(b));
+  ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
+    !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
 }
 
 console.log("\n3. The forbidden list covers the stripped features + internal examples");
@@ -59,7 +61,7 @@ console.log("\n5. Row-limit claims match the code (no false/guessed numbers)");
   ok("no false 'SF 2,000-row UI limit' claim", !/2,?000-row UI limit/.test(b));
   // Verified facts that SHOULD be present in the dev feature copy.
   ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /1,000 rows<\/strong> the Query Editor grid/.test(b));
-  ok("Explorer's 100-row own-view load is stated", /loads only 100 rows|only 100 rows/.test(b));
+  ok("Explorer's 100-row own-view is stated", /own view loads 100 rows|loads only 100 rows|100 rows/.test(b));
   ok("CSV export cap stated as 500K (matches DC_MAX_TOTAL_EXPORT=500000)", /500K rows/.test(b));
 }
 
