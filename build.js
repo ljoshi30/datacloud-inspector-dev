@@ -707,3 +707,13 @@ if (fs.existsSync(extDir)) {
 }
 console.log("Round-trip + browser-decode + syntax + strip-symbol checks all verified.");
 console.log("NOTE: obfuscation only DETERS copying; the @strip mechanism PHYSICALLY removes in-dev code from the public payload. Keep console-decorate.js private.");
+
+// ---- sync the built extension output into the two extension repos ----
+// Local file copy only (no git). Keeps datacloud-inspector-extension-dev (private)
+// and datacloud-inspector-extension (public) working dirs current after every
+// build. Wrapped so a missing/failed sync never aborts the build itself.
+try {
+  require("./publish-extensions.js");
+} catch (e) {
+  console.warn("NOTE: extension sync skipped (" + e.message + "). Run `node publish-extensions.js` manually if needed.");
+}
