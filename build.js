@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js", "bookmarklet-size.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -538,6 +538,31 @@ const fullBmCode = bmSource;
 const full = makePayload(minifyForBookmarklet(fullBmCode, "full"), "full");
 fs.writeFileSync(path.join(dir, "console-decorate-full.min.js"), full.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet-full.txt"), full.bm);
+
+// ---- SIZE CHECK: FULL/dev bookmarklet vs the 2 MB browser bookmark-URL cap ----
+// Only the FULL bookmarklet is watched (the public one sits ~19% and isn't a
+// concern). The measured value is the actual `javascript:` URL that gets stored in
+// the bookmark — that is what the 2^21-byte limit applies to. Warn at 75%, and
+// HARD-FAIL past 100% (a bookmark URL over the cap truncates silently in-browser,
+// which would ship a broken bookmarklet).
+(function checkFullBookmarkletSize() {
+  const LIMIT = 2 * 1024 * 1024;           // 2,097,152 bytes
+  const WARN = Math.floor(LIMIT * 0.75);   // 75% soft line
+  const n = Buffer.byteLength(full.bm, "utf8");
+  const pct = (n / LIMIT * 100).toFixed(1);
+  const line = "FULL bookmarklet size: " + n.toLocaleString() + " bytes = " + pct +
+               "% of 2MB  (" + Math.round((LIMIT - n) / 1024) + "KB free)";
+  if (n >= LIMIT) {
+    console.error("ERROR: " + line + " — AT/OVER the 2MB bookmark cap; it would truncate and break. " +
+      "Move heavy in-dev features to @ext-only (extension), or trim. Aborting.");
+    process.exit(1);
+  } else if (n >= WARN) {
+    console.warn("⚠ WARNING: " + line + " — past the 75% soft limit. Consider moving heavy " +
+      "features to @ext-only so they ship only in the extension, not the bookmarklet.");
+  } else {
+    console.log("  ✓ " + line);
+  }
+})();
 const fullHtml = makeHtml(full.hrefSafe, true, buildIdOf(full.b64));
 verifyHtml(fullHtml, full.loader, "full");
 fs.writeFileSync(path.join(dir, "install-full.html"), fullHtml);
