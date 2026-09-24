@@ -232,31 +232,40 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   //   • Explorer's own view loads 100 rows (code: "hard-capped at 100").
   //   • Query Editor grid shows 1,000 rows on screen (Salesforce product UI limit).
   //   • CSV export cap = 500K rows (DC_MAX_TOTAL_EXPORT), paginated.
-  function pageCard(icon, name, buttons, desc) {
-    return `<div class="feat">
-        <div class="icon">${icon}</div><strong>${name}</strong>
-        <div style="margin:2px 0 5px">${buttons.map(b => '<span class="pill">' + b + '</span>').join(" ")}</div>
-        <span>${desc}</span>
-      </div>`;
+  // Accordion row: one collapsed <details> per page. Page loads short (all collapsed);
+  // click a row to expand its launcher buttons + what they do. Fixes the old bug where
+  // inline <strong> broke onto its own line (we use <b>, and .acc-body has no block
+  // rule). Every claim verified against console-decorate.extension.js.
+  function acc(icon, name, pills, desc) {
+    return `<details class="acc">
+        <summary><span class="acc-ic">${icon}</span><span class="acc-nm">${name}</span><span class="acc-pills">${pills.map(p => '<span class="pill">' + p + '</span>').join("")}</span></summary>
+        <div class="acc-body">${desc}</div>
+      </details>`;
   }
-  const sharedCards =
-    pageCard("&#128257;", "Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
-      "Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <strong>Export</strong> the full mapping table (filter by DMO) to Sheets or CSV.") +
-    pageCard("&#127760;", "Data Stream &amp; DLO", ["Export Fields"],
+  const chips = ["Mapping Canvas", "Data Stream", "DLO", "DMO"]
+    .concat(includeDev ? ["Data Model (ERD)", "Data Explorer", "Segment", "Query Editor", "Data Transform"] : [])
+    .map(c => `<span class="chip">${c}</span>`).join("");
+
+  const sharedRows =
+    acc("&#128257;", "Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
+      "Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <b>Export</b> the full mapping table (filter by DMO) to Sheets or CSV.") +
+    acc("&#127760;", "Data Stream &amp; DLO", ["Export Fields"],
       "Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.") +
-    pageCard("&#128450;", "DMO Detail", ["Export Fields"],
-      "<strong>Fields</strong> tab (API name, type, mapped status, key qualifier) + <strong>Relationships</strong> tab (related objects, join fields). Copy for Sheets or Download XLS.");
-  const devCards = !includeDev ? "" :
-    pageCard("&#127937;", "Segment", ["Export Rules"],
+    acc("&#128450;", "DMO Detail", ["Export Fields"],
+      "<b>Fields</b> tab (API name, type, mapped status, key qualifier) plus <b>Relationships</b> tab (related objects, join fields). Copy for Sheets or Download XLS.");
+  const devRows = !includeDev ? "" :
+    acc("&#128506;&#65039;", "Data Model (ERD)", ["Diagram"],
+      "On the Data Model graph page, generates a copyable <b>Mermaid ERD</b> of your entities &amp; relationships (paste into Lucidchart, draw.io, or GitHub) with a cardinality legend and searchable entity cards showing each object&rsquo;s connections.") +
+    acc("&#127937;", "Segment", ["Export Rules"],
       "Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel.") +
-    pageCard("&#128202;", "Data Explorer", ["Columns", "Export CSV"],
-      "See <strong>all columns</strong> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <strong>Export All</strong> to CSV up to 500K rows (paginated, cancelable).") +
-    pageCard("&#128270;", "Query Editor", ["Run &amp; Export"],
-      "Run any SQL and export the <strong>full</strong> result as CSV up to 500K rows (paginated, progress + cancel) &mdash; beyond the <strong>1,000 rows</strong> the Query Editor grid shows on screen.") +
-    pageCard("&#9881;&#65039;", "Data Transform", ["View Definition"],
-      "<strong>Auto-reads</strong> the definition into a plain-English, branch-by-branch summary: sources, filters, formulas, joins, outputs, fields kept / dropped / renamed. Download as HTML (printable to PDF). Optional AI explanation.");
+    acc("&#128202;", "Data Explorer", ["Columns", "Export CSV"],
+      "See <b>all columns</b> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <b>Export All</b> to CSV up to 500K rows (paginated, cancelable).") +
+    acc("&#128270;", "Query Editor", ["Run &amp; Export"],
+      "Run any SQL and export the <b>full</b> result as CSV up to 500K rows (paginated, progress + cancel) &mdash; beyond the <b>1,000 rows</b> the Query Editor grid shows on screen.") +
+    acc("&#9881;&#65039;", "Data Transform", ["View Definition"],
+      "<b>Auto-reads</b> the definition into a plain-English, branch-by-branch summary: sources, filters, formulas, joins, outputs, fields kept / dropped / renamed. Download as HTML (printable to PDF). Optional AI explanation.");
   const roadmapNote = includeDev ? "" : `
-    <p style="font-size:12px;color:var(--muted);margin:12px 0 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>`;
+    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -294,6 +303,22 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);margin-right:4px}
   .pill.new{background:var(--greenbg);color:var(--green)}
+  /* page chips (at-a-glance list of supported pages) */
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:12px;font-weight:600;color:var(--dark);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
+  /* accordion rows */
+  .acc{border:1px solid var(--line);border-radius:10px;margin:7px 0;background:#fff;overflow:hidden}
+  .acc[open]{border-color:#bcd3f7;box-shadow:0 1px 6px rgba(13,110,253,.07)}
+  .acc summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:11px 14px;font-size:14px;user-select:none}
+  .acc summary::-webkit-details-marker{display:none}
+  .acc summary::after{content:"\\203A";margin-left:auto;color:var(--muted);font-size:18px;transform:rotate(90deg);transition:transform .15s}
+  .acc[open] summary::after{transform:rotate(-90deg)}
+  .acc summary:hover{background:var(--bg)}
+  .acc-ic{font-size:17px;line-height:1}
+  .acc-nm{font-weight:700;color:var(--ink)}
+  .acc-pills{display:flex;flex-wrap:wrap;gap:3px}
+  .acc-body{padding:2px 15px 14px 40px;font-size:13px;color:var(--muted);line-height:1.55}
+  .acc-body b{color:var(--ink);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -347,22 +372,24 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 
   <div class="card">
     <h2>What it does</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 4px">Open the launcher (purple button, bottom-right) on any page below &mdash; only the buttons for that page show. Everything is read-only.</p>
-    <div class="feat-grid">
-      ${sharedCards}${devCards}
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Works on these pages &mdash; open the launcher (purple button, bottom-right) and only that page&rsquo;s buttons show. Everything is read-only.</p>
+    <div class="chips">${chips}</div>
+    <p style="font-size:12px;color:var(--muted);margin:14px 0 8px">Click a page to see what you can do:</p>
+    ${sharedRows}${devRows}
+    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>${roadmapNote}
+  </div>
+  <details class="acc" style="margin-top:16px">
+    <summary><span class="acc-ic">&#128274;</span><span class="acc-nm">Privacy &amp; safety</span></summary>
+    <div class="acc-body">
+      <ul style="margin:4px 0;padding-left:18px">
+        <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
+        <li>Uses Salesforce&rsquo;s own APIs (same-origin). No data leaves your browser or your org.</li>
+        <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
+        <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
+        <li>No installation required &mdash; no package, no Connected App, no admin approval.</li>
+      </ul>
     </div>
-    <p style="font-size:12px;color:var(--muted);margin:12px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>${roadmapNote}
-  </div>
-  <div class="card">
-    <h2>Privacy &amp; safety</h2>
-    <ul>
-      <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
-      <li>Uses Salesforce&rsquo;s own APIs (same-origin). No data leaves your browser or your org.</li>
-      <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
-      <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
-      <li>No installation required &mdash; no package, no Connected App, no admin approval.</li>
-    </ul>
-  </div>
+  </details>
 
   <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:26px;line-height:1.7">
     Data 360 Inspector &middot; internal tool for Salesforce Data Cloud<br>
@@ -479,14 +506,19 @@ verifyHtml(pubHtml, pub.loader, "public");
 // public bookmarklet, nor leak internal example field names. Checked on the fresh
 // HTML string (not a stale file) so it can never ship wrong.
 (function verifyPublicHtmlAccuracy(html) {
+  // Dev-only page/feature names & buttons that must never appear on the public page,
+  // in ANY markup (accordion row name, chip, or button pill).
   const forbidden = [
-    [/<strong>Data Explorer<\/strong>/, "Data Explorer page tile (stripped from public)"],
-    [/<strong>Segment<\/strong>/, "Segment page tile (stripped from public)"],
-    [/<strong>Query Editor<\/strong>/, "Query Editor page tile (stripped from public)"],
-    [/<strong>Data Transform<\/strong>/, "Data Transform page tile (stripped from public)"],
-    [/Export Rules/, "Export Rules launcher row (Segment)"],
-    [/Run &amp; Export/, "Run & Export launcher row (Query Editor)"],
-    [/View Definition/, "View Definition launcher row (Data Transform)"],
+    [/acc-nm">Data Explorer</, "Data Explorer accordion row (stripped from public)"],
+    [/acc-nm">Segment</, "Segment accordion row (stripped from public)"],
+    [/acc-nm">Query Editor</, "Query Editor accordion row (stripped from public)"],
+    [/acc-nm">Data Transform</, "Data Transform accordion row (stripped from public)"],
+    [/Data Model \(ERD\)/, "Data Model / ERD (dev-only, stripped from public)"],
+    [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
+    [/chip">Segment</, "Segment chip (stripped from public)"],
+    [/Export Rules/, "Export Rules launcher (Segment)"],
+    [/Run &amp; Export/, "Run & Export launcher (Query Editor)"],
+    [/View Definition/, "View Definition launcher (Data Transform)"],
     [/birth\s*date|birthdt|ssot__birthdate/i, "internal 'Birth Date' example"],
     [/account number|customer_account_number/i, "internal 'Account Number' example"],
   ];

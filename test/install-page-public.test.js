@@ -30,20 +30,22 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
     /verifyPublicHtmlAccuracy[\s\S]{0,1600}process\.exit\(1\)/.test(b));
 }
 
-console.log("\n2. Dev-only page cards are gated behind includeDev (one consolidated grid)");
+console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 {
-  ok("devCards is gated by includeDev", /devCards\s*=\s*!includeDev\s*\?\s*""/.test(b));
-  ok("devCards carries Segment / Data Explorer / Query Editor / Data Transform",
-    /devCards[\s\S]{0,600}Segment[\s\S]{0,400}Data Explorer[\s\S]{0,400}Query Editor[\s\S]{0,400}Data Transform/.test(b));
-  ok("the grid renders sharedCards + devCards (not the old 3 sections)", /\$\{sharedCards\}\$\{devCards\}/.test(b));
+  ok("devRows is gated by includeDev", /devRows\s*=\s*!includeDev\s*\?\s*""/.test(b));
+  ok("devRows carries Data Model (ERD) / Segment / Data Explorer / Query Editor / Data Transform",
+    /devRows[\s\S]{0,700}Data Model \(ERD\)[\s\S]{0,500}Segment[\s\S]{0,500}Data Explorer[\s\S]{0,500}Query Editor[\s\S]{0,500}Data Transform/.test(b));
+  ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
+  ok("ERD is dev-only (not in the always-shared rows)", !/sharedRows[\s\S]{0,600}Data Model \(ERD\)/.test(b));
 }
 
 console.log("\n3. The forbidden list covers the stripped features + internal examples");
 {
-  ok("guards against a Segment tile", /<strong>Segment<\\?\/strong>/.test(b));
-  ok("guards against Birth Date example", /birth\\?s\*date|birth\s*date/i.test(b));
+  ok("guards against a Segment accordion row", /acc-nm">Segment</.test(b));
+  ok("guards against Data Model (ERD) leaking public", /Data Model \\\(ERD\\\)/.test(b));
+  ok("guards against Birth Date example", /birth\\s\*date|birth\s*date/i.test(b));
   ok("guards against Account Number example", /account number/i.test(b));
 }
 
@@ -60,7 +62,7 @@ console.log("\n5. Row-limit claims match the code (no false/guessed numbers)");
   // (DC_MAX_RENDER_ROWS), not an SF UI limit. Must never return.
   ok("no false 'SF 2,000-row UI limit' claim", !/2,?000-row UI limit/.test(b));
   // Verified facts that SHOULD be present in the dev feature copy.
-  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /1,000 rows<\/strong> the Query Editor grid/.test(b));
+  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /1,000 rows<\/b> the Query Editor grid/.test(b));
   ok("Explorer's 100-row own-view is stated", /own view loads 100 rows|loads only 100 rows|100 rows/.test(b));
   ok("CSV export cap stated as 500K (matches DC_MAX_TOTAL_EXPORT=500000)", /500K rows/.test(b));
 }

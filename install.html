@@ -34,6 +34,22 @@
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:#edf4ff;color:var(--blue);margin-right:4px}
   .pill.new{background:var(--greenbg);color:var(--green)}
+  /* page chips (at-a-glance list of supported pages) */
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:12px;font-weight:600;color:var(--dark);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
+  /* accordion rows */
+  .acc{border:1px solid var(--line);border-radius:10px;margin:7px 0;background:#fff;overflow:hidden}
+  .acc[open]{border-color:#bcd3f7;box-shadow:0 1px 6px rgba(13,110,253,.07)}
+  .acc summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;padding:11px 14px;font-size:14px;user-select:none}
+  .acc summary::-webkit-details-marker{display:none}
+  .acc summary::after{content:"\203A";margin-left:auto;color:var(--muted);font-size:18px;transform:rotate(90deg);transition:transform .15s}
+  .acc[open] summary::after{transform:rotate(-90deg)}
+  .acc summary:hover{background:var(--bg)}
+  .acc-ic{font-size:17px;line-height:1}
+  .acc-nm{font-weight:700;color:var(--ink)}
+  .acc-pills{display:flex;flex-wrap:wrap;gap:3px}
+  .acc-body{padding:2px 15px 14px 40px;font-size:13px;color:var(--muted);line-height:1.55}
+  .acc-body b{color:var(--ink);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -87,35 +103,34 @@
 
   <div class="card">
     <h2>What it does</h2>
-    <p style="font-size:13px;color:var(--muted);margin:0 0 4px">Open the launcher (purple button, bottom-right) on any page below &mdash; only the buttons for that page show. Everything is read-only.</p>
-    <div class="feat-grid">
-      <div class="feat">
-        <div class="icon">&#128257;</div><strong>Mapping Canvas</strong>
-        <div style="margin:2px 0 5px"><span class="pill">API Tooltip</span> <span class="pill">Pin API names</span> <span class="pill">Export</span></div>
-        <span>Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <strong>Export</strong> the full mapping table (filter by DMO) to Sheets or CSV.</span>
-      </div><div class="feat">
-        <div class="icon">&#127760;</div><strong>Data Stream &amp; DLO</strong>
-        <div style="margin:2px 0 5px"><span class="pill">Export Fields</span></div>
-        <span>Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.</span>
-      </div><div class="feat">
-        <div class="icon">&#128450;</div><strong>DMO Detail</strong>
-        <div style="margin:2px 0 5px"><span class="pill">Export Fields</span></div>
-        <span><strong>Fields</strong> tab (API name, type, mapped status, key qualifier) + <strong>Relationships</strong> tab (related objects, join fields). Copy for Sheets or Download XLS.</span>
-      </div>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">Works on these pages &mdash; open the launcher (purple button, bottom-right) and only that page&rsquo;s buttons show. Everything is read-only.</p>
+    <div class="chips"><span class="chip">Mapping Canvas</span><span class="chip">Data Stream</span><span class="chip">DLO</span><span class="chip">DMO</span></div>
+    <p style="font-size:12px;color:var(--muted);margin:14px 0 8px">Click a page to see what you can do:</p>
+    <details class="acc">
+        <summary><span class="acc-ic">&#128257;</span><span class="acc-nm">Mapping Canvas</span><span class="acc-pills"><span class="pill">API Tooltip</span><span class="pill">Pin API names</span><span class="pill">Export</span></span></summary>
+        <div class="acc-body">Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <b>Export</b> the full mapping table (filter by DMO) to Sheets or CSV.</div>
+      </details><details class="acc">
+        <summary><span class="acc-ic">&#127760;</span><span class="acc-nm">Data Stream &amp; DLO</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
+        <div class="acc-body">Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.</div>
+      </details><details class="acc">
+        <summary><span class="acc-ic">&#128450;</span><span class="acc-nm">DMO Detail</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
+        <div class="acc-body"><b>Fields</b> tab (API name, type, mapped status, key qualifier) plus <b>Relationships</b> tab (related objects, join fields). Copy for Sheets or Download XLS.</div>
+      </details>
+    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>
+    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>
+  </div>
+  <details class="acc" style="margin-top:16px">
+    <summary><span class="acc-ic">&#128274;</span><span class="acc-nm">Privacy &amp; safety</span></summary>
+    <div class="acc-body">
+      <ul style="margin:4px 0;padding-left:18px">
+        <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
+        <li>Uses Salesforce&rsquo;s own APIs (same-origin). No data leaves your browser or your org.</li>
+        <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
+        <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
+        <li>No installation required &mdash; no package, no Connected App, no admin approval.</li>
+      </ul>
     </div>
-    <p style="font-size:12px;color:var(--muted);margin:12px 0 0">All modals are draggable (grab the header) and resizable (drag the bottom-right corner). Click <strong>Remove</strong> in the menu to take the tool off the page.</p>
-    <p style="font-size:12px;color:var(--muted);margin:12px 0 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>
-  </div>
-  <div class="card">
-    <h2>Privacy &amp; safety</h2>
-    <ul>
-      <li>Runs entirely in your browser &mdash; no external servers, no third-party services.</li>
-      <li>Uses Salesforce&rsquo;s own APIs (same-origin). No data leaves your browser or your org.</li>
-      <li>Nothing is stored permanently &mdash; the tool disappears on page reload. Column selections use localStorage (per-org, 90-day TTL).</li>
-      <li>Read-only: it never creates, modifies, or deletes any Salesforce data.</li>
-      <li>No installation required &mdash; no package, no Connected App, no admin approval.</li>
-    </ul>
-  </div>
+  </details>
 
   <div style="text-align:center;color:var(--muted);font-size:12px;margin-top:26px;line-height:1.7">
     Data 360 Inspector &middot; internal tool for Salesforce Data Cloud<br>
