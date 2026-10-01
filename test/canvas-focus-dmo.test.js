@@ -148,6 +148,30 @@ console.log("\n4e. pairsToTSV — clipboard export of a DMO's pairs (type + PK c
   ok("non-mismatch row has empty mismatch cell", rows[1].endsWith("\t"));
 }
 
+console.log("\n4f. system/key field classification (explains why our count > SF's 'Is Mapped')");
+{
+  const SYS_TARGETS = { "datasourceid__c": 1, "datasourceobjectid__c": 1, "internalorganizationid__c": 1, "datasource__c": 1, "datasourceobject__c": 1, "internalorganization__c": 1, "ssot__datasourceid__c": 1, "ssot__datasourceobjectid__c": 1, "ssot__internalorganizationid__c": 1, "cdp_sys_sourceversion__c": 1 };
+  function isSystemPair(p) {
+    const t = String(p.targetApi || "").toLowerCase();
+    if (SYS_TARGETS[t]) return true;
+    if (/^kq_/i.test(String(p.targetApi || "")) || /^kq_/i.test(String(p.sourceApi || ""))) return true;
+    return false;
+  }
+  ok("DataSourceId__c flagged system", isSystemPair({ targetApi: "DataSourceId__c" }));
+  ok("InternalOrganizationId__c flagged system", isSystemPair({ targetApi: "InternalOrganizationId__c" }));
+  ok("KQ_ target flagged (key qualifier)", isSystemPair({ targetApi: "KQ_Id__c" }));
+  ok("KQ_ source flagged (key qualifier)", isSystemPair({ sourceApi: "KQ_contact_key__c", targetApi: "Id__c" }));
+  ok("a real business field is NOT system", !isSystemPair({ targetApi: "BirthDt__c" }));
+  // the reported case: 14 total, 9 business → 5 system/key
+  const pairs = [
+    { targetApi: "Id__c" }, { targetApi: "City__c" }, { targetApi: "PostalCode__c" }, { targetApi: "Country__c" },
+    { targetApi: "Street__c" }, { targetApi: "APT__c" }, { targetApi: "ContactPointType__c" }, { targetApi: "StateProvince__c" }, { targetApi: "LastModifiedDate__c" },
+    { targetApi: "DataSourceId__c" }, { targetApi: "DataSourceObjectId__c" }, { targetApi: "InternalOrganizationId__c" }, { targetApi: "KQ_Id__c" }, { targetApi: "KQ_PartyId__c" },
+  ];
+  eq("14 total pairs", pairs.length, 14);
+  eq("5 are system/key (explains 14 vs SF's 9)", pairs.filter(isSystemPair).length, 5);
+}
+
 console.log("\n5. empty / malformed rows don't crash");
 {
   eq("empty rows -> 0 options", dmoDropdownOptions([]).length, 0);
@@ -173,6 +197,7 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("shows a Copied toast on field click", /function toast\(/.test(src) && /Copied/.test(src));
   ok("has a Copy-mappings button (TSV export)", /Copy mappings/.test(src) && /pairsToTSV/.test(src));
   ok("has an 'All DMOs' grouped view (collapsible sections)", /__ALL__/.test(src) && /mode === "all"/.test(src));
+  ok("flags system/key fields (SYS badge + 'SF hides' note)", /isSystemPair/.test(src) && /SYS/.test(src) && /SF hides/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",

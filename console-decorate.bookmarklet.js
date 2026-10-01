@@ -1481,11 +1481,25 @@
 
     const foot = document.createElement("div");
     foot.style.cssText = "padding:8px 16px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#f8fafc;flex-shrink:0;";
-    foot.innerHTML = "Complete &amp; clean, from the authoritative mapping (same as Export). Hover to trace a pair · click a field to copy its API name.";
+    foot.innerHTML = "Complete mapping (same as Export). <span style='background:#7c3aed;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>PK</span> primary key · <span style='background:#64748b;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>SYS</span> system/key field SF auto-adds (hidden in its “Is Mapped” count) · <span style='background:#f59e0b;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>type</span> mismatch. Click a field to copy.";
     panel.appendChild(foot);
 
     let currentPairs = [];
     const COL_W = 300, ROW_H = 42, PAD_Y = 8, GAP = 110, HEAD_H = 24; // layout constants
+
+    // Our count is the COMPLETE authoritative mapping; SF's "Is Mapped (n)" hides the
+    // auto-added system/key fields (Data Source, Data Source Object, Internal
+    // Organization, Key Qualifiers). Classify a target field as system/key so we can
+    // tell the user why our number is higher than SF's. Match by target API name.
+    const SYS_TARGETS = { "datasourceid__c": 1, "datasourceobjectid__c": 1, "internalorganizationid__c": 1, "datasource__c": 1, "datasourceobject__c": 1, "internalorganization__c": 1, "ssot__datasourceid__c": 1, "ssot__datasourceobjectid__c": 1, "ssot__internalorganizationid__c": 1, "cdp_sys_sourceversion__c": 1 };
+    function isSystemPair(p) {
+      const t = String(p.targetApi || "").toLowerCase();
+      if (SYS_TARGETS[t]) return true;
+      if (/^kq_/i.test(String(p.targetApi || "")) || /^kq_/i.test(String(p.sourceApi || ""))) return true; // key qualifiers
+      return false;
+    }
+    const sysCount = (pairs) => pairs.filter(isSystemPair).length;
+    const sysNote = (pairs) => { const n = sysCount(pairs); return n ? " <span title='Data Source, Data Source Object, Internal Organization, Key Qualifiers — auto-added by Salesforce and hidden in its “Is Mapped” count' style='color:#64748b'>(incl. " + n + " system/key field" + (n === 1 ? "" : "s") + " SF hides)</span>" : ""; };
 
     // Small self-contained toast (lives inside the panel so it rides drag/resize).
     let toastEl = null, toastT = null;
@@ -1544,7 +1558,8 @@
       function setActive(idx, on) {
         const ln = svg.querySelector('path[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", on ? "#2563eb" : "#b6c2d6"); ln.setAttribute("stroke-width", on ? "2.5" : "1.5"); }
         svg.querySelectorAll('circle[data-i="' + idx + '"]').forEach((c) => c.setAttribute("fill", on ? "#2563eb" : "#b6c2d6"));
-        [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : "#fff"; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
+        const baseBg = isSystemPair(pairs[idx]) ? "#f8fafc" : "#fff";
+        [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : baseBg; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
       }
       function cell(side, p, idx) {
         const y = PAD_Y + idx * ROW_H;
@@ -1554,13 +1569,14 @@
         const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
         const type = isSrc ? (p.sourceType || "") : (p.targetType || "");
         const isPK = isSrc ? !!p.sourceIsPrimaryKey : !!p.targetIsPrimaryKey;
+        const isSys = isSystemPair(p);
         const mism = isMismatch(p);
         d.setAttribute("data-i", idx);
-        d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
-        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;background:#fff;transition:background .1s,border-color .1s;" + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
+        d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (isSys ? "  · system/key field (SF auto-adds; hidden in its “Is Mapped” count)" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
+        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;transition:background .1s,border-color .1s;" + (isSys ? "background:#f8fafc;opacity:.82;" : "background:#fff;") + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
         const pill = (txt, kind) => "<span style='display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
-          (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
-        const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "");
+          (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : kind === "sys" ? "background:#64748b;color:#fff;letter-spacing:.03em;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
+        const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "") + (isSys ? pill("SYS", "sys") : "");
         const nameLine = isSrc
           ? "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + badges + " " + esc(label) + "</div>"
           : "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + " " + badges + "</div>";
@@ -1598,7 +1614,7 @@
       if (mode === "one") {
         const shown = currentPairs.filter(match);
         const mism = shown.filter(isMismatch).length;
-        countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "") + (mism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mism + " type mismatch" + (mism === 1 ? "" : "es") + "</span>" : "");
+        countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + sysNote(currentPairs) + (q ? "  ·  " + shown.length + " shown" : "") + (mism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mism + " type mismatch" + (mism === 1 ? "" : "es") + "</span>" : "");
         copyBtn.style.display = shown.length ? "" : "none";
         if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>"; return; }
         diagram.appendChild(buildDiagram(shown));
@@ -1624,7 +1640,8 @@
         det.appendChild(body);
         diagram.appendChild(det);
       });
-      countLine.innerHTML = total + " mapping" + (total === 1 ? "" : "s") + " across " + groupsShown + " DMO" + (groupsShown === 1 ? "" : "s") + (totalMism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + totalMism + " mismatch" + (totalMism === 1 ? "" : "es") + "</span>" : "");
+      const allPairs = []; opts.forEach((o) => { (g.get(o.dmo) || []).forEach((p) => { if (match(p)) allPairs.push(p); }); });
+      countLine.innerHTML = total + " mapping" + (total === 1 ? "" : "s") + " across " + groupsShown + " DMO" + (groupsShown === 1 ? "" : "s") + sysNote(allPairs) + (totalMism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + totalMism + " mismatch" + (totalMism === 1 ? "" : "es") + "</span>" : "");
       copyBtn.style.display = total ? "" : "none";
       if (!total) diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>";
     }
