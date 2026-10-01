@@ -1380,15 +1380,12 @@
 
   /* @strip:start dev */
   // ===== FOCUS DMO ===== (IN-DEV — stripped from the public build until tested)
-  // Verify ONE DMO's mappings without tracing the wire spaghetti. Two parts:
-  //   (1) a panel listing that DMO's exact source->target field pairs (authoritative,
-  //       from buildMappingRows()); and
-  //   (2) a "declutter canvas" action that HIDES every OTHER target DMO list + every
-  //       source row NOT mapped to the chosen DMO (display:none), leaving only that
-  //       DMO's handful of wires — clean to trace.
-  // CAVEAT (surfaced to the user): hiding SF's own rows disturbs SF's zoom/pan math
-  // while active, so this is a temporary "verify snapshot" — a prominent Show All
-  // restores everything, and we auto-restore on panel close/teardown.
+  // Verify ONE DMO's mappings without fighting SF's wire spaghetti. We DON'T touch
+  // SF's canvas (proven dead end: its wires are anonymous + can't be removed, and
+  // hiding a row just re-routes its wire to 0,0 → strays persist). Instead we draw
+  // OUR OWN clean 2-column diagram for the chosen DMO: source fields on the left,
+  // target fields on the right, straight connector lines between — all pairs, correct
+  // & complete, zero spaghetti. Data from buildMappingRows() (authoritative, = Export).
   function groupRowsByDmo(rows) {
     const m = new Map();
     for (const r of rows) {
@@ -1399,66 +1396,8 @@
     return m;
   }
 
-  // Normalize a field api name or a row's data-tid to a common key so they match:
-  //   "Address_Contact_Point_Type__c" / "Address Contact Point Type" -> "address contact point type"
-  function normFieldKey(s) { return String(s == null ? "" : s).replace(/__c$/i, "").replace(/[_\s]+/g, " ").trim().toLowerCase(); }
-
-  // Hide everything on the canvas except the chosen DMO + its mapped source rows.
-  // Records each hidden element's prior inline display so restoreCanvas() is exact.
-  var _canvasHidden = [];
-  function restoreCanvas() {
-    for (const pair of _canvasHidden) { try { pair[0].style.setProperty("display", pair[1] || "", ""); } catch (e) {} }
-    _canvasHidden = [];
-  }
-  // Returns the set of normalized source-field keys mapped to >1 DMO ("shared" /
-  // system fields like DataSource, InternalOrganization, key qualifiers). Their wires
-  // dangle to hidden DMOs; hiding these rows removes the stray wires entirely.
-  function sharedSourceKeys(rows) {
-    const byField = new Map(); // normKey -> Set(dmoApi)
-    for (const r of rows) {
-      if (!r.sourceApi || !r.dmo) continue;
-      const k = normFieldKey(r.sourceApi);
-      if (!byField.has(k)) byField.set(k, new Set());
-      byField.get(k).add(r.dmo);
-    }
-    const shared = new Set();
-    for (const [k, set] of byField) if (set.size > 1) shared.add(k);
-    return shared;
-  }
-  // Hide everything except the chosen DMO + its mapped source rows. If hideShared is
-  // true, ALSO hide source rows that map to other DMOs too (removes the stray wires).
-  function hideOtherForDmo(dmoApi, rows, hideShared) {
-    restoreCanvas();
-    if (!dmoApi) return 0;
-    const hide = (el) => { try { const p = el.style.display; el.style.setProperty("display", "none", "important"); _canvasHidden.push([el, p]); } catch (e) {} };
-    // 1. hide OTHER target DMO lists
-    try {
-      for (const listEl of findByTag(TGT_CONTAINER)) {
-        let n = ""; try { n = (listEl.entity && listEl.entity.name) || ""; } catch (e) {}
-        if (n && n !== dmoApi) hide(listEl);
-      }
-    } catch (e) {}
-    // 2. source field keys to KEEP = mapped to this DMO, minus shared ones if requested
-    const shared = hideShared ? sharedSourceKeys(rows) : new Set();
-    const keep = new Set();
-    for (const r of rows) { if (r.dmo === dmoApi && r.sourceApi) { const k = normFieldKey(r.sourceApi); if (!(hideShared && shared.has(k))) keep.add(k); } }
-    // 3. hide source rows whose normalized data-tid isn't in `keep` (skip section headers)
-    const NON_FIELD = /^(Add New Field|Unmapped|Is Mapped|Mapped|Show more|Show less)\b/i;
-    let hid = 0;
-    try {
-      for (const it of findByTag(ITEM)) {
-        if (ancestorOfTag(it, SRC_LIST) == null) continue; // source-side rows only
-        const t = labelOf(it);
-        if (!t || HEADER.test(t) || NON_FIELD.test(t)) continue;
-        if (keep.has(normFieldKey(t))) continue;
-        hide(it); hid++;
-      }
-    } catch (e) {}
-    return hid;
-  }
-
   var focusPanelEl = null;
-  function closeFocusPanel() { restoreCanvas(); if (focusPanelEl) { try { focusPanelEl.remove(); } catch (e) {} focusPanelEl = null; } }
+  function closeFocusPanel() { if (focusPanelEl) { try { focusPanelEl.remove(); } catch (e) {} focusPanelEl = null; } }
 
   function openFocusPanel() {
     closeFocusPanel();
@@ -1472,11 +1411,11 @@
     const panel = document.createElement("div");
     focusPanelEl = panel;
     panel.id = "dc-focus-panel";
-    panel.style.cssText = "position:fixed;top:84px;right:24px;width:min(420px,92vw);max-height:80vh;display:flex;flex-direction:column;z-index:2147483646;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.4);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
+    panel.style.cssText = "position:fixed;top:7vh;left:50%;transform:translateX(-50%);width:min(760px,96vw);max-height:86vh;display:flex;flex-direction:column;z-index:2147483646;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.4);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
 
     const hdr = document.createElement("div");
-    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid #e2e8f0;background:#eff6ff;cursor:move;flex-shrink:0;";
-    hdr.innerHTML = "<div style='font:700 14px -apple-system,sans-serif;color:#0369a1;'>&#128269; Focus DMO &mdash; verify mappings</div>";
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#eff6ff;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div style='font:700 14px -apple-system,sans-serif;color:#0369a1;'>&#128269; Focus DMO &mdash; mapping diagram</div>";
     const closeX = document.createElement("button");
     closeX.innerHTML = "&times;"; closeX.title = "Close";
     closeX.style.cssText = "border:none;background:none;font-size:20px;line-height:1;color:#0369a1;cursor:pointer;padding:0 4px;";
@@ -1485,7 +1424,7 @@
     panel.appendChild(hdr);
 
     const controls = document.createElement("div");
-    controls.style.cssText = "padding:12px 14px 8px;flex-shrink:0;";
+    controls.style.cssText = "padding:12px 16px 8px;flex-shrink:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;";
     panel.appendChild(controls);
 
     if (!opts.length) {
@@ -1496,103 +1435,105 @@
     }
 
     const sel = document.createElement("select");
-    sel.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:13px -apple-system,sans-serif;margin-bottom:8px;";
+    sel.style.cssText = "flex:1;min-width:200px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:13px -apple-system,sans-serif;";
     sel.innerHTML = "<option value=''>&mdash; pick a DMO (" + opts.length + " mapped) &mdash;</option>" +
       opts.map((o) => "<option value='" + esc(o.dmo) + "'>" + esc(o.label) + " (" + o.count + ")</option>").join("");
     controls.appendChild(sel);
 
     const search = document.createElement("input");
-    search.type = "text"; search.placeholder = "Filter fields in this DMO…";
-    search.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:12px -apple-system,sans-serif;display:none;";
+    search.type = "text"; search.placeholder = "Filter fields…";
+    search.style.cssText = "flex:1;min-width:160px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:12px -apple-system,sans-serif;display:none;";
     controls.appendChild(search);
 
-    // Declutter-canvas controls: hide other DMOs + unrelated source rows on the canvas.
-    const declutterRow = document.createElement("div");
-    declutterRow.style.cssText = "display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;";
-    const declutterBtn = document.createElement("button");
-    declutterBtn.textContent = "Declutter canvas";
-    declutterBtn.title = "Hide every other DMO and unrelated source field on the canvas, leaving just this DMO's wires to trace.";
-    declutterBtn.style.cssText = "border:none;border-radius:7px;padding:6px 12px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#14b8a6,#0d9488);";
-    const showAllBtn = document.createElement("button");
-    showAllBtn.textContent = "Show all";
-    showAllBtn.title = "Restore every DMO and field on the canvas.";
-    showAllBtn.style.cssText = "border:1px solid #cbd5e1;border-radius:7px;padding:6px 12px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#334155;background:#fff;display:none;";
-    const sharedLbl = document.createElement("label");
-    sharedLbl.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#475569;cursor:pointer;flex-basis:100%;margin-top:2px;";
-    const sharedChk = document.createElement("input"); sharedChk.type = "checkbox"; sharedChk.checked = true;
-    sharedLbl.appendChild(sharedChk);
-    sharedLbl.appendChild(document.createTextNode(" hide shared system/key fields (removes stray wires)"));
-    declutterRow.appendChild(declutterBtn);
-    declutterRow.appendChild(showAllBtn);
-    declutterRow.appendChild(sharedLbl);
-    controls.appendChild(declutterRow);
-
-    const warnLine = document.createElement("div");
-    warnLine.style.cssText = "display:none;font-size:10.5px;color:#b45309;background:#fffbeb;border-radius:6px;padding:5px 8px;margin-top:7px;line-height:1.4;";
-    warnLine.innerHTML = "Canvas rows are hidden to declutter — SF zoom/pan may act oddly while active. Click <b>Show all</b> (or close) to restore.";
-    controls.appendChild(warnLine);
-
     const countLine = document.createElement("div");
-    countLine.style.cssText = "font-size:11px;color:#64748b;margin:8px 0 0;";
+    countLine.style.cssText = "font-size:11px;color:#64748b;flex-basis:100%;";
     controls.appendChild(countLine);
 
-    const listWrap = document.createElement("div");
-    listWrap.style.cssText = "padding:4px 14px 12px;overflow-y:auto;flex:1;";
-    panel.appendChild(listWrap);
+    // Diagram area: our own 2-column drawing (SVG lines + two field columns).
+    const diagram = document.createElement("div");
+    diagram.style.cssText = "position:relative;overflow:auto;flex:1;padding:4px 0;";
+    panel.appendChild(diagram);
 
     const foot = document.createElement("div");
-    foot.style.cssText = "padding:8px 14px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#f8fafc;flex-shrink:0;";
-    foot.innerHTML = "Reads the authoritative mapping (same as Export). Click a pair to copy <b>source&nbsp;&rarr;&nbsp;target</b> API names.";
+    foot.style.cssText = "padding:8px 16px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#f8fafc;flex-shrink:0;";
+    foot.innerHTML = "Our own diagram from the authoritative mapping (same as Export) &mdash; complete &amp; clean, independent of the SF canvas. Click a field to copy its API name.";
     panel.appendChild(foot);
 
     let currentPairs = [];
+    const COL_W = 300, ROW_H = 34, PAD_Y = 10, GAP = 120; // layout constants
+
+    function copyFlash(el, text) {
+      try { navigator.clipboard.writeText(text); } catch (e) {}
+      const prev = el.style.background; el.style.background = "#dcfce7";
+      setTimeout(() => { el.style.background = prev || ""; }, 500);
+    }
+
     function paint(filter) {
       const q = String(filter || "").trim().toLowerCase();
       const shown = !q ? currentPairs : currentPairs.filter((p) =>
         [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0));
-      countLine.textContent = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " match" + (shown.length === 1 ? "" : "es") : "");
-      listWrap.innerHTML = "";
-      shown.forEach((p) => {
-        const row = document.createElement("div");
-        row.style.cssText = "border:1px solid #e2e8f0;border-radius:7px;padding:7px 10px;margin-bottom:5px;cursor:pointer;";
-        row.onmouseenter = () => (row.style.background = "#f1f5f9");
-        row.onmouseleave = () => (row.style.background = "#fff");
-        row.innerHTML =
-          "<div style='font-size:12.5px;color:#0f172a;font-weight:600;'>" + esc(p.sourceLabel || p.sourceApi || "(system field)") + " <span style='color:#94a3b8;font-weight:400'>&rarr;</span> " + esc(p.targetLabel || p.targetApi) + "</div>" +
-          "<div style='font:11px SF Mono,Consolas,monospace;color:#64748b;margin-top:2px'>" + esc(p.sourceApi || "(system)") + " &rarr; " + esc(p.targetApi || "") + "</div>";
-        row.onclick = () => {
-          const text = (p.sourceApi || "") + " → " + (p.targetApi || "");
-          try { navigator.clipboard.writeText(text); } catch (e) {}
-          const prev = row.style.background; row.style.background = "#dcfce7";
-          setTimeout(() => { row.style.background = prev || "#fff"; }, 500);
-        };
-        listWrap.appendChild(row);
-      });
-      if (!shown.length) listWrap.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:6px 2px'>No fields match “" + esc(q) + "”.</div>";
-    }
+      countLine.textContent = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "");
+      diagram.innerHTML = "";
+      if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>" + (q ? "No fields match “" + esc(q) + "”." : "Pick a DMO above to see its mapping diagram.") + "</div>"; return; }
 
-    let decluttered = false;
-    function setDeclutter(on) {
-      decluttered = on;
-      if (on) { hideOtherForDmo(sel.value, rows, sharedChk.checked); declutterBtn.style.display = "none"; showAllBtn.style.display = ""; warnLine.style.display = "block"; }
-      else { restoreCanvas(); declutterBtn.style.display = ""; showAllBtn.style.display = "none"; warnLine.style.display = "none"; }
+      const n = shown.length;
+      const H = PAD_Y * 2 + n * ROW_H;
+      const totalW = COL_W * 2 + GAP;
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:relative;width:" + totalW + "px;height:" + H + "px;margin:0 auto;";
+      // SVG connector layer
+      const svgNS = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", totalW); svg.setAttribute("height", H);
+      svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:visible;";
+      wrap.appendChild(svg);
+      const colL = document.createElement("div"); colL.style.cssText = "position:absolute;top:0;left:0;width:" + COL_W + "px;";
+      const colR = document.createElement("div"); colR.style.cssText = "position:absolute;top:0;left:" + (COL_W + GAP) + "px;width:" + COL_W + "px;";
+      wrap.appendChild(colL); wrap.appendChild(colR);
+
+      function cell(side, p, idx) {
+        const y = PAD_Y + idx * ROW_H;
+        const d = document.createElement("div");
+        const isSrc = side === "L";
+        const label = isSrc ? (p.sourceLabel || p.sourceApi || "(system field)") : (p.targetLabel || p.targetApi);
+        const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
+        d.title = api || label;
+        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 6) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:6px;padding:3px 9px;overflow:hidden;cursor:pointer;background:#fff;" + (isSrc ? "text-align:right;" : "");
+        d.innerHTML = "<div style='font-size:12px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+          "<div style='font:10px SF Mono,Consolas,monospace;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
+        d.onmouseenter = () => { d.style.background = "#eff6ff"; d.style.borderColor = "#93c5fd"; const ln = svg.querySelector('[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", "#2563eb"); ln.setAttribute("stroke-width", "2.5"); } };
+        d.onmouseleave = () => { d.style.background = "#fff"; d.style.borderColor = "#e2e8f0"; const ln = svg.querySelector('[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", "#9fb0c6"); ln.setAttribute("stroke-width", "1.5"); } };
+        d.onclick = () => copyFlash(d, api || label);
+        return d;
+      }
+
+      shown.forEach((p, idx) => {
+        colL.appendChild(cell("L", p, idx));
+        colR.appendChild(cell("R", p, idx));
+        const y = PAD_Y + idx * ROW_H + (ROW_H - 6) / 2;
+        const x1 = COL_W, x2 = COL_W + GAP;
+        const path = document.createElementNS(svgNS, "path");
+        const mx = (x1 + x2) / 2;
+        path.setAttribute("d", "M" + x1 + " " + y + " C " + mx + " " + y + " " + mx + " " + y + " " + x2 + " " + y);
+        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#9fb0c6"); path.setAttribute("stroke-width", "1.5");
+        path.setAttribute("data-i", idx);
+        svg.appendChild(path);
+      });
+
+      diagram.appendChild(wrap);
     }
-    declutterBtn.onclick = () => setDeclutter(true);
-    showAllBtn.onclick = () => setDeclutter(false);
-    sharedChk.onchange = () => { if (decluttered) hideOtherForDmo(sel.value, rows, sharedChk.checked); };
 
     function selectDmo(dmoApi) {
-      setDeclutter(false); // changing DMO restores the canvas first
-      if (!dmoApi) { currentPairs = []; search.style.display = "none"; declutterRow.style.display = "none"; countLine.textContent = ""; listWrap.innerHTML = ""; return; }
+      if (!dmoApi) { currentPairs = []; search.style.display = "none"; countLine.textContent = ""; diagram.innerHTML = ""; paint(""); return; }
       currentPairs = (g.get(dmoApi) || []).slice().sort((a, b) =>
         String(a.targetLabel || a.targetApi || "").toLowerCase().localeCompare(String(b.targetLabel || b.targetApi || "").toLowerCase()));
       search.style.display = currentPairs.length > 8 ? "block" : "none";
-      declutterRow.style.display = "flex";
       search.value = "";
       paint("");
     }
     sel.onchange = () => selectDmo(sel.value);
     search.oninput = () => paint(search.value);
+    paint(""); // initial hint
 
     document.body.appendChild(panel);
     try { makeDraggable(panel, hdr); } catch (e) {}
