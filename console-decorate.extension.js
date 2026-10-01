@@ -1574,12 +1574,13 @@
         d.setAttribute("data-i", idx);
         d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (isSys ? "  · system/key field (SF auto-adds; hidden in its “Is Mapped” count)" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
         d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;transition:background .1s,border-color .1s;" + (isSys ? "background:#f8fafc;opacity:.82;" : "background:#fff;") + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
-        const pill = (txt, kind) => "<span style='display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
+        const pill = (txt, kind) => "<span style='flex:none;display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;vertical-align:middle;" +
           (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : kind === "sys" ? "background:#64748b;color:#fff;letter-spacing:.03em;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
         const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "") + (isSys ? pill("SYS", "sys") : "");
-        const nameLine = isSrc
-          ? "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + badges + " " + esc(label) + "</div>"
-          : "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + " " + badges + "</div>";
+        // Flex row: badges are flex:none (never clipped); ONLY the label text truncates.
+        // Source side = badges on the right (reversed); target side = badges on the left.
+        const nameTxt = "<span style='flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:600;color:#0f172a'>" + esc(label) + "</span>";
+        const nameLine = "<div style='display:flex;align-items:center;gap:5px;" + (isSrc ? "flex-direction:row-reverse;" : "") + "'>" + nameTxt + badges + "</div>";
         d.innerHTML = nameLine + "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
         d.onmouseenter = () => setActive(idx, true);
         d.onmouseleave = () => setActive(idx, false);
@@ -1632,7 +1633,10 @@
         det.style.cssText = "border:1px solid #e2e8f0;border-radius:9px;margin:0 14px 8px;overflow:hidden;";
         const sum = document.createElement("summary");
         sum.style.cssText = "cursor:pointer;padding:9px 12px;font:600 13px -apple-system,sans-serif;color:#0f172a;background:#f8fafc;list-style:none;display:flex;align-items:center;gap:8px;";
-        sum.innerHTML = "<span style='color:#0369a1'>" + esc(o.label) + "</span><span style='font-weight:500;color:#64748b'>(" + pairs.length + ")</span>" + (mism ? "<span style='margin-left:auto;color:#b45309;font-weight:600;font-size:11px'>&#9888; " + mism + "</span>" : "");
+        const sysN = sysCount(pairs);
+        sum.innerHTML = "<span style='color:#0369a1'>" + esc(o.label) + "</span><span style='font-weight:500;color:#64748b'>(" + pairs.length + ")</span>" +
+          (sysN ? "<span title='system/key fields SF auto-adds &amp; hides in its “Is Mapped” count' style='font-weight:500;color:#94a3b8;font-size:11px'>" + sysN + " sys</span>" : "") +
+          (mism ? "<span style='margin-left:auto;color:#b45309;font-weight:600;font-size:11px'>&#9888; " + mism + "</span>" : "");
         det.appendChild(sum);
         const body = document.createElement("div"); body.style.cssText = "padding:2px 0 6px;overflow:auto;";
         let built = false;
