@@ -115,14 +115,37 @@ console.log("\n4c. data-type mismatch detection (only when BOTH types known)");
   ok("both blank -> NOT flagged", !isMismatch({ sourceType: "", targetType: "" }));
 }
 
-console.log("\n4d. PK badge uses the authoritative flag, target side only");
+console.log("\n4d. PK badge uses the authoritative per-side flag");
 {
-  // mirror: isPK = !isSrc && !!p.targetIsPrimaryKey
-  const pkShown = (side, p) => (side !== "L") && !!p.targetIsPrimaryKey;
-  ok("target PK field shows PK", pkShown("R", { targetIsPrimaryKey: true }));
-  ok("same field on SOURCE side does NOT show PK", !pkShown("L", { targetIsPrimaryKey: true }));
-  ok("non-PK target shows nothing", !pkShown("R", { targetIsPrimaryKey: false }));
-  ok("missing flag -> no PK (never guessed)", !pkShown("R", {}));
+  // mirror: isPK = isSrc ? sourceIsPrimaryKey : targetIsPrimaryKey
+  const pkShown = (side, p) => side === "L" ? !!p.sourceIsPrimaryKey : !!p.targetIsPrimaryKey;
+  ok("target PK field shows PK on right", pkShown("R", { targetIsPrimaryKey: true }));
+  ok("source PK field shows PK on left", pkShown("L", { sourceIsPrimaryKey: true }));
+  ok("target PK does NOT bleed to left", !pkShown("L", { targetIsPrimaryKey: true }));
+  ok("source PK does NOT bleed to right", !pkShown("R", { sourceIsPrimaryKey: true }));
+  ok("missing flags -> no PK (never guessed)", !pkShown("R", {}) && !pkShown("L", {}));
+}
+
+console.log("\n4e. pairsToTSV — clipboard export of a DMO's pairs (type + PK columns)");
+{
+  const isMismatch = (p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return !!(a && b && a !== b); };
+  function pairsToTSV(pairs) {
+    const head = ["Source Field", "Source API", "Source Type", "Source PK", "Target Field", "Target API", "Target Type", "Target PK", "Type Mismatch"];
+    const lines = [head.join("\t")];
+    pairs.forEach((p) => lines.push([p.sourceLabel || "", p.sourceApi || "", p.sourceType || "", p.sourceIsPrimaryKey ? "PK" : "", p.targetLabel || "", p.targetApi || "", p.targetType || "", p.targetIsPrimaryKey ? "PK" : "", isMismatch(p) ? "YES" : ""].map((v) => String(v).replace(/\t/g, " ")).join("\t")));
+    return lines.join("\n");
+  }
+  const pairs = [
+    { sourceLabel: "deviceId", sourceApi: "deviceId__c", sourceType: "Text", sourceIsPrimaryKey: true, targetLabel: "Contact Point Phone Id", targetApi: "Id__c", targetType: "Text", targetIsPrimaryKey: true },
+    { sourceLabel: "DQ_Birthdate", sourceApi: "DQ_Birthdate__c", sourceType: "Text", targetLabel: "Birth Date", targetApi: "BirthDt__c", targetType: "Date" },
+  ];
+  const tsv = pairsToTSV(pairs);
+  const rows = tsv.split("\n");
+  eq("header + 2 rows", rows.length, 3);
+  ok("header has all 9 columns", rows[0].split("\t").length === 9);
+  ok("PK marked on both sides for the PK row", /\tPK\t.*\tPK\t/.test(rows[1]));
+  ok("type mismatch flagged YES (Text->Date)", /\tYES$/.test(rows[2]));
+  ok("non-mismatch row has empty mismatch cell", rows[1].endsWith("\t"));
 }
 
 console.log("\n5. empty / malformed rows don't crash");
@@ -145,7 +168,11 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("panel is resizable (addResizeHandle wired)", /addResizeHandle\(panel/.test(src));
   ok("draws its OWN svg diagram (createElementNS svg/path)", /createElementNS\(svgNS/.test(src));
   ok("shows data type pills + PK badge", /isMismatch/.test(src) && /targetIsPrimaryKey/.test(src));
-  ok("PK flag from the field's own isPrimaryKey (confirmed via probe, not guessed)", /safeGet\(f, "isPrimaryKey"\)/.test(src));
+  ok("target PK from the field's own isPrimaryKey (confirmed via probe)", /safeGet\(f, "isPrimaryKey"\)/.test(src));
+  ok("source PK from the source entity's isPrimaryKey (both sides)", /srcPkSet/.test(src) && /isPrimaryKey/.test(src));
+  ok("shows a Copied toast on field click", /function toast\(/.test(src) && /Copied/.test(src));
+  ok("has a Copy-mappings button (TSV export)", /Copy mappings/.test(src) && /pairsToTSV/.test(src));
+  ok("has an 'All DMOs' grouped view (collapsible sections)", /__ALL__/.test(src) && /mode === "all"/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",

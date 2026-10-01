@@ -1100,11 +1100,23 @@
     const byLabel = new Map();
     const labelCounts = new Map();
     const objByLabel = new Map(); // source-object label -> {name,label}
+    const srcPkSet = {};          // source field api names that are the DLO's primary key
     for (const listEl of findVisibleByTag(SRC_CONTAINER)) {
       let ent = null; try { ent = listEl.entity; } catch (e) {}
       const dlo = (ent && safeGet(ent, "name")) || "";
       const dloLabel = (ent && safeGet(ent, "label")) || "";
       if (dloLabel) objByLabel.set(dloLabel, { name: dlo, label: dloLabel });
+      // Source PK: field.isPrimaryKey on the source entity's fields (confirmed via
+      // probe — e.g. contact_key__c on the DLO). Keyed by field api name.
+      try {
+        const efs = ent && safeGet(ent, "fields");
+        if (efs && typeof efs.length === "number") {
+          for (let k = 0; k < efs.length; k++) {
+            const ef = safeGet(efs, k); if (!ef) continue;
+            if (safeGet(ef, "isPrimaryKey")) { const nm = safeGet(ef, "name"); if (nm) srcPkSet[String(nm)] = true; }
+          }
+        }
+      } catch (e) {}
       const { map, typeMap } = entityFieldMap(listEl);
       for (const [label, name] of map) {
         labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
@@ -1162,6 +1174,7 @@
         rows.push({
           srcObj: s.srcObj, srcObjLabel: s.srcObjLabel,
           sourceLabel: sourceLabel, sourceApi: s.sourceApi, sourceType: s.sourceType || "",
+          sourceIsPrimaryKey: !!(s.sourceApi && srcPkSet[String(s.sourceApi)]),
           dmo, dmoLabel,
           targetLabel: safeGet(f, "label") || "",
           targetApi: targetApi,
@@ -1441,8 +1454,15 @@
     const sel = document.createElement("select");
     sel.style.cssText = "flex:1;min-width:200px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:13px -apple-system,sans-serif;";
     sel.innerHTML = "<option value=''>&mdash; pick a DMO (" + opts.length + " mapped) &mdash;</option>" +
+      "<option value='__ALL__'>All DMOs (" + opts.reduce((a, o) => a + o.count, 0) + " mappings)</option>" +
       opts.map((o) => "<option value='" + esc(o.dmo) + "'>" + esc(o.label) + " (" + o.count + ")</option>").join("");
     controls.appendChild(sel);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy mappings";
+    copyBtn.title = "Copy the shown mappings (labels, API names, types, PK) as tab-separated — paste into Sheets/Excel.";
+    copyBtn.style.cssText = "display:none;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:7px 11px;cursor:pointer;font:600 12px -apple-system,sans-serif;white-space:nowrap;";
+    controls.appendChild(copyBtn);
 
     const search = document.createElement("input");
     search.type = "text"; search.placeholder = "Type to find a field (e.g. birth, phone, Id__c)…";
@@ -1467,35 +1487,53 @@
     let currentPairs = [];
     const COL_W = 300, ROW_H = 42, PAD_Y = 8, GAP = 110, HEAD_H = 24; // layout constants
 
+    // Small self-contained toast (lives inside the panel so it rides drag/resize).
+    let toastEl = null, toastT = null;
+    function toast(msg) {
+      if (!toastEl) {
+        toastEl = document.createElement("div");
+        toastEl.style.cssText = "position:absolute;left:50%;bottom:44px;transform:translateX(-50%);z-index:5;background:#0f172a;color:#fff;font:600 12px -apple-system,sans-serif;padding:7px 14px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);opacity:0;transition:opacity .15s;pointer-events:none;white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;";
+        panel.appendChild(toastEl);
+      }
+      toastEl.textContent = msg;
+      toastEl.style.opacity = "1";
+      if (toastT) clearTimeout(toastT);
+      toastT = setTimeout(() => { if (toastEl) toastEl.style.opacity = "0"; }, 1400);
+    }
     function copyFlash(el, text) {
       try { navigator.clipboard.writeText(text); } catch (e) {}
       const prev = el.style.boxShadow; el.style.boxShadow = "0 0 0 2px #22c55e inset";
       const prevBg = el.style.background; el.style.background = "#dcfce7";
       setTimeout(() => { el.style.boxShadow = prev || ""; el.style.background = prevBg || ""; }, 550);
+      toast("✓ Copied  " + text);
     }
 
-    function paint(filter) {
-      const q = String(filter || "").trim().toLowerCase();
-      const shown = !q ? currentPairs : currentPairs.filter((p) =>
-        [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0));
-      const mismCount = shown.filter((p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return a && b && a !== b; }).length;
-      countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "") +
-        (mismCount ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mismCount + " type mismatch" + (mismCount === 1 ? "" : "es") + "</span>" : "");
-      diagram.innerHTML = "";
-      if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12.5px;padding:28px 16px;text-align:center'>" + (q ? "No fields match “" + esc(q) + "”." : "&#128073; Pick a DMO above to see its mapping diagram.") + "</div>"; return; }
+    const isMismatch = (p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return !!(a && b && a !== b); };
+    const sortPairs = (arr) => arr.slice().sort((a, b) => String(a.targetLabel || a.targetApi || "").toLowerCase().localeCompare(String(b.targetLabel || b.targetApi || "").toLowerCase()));
 
-      const n = shown.length;
+    // TSV for clipboard — labels, API names, types, PK on both sides (for Sheets/Excel).
+    function pairsToTSV(pairs) {
+      const head = ["Source Field", "Source API", "Source Type", "Source PK", "Target Field", "Target API", "Target Type", "Target PK", "Type Mismatch"];
+      const lines = [head.join("\t")];
+      pairs.forEach((p) => lines.push([
+        p.sourceLabel || "", p.sourceApi || "", p.sourceType || "", p.sourceIsPrimaryKey ? "PK" : "",
+        p.targetLabel || "", p.targetApi || "", p.targetType || "", p.targetIsPrimaryKey ? "PK" : "",
+        isMismatch(p) ? "YES" : "",
+      ].map((v) => String(v).replace(/\t/g, " ")).join("\t")));
+      return lines.join("\n");
+    }
+
+    // Build ONE 2-column diagram element for a set of pairs (reused by single + grouped).
+    function buildDiagram(pairs) {
+      const n = pairs.length;
       const H = HEAD_H + PAD_Y * 2 + n * ROW_H;
       const totalW = COL_W * 2 + GAP;
       const svgNS = "http://www.w3.org/2000/svg";
       const wrap = document.createElement("div");
       wrap.style.cssText = "position:relative;width:" + totalW + "px;height:" + H + "px;margin:4px auto 10px;";
-
-      // column headers
       const mkHead = (left, txt, align) => { const h = document.createElement("div"); h.textContent = txt; h.style.cssText = "position:absolute;top:0;left:" + left + "px;width:" + COL_W + "px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;text-align:" + align + ";"; return h; };
       wrap.appendChild(mkHead(0, "Source · DLO", "right"));
       wrap.appendChild(mkHead(COL_W + GAP, "Target · DMO", "left"));
-
       const svg = document.createElementNS(svgNS, "svg");
       svg.setAttribute("width", totalW); svg.setAttribute("height", H);
       svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:visible;";
@@ -1503,21 +1541,10 @@
       const colL = document.createElement("div"); colL.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:0;width:" + COL_W + "px;";
       const colR = document.createElement("div"); colR.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:" + (COL_W + GAP) + "px;width:" + COL_W + "px;";
       wrap.appendChild(colL); wrap.appendChild(colR);
-
-      const lineOf = (idx) => svg.querySelector('path[data-i="' + idx + '"]');
-      const dotsOf = (idx) => svg.querySelectorAll('circle[data-i="' + idx + '"]');
       function setActive(idx, on) {
-        const ln = lineOf(idx); if (ln) { ln.setAttribute("stroke", on ? "#2563eb" : "#b6c2d6"); ln.setAttribute("stroke-width", on ? "2.5" : "1.5"); }
-        dotsOf(idx).forEach((c) => c.setAttribute("fill", on ? "#2563eb" : "#b6c2d6"));
+        const ln = svg.querySelector('path[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", on ? "#2563eb" : "#b6c2d6"); ln.setAttribute("stroke-width", on ? "2.5" : "1.5"); }
+        svg.querySelectorAll('circle[data-i="' + idx + '"]').forEach((c) => c.setAttribute("fill", on ? "#2563eb" : "#b6c2d6"));
         [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : "#fff"; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
-      }
-
-      // A mapping is a type MISMATCH only when BOTH types are known and differ
-      // (case-insensitive). Unknown/blank types are never flagged (don't guess).
-      function isMismatch(p) {
-        const a = String(p.sourceType || "").trim().toLowerCase();
-        const b = String(p.targetType || "").trim().toLowerCase();
-        return a && b && a !== b;
       }
       function cell(side, p, idx) {
         const y = PAD_Y + idx * ROW_H;
@@ -1526,56 +1553,99 @@
         const label = isSrc ? (p.sourceLabel || p.sourceApi || "(system field)") : (p.targetLabel || p.targetApi);
         const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
         const type = isSrc ? (p.sourceType || "") : (p.targetType || "");
-        const isPK = !isSrc && !!p.targetIsPrimaryKey; // PK marker only on the real PK (target side)
+        const isPK = isSrc ? !!p.sourceIsPrimaryKey : !!p.targetIsPrimaryKey;
         const mism = isMismatch(p);
         d.setAttribute("data-i", idx);
         d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
         d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;background:#fff;transition:background .1s,border-color .1s;" + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
-        // badges: type pill (amber if mismatch) + PK badge
         const pill = (txt, kind) => "<span style='display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
           (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
         const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "");
         const nameLine = isSrc
           ? "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + badges + " " + esc(label) + "</div>"
           : "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + " " + badges + "</div>";
-        d.innerHTML = nameLine +
-          "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
+        d.innerHTML = nameLine + "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
         d.onmouseenter = () => setActive(idx, true);
         d.onmouseleave = () => setActive(idx, false);
         d.onclick = () => copyFlash(d, api || label);
         return d;
       }
-
-      shown.forEach((p, idx) => {
+      pairs.forEach((p, idx) => {
         colL.appendChild(cell("L", p, idx));
         colR.appendChild(cell("R", p, idx));
         const y = HEAD_H + PAD_Y + idx * ROW_H + (ROW_H - 8) / 2;
-        const x1 = COL_W, x2 = COL_W + GAP;
-        const mx = (x1 + x2) / 2;
+        const x1 = COL_W, x2 = COL_W + GAP, mx = (x1 + x2) / 2;
         const path = document.createElementNS(svgNS, "path");
         path.setAttribute("d", "M" + x1 + " " + y + " C " + mx + " " + y + " " + mx + " " + y + " " + (x2 - 4) + " " + y);
-        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#b6c2d6"); path.setAttribute("stroke-width", "1.5");
-        path.setAttribute("data-i", idx);
+        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#b6c2d6"); path.setAttribute("stroke-width", "1.5"); path.setAttribute("data-i", idx);
         svg.appendChild(path);
-        // endpoint dots + a small arrowhead at the target end (shows direction)
-        [[x1, "src"], [x2, "tgt"]].forEach(([x]) => { const c = document.createElementNS(svgNS, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", "3"); c.setAttribute("fill", "#b6c2d6"); c.setAttribute("data-i", idx); svg.appendChild(c); });
+        [x1, x2].forEach((x) => { const c = document.createElementNS(svgNS, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", "3"); c.setAttribute("fill", "#b6c2d6"); c.setAttribute("data-i", idx); svg.appendChild(c); });
         const ar = document.createElementNS(svgNS, "path");
         ar.setAttribute("d", "M" + (x2 - 7) + " " + (y - 3.5) + " L" + x2 + " " + y + " L" + (x2 - 7) + " " + (y + 3.5));
         ar.setAttribute("fill", "none"); ar.setAttribute("stroke", "#93c5fd"); ar.setAttribute("stroke-width", "1.5"); ar.setAttribute("stroke-linejoin", "round");
         svg.appendChild(ar);
       });
-
-      diagram.appendChild(wrap);
+      return wrap;
     }
 
-    function selectDmo(dmoApi) {
-      if (!dmoApi) { currentPairs = []; search.style.display = "none"; countLine.textContent = ""; diagram.innerHTML = ""; paint(""); return; }
-      currentPairs = (g.get(dmoApi) || []).slice().sort((a, b) =>
-        String(a.targetLabel || a.targetApi || "").toLowerCase().localeCompare(String(b.targetLabel || b.targetApi || "").toLowerCase()));
+    let mode = "none"; // none | one | all
+    function paint(filter) {
+      const q = String(filter || "").trim().toLowerCase();
+      const match = (p) => !q || [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0);
+      diagram.innerHTML = "";
+      if (mode === "none") { copyBtn.style.display = "none"; countLine.textContent = ""; diagram.innerHTML = "<div style='color:#94a3b8;font-size:12.5px;padding:28px 16px;text-align:center'>&#128073; Pick a DMO (or All DMOs) above to see its mapping diagram.</div>"; return; }
+
+      if (mode === "one") {
+        const shown = currentPairs.filter(match);
+        const mism = shown.filter(isMismatch).length;
+        countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "") + (mism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mism + " type mismatch" + (mism === 1 ? "" : "es") + "</span>" : "");
+        copyBtn.style.display = shown.length ? "" : "none";
+        if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>"; return; }
+        diagram.appendChild(buildDiagram(shown));
+        return;
+      }
+
+      // mode === "all": collapsible section per DMO
+      let total = 0, totalMism = 0, groupsShown = 0;
+      opts.forEach((o) => {
+        const pairs = sortPairs((g.get(o.dmo) || []).filter(match));
+        if (!pairs.length) return;
+        groupsShown++; total += pairs.length;
+        const mism = pairs.filter(isMismatch).length; totalMism += mism;
+        const det = document.createElement("details");
+        det.style.cssText = "border:1px solid #e2e8f0;border-radius:9px;margin:0 14px 8px;overflow:hidden;";
+        const sum = document.createElement("summary");
+        sum.style.cssText = "cursor:pointer;padding:9px 12px;font:600 13px -apple-system,sans-serif;color:#0f172a;background:#f8fafc;list-style:none;display:flex;align-items:center;gap:8px;";
+        sum.innerHTML = "<span style='color:#0369a1'>" + esc(o.label) + "</span><span style='font-weight:500;color:#64748b'>(" + pairs.length + ")</span>" + (mism ? "<span style='margin-left:auto;color:#b45309;font-weight:600;font-size:11px'>&#9888; " + mism + "</span>" : "");
+        det.appendChild(sum);
+        const body = document.createElement("div"); body.style.cssText = "padding:2px 0 6px;overflow:auto;";
+        let built = false;
+        det.addEventListener("toggle", () => { if (det.open && !built) { body.appendChild(buildDiagram(pairs)); built = true; } });
+        det.appendChild(body);
+        diagram.appendChild(det);
+      });
+      countLine.innerHTML = total + " mapping" + (total === 1 ? "" : "s") + " across " + groupsShown + " DMO" + (groupsShown === 1 ? "" : "s") + (totalMism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + totalMism + " mismatch" + (totalMism === 1 ? "" : "es") + "</span>" : "");
+      copyBtn.style.display = total ? "" : "none";
+      if (!total) diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>";
+    }
+
+    function selectDmo(val) {
+      if (!val) { mode = "none"; currentPairs = []; search.style.display = "none"; copyBtn.style.display = "none"; search.value = ""; paint(""); return; }
+      if (val === "__ALL__") { mode = "all"; currentPairs = []; search.style.display = "block"; search.value = ""; paint(""); return; }
+      mode = "one";
+      currentPairs = sortPairs(g.get(val) || []);
       search.style.display = currentPairs.length > 4 ? "block" : "none";
       search.value = "";
       paint("");
     }
+    copyBtn.onclick = () => {
+      let pairs = [];
+      if (mode === "one") pairs = currentPairs;
+      else if (mode === "all") opts.forEach((o) => { pairs = pairs.concat(sortPairs(g.get(o.dmo) || [])); });
+      if (!pairs.length) return;
+      try { navigator.clipboard.writeText(pairsToTSV(pairs)); } catch (e) {}
+      toast("✓ Copied " + pairs.length + " mapping" + (pairs.length === 1 ? "" : "s") + " for Sheets");
+    };
     sel.onchange = () => selectDmo(sel.value);
     search.oninput = () => paint(search.value);
     paint(""); // initial hint
