@@ -1414,11 +1414,11 @@
     panel.style.cssText = "position:fixed;top:7vh;left:50%;transform:translateX(-50%);width:min(760px,96vw);max-height:86vh;display:flex;flex-direction:column;z-index:2147483646;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.4);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
 
     const hdr = document.createElement("div");
-    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#eff6ff;cursor:move;flex-shrink:0;";
-    hdr.innerHTML = "<div style='font:700 14px -apple-system,sans-serif;color:#0369a1;'>&#128269; Focus DMO &mdash; mapping diagram</div>";
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 16px;border-bottom:1px solid #e2e8f0;background:linear-gradient(135deg,#1e3a5f,#0369a1);cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div style='font:700 14px -apple-system,sans-serif;color:#fff;display:flex;align-items:center;gap:7px;'><span style='font-size:15px'>&#128269;</span> Focus DMO <span style='opacity:.7;font-weight:500'>&mdash; mapping diagram</span></div>";
     const closeX = document.createElement("button");
     closeX.innerHTML = "&times;"; closeX.title = "Close";
-    closeX.style.cssText = "border:none;background:none;font-size:20px;line-height:1;color:#0369a1;cursor:pointer;padding:0 4px;";
+    closeX.style.cssText = "border:none;background:rgba(255,255,255,.15);border-radius:6px;font-size:18px;line-height:1;color:#fff;cursor:pointer;padding:2px 8px;";
     closeX.onclick = closeFocusPanel;
     hdr.appendChild(closeX);
     panel.appendChild(hdr);
@@ -1456,16 +1456,17 @@
 
     const foot = document.createElement("div");
     foot.style.cssText = "padding:8px 16px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#f8fafc;flex-shrink:0;";
-    foot.innerHTML = "Our own diagram from the authoritative mapping (same as Export) &mdash; complete &amp; clean, independent of the SF canvas. Click a field to copy its API name.";
+    foot.innerHTML = "Complete &amp; clean, from the authoritative mapping (same as Export). Hover to trace a pair · click a field to copy its API name.";
     panel.appendChild(foot);
 
     let currentPairs = [];
-    const COL_W = 300, ROW_H = 34, PAD_Y = 10, GAP = 120; // layout constants
+    const COL_W = 300, ROW_H = 42, PAD_Y = 8, GAP = 110, HEAD_H = 24; // layout constants
 
     function copyFlash(el, text) {
       try { navigator.clipboard.writeText(text); } catch (e) {}
-      const prev = el.style.background; el.style.background = "#dcfce7";
-      setTimeout(() => { el.style.background = prev || ""; }, 500);
+      const prev = el.style.boxShadow; el.style.boxShadow = "0 0 0 2px #22c55e inset";
+      const prevBg = el.style.background; el.style.background = "#dcfce7";
+      setTimeout(() => { el.style.boxShadow = prev || ""; el.style.background = prevBg || ""; }, 550);
     }
 
     function paint(filter) {
@@ -1474,22 +1475,35 @@
         [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0));
       countLine.textContent = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "");
       diagram.innerHTML = "";
-      if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>" + (q ? "No fields match “" + esc(q) + "”." : "Pick a DMO above to see its mapping diagram.") + "</div>"; return; }
+      if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12.5px;padding:28px 16px;text-align:center'>" + (q ? "No fields match “" + esc(q) + "”." : "&#128073; Pick a DMO above to see its mapping diagram.") + "</div>"; return; }
 
       const n = shown.length;
-      const H = PAD_Y * 2 + n * ROW_H;
+      const H = HEAD_H + PAD_Y * 2 + n * ROW_H;
       const totalW = COL_W * 2 + GAP;
-      const wrap = document.createElement("div");
-      wrap.style.cssText = "position:relative;width:" + totalW + "px;height:" + H + "px;margin:0 auto;";
-      // SVG connector layer
       const svgNS = "http://www.w3.org/2000/svg";
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:relative;width:" + totalW + "px;height:" + H + "px;margin:4px auto 10px;";
+
+      // column headers
+      const mkHead = (left, txt, align) => { const h = document.createElement("div"); h.textContent = txt; h.style.cssText = "position:absolute;top:0;left:" + left + "px;width:" + COL_W + "px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;text-align:" + align + ";"; return h; };
+      wrap.appendChild(mkHead(0, "Source · DLO", "right"));
+      wrap.appendChild(mkHead(COL_W + GAP, "Target · DMO", "left"));
+
       const svg = document.createElementNS(svgNS, "svg");
       svg.setAttribute("width", totalW); svg.setAttribute("height", H);
       svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:visible;";
       wrap.appendChild(svg);
-      const colL = document.createElement("div"); colL.style.cssText = "position:absolute;top:0;left:0;width:" + COL_W + "px;";
-      const colR = document.createElement("div"); colR.style.cssText = "position:absolute;top:0;left:" + (COL_W + GAP) + "px;width:" + COL_W + "px;";
+      const colL = document.createElement("div"); colL.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:0;width:" + COL_W + "px;";
+      const colR = document.createElement("div"); colR.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:" + (COL_W + GAP) + "px;width:" + COL_W + "px;";
       wrap.appendChild(colL); wrap.appendChild(colR);
+
+      const lineOf = (idx) => svg.querySelector('path[data-i="' + idx + '"]');
+      const dotsOf = (idx) => svg.querySelectorAll('circle[data-i="' + idx + '"]');
+      function setActive(idx, on) {
+        const ln = lineOf(idx); if (ln) { ln.setAttribute("stroke", on ? "#2563eb" : "#b6c2d6"); ln.setAttribute("stroke-width", on ? "2.5" : "1.5"); }
+        dotsOf(idx).forEach((c) => c.setAttribute("fill", on ? "#2563eb" : "#b6c2d6"));
+        [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : "#fff"; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
+      }
 
       function cell(side, p, idx) {
         const y = PAD_Y + idx * ROW_H;
@@ -1497,12 +1511,13 @@
         const isSrc = side === "L";
         const label = isSrc ? (p.sourceLabel || p.sourceApi || "(system field)") : (p.targetLabel || p.targetApi);
         const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
-        d.title = api || label;
-        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 6) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:6px;padding:3px 9px;overflow:hidden;cursor:pointer;background:#fff;" + (isSrc ? "text-align:right;" : "");
-        d.innerHTML = "<div style='font-size:12px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
-          "<div style='font:10px SF Mono,Consolas,monospace;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
-        d.onmouseenter = () => { d.style.background = "#eff6ff"; d.style.borderColor = "#93c5fd"; const ln = svg.querySelector('[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", "#2563eb"); ln.setAttribute("stroke-width", "2.5"); } };
-        d.onmouseleave = () => { d.style.background = "#fff"; d.style.borderColor = "#e2e8f0"; const ln = svg.querySelector('[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", "#9fb0c6"); ln.setAttribute("stroke-width", "1.5"); } };
+        d.setAttribute("data-i", idx);
+        d.title = (label || "") + (api ? "  —  " + api : "");
+        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;background:#fff;transition:background .1s,border-color .1s;" + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
+        d.innerHTML = "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+          "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
+        d.onmouseenter = () => setActive(idx, true);
+        d.onmouseleave = () => setActive(idx, false);
         d.onclick = () => copyFlash(d, api || label);
         return d;
       }
@@ -1510,14 +1525,20 @@
       shown.forEach((p, idx) => {
         colL.appendChild(cell("L", p, idx));
         colR.appendChild(cell("R", p, idx));
-        const y = PAD_Y + idx * ROW_H + (ROW_H - 6) / 2;
+        const y = HEAD_H + PAD_Y + idx * ROW_H + (ROW_H - 8) / 2;
         const x1 = COL_W, x2 = COL_W + GAP;
-        const path = document.createElementNS(svgNS, "path");
         const mx = (x1 + x2) / 2;
-        path.setAttribute("d", "M" + x1 + " " + y + " C " + mx + " " + y + " " + mx + " " + y + " " + x2 + " " + y);
-        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#9fb0c6"); path.setAttribute("stroke-width", "1.5");
+        const path = document.createElementNS(svgNS, "path");
+        path.setAttribute("d", "M" + x1 + " " + y + " C " + mx + " " + y + " " + mx + " " + y + " " + (x2 - 4) + " " + y);
+        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#b6c2d6"); path.setAttribute("stroke-width", "1.5");
         path.setAttribute("data-i", idx);
         svg.appendChild(path);
+        // endpoint dots + a small arrowhead at the target end (shows direction)
+        [[x1, "src"], [x2, "tgt"]].forEach(([x]) => { const c = document.createElementNS(svgNS, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", "3"); c.setAttribute("fill", "#b6c2d6"); c.setAttribute("data-i", idx); svg.appendChild(c); });
+        const ar = document.createElementNS(svgNS, "path");
+        ar.setAttribute("d", "M" + (x2 - 7) + " " + (y - 3.5) + " L" + x2 + " " + y + " L" + (x2 - 7) + " " + (y + 3.5));
+        ar.setAttribute("fill", "none"); ar.setAttribute("stroke", "#93c5fd"); ar.setAttribute("stroke-width", "1.5"); ar.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(ar);
       });
 
       diagram.appendChild(wrap);
