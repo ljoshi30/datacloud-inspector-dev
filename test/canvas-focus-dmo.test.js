@@ -121,7 +121,8 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("a Focus DMO button/panel exists", /Focus DMO|dc-focus-btn|openFocusPanel/.test(src));
   ok("groups mapping rows by DMO", /groupRowsByDmo/.test(src));
   ok("reuses buildMappingRows() (authoritative mapping), not re-scraping", /buildMappingRows\(\)/.test(src));
-  ok("has a field filter/search box", /Filter fields/.test(src));
+  ok("has a field search box", /Type to find a field/.test(src));
+  ok("panel is resizable (addResizeHandle wired)", /addResizeHandle\(panel/.test(src));
   ok("draws its OWN svg diagram (createElementNS svg/path)", /createElementNS\(svgNS/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));

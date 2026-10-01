@@ -1441,7 +1441,8 @@
     controls.appendChild(sel);
 
     const search = document.createElement("input");
-    search.type = "text"; search.placeholder = "Filter fields…";
+    search.type = "text"; search.placeholder = "Type to find a field (e.g. birth, phone, Id__c)…";
+    search.title = "Type to narrow the diagram to matching fields — searches source/target label and API name. Clear to see all.";
     search.style.cssText = "flex:1;min-width:160px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:12px -apple-system,sans-serif;display:none;";
     controls.appendChild(search);
 
@@ -1548,7 +1549,7 @@
       if (!dmoApi) { currentPairs = []; search.style.display = "none"; countLine.textContent = ""; diagram.innerHTML = ""; paint(""); return; }
       currentPairs = (g.get(dmoApi) || []).slice().sort((a, b) =>
         String(a.targetLabel || a.targetApi || "").toLowerCase().localeCompare(String(b.targetLabel || b.targetApi || "").toLowerCase()));
-      search.style.display = currentPairs.length > 8 ? "block" : "none";
+      search.style.display = currentPairs.length > 4 ? "block" : "none";
       search.value = "";
       paint("");
     }
@@ -1558,6 +1559,7 @@
 
     document.body.appendChild(panel);
     try { makeDraggable(panel, hdr); } catch (e) {}
+    try { addResizeHandle(panel, 420, 320); } catch (e) {} // drag the bottom-right grip to resize
   }
   /* @strip:end */
 
