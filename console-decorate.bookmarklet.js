@@ -1163,6 +1163,7 @@
           targetLabel: safeGet(f, "label") || "",
           targetApi: targetApi,
           targetType: (function () { const t = safeGet(f, "type"); return t == null ? "" : String(t); })(),
+          targetIsPrimaryKey: !!safeGet(f, "primaryKey"), // authoritative PK flag (not guessed)
         });
       }
     }
@@ -1474,7 +1475,9 @@
       const q = String(filter || "").trim().toLowerCase();
       const shown = !q ? currentPairs : currentPairs.filter((p) =>
         [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0));
-      countLine.textContent = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "");
+      const mismCount = shown.filter((p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return a && b && a !== b; }).length;
+      countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + (q ? "  ·  " + shown.length + " shown" : "") +
+        (mismCount ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mismCount + " type mismatch" + (mismCount === 1 ? "" : "es") + "</span>" : "");
       diagram.innerHTML = "";
       if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12.5px;padding:28px 16px;text-align:center'>" + (q ? "No fields match “" + esc(q) + "”." : "&#128073; Pick a DMO above to see its mapping diagram.") + "</div>"; return; }
 
@@ -1506,16 +1509,33 @@
         [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : "#fff"; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
       }
 
+      // A mapping is a type MISMATCH only when BOTH types are known and differ
+      // (case-insensitive). Unknown/blank types are never flagged (don't guess).
+      function isMismatch(p) {
+        const a = String(p.sourceType || "").trim().toLowerCase();
+        const b = String(p.targetType || "").trim().toLowerCase();
+        return a && b && a !== b;
+      }
       function cell(side, p, idx) {
         const y = PAD_Y + idx * ROW_H;
         const d = document.createElement("div");
         const isSrc = side === "L";
         const label = isSrc ? (p.sourceLabel || p.sourceApi || "(system field)") : (p.targetLabel || p.targetApi);
         const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
+        const type = isSrc ? (p.sourceType || "") : (p.targetType || "");
+        const isPK = !isSrc && !!p.targetIsPrimaryKey; // PK marker only on the real PK (target side)
+        const mism = isMismatch(p);
         d.setAttribute("data-i", idx);
-        d.title = (label || "") + (api ? "  —  " + api : "");
+        d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
         d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;background:#fff;transition:background .1s,border-color .1s;" + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
-        d.innerHTML = "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+        // badges: type pill (amber if mismatch) + PK badge
+        const pill = (txt, kind) => "<span style='display:inline-block;font:600 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
+          (kind === "pk" ? "background:#fef3c7;color:#92400e;" : kind === "mism" ? "background:#fde68a;color:#92400e;" : "background:#eef2f7;color:#64748b;") + "'>" + esc(txt) + "</span>";
+        const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "");
+        const nameLine = isSrc
+          ? "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + badges + " " + esc(label) + "</div>"
+          : "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + " " + badges + "</div>";
+        d.innerHTML = nameLine +
           "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
         d.onmouseenter = () => setActive(idx, true);
         d.onmouseleave = () => setActive(idx, false);
@@ -1582,7 +1602,7 @@
     } catch (e) {}
     // Remove transform view
     try { if (typeof closeTransformView === "function") closeTransformView(); } catch (e) {}
-    // Restore any rows dimmed/highlighted by Focus DMO (inline styles on SF rows).
+    // Close the Focus DMO panel if open (guarded — stripped from public build).
     try { if (typeof closeFocusPanel === "function") closeFocusPanel(); } catch (e) {}
     try { if (navPoll) { clearInterval(navPoll); navPoll = null; } } catch (e) {}
     try { var bar = document.getElementById("dc-bar"); if (bar) bar.remove(); } catch (e) {}

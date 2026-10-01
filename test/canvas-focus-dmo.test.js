@@ -105,6 +105,26 @@ console.log("\n4. field filter/search within a DMO");
   eq("no match -> 0", filterPairs(pairs, "zzz").length, 0);
 }
 
+console.log("\n4c. data-type mismatch detection (only when BOTH types known)");
+{
+  const isMismatch = (p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return !!(a && b && a !== b); };
+  ok("Text -> Date flagged", isMismatch({ sourceType: "Text", targetType: "Date" }));
+  ok("Text -> text NOT flagged (case-insensitive)", !isMismatch({ sourceType: "Text", targetType: "text" }));
+  ok("blank source type -> NOT flagged (don't guess)", !isMismatch({ sourceType: "", targetType: "Date" }));
+  ok("blank target type -> NOT flagged", !isMismatch({ sourceType: "Text", targetType: "" }));
+  ok("both blank -> NOT flagged", !isMismatch({ sourceType: "", targetType: "" }));
+}
+
+console.log("\n4d. PK badge uses the authoritative flag, target side only");
+{
+  // mirror: isPK = !isSrc && !!p.targetIsPrimaryKey
+  const pkShown = (side, p) => (side !== "L") && !!p.targetIsPrimaryKey;
+  ok("target PK field shows PK", pkShown("R", { targetIsPrimaryKey: true }));
+  ok("same field on SOURCE side does NOT show PK", !pkShown("L", { targetIsPrimaryKey: true }));
+  ok("non-PK target shows nothing", !pkShown("R", { targetIsPrimaryKey: false }));
+  ok("missing flag -> no PK (never guessed)", !pkShown("R", {}));
+}
+
 console.log("\n5. empty / malformed rows don't crash");
 {
   eq("empty rows -> 0 options", dmoDropdownOptions([]).length, 0);
@@ -124,6 +144,8 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("has a field search box", /Type to find a field/.test(src));
   ok("panel is resizable (addResizeHandle wired)", /addResizeHandle\(panel/.test(src));
   ok("draws its OWN svg diagram (createElementNS svg/path)", /createElementNS\(svgNS/.test(src));
+  ok("shows data type pills + PK badge", /isMismatch/.test(src) && /targetIsPrimaryKey/.test(src));
+  ok("PK flag from authoritative primaryKey prop (not guessed)", /safeGet\(f, "primaryKey"\)/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",
