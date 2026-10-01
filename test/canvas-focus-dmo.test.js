@@ -145,7 +145,7 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("panel is resizable (addResizeHandle wired)", /addResizeHandle\(panel/.test(src));
   ok("draws its OWN svg diagram (createElementNS svg/path)", /createElementNS\(svgNS/.test(src));
   ok("shows data type pills + PK badge", /isMismatch/.test(src) && /targetIsPrimaryKey/.test(src));
-  ok("PK flag from authoritative primaryKey prop (not guessed)", /safeGet\(f, "primaryKey"\)/.test(src));
+  ok("PK flag from the field's own isPrimaryKey (confirmed via probe, not guessed)", /safeGet\(f, "isPrimaryKey"\)/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",

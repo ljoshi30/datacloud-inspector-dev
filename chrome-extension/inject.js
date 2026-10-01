@@ -1156,6 +1156,9 @@
         const sourceLabel = safeGet(f, "sourceLabel") || "";
         const targetApi = safeGet(f, "name") || "";
         const s = resolveSource(sourceLabel, dmo, targetApi);
+        // PK: the canvas field's own `isPrimaryKey` flag (confirmed via probe — this is
+        // what SF renders "Primary Key" from; entity.primaryKeys[] is empty on canvas).
+        const isPK = !!safeGet(f, "isPrimaryKey");
         rows.push({
           srcObj: s.srcObj, srcObjLabel: s.srcObjLabel,
           sourceLabel: sourceLabel, sourceApi: s.sourceApi, sourceType: s.sourceType || "",
@@ -1163,7 +1166,7 @@
           targetLabel: safeGet(f, "label") || "",
           targetApi: targetApi,
           targetType: (function () { const t = safeGet(f, "type"); return t == null ? "" : String(t); })(),
-          targetIsPrimaryKey: !!safeGet(f, "primaryKey"), // authoritative PK flag (not guessed)
+          targetIsPrimaryKey: isPK,
         });
       }
     }
@@ -1529,8 +1532,8 @@
         d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
         d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;background:#fff;transition:background .1s,border-color .1s;" + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
         // badges: type pill (amber if mismatch) + PK badge
-        const pill = (txt, kind) => "<span style='display:inline-block;font:600 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
-          (kind === "pk" ? "background:#fef3c7;color:#92400e;" : kind === "mism" ? "background:#fde68a;color:#92400e;" : "background:#eef2f7;color:#64748b;") + "'>" + esc(txt) + "</span>";
+        const pill = (txt, kind) => "<span style='display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;" +
+          (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
         const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "");
         const nameLine = isSrc
           ? "<div style='font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + badges + " " + esc(label) + "</div>"
