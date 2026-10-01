@@ -78,7 +78,7 @@ console.log("\n2. dmoDropdownOptions — label + count, sorted");
   ok("each option carries the dmo api name", opts.every(o => /__dlm$/.test(o.dmo)));
 }
 
-console.log("\n3. rowKeysForDmo — which source & target fields to highlight");
+console.log("\n3. per-DMO field scoping (fixes the shared-field over-match: Id__c etc.)");
 {
   const k = rowKeysForDmo(sampleRows(), "TDI_ContactPointPhone__dlm");
   eq("3 source fields", k.source.size, 3);
@@ -88,7 +88,24 @@ console.log("\n3. rowKeysForDmo — which source & target fields to highlight");
   ok("does NOT include another DMO's field (BirthDt__c)", !k.target.has("BirthDt__c"));
 }
 
-console.log("\n4. empty / malformed rows don't crash");
+console.log("\n4. field filter/search within a DMO");
+{
+  // mirrors panel paint(): filter pairs by substring across both labels + api names
+  function filterPairs(pairs, q) {
+    q = String(q || "").trim().toLowerCase();
+    if (!q) return pairs;
+    return pairs.filter((p) => [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi]
+      .some((v) => String(v || "").toLowerCase().indexOf(q) >= 0));
+  }
+  const pairs = groupByDmo(sampleRows()).get("TDI_ContactPointPhone__dlm");
+  eq("no query -> all 3", filterPairs(pairs, "").length, 3);
+  eq("filter 'phone' matches both phone-labeled pairs", filterPairs(pairs, "phone").length, 2);
+  eq("filter by target label 'E164' is specific", filterPairs(pairs, "e164").length, 1);
+  eq("filter by source api 'contact_type'", filterPairs(pairs, "contact_type").length, 1);
+  eq("no match -> 0", filterPairs(pairs, "zzz").length, 0);
+}
+
+console.log("\n5. empty / malformed rows don't crash");
 {
   eq("empty rows -> 0 options", dmoDropdownOptions([]).length, 0);
   const g = groupByDmo([{ sourceApi: "x" }, null, { dmo: "" }]); // no dmo / null / blank
@@ -96,14 +113,17 @@ console.log("\n4. empty / malformed rows don't crash");
 }
 
 // ── Source presence — the feature is wired into console-decorate.extension.js ────
-console.log("\n5. Source presence (Focus DMO wired into the canvas launcher)");
+console.log("\n6. Source presence (panel-only Focus DMO wired up)");
 {
   const fs = require("fs");
   const path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  ok("a Focus DMO button exists", /Focus DMO|dc-focus-btn|openFocusPanel/.test(src));
-  ok("groups mapping rows by DMO", /groupByDmo|rowsByDmo|buildMappingRows\(\)/.test(src));
+  ok("a Focus DMO button/panel exists", /Focus DMO|dc-focus-btn|openFocusPanel/.test(src));
+  ok("groups mapping rows by DMO", /groupRowsByDmo/.test(src));
   ok("reuses buildMappingRows() (authoritative mapping), not re-scraping", /buildMappingRows\(\)/.test(src));
+  ok("has a field filter/search box", /Filter fields in this DMO/.test(src));
+  ok("does NOT dim canvas rows anymore (removed applyFocus/clearFocusStyles)",
+    !/function applyFocus\b/.test(src) && !/clearFocusStyles/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
