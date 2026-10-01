@@ -158,7 +158,7 @@ try { new Function(publicCode); } catch (e) {
   process.exit(1);
 }
 // sanity: no in-dev entry points survive in the public code
-["openSegmentExport", "ensureExploreLauncher", "openExploreModal", "readSegmentRules"].forEach(sym => {
+["openSegmentExport", "ensureExploreLauncher", "openExploreModal", "readSegmentRules", "openFocusPanel", "hideOtherForDmo"].forEach(sym => {
   if (new RegExp("function\\s+" + sym + "\\b").test(publicCode)) {
     console.error("ERROR: in-dev function '" + sym + "' still defined in public build; aborting.");
     process.exit(1);

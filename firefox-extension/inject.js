@@ -1378,7 +1378,8 @@
     render();
   }
 
-  // ===== FOCUS DMO =====
+  /* @strip:start dev */
+  // ===== FOCUS DMO ===== (IN-DEV — stripped from the public build until tested)
   // Verify ONE DMO's mappings without tracing the wire spaghetti. Two parts:
   //   (1) a panel listing that DMO's exact source->target field pairs (authoritative,
   //       from buildMappingRows()); and
@@ -1596,6 +1597,7 @@
     document.body.appendChild(panel);
     try { makeDraggable(panel, hdr); } catch (e) {}
   }
+  /* @strip:end */
 
   // Fully remove the tool from the page: inline names off, tooltip + tags gone,
   // export modal closed, control bar removed, timers stopped. Re-running the
@@ -1808,10 +1810,12 @@
       return b;
     };
 
+    /* @strip:start dev */
     const focusIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><circle cx='7' cy='7' r='4.2'/><path d='M10.2 10.2L14 14' stroke-linecap='round'/></svg>";
+    const foc = mkBtn("dc-focus-btn",  "Focus DMO",     "Isolate one DMO's mappings — dim the rest, list its field pairs", "linear-gradient(135deg,#14b8a6,#0d9488)", focusIconSvg, "Verify one DMO at a time");
+    /* @strip:end */
     const tog = mkBtn("dc-toggle-btn", "API Tooltip",  "Show API name on hover",  "linear-gradient(135deg,#3b82f6,#2563eb)", tooltipIconSvg, "Hover to see API names");
     const inl = mkBtn("dc-inline-btn", "Pin API names","Pin API names on canvas",  "linear-gradient(135deg,#ec4899,#db2777)", pinIconSvg,     "Pin all on canvas");
-    const foc = mkBtn("dc-focus-btn",  "Focus DMO",     "Isolate one DMO's mappings — dim the rest, list its field pairs", "linear-gradient(135deg,#14b8a6,#0d9488)", focusIconSvg, "Verify one DMO at a time");
     const exp = mkBtn("dc-export-btn", "Export",       "Export mappings",          "linear-gradient(135deg,#f59e0b,#d97706)", exportIconSvg,  "All fields with types");
 
     const separator = document.createElement("div");
@@ -1827,12 +1831,16 @@
 
     tog.onclick = (e) => { e.stopPropagation(); toggle(); };
     inl.onclick = (e) => { e.stopPropagation(); toggleInline(); };
+    /* @strip:start dev */
     foc.onclick = (e) => { e.stopPropagation(); openFocusPanel(); };
+    /* @strip:end */
     exp.onclick = (e) => { e.stopPropagation(); openExport(); };
 
     menu.appendChild(tog);
     menu.appendChild(inl);
+    /* @strip:start dev */
     menu.appendChild(foc);
+    /* @strip:end */
     menu.appendChild(exp);
     menu.appendChild(separator);
     menu.appendChild(dismissRow);
