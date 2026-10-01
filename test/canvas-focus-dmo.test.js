@@ -105,6 +105,43 @@ console.log("\n4. field filter/search within a DMO");
   eq("no match -> 0", filterPairs(pairs, "zzz").length, 0);
 }
 
+console.log("\n4b. declutter: normFieldKey + shared-field detection + keep-set");
+{
+  // mirror console-decorate.extension.js
+  const normFieldKey = (s) => String(s == null ? "" : s).replace(/__c$/i, "").replace(/[_\s]+/g, " ").trim().toLowerCase();
+  eq("api name normalizes", normFieldKey("Address_Contact_Point_Type__c"), "address contact point type");
+  eq("row data-tid normalizes to same key", normFieldKey("Address Contact Point Type"), "address contact point type");
+  eq("api == tid after norm (join works)", normFieldKey("apt__c"), normFieldKey("apt"));
+
+  function sharedSourceKeys(rows) {
+    const byField = new Map();
+    for (const r of rows) { if (!r.sourceApi || !r.dmo) continue; const k = normFieldKey(r.sourceApi); if (!byField.has(k)) byField.set(k, new Set()); byField.get(k).add(r.dmo); }
+    const shared = new Set(); for (const [k, set] of byField) if (set.size > 1) shared.add(k); return shared;
+  }
+  // DataSource maps to 2 DMOs (shared); Phone maps to 1 (unique)
+  const rows = [
+    { sourceApi: "DataSource__c", dmo: "TDI_ContactPointPhone__dlm" },
+    { sourceApi: "DataSource__c", dmo: "TDI_Individual__dlm" },
+    { sourceApi: "Phone__c", dmo: "TDI_ContactPointPhone__dlm" },
+  ];
+  const shared = sharedSourceKeys(rows);
+  ok("DataSource flagged shared (>1 DMO)", shared.has("datasource"));
+  ok("Phone NOT shared (1 DMO)", !shared.has("phone"));
+
+  // keep-set with hideShared=true excludes shared fields (removes stray wires)
+  function keepSet(rows, dmo, hideShared) {
+    const sh = hideShared ? sharedSourceKeys(rows) : new Set();
+    const keep = new Set();
+    for (const r of rows) { if (r.dmo === dmo && r.sourceApi) { const k = normFieldKey(r.sourceApi); if (!(hideShared && sh.has(k))) keep.add(k); } }
+    return keep;
+  }
+  const kAll = keepSet(rows, "TDI_ContactPointPhone__dlm", false);
+  ok("hideShared=false keeps DataSource + Phone", kAll.has("datasource") && kAll.has("phone"));
+  const kClean = keepSet(rows, "TDI_ContactPointPhone__dlm", true);
+  ok("hideShared=true drops DataSource (stray wire gone)", !kClean.has("datasource"));
+  ok("hideShared=true keeps the unique Phone field", kClean.has("phone"));
+}
+
 console.log("\n5. empty / malformed rows don't crash");
 {
   eq("empty rows -> 0 options", dmoDropdownOptions([]).length, 0);
@@ -122,8 +159,10 @@ console.log("\n6. Source presence (panel-only Focus DMO wired up)");
   ok("groups mapping rows by DMO", /groupRowsByDmo/.test(src));
   ok("reuses buildMappingRows() (authoritative mapping), not re-scraping", /buildMappingRows\(\)/.test(src));
   ok("has a field filter/search box", /Filter fields in this DMO/.test(src));
-  ok("does NOT dim canvas rows anymore (removed applyFocus/clearFocusStyles)",
-    !/function applyFocus\b/.test(src) && !/clearFocusStyles/.test(src));
+  ok("declutter hides other DMOs + unrelated source rows", /hideOtherForDmo/.test(src));
+  ok("has Show all restore + auto-restore on close", /restoreCanvas/.test(src) && /Show all/.test(src));
+  ok("has the shared-field (stray-wire) option", /sharedSourceKeys/.test(src) && /hide shared/.test(src));
+  ok("warns that SF zoom may act oddly while decluttered", /zoom\/pan may act oddly/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
