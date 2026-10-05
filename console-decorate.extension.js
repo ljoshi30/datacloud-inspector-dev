@@ -11793,6 +11793,105 @@
     document.body.appendChild(wrap);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // QE JSON VIEWER — INDEPENDENT from the Data Explorer JSON view (by design; no
+  // shared code). A QE result cell holding JSON gets a "{ }" button + tooltip; clicking
+  // opens a modal with Table + Raw JSON tabs. Handles every shape (object, array of
+  // objects with ragged keys, scalar arrays, nested, empty, malformed, null) without
+  // dropping info or crashing. Dev-only (inside the @strip block with the rest of QE).
+  // ═══════════════════════════════════════════════════════════════════════════════
+  function qeJsonDetect(raw) {
+    if (raw == null) return { isJson: false };
+    if (typeof raw === "object") return { isJson: true, kind: Array.isArray(raw) ? "array" : "object", value: raw };
+    var s = String(raw).trim();
+    if (s.length < 2) return { isJson: false };
+    var c = s.charAt(0);
+    if (c !== "{" && c !== "[") return { isJson: false };
+    var v; try { v = JSON.parse(s); } catch (e) { return { isJson: false }; }
+    if (v === null || typeof v !== "object") return { isJson: false };
+    return { isJson: true, kind: Array.isArray(v) ? "array" : "object", value: v };
+  }
+  function qeJsonIsPlainObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
+  function qeJsonCellStr(v) {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "object") { try { return JSON.stringify(v); } catch (e) { return String(v); } }
+    return String(v);
+  }
+  function qeJsonToTable(value) {
+    if (Array.isArray(value)) {
+      if (value.length && value.every(qeJsonIsPlainObj)) {
+        var cols = [], seen = {};
+        value.forEach(function (o) { Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; cols.push(k); } }); });
+        return { columns: cols, rows: value.map(function (o) { var r = {}; cols.forEach(function (k) { r[k] = qeJsonCellStr(o[k]); }); return r; }) };
+      }
+      return { columns: ["#", "value"], rows: value.map(function (el, i) { return { "#": String(i), value: qeJsonCellStr(el) }; }) };
+    }
+    if (qeJsonIsPlainObj(value)) {
+      return { columns: ["key", "value"], rows: Object.keys(value).map(function (k) { return { key: k, value: qeJsonCellStr(value[k]) }; }) };
+    }
+    return { columns: ["value"], rows: [{ value: qeJsonCellStr(value) }] };
+  }
+  function qeJsonPretty(value) { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } }
+
+  // Open the QE JSON modal for a raw cell value (already known to be JSON).
+  function openQeJsonModal(rawValue, colName) {
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+    var det = qeJsonDetect(rawValue);
+    var value = det.isJson ? det.value : rawValue;
+    var old = document.getElementById("dc-qe-json-modal"); if (old) old.remove();
+    var modal = document.createElement("div");
+    modal.id = "dc-qe-json-modal";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
+    var box = document.createElement("div");
+    box.style.cssText = "position:fixed;top:7vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(820px,94vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    var hdr = document.createElement("div");
+    hdr.style.cssText = "padding:12px 16px;background:linear-gradient(135deg,#1e293b,#334155);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div style='font:700 14px system-ui'>&#128269; JSON &mdash; <span style='opacity:.8;font-weight:500'>" + esc(colName || "value") + "</span></div>";
+    var tabsWrap = document.createElement("div"); tabsWrap.style.cssText = "display:flex;gap:4px;";
+    var tableTab = document.createElement("button"); var rawTab = document.createElement("button");
+    var tabCss = "border:none;border-radius:6px;padding:4px 12px;cursor:pointer;font:600 12px system-ui;";
+    function styleTabs(active) { tableTab.style.cssText = tabCss + (active === "table" ? "background:#fff;color:#1e293b;" : "background:rgba(255,255,255,.15);color:#fff;"); rawTab.style.cssText = tabCss + (active === "raw" ? "background:#fff;color:#1e293b;" : "background:rgba(255,255,255,.15);color:#fff;"); }
+    tableTab.textContent = "Table"; rawTab.textContent = "Raw JSON";
+    tabsWrap.appendChild(tableTab); tabsWrap.appendChild(rawTab);
+    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.title = "Close";
+    closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;flex-shrink:0;";
+    closeX.onclick = function () { modal.remove(); };
+    var right = document.createElement("div"); right.style.cssText = "display:flex;align-items:center;gap:10px;"; right.appendChild(tabsWrap); right.appendChild(closeX);
+    hdr.appendChild(right); box.appendChild(hdr);
+
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 16px;min-height:0;background:#f8fafc;"; box.appendChild(body);
+    var foot = document.createElement("div"); foot.style.cssText = "padding:8px 16px;border-top:1px solid #e2e8f0;background:#fff;flex-shrink:0;display:flex;gap:8px;";
+    var copyBtn = document.createElement("button"); copyBtn.textContent = "Copy JSON";
+    copyBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 12px system-ui;";
+    copyBtn.onclick = function () { try { navigator.clipboard.writeText(qeJsonPretty(value)); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
+    foot.appendChild(copyBtn); box.appendChild(foot);
+
+    function renderTable() {
+      if (!det.isJson) { body.innerHTML = "<div style='color:#64748b;font-size:12px'>Not valid JSON — showing raw text.</div><pre style='white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#0f172a'>" + esc(String(rawValue)) + "</pre>"; return; }
+      var t = qeJsonToTable(value);
+      if (!t.rows.length) { body.innerHTML = "<div style='color:#94a3b8;font-size:12px'>Empty " + (Array.isArray(value) ? "array" : "object") + ".</div>"; return; }
+      var h = "<table style='width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:8px;overflow:hidden'><thead><tr style='background:#1e293b;color:#fff'>";
+      t.columns.forEach(function (c) { h += "<th style='text-align:left;padding:7px 10px;font:600 11px system-ui;white-space:nowrap'>" + esc(c) + "</th>"; });
+      h += "</tr></thead><tbody>";
+      t.rows.forEach(function (r, i) {
+        h += "<tr style='background:" + (i % 2 ? "#f9fafb" : "#fff") + "'>";
+        t.columns.forEach(function (c) { h += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(r[c]) + "'>" + esc(r[c]) + "</td>"; });
+        h += "</tr>";
+      });
+      h += "</tbody></table>";
+      body.innerHTML = h;
+    }
+    function renderRaw() { body.innerHTML = "<pre style='white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#0f172a;margin:0'>" + esc(det.isJson ? qeJsonPretty(value) : String(rawValue)) + "</pre>"; }
+    tableTab.onclick = function () { styleTabs("table"); renderTable(); };
+    rawTab.onclick = function () { styleTabs("raw"); renderRaw(); };
+
+    modal.appendChild(box);
+    modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    try { makeDraggable(box, hdr); } catch (e) {}
+    styleTabs("table"); renderTable();
+  }
+
   // ── Query Editor launcher (FAB) — "Export results to CSV" ─────────────────
   // SF's Query Editor shows results but can't export them. This button reads the user's
   // SQL, re-runs it via our proven query path (up to 49,999 rows), and downloads the
@@ -13211,6 +13310,22 @@
       var rows = _lastResult.data;
       var showing = Math.min(rows.length, 2000);
       var esc = function (s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+      // Build ONE result cell. If the value is viewable JSON, prepend a "{ }" button
+      // (data-json index into rows via r/c) so the user can open the JSON modal; the
+      // text still copies on click like every other cell. Shared by all 3 render paths.
+      var _jsonCellStore = []; // holds raw JSON strings; button carries its index
+      function qeCellHtml(val) {
+        var raw = val == null ? "" : String(val);
+        var copyAttr = raw.replace(/'/g, "&#39;").replace(/</g, "&lt;");
+        var base = "padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;";
+        if (qeJsonDetect(val).isJson) {
+          var ji = _jsonCellStore.push(raw) - 1;
+          return "<td style='" + base + "' title='Click to copy · use the { } button to view JSON' data-copy='" + copyAttr + "'>" +
+            "<button class='dc-qe-json-btn' data-json='" + ji + "' title='View JSON (table / raw)' style='border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:4px;font:700 10px system-ui;padding:0 5px;margin-right:5px;cursor:pointer;vertical-align:middle'>{ }</button>" +
+            "<span style='color:#64748b'>" + esc(val) + "</span></td>";
+        }
+        return "<td style='" + base + "' title='Click to copy' data-copy='" + copyAttr + "'>" + esc(val) + "</td>";
+      }
       // Detect empty columns (all null/empty in displayed rows)
       var emptyCols = {};
       allCols.forEach(function (c) {
@@ -13288,12 +13403,7 @@
           var r = data[i];
           var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
           html += "<tr style='background:" + bg + ";'>";
-          cols.forEach(function (c) {
-            var val = r[c];
-            var display = esc(val);
-            var raw = val == null ? "" : String(val);
-            html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + display + "</td>";
-          });
+          cols.forEach(function (c) { html += qeCellHtml(r[c]); });
           html += "</tr>";
         }
         return html;
@@ -13331,7 +13441,7 @@
         var row = rows[i];
         var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
         table += "<tr style='background:" + bg + ";'>";
-        cols.forEach(function (c) { var val = row[c]; var raw = val == null ? "" : String(val); table += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + esc(val) + "</td>"; });
+        cols.forEach(function (c) { table += qeCellHtml(row[c]); });
         table += "</tr>";
       }
       table += "</tbody></table>";
@@ -13349,7 +13459,7 @@
             var r = rows[j];
             var rbg = j % 2 === 0 ? "#fff" : "#f9fafb";
             html += "<tr style='background:" + rbg + ";'>";
-            cols.forEach(function (c) { var val = r[c]; var raw = val == null ? "" : String(val); html += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;' title='Click to copy' data-copy='" + raw.replace(/'/g, "&#39;").replace(/</g, "&lt;") + "'>" + esc(val) + "</td>"; });
+            cols.forEach(function (c) { html += qeCellHtml(r[c]); });
             html += "</tr>";
           }
           tbody.insertAdjacentHTML("beforeend", html);
@@ -13391,8 +13501,20 @@
         th.onmouseenter = function () { th.style.background = "#334155"; };
         th.onmouseleave = function () { th.style.background = ""; };
       });
-      // Click-to-copy on any cell
+      // Click-to-copy on any cell — but if the "{ }" JSON button was clicked, open the
+      // JSON modal instead (and don't also copy).
       tableWrap.addEventListener("click", function (e) {
+        var jbtn = e.target.closest ? e.target.closest(".dc-qe-json-btn") : null;
+        if (jbtn) {
+          e.stopPropagation();
+          var ji = parseInt(jbtn.getAttribute("data-json"), 10);
+          var th = jbtn.closest ? jbtn.closest("td") : null;
+          // find column name from the cell's index in its row
+          var colName = "";
+          try { var tr = jbtn.closest("tr"); var tds = tr ? Array.prototype.slice.call(tr.children) : []; var ci = tds.indexOf(th); if (ci >= 0 && cols[ci]) colName = cols[ci]; } catch (ex2) {}
+          if (!isNaN(ji) && _jsonCellStore[ji] != null) openQeJsonModal(_jsonCellStore[ji], colName);
+          return;
+        }
         var td = e.target.closest ? e.target.closest("td[data-copy]") : null;
         if (!td) return;
         var val = td.getAttribute("data-copy") || "";
