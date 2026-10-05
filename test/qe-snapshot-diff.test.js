@@ -171,6 +171,73 @@ console.log("\n7b. save/list/delete/clear round-trip (mock localStorage) + name 
   eq("different query -> own bucket unaffected by clear", list("SELECT a").length, 1);
 }
 
+// ── 7c. Key-quality assessment (powers the inline "bad key" warning) ──────────────
+// Mirror of qeKeyQuality: flag a key column that is non-unique (dups), JSON/hash-like
+// (jsonish — changes on edit → remove+add instead of changed), or blank.
+console.log("\n7c. qeKeyQuality — guides the user to a safe key");
+{
+  function qeKeyQuality(rows, keyCol) {
+    var seen = Object.create(null), dups = 0, jsonish = 0, blanks = 0, total = (rows || []).length;
+    (rows || []).forEach(function (r) {
+      var v = r ? r[keyCol] : null;
+      var s = v == null ? "" : String(v);
+      if (s === "") blanks++;
+      if (seen[s]) dups++; else seen[s] = 1;
+      var t = s.trim();
+      if (t.charAt(0) === "{" || t.charAt(0) === "[") jsonish++;
+    });
+    return { dups: dups, total: total, jsonish: jsonish, blanks: blanks };
+  }
+  const unique = [{ Id: "1" }, { Id: "2" }, { Id: "3" }];
+  eq("unique id -> 0 dups", qeKeyQuality(unique, "Id").dups, 0);
+  const dupKey = [{ Delta: "I" }, { Delta: "D" }, { Delta: "I" }, { Delta: "I" }];
+  // 4 rows, 2 distinct values (I, D) -> 2 rows collapse onto an already-seen key
+  eq("non-unique Delta -> 2 collapse onto seen keys", qeKeyQuality(dupKey, "Delta").dups, 2);
+  const jsonKey = [{ H: '{"a":1}' }, { H: '[1,2]' }, { H: "plain" }];
+  eq("json/hash values flagged", qeKeyQuality(jsonKey, "H").jsonish, 2);
+  eq("plain value not json-flagged", qeKeyQuality([{ H: "abc" }], "H").jsonish, 0);
+  const blankKey = [{ Id: "" }, { Id: null }, { Id: "x" }];
+  eq("blank/null keys counted", qeKeyQuality(blankKey, "Id").blanks, 2);
+  eq("empty rows -> 0 total (no crash)", qeKeyQuality([], "Id").total, 0);
+}
+
+// ── 7d. Other-bucket detection (the "my snapshot disappeared" hint) ───────────────
+// Mirror of qeSnapOtherBucketCount over a mock localStorage: counts snapshot buckets
+// saved under a DIFFERENT normalized query than the current one.
+console.log("\n7d. qeSnapOtherBucketCount — explains LIMIT 1 vs LIMIT 2 buckets");
+{
+  var store = {};
+  var LS = {
+    get length() { return Object.keys(store).length; },
+    key: function (i) { return Object.keys(store)[i]; },
+    getItem: function (k) { return (k in store) ? store[k] : null; },
+    setItem: function (k, v) { store[k] = String(v); },
+    removeItem: function (k) { delete store[k]; },
+  };
+  var PREFIX = "dc_qe_snap_";
+  function qeSnapKey(sql) { var s = String(sql || "").replace(/\s+/g, " ").trim().toLowerCase(); var h = 0; for (var i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return PREFIX + (h >>> 0).toString(36); }
+  function otherBuckets(sql) {
+    var cur = qeSnapKey(sql), n = 0;
+    for (var i = 0; i < LS.length; i++) {
+      var k = LS.key(i);
+      if (k && k.indexOf(PREFIX) === 0 && k !== cur) {
+        try { var arr = JSON.parse(LS.getItem(k)); if (Array.isArray(arr) && arr.length) n++; } catch (e) {}
+      }
+    }
+    return n;
+  }
+  var q1 = 'SELECT * FROM "T__dlm" LIMIT 1';
+  var q2 = 'SELECT * FROM "T__dlm" LIMIT 2';
+  LS.setItem(qeSnapKey(q1), JSON.stringify([{ ts: 1, rows: [{ Id: "1" }] }]));
+  eq("q1 and q2 land in different buckets", qeSnapKey(q1) === qeSnapKey(q2), false);
+  eq("from q2's view, 1 other bucket exists (the q1 snapshot)", otherBuckets(q2), 1);
+  eq("from q1's view, 0 others (its own bucket excluded)", otherBuckets(q1), 0);
+  LS.setItem("unrelated_key", "x"); // non-snapshot keys ignored
+  eq("non-snapshot keys ignored", otherBuckets(q2), 1);
+  LS.setItem(qeSnapKey(q2), JSON.stringify([])); // empty bucket doesn't count
+  eq("empty bucket not counted", otherBuckets(q2), 1);
+}
+
 // ── Source presence ──────────────────────────────────────────────────────────────
 console.log("\n8. Source presence (independent qeSnap module wired)");
 {
@@ -185,6 +252,16 @@ console.log("\n8. Source presence (independent qeSnap module wired)");
   ok("can delete + clear snapshots", /qeSnapDelete/.test(src) && /qeSnapClear/.test(src));
   ok("save confirms the row count saved", /saved \" \+ res\.rows|res\.rows\.toLocaleString/.test(src));
   ok("handles too-big result honestly (5MB cap msg)", /too big to save|tooBig/.test(src));
+  // in-tool help + inline smart warnings
+  ok("key-quality helper defined", /function qeKeyQuality\s*\(/.test(src));
+  ok("other-bucket helper defined", /function qeSnapOtherBucketCount\s*\(/.test(src));
+  ok("in-tool help modal defined", /function openQeSnapHelp\s*\(/.test(src));
+  ok("help button wired into toolbar", /helpBtn/.test(src) && /openQeSnapHelp\(\)/.test(src));
+  ok("help covers the Key + JSON/hash trap", /JSON\s*\/\s*hash|removed \+ added|remove\+add/i.test(src) && /stable ID/i.test(src));
+  ok("help covers bucket / identical-query rule", /bucket/i.test(src) && /identical/i.test(src));
+  ok("help has step-by-step day1/day2/day3 test steps", /Day 1/.test(src) && /Day 2/.test(src) && /Day 3/.test(src));
+  ok("inline hint warns about other buckets", /other quer/i.test(src));
+  ok("inline hint warns non-unique key", /not unique/i.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
