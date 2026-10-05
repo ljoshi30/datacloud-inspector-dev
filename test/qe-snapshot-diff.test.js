@@ -138,6 +138,39 @@ console.log("\n7. null/blank key values don't crash (grouped as empty-key)");
   eq("null key matched as same row", d.changed.length, 1);
 }
 
+console.log("\n7b. save/list/delete/clear round-trip (mock localStorage) + name + row count");
+{
+  // minimal localStorage mock
+  var store = {};
+  var LS = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+  var PREFIX = "dc_qe_snap_", MAX = 5;
+  function key(sql) { var s = String(sql || "").replace(/\s+/g, " ").trim().toLowerCase(); var h = 0; for (var i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return PREFIX + (h >>> 0).toString(36); }
+  function list(sql) { try { var r = LS.getItem(key(sql)); return r ? JSON.parse(r) : []; } catch (e) { return []; } }
+  function save(sql, cols, rows, label, ts) { var l = list(sql); l.unshift({ ts: ts, label: label || "", columns: cols, rows: rows }); while (l.length > MAX) l.pop(); LS.setItem(key(sql), JSON.stringify(l)); return { ok: true, count: l.length, rows: rows.length }; }
+  function del(sql, idx) { var l = list(sql); if (idx < 0 || idx >= l.length) return false; l.splice(idx, 1); if (l.length) LS.setItem(key(sql), JSON.stringify(l)); else LS.removeItem(key(sql)); return true; }
+  function clear(sql) { LS.removeItem(key(sql)); return true; }
+
+  var SQL = "SELECT * FROM Audience__dlm";
+  var r1 = save(SQL, ["Id"], [{ Id: "1" }, { Id: "2" }], "day1", 1000);
+  eq("save returns row count", r1.rows, 2);
+  eq("1 snapshot", list(SQL).length, 1);
+  eq("name retained", list(SQL)[0].label, "day1");
+  save(SQL, ["Id"], [{ Id: "1" }], "day2", 2000);
+  eq("2 snapshots, newest first", list(SQL)[0].label, "day2");
+  // keep only MAX
+  for (var i = 0; i < 10; i++) save(SQL, ["Id"], [{ Id: String(i) }], "x" + i, 3000 + i);
+  eq("capped at MAX=5", list(SQL).length, 5);
+  // delete one
+  del(SQL, 0);
+  eq("after delete -> 4", list(SQL).length, 4);
+  // clear all
+  clear(SQL);
+  eq("after clear -> 0", list(SQL).length, 0);
+  // isolated per query key
+  save("SELECT a", ["Id"], [{ Id: "9" }], "other", 5000);
+  eq("different query -> own bucket unaffected by clear", list("SELECT a").length, 1);
+}
+
 // ── Source presence ──────────────────────────────────────────────────────────────
 console.log("\n8. Source presence (independent qeSnap module wired)");
 {
@@ -148,6 +181,10 @@ console.log("\n8. Source presence (independent qeSnap module wired)");
   ok("saves snapshots (localStorage key)", /dc_qe_snap|qeSnapSave|dc-qe-snap/.test(src));
   ok("has Save snapshot + Compare UI", /Save snapshot/.test(src) && /Compare/.test(src));
   ok("has a key-column picker (row identity)", /key column|keyCols|rowKey/.test(src));
+  ok("snapshots can be named on save (prompt)", /Name this snapshot/.test(src));
+  ok("can delete + clear snapshots", /qeSnapDelete/.test(src) && /qeSnapClear/.test(src));
+  ok("save confirms the row count saved", /saved \" \+ res\.rows|res\.rows\.toLocaleString/.test(src));
+  ok("handles too-big result honestly (5MB cap msg)", /too big to save|tooBig/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

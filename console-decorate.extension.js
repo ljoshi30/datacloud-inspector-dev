@@ -11909,20 +11909,35 @@
   function qeSnapList(sql) {
     try { var raw = localStorage.getItem(qeSnapKey(sql)); if (!raw) return []; var arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
   }
-  function qeSnapSave(sql, columns, rows, tableName) {
+  function qeSnapSave(sql, columns, rows, tableName, label) {
     var list = qeSnapList(sql);
-    var snap = { ts: null, label: "", tableName: tableName || "", sql: String(sql || ""), columns: columns || [], rows: rows || [] };
-    // ts is stamped by caller-provided Date (scripts can't use Date.now here); UI passes it.
+    var snap = { ts: 0, label: String(label || ""), tableName: tableName || "", sql: String(sql || ""), columns: columns || [], rows: rows || [] };
     try { snap.ts = (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; } catch (e) { snap.ts = 0; }
     list.unshift(snap);
     while (list.length > QE_SNAP_MAX) list.pop();
-    // guard the ~5MB localStorage cap: drop oldest until it fits
+    var rowN = (rows || []).length;
+    // guard the ~5MB localStorage cap: drop OTHER snapshots first; if even this one
+    // alone won't fit, fail honestly (don't half-save) and tell the caller the size.
     for (;;) {
       try { localStorage.setItem(qeSnapKey(sql), JSON.stringify(list)); break; }
-      catch (e) { if (list.length <= 1) { try { localStorage.removeItem(qeSnapKey(sql)); } catch (e2) {} return { ok: false, error: "too large for local storage" }; } list.pop(); }
+      catch (e) {
+        if (list.length <= 1) {
+          try { localStorage.removeItem(qeSnapKey(sql)); } catch (e2) {}
+          var approxMB = 0; try { approxMB = Math.round(JSON.stringify(snap).length / 1048576 * 10) / 10; } catch (e3) {}
+          return { ok: false, tooBig: true, rows: rowN, approxMB: approxMB };
+        }
+        list.pop(); // drop an older snapshot to make room
+      }
     }
-    return { ok: true, count: list.length };
+    return { ok: true, count: list.length, rows: rowN, evicted: (rows || []).length && list.length < qeSnapList(sql).length };
   }
+  function qeSnapDelete(sql, idx) {
+    var list = qeSnapList(sql);
+    if (idx < 0 || idx >= list.length) return false;
+    list.splice(idx, 1);
+    try { if (list.length) localStorage.setItem(qeSnapKey(sql), JSON.stringify(list)); else localStorage.removeItem(qeSnapKey(sql)); return true; } catch (e) { return false; }
+  }
+  function qeSnapClear(sql) { try { localStorage.removeItem(qeSnapKey(sql)); return true; } catch (e) { return false; } }
   function qeRowKey(row, keyCols) { return keyCols.map(function (k) { return String(row[k] == null ? "" : row[k]); }).join(""); }
   function qeDiffSnapshots(prev, curr, keyCols) {
     var warnings = [];
@@ -13611,18 +13626,29 @@
       cmpBtn.textContent = "Compare";
       cmpBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;font:600 12px system-ui;";
       var snapMsg = document.createElement("span"); snapMsg.style.cssText = "color:#64748b;font-size:11px;";
+      var delBtn = document.createElement("button");
+      delBtn.textContent = "🗑"; delBtn.title = "Delete the selected snapshot";
+      delBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#dc2626;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 12px system-ui;";
+      var clearBtn = document.createElement("button");
+      clearBtn.textContent = "Clear all"; clearBtn.title = "Delete ALL saved snapshots for this query";
+      clearBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#64748b;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 11px system-ui;";
       function refreshSnapList() {
         var list = qeSnapList(snapSql);
-        cmpSel.innerHTML = list.length ? list.map(function (s, i) { var dt = s.ts ? new Date(s.ts).toLocaleString() : ("snapshot " + (i + 1)); return "<option value='" + i + "'>" + dt.replace(/</g, "") + " (" + (s.rows ? s.rows.length : 0) + " rows)</option>"; }).join("") : "<option value=''>no saved snapshots</option>";
-        cmpSel.disabled = !list.length; cmpBtn.disabled = !list.length;
-        cmpSel.style.opacity = cmpBtn.style.opacity = list.length ? "1" : ".5";
+        cmpSel.innerHTML = list.length ? list.map(function (s, i) { var dt = s.ts ? new Date(s.ts).toLocaleString() : ("snapshot " + (i + 1)); var nm = s.label ? (s.label + " — ") : ""; return "<option value='" + i + "'>" + (nm + dt).replace(/</g, "") + " (" + (s.rows ? s.rows.length : 0) + " rows)</option>"; }).join("") : "<option value=''>no saved snapshots</option>";
+        var none = !list.length;
+        cmpSel.disabled = cmpBtn.disabled = delBtn.disabled = clearBtn.disabled = none;
+        [cmpSel, cmpBtn, delBtn, clearBtn].forEach(function (el) { el.style.opacity = none ? ".5" : "1"; });
       }
       saveSnapBtn.onclick = function () {
-        var res = qeSnapSave(snapSql, allCols, rows, _lastResult && _lastResult.tableName);
-        snapMsg.textContent = res.ok ? ("✓ saved (" + res.count + " kept)") : ("⚠ " + (res.error || "save failed"));
-        snapMsg.style.color = res.ok ? "#059669" : "#b45309";
+        var def = (_lastResult && _lastResult.tableName ? _lastResult.tableName : "snapshot");
+        var label = (typeof prompt === "function") ? prompt("Name this snapshot (optional) — " + rows.length.toLocaleString() + " rows will be saved:", def) : def;
+        if (label === null) return; // user cancelled
+        var res = qeSnapSave(snapSql, allCols, rows, _lastResult && _lastResult.tableName, String(label || "").trim());
+        if (res.ok) { snapMsg.textContent = "✓ saved " + res.rows.toLocaleString() + " rows (" + res.count + " snapshot" + (res.count === 1 ? "" : "s") + " kept)"; snapMsg.style.color = "#059669"; }
+        else if (res.tooBig) { snapMsg.textContent = "⚠ too big to save (~" + res.approxMB + "MB, " + res.rows.toLocaleString() + " rows). Local storage caps ~5MB — query fewer rows/columns, or use Download CSV to keep it."; snapMsg.style.color = "#b45309"; }
+        else { snapMsg.textContent = "⚠ save failed"; snapMsg.style.color = "#b45309"; }
         refreshSnapList();
-        setTimeout(function () { snapMsg.textContent = ""; }, 2500);
+        setTimeout(function () { snapMsg.textContent = ""; }, 6000);
       };
       cmpBtn.onclick = function () {
         var list = qeSnapList(snapSql); var idx = parseInt(cmpSel.value, 10);
@@ -13631,8 +13657,18 @@
         var d = qeDiffSnapshots(list[idx], { columns: allCols, rows: rows }, keyCols);
         openQeDiffModal(d, keyCols, list[idx]);
       };
+      delBtn.onclick = function () {
+        var idx = parseInt(cmpSel.value, 10); if (isNaN(idx)) return;
+        qeSnapDelete(snapSql, idx); snapMsg.textContent = "✓ deleted"; snapMsg.style.color = "#64748b"; refreshSnapList();
+        setTimeout(function () { snapMsg.textContent = ""; }, 2000);
+      };
+      clearBtn.onclick = function () {
+        if (typeof confirm === "function" && !confirm("Delete ALL saved snapshots for this query?")) return;
+        qeSnapClear(snapSql); snapMsg.textContent = "✓ all cleared"; snapMsg.style.color = "#64748b"; refreshSnapList();
+        setTimeout(function () { snapMsg.textContent = ""; }, 2000);
+      };
       snapBar.appendChild(saveSnapBtn); snapBar.appendChild(keyWrap);
-      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(snapMsg);
+      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(snapMsg);
       refreshSnapList();
 
       box.appendChild(hdr);
