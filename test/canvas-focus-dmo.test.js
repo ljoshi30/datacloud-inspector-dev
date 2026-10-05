@@ -218,6 +218,7 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("has an 'All DMOs' grouped view (collapsible sections)", /__ALL__/.test(src) && /mode === "all"/.test(src));
   ok("flags system/key fields (SYS badge + 'SF hides' note)", /isSystemPair/.test(src) && /SYS/.test(src) && /SF hides/.test(src));
   ok("shows DLO + DMO object name + API (object context bar)", /function buildObjectBar/.test(src) && /Target · DMO/.test(src));
+  ok("shows DLO category chip (from entity.category, e.g. Profile)", /srcCat/.test(src) && /category/.test(src) && /catChip/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",

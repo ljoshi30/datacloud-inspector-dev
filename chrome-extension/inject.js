@@ -1101,11 +1101,13 @@
     const labelCounts = new Map();
     const objByLabel = new Map(); // source-object label -> {name,label}
     const srcPkSet = {};          // source field api names that are the DLO's primary key
+    const srcCat = {}; // DLO api name -> category (e.g. "Profile"), confirmed via probe
     for (const listEl of findVisibleByTag(SRC_CONTAINER)) {
       let ent = null; try { ent = listEl.entity; } catch (e) {}
       const dlo = (ent && safeGet(ent, "name")) || "";
       const dloLabel = (ent && safeGet(ent, "label")) || "";
       if (dloLabel) objByLabel.set(dloLabel, { name: dlo, label: dloLabel });
+      if (dlo) { const cat = ent && safeGet(ent, "category"); if (cat) srcCat[String(dlo)] = String(cat); }
       // Source PK: field.isPrimaryKey on the source entity's fields (confirmed via
       // probe — e.g. contact_key__c on the DLO). Keyed by field api name.
       try {
@@ -1172,7 +1174,7 @@
         // what SF renders "Primary Key" from; entity.primaryKeys[] is empty on canvas).
         const isPK = !!safeGet(f, "isPrimaryKey");
         rows.push({
-          srcObj: s.srcObj, srcObjLabel: s.srcObjLabel,
+          srcObj: s.srcObj, srcObjLabel: s.srcObjLabel, srcCategory: (s.srcObj && srcCat[String(s.srcObj)]) || "",
           sourceLabel: sourceLabel, sourceApi: s.sourceApi, sourceType: s.sourceType || "",
           sourceIsPrimaryKey: !!(s.sourceApi && srcPkSet[String(s.sourceApi)]),
           dmo, dmoLabel,
@@ -1542,15 +1544,16 @@
     // receive from multiple DLOs, so we list all distinct source objects.
     function buildObjectBar(pairs) {
       const srcs = []; const seen = {};
-      pairs.forEach((p) => { const api = p.srcObj || "", lbl = p.srcObjLabel || p.srcObj || ""; const key = api + "|" + lbl; if ((api || lbl) && !seen[key]) { seen[key] = 1; srcs.push({ api: api, label: lbl }); } });
+      pairs.forEach((p) => { const api = p.srcObj || "", lbl = p.srcObjLabel || p.srcObj || ""; const key = api + "|" + lbl; if ((api || lbl) && !seen[key]) { seen[key] = 1; srcs.push({ api: api, label: lbl, cat: p.srcCategory || "" }); } });
       const dmoApi = (pairs[0] && pairs[0].dmo) || "", dmoLabel = (pairs[0] && pairs[0].dmoLabel) || dmoApi;
-      const box = (role, color, label, api) =>
+      const catChip = (cat) => cat ? "<span title='Data Lake Object category' style='float:right;font:700 9px -apple-system,sans-serif;background:#e0e7ff;color:#4338ca;padding:1px 6px;border-radius:4px;margin-left:6px'>" + esc(cat) + "</span>" : "";
+      const box = (role, color, label, api, cat) =>
         "<div style='flex:1;min-width:0;background:#fff;border:1px solid #e2e8f0;border-left:3px solid " + color + ";border-radius:8px;padding:6px 11px;overflow:hidden'>" +
-          "<div style='font:700 9px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8'>" + role + "</div>" +
+          "<div style='font:700 9px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8'>" + role + catChip(cat) + "</div>" +
           "<div style='font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
           "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "—") + "</div>" +
         "</div>";
-      const srcBoxes = srcs.length ? srcs.map((s) => box(srcs.length > 1 ? "Source DLO" : "Source · DLO", "#c7d2e5", s.label, s.api)).join("") : box("Source · DLO", "#c7d2e5", "(system)", "");
+      const srcBoxes = srcs.length ? srcs.map((s) => box(srcs.length > 1 ? "Source DLO" : "Source · DLO", "#c7d2e5", s.label, s.api, s.cat)).join("") : box("Source · DLO", "#c7d2e5", "(system)", "", "");
       const bar = document.createElement("div");
       bar.style.cssText = "display:flex;align-items:stretch;gap:10px;max-width:" + (COL_W * 2 + GAP) + "px;margin:2px auto 12px;";
       bar.innerHTML = "<div style='flex:1;min-width:0;display:flex;flex-direction:column;gap:6px'>" + srcBoxes + "</div>" +
