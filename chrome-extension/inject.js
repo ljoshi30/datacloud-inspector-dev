@@ -11866,20 +11866,95 @@
     copyBtn.onclick = function () { try { navigator.clipboard.writeText(qeJsonPretty(value)); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy JSON"; }, 1200); } catch (e) {} };
     foot.appendChild(copyBtn); box.appendChild(foot);
 
-    function renderTable() {
-      if (!det.isJson) { body.innerHTML = "<div style='color:#64748b;font-size:12px'>Not valid JSON — showing raw text.</div><pre style='white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#0f172a'>" + esc(String(rawValue)) + "</pre>"; return; }
-      var t = qeJsonToTable(value);
-      if (!t.rows.length) { body.innerHTML = "<div style='color:#94a3b8;font-size:12px'>Empty " + (Array.isArray(value) ? "array" : "object") + ".</div>"; return; }
-      var h = "<table style='width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:8px;overflow:hidden'><thead><tr style='background:#1e293b;color:#fff'>";
-      t.columns.forEach(function (c) { h += "<th style='text-align:left;padding:7px 10px;font:600 11px system-ui;white-space:nowrap'>" + esc(c) + "</th>"; });
-      h += "</tr></thead><tbody>";
-      t.rows.forEach(function (r, i) {
-        h += "<tr style='background:" + (i % 2 ? "#f9fafb" : "#fff") + "'>";
-        t.columns.forEach(function (c) { h += "<td style='padding:6px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(r[c]) + "'>" + esc(r[c]) + "</td>"; });
-        h += "</tr>";
+    // Recursive DOM builder: a value that is itself an object/array renders a "▶"
+    // chip; clicking expands an indented sub-table IN PLACE (as a new row right below),
+    // leaving everything else visible. Depth-guarded; large arrays capped with "N more".
+    var MAX_DEPTH = 12, ARR_CAP = 200;
+    function isObjOrArr(v) { return v && typeof v === "object"; }
+    function chipLabel(v) { return Array.isArray(v) ? ("[ " + v.length + (v.length === 1 ? " item" : " items") + " ]") : ("{ " + Object.keys(v).length + (Object.keys(v).length === 1 ? " field" : " fields") + " }"); }
+
+    // Build a <table> (DOM) for any object/array value at a given depth.
+    function buildJsonTable(val, depth) {
+      var table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:8px;overflow:hidden;" + (depth ? "margin:4px 0;border:1px solid #e2e8f0;" : "");
+      // Determine columns: array-of-objects -> union keys; else key/value or #/value.
+      var columns, rowsData;
+      if (Array.isArray(val)) {
+        var capped = val.length > ARR_CAP ? val.slice(0, ARR_CAP) : val;
+        if (capped.length && capped.every(function (x) { return x && typeof x === "object" && !Array.isArray(x); })) {
+          columns = []; var seen = {};
+          capped.forEach(function (o) { Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; columns.push(k); } }); });
+          rowsData = capped.map(function (o) { return o; });
+        } else {
+          columns = ["#", "value"]; rowsData = capped.map(function (el, i) { return { "#": i, value: el }; });
+        }
+      } else {
+        columns = ["key", "value"]; rowsData = Object.keys(val).map(function (k) { return { key: k, value: val[k] }; });
+      }
+      var thead = document.createElement("thead");
+      var htr = document.createElement("tr"); htr.style.cssText = "background:" + (depth ? "#475569" : "#1e293b") + ";color:#fff";
+      columns.forEach(function (c) { var th = document.createElement("th"); th.textContent = c; th.style.cssText = "text-align:left;padding:6px 10px;font:600 11px system-ui;white-space:nowrap"; htr.appendChild(th); });
+      thead.appendChild(htr); table.appendChild(thead);
+      var tbody = document.createElement("tbody"); table.appendChild(tbody);
+
+      rowsData.forEach(function (rowObj, ri) {
+        var tr = document.createElement("tr"); tr.style.background = ri % 2 ? "#f9fafb" : "#fff";
+        columns.forEach(function (c) {
+          var cellVal = rowObj[c];
+          var td = document.createElement("td");
+          td.style.cssText = "padding:5px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top;max-width:420px;";
+          if (isObjOrArr(cellVal) && depth < MAX_DEPTH) {
+            // nested → ▶ chip that expands a sub-table row in place
+            var chip = document.createElement("button");
+            chip.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:5px;font:600 11px system-ui;padding:1px 8px;cursor:pointer;white-space:nowrap";
+            chip.textContent = "▶ " + chipLabel(cellVal);
+            var open = false, subTr = null;
+            chip.onclick = function (e) {
+              e.stopPropagation();
+              open = !open;
+              chip.textContent = (open ? "▼ " : "▶ ") + chipLabel(cellVal);
+              if (open) {
+                subTr = document.createElement("tr");
+                var subTd = document.createElement("td"); subTd.colSpan = columns.length;
+                subTd.style.cssText = "padding:4px 10px 8px " + (18 + depth * 6) + "px;background:#f1f5f9;border-bottom:1px solid #e2e8f0;";
+                if ((Array.isArray(cellVal) && !cellVal.length) || (!Array.isArray(cellVal) && !Object.keys(cellVal).length)) {
+                  subTd.innerHTML = "<span style='color:#94a3b8;font-size:11px'>Empty " + (Array.isArray(cellVal) ? "array" : "object") + "</span>";
+                } else {
+                  subTd.appendChild(buildJsonTable(cellVal, depth + 1));
+                  if (Array.isArray(cellVal) && cellVal.length > ARR_CAP) { var more = document.createElement("div"); more.style.cssText = "font-size:11px;color:#94a3b8;margin-top:4px"; more.textContent = "+" + (cellVal.length - ARR_CAP) + " more items (use Raw JSON for all)"; subTd.appendChild(more); }
+                }
+                tr.parentNode.insertBefore(subTr, tr.nextSibling);
+                subTr.appendChild(subTd);
+              } else if (subTr) { subTr.remove(); subTr = null; }
+            };
+            td.appendChild(chip);
+          } else if (cellVal === null || cellVal === undefined) {
+            td.innerHTML = "<span style='color:#cbd5e1'>—</span>";
+          } else if (isObjOrArr(cellVal)) {
+            // past max depth → compact string (safety; shouldn't normally hit)
+            td.textContent = qeJsonPretty(cellVal); td.style.whiteSpace = "pre-wrap"; td.style.font = "11px SF Mono,Consolas,monospace";
+          } else {
+            var s = String(cellVal);
+            td.textContent = s; td.title = s;
+            td.style.whiteSpace = "nowrap"; td.style.overflow = "hidden"; td.style.textOverflow = "ellipsis";
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+        if (Array.isArray(val) && val.length > ARR_CAP && ri === rowsData.length - 1) {
+          var mtr = document.createElement("tr"); var mtd = document.createElement("td"); mtd.colSpan = columns.length;
+          mtd.style.cssText = "padding:5px 10px;color:#94a3b8;font-size:11px;background:#fff"; mtd.textContent = "+" + (val.length - ARR_CAP) + " more items (use Raw JSON for all)";
+          mtr.appendChild(mtd); tbody.appendChild(mtr);
+        }
       });
-      h += "</tbody></table>";
-      body.innerHTML = h;
+      return table;
+    }
+
+    function renderTable() {
+      body.innerHTML = "";
+      if (!det.isJson) { body.innerHTML = "<div style='color:#64748b;font-size:12px'>Not valid JSON — showing raw text.</div><pre style='white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#0f172a'>" + esc(String(rawValue)) + "</pre>"; return; }
+      if ((Array.isArray(value) && !value.length) || (qeJsonIsPlainObj(value) && !Object.keys(value).length)) { body.innerHTML = "<div style='color:#94a3b8;font-size:12px'>Empty " + (Array.isArray(value) ? "array" : "object") + ".</div>"; return; }
+      body.appendChild(buildJsonTable(value, 0));
     }
     function renderRaw() { body.innerHTML = "<pre style='white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#0f172a;margin:0'>" + esc(det.isJson ? qeJsonPretty(value) : String(rawValue)) + "</pre>"; }
     tableTab.onclick = function () { styleTabs("table"); renderTable(); };

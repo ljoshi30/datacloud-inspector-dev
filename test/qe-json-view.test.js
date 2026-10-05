@@ -166,6 +166,33 @@ console.log("\n9. qeJsonPretty");
   ok("pretty of array ok", qeJsonPretty([1, 2]).indexOf("[") === 0);
 }
 
+// ── 9b. Nested rendering: chip label + per-level column derivation (recursive) ───
+console.log("\n9b. nested inline-expand helpers");
+{
+  var isObjOrArr = (v) => v && typeof v === "object";
+  var chipLabel = (v) => Array.isArray(v) ? ("[ " + v.length + (v.length === 1 ? " item" : " items") + " ]") : ("{ " + Object.keys(v).length + (Object.keys(v).length === 1 ? " field" : " fields") + " }");
+  eq("array chip label (1 item)", chipLabel([{ a: 1 }]), "[ 1 item ]");
+  eq("array chip label (3 items)", chipLabel([1, 2, 3]), "[ 3 items ]");
+  eq("object chip label (2 fields)", chipLabel({ a: 1, b: 2 }), "{ 2 fields }");
+  ok("nested array detected as expandable", isObjOrArr([{ x: 1 }]));
+  ok("nested object detected as expandable", isObjOrArr({ x: 1 }));
+  ok("scalar NOT expandable", !isObjOrArr("ON") && !isObjOrArr(42) && !isObjOrArr(false));
+  ok("null NOT expandable", !isObjOrArr(null));
+
+  // the exact screenshot case: array-of-one-object nested field expands to its own sub-table
+  var cell = [{ StateProvinceId: "ON" }];
+  ok("screenshot nested cell is expandable (not flat string)", isObjOrArr(cell));
+  var sub = qeJsonToTable(cell);
+  eq("expands to 1-col-of-keys sub-table (union)", sub.columns.join(","), "StateProvinceId");
+  eq("sub-table 1 row", sub.rows.length, 1);
+  eq("sub-table value", sub.rows[0].StateProvinceId, "ON");
+
+  // deep nesting: object -> array -> object
+  var deep = { a: { b: [{ c: 1 }] } };
+  ok("deep level-1 value expandable", isObjOrArr(deep.a));
+  ok("deep level-2 value expandable", isObjOrArr(deep.a.b));
+}
+
 // ── 10. Source presence (independent QE module wired; NOT reusing Explorer) ───────
 console.log("\n10. Source presence (independent QE JSON viewer wired up)");
 {
@@ -178,6 +205,10 @@ console.log("\n10. Source presence (independent QE JSON viewer wired up)");
   ok("QE opens its OWN json modal (not Explorer's openCellValue)", /dc-qe-json/.test(src));
   ok("independent from Explorer (QE code doesn't call renderJsonAsTable)",
     !/openResultsModal[\s\S]{0,4000}renderJsonAsTable/.test(src)); // loose guard
+  ok("recursive nested inline-expand builder (buildJsonTable + depth)", /function buildJsonTable\s*\(\s*val\s*,\s*depth\s*\)/.test(src));
+  ok("generic/shape-driven (no activation/TDI hardcoding in the viewer)",
+    !/qeJson[\s\S]{0,2500}(TDI_|Activation_Record)/.test(src));
+  ok("depth guard + array cap present", /MAX_DEPTH/.test(src) && /ARR_CAP/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
