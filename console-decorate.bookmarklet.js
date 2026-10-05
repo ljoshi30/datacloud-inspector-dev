@@ -1537,6 +1537,28 @@
       return lines.join("\n");
     }
 
+    // Object context bar: shows the source DLO(s) and target DMO as object label +
+    // API name, so the diagram has full context (not just field names). A DMO can
+    // receive from multiple DLOs, so we list all distinct source objects.
+    function buildObjectBar(pairs) {
+      const srcs = []; const seen = {};
+      pairs.forEach((p) => { const api = p.srcObj || "", lbl = p.srcObjLabel || p.srcObj || ""; const key = api + "|" + lbl; if ((api || lbl) && !seen[key]) { seen[key] = 1; srcs.push({ api: api, label: lbl }); } });
+      const dmoApi = (pairs[0] && pairs[0].dmo) || "", dmoLabel = (pairs[0] && pairs[0].dmoLabel) || dmoApi;
+      const box = (role, color, label, api) =>
+        "<div style='flex:1;min-width:0;background:#fff;border:1px solid #e2e8f0;border-left:3px solid " + color + ";border-radius:8px;padding:6px 11px;overflow:hidden'>" +
+          "<div style='font:700 9px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8'>" + role + "</div>" +
+          "<div style='font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+          "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "—") + "</div>" +
+        "</div>";
+      const srcBoxes = srcs.length ? srcs.map((s) => box(srcs.length > 1 ? "Source DLO" : "Source · DLO", "#c7d2e5", s.label, s.api)).join("") : box("Source · DLO", "#c7d2e5", "(system)", "");
+      const bar = document.createElement("div");
+      bar.style.cssText = "display:flex;align-items:stretch;gap:10px;max-width:" + (COL_W * 2 + GAP) + "px;margin:2px auto 12px;";
+      bar.innerHTML = "<div style='flex:1;min-width:0;display:flex;flex-direction:column;gap:6px'>" + srcBoxes + "</div>" +
+        "<div style='display:flex;align-items:center;color:#94a3b8;font-size:16px'>&rarr;</div>" +
+        box("Target · DMO", "#93c5fd", dmoLabel, dmoApi);
+      return bar;
+    }
+
     // Build ONE 2-column diagram element for a set of pairs (reused by single + grouped).
     function buildDiagram(pairs) {
       const n = pairs.length;
@@ -1618,6 +1640,7 @@
         countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + sysNote(currentPairs) + (q ? "  ·  " + shown.length + " shown" : "") + (mism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mism + " type mismatch" + (mism === 1 ? "" : "es") + "</span>" : "");
         copyBtn.style.display = shown.length ? "" : "none";
         if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>"; return; }
+        diagram.appendChild(buildObjectBar(currentPairs));
         diagram.appendChild(buildDiagram(shown));
         return;
       }
@@ -1640,7 +1663,7 @@
         det.appendChild(sum);
         const body = document.createElement("div"); body.style.cssText = "padding:2px 0 6px;overflow:auto;";
         let built = false;
-        det.addEventListener("toggle", () => { if (det.open && !built) { body.appendChild(buildDiagram(pairs)); built = true; } });
+        det.addEventListener("toggle", () => { if (det.open && !built) { body.appendChild(buildObjectBar(pairs)); body.appendChild(buildDiagram(pairs)); built = true; } });
         det.appendChild(body);
         diagram.appendChild(det);
       });

@@ -172,6 +172,25 @@ console.log("\n4f. system/key field classification (explains why our count > SF'
   eq("5 are system/key (explains 14 vs SF's 9)", pairs.filter(isSystemPair).length, 5);
 }
 
+console.log("\n4g. object-context bar: distinct source DLO(s) + target DMO");
+{
+  // mirror buildObjectBar's distinct-source collection
+  function sources(pairs) {
+    const out = [], seen = {};
+    pairs.forEach((p) => { const api = p.srcObj || "", lbl = p.srcObjLabel || p.srcObj || "", key = api + "|" + lbl; if ((api || lbl) && !seen[key]) { seen[key] = 1; out.push({ api, label: lbl }); } });
+    return out;
+  }
+  const oneSrc = [
+    { srcObj: "TDI_RH_Profile__dll", srcObjLabel: "TDI_RH_Profile", dmo: "TDI_ContactPointPhone__dlm", dmoLabel: "Contact Point Phone" },
+    { srcObj: "TDI_RH_Profile__dll", srcObjLabel: "TDI_RH_Profile", dmo: "TDI_ContactPointPhone__dlm", dmoLabel: "Contact Point Phone" },
+  ];
+  eq("same DLO twice -> 1 distinct source", sources(oneSrc).length, 1);
+  eq("source API captured", sources(oneSrc)[0].api, "TDI_RH_Profile__dll");
+  const multiSrc = oneSrc.concat([{ srcObj: "TDI_Other__dll", srcObjLabel: "Other", dmo: "TDI_ContactPointPhone__dlm", dmoLabel: "Contact Point Phone" }]);
+  eq("two different DLOs -> 2 distinct sources", sources(multiSrc).length, 2);
+  eq("target DMO api from first row", (multiSrc[0].dmo), "TDI_ContactPointPhone__dlm");
+}
+
 console.log("\n5. empty / malformed rows don't crash");
 {
   eq("empty rows -> 0 options", dmoDropdownOptions([]).length, 0);
@@ -198,6 +217,7 @@ console.log("\n6. Source presence (own-diagram Focus DMO wired up; no canvas man
   ok("has a Copy-mappings button (TSV export)", /Copy mappings/.test(src) && /pairsToTSV/.test(src));
   ok("has an 'All DMOs' grouped view (collapsible sections)", /__ALL__/.test(src) && /mode === "all"/.test(src));
   ok("flags system/key fields (SYS badge + 'SF hides' note)", /isSystemPair/.test(src) && /SYS/.test(src) && /SF hides/.test(src));
+  ok("shows DLO + DMO object name + API (object context bar)", /function buildObjectBar/.test(src) && /Target · DMO/.test(src));
   ok("does NOT manipulate SF canvas anymore (no hideOtherForDmo/restoreCanvas)",
     !/hideOtherForDmo/.test(src) && !/function restoreCanvas/.test(src));
   ok("no 'Declutter canvas' / zoom-warning left over",
