@@ -12546,13 +12546,21 @@
         }
         if (cands.indexOf("default") < 0) cands.push("default");
         var dsi = 0;
+        // Async-materialization poll. Data Cloud returns state:"SUCCESS" with an EMPTY
+        // dataRows while the query is still running (completionStatus Running/Unspecified/
+        // null, progress<100). The # Count path already polls through this; Fetch & Export
+        // did not, so a slow query (joins/large scans) returned "0 rows" even though SF's
+        // own grid showed rows seconds later. Poll the SAME offset until the batch is ready.
+        var FE_POLL_MS = 1500;
+        var FE_MAX_POLL = 20;   // ~30s ceiling — well past SF's own materialization time
 
         function finish() {
           var blob = new Blob(csvOut, { type: "text/csv" });
           resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null });
         }
 
-        function fetchBatch(offset) {
+        function fetchBatch(offset, pollAttempt) {
+          pollAttempt = pollAttempt || 0;
           if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
           var remaining = effectiveMax - offset;
           if (remaining <= 0) { finish(); return; }
@@ -12584,6 +12592,34 @@
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var meta = rv.metadata || [];
               var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
+              // ── Async-materialization guard ──────────────────────────────────────
+              // Data Cloud can return state:"SUCCESS" with an EMPTY batch while the query
+              // is still materializing. An empty batch here does NOT always mean "no data"
+              // — it can mean "not ready yet". Re-issue the SAME offset after a short delay
+              // instead of finishing with 0 rows (the bug: SF's grid showed rows ~2.5s
+              // later, we quit at 0.5s with "0 rows").
+              //
+              // We must NOT make a genuinely-empty table wait 30s, so we poll only when the
+              // batch looks UNFINISHED, using two signals:
+              //   (a) an explicit running status (Running/Unspecified/Processing/InProgress
+              //       or progress<100) — unambiguous "still working", OR
+              //   (b) the response carries NO column metadata yet AND no terminal status —
+              //       a completed empty result still returns its SCHEMA (column metadata),
+              //       whereas a not-yet-materialized query returns neither rows nor schema.
+              // A completed 0-row result (schema present, progress=100 / terminal status)
+              // matches neither → it finishes immediately, no wait.
+              var _st = rv.status || {};
+              var _cs = _st.completionStatus;
+              var _runningStatus = (_cs === "Unspecified" || _cs === "Running" || _cs === "Processing" ||
+                _cs === "InProgress" || (typeof _st.progress === "number" && _st.progress < 100));
+              var _haveSchema = (cols2.length > 0) || (meta && meta.length > 0);
+              var _noTerminalSignal = (_cs == null && !(typeof _st.progress === "number" && _st.progress >= 100));
+              var _looksUnfinished = _runningStatus || (!_haveSchema && _noTerminalSignal);
+              if (arrData.length === 0 && _looksUnfinished && pollAttempt < FE_MAX_POLL) {
+                if (onProgress) onProgress(totalFetched, userLimit || 0);
+                setTimeout(function () { fetchBatch(offset, pollAttempt + 1); }, FE_POLL_MS);
+                return;
+              }
               // Header from metadata (first batch that has columns). Also remember each
               // column's SQL type (e.g. "date", "timestamp", "text") so callers can filter
               // a column dropdown to only date/timestamp fields — avoids "cannot compare
