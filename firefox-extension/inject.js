@@ -12013,6 +12013,54 @@
     try { if (list.length) localStorage.setItem(qeSnapKey(sql), JSON.stringify(list)); else localStorage.removeItem(qeSnapKey(sql)); return true; } catch (e) { return false; }
   }
   function qeSnapClear(sql) { try { localStorage.removeItem(qeSnapKey(sql)); return true; } catch (e) { return false; } }
+  // ── CSV parsing (for "Compare two CSV files") ─────────────────────────────────
+  // A correct RFC-4180-ish parser: handles quoted fields containing commas, quotes
+  // ("" escape), and newlines; tolerates CRLF or LF; ignores a trailing blank line.
+  // Returns a flat array of string-cell rows (arrays). Pure + mirrored in tests.
+  function qeCsvParse(text) {
+    var rows = [], row = [], field = "", i = 0, inQ = false;
+    var s = String(text == null ? "" : text);
+    // strip a UTF-8 BOM if present (Excel loves adding it)
+    if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+    for (i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (inQ) {
+        if (c === '"') {
+          if (s[i + 1] === '"') { field += '"'; i++; }   // escaped quote
+          else inQ = false;                               // end of quoted field
+        } else field += c;
+      } else {
+        if (c === '"') inQ = true;
+        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (c === "\r") { /* swallow; \n handles the row break */ }
+        else field += c;
+      }
+    }
+    // flush the last field/row if the file didn't end with a newline
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    // drop a trailing fully-empty row (file ended with a newline)
+    if (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === "") rows.pop();
+    return rows;
+  }
+  // Turn parsed CSV cell-rows into the {columns, rows:[{col:val}]} shape the diff uses
+  // (identical to a snapshot's shape, so qeDiffSnapshots works unchanged). First row =
+  // header. Blank header cells are named col1/col2…; duplicate headers get a _2 suffix.
+  function qeCsvToSnapshot(text) {
+    var cells = qeCsvParse(text);
+    if (!cells.length) return { columns: [], rows: [] };
+    var header = cells[0].map(function (h, i) { return String(h || "").trim() || ("col" + (i + 1)); });
+    var seen = Object.create(null), columns = header.map(function (h) {
+      if (seen[h]) { seen[h]++; return h + "_" + seen[h]; } seen[h] = 1; return h;
+    });
+    var rows = [];
+    for (var r = 1; r < cells.length; r++) {
+      var o = {}, cr = cells[r];
+      for (var c = 0; c < columns.length; c++) o[columns[c]] = cr[c] == null ? "" : cr[c];
+      rows.push(o);
+    }
+    return { columns: columns, rows: rows };
+  }
   function qeRowKey(row, keyCols) { return keyCols.map(function (k) { return String(row[k] == null ? "" : row[k]); }).join(""); }
   // How many OTHER snapshot buckets exist (saved under a DIFFERENT query text than `sql`).
   // Snapshots are keyed by the exact normalized query (qeSnapKey), so changing LIMIT, a
@@ -12181,6 +12229,9 @@
       + "<details style='" + det + "'><summary style='" + sum + "'>Keeping several snapshots &amp; comparing</summary>"
       + "<div style='margin-top:7px'>You can save a snapshot on each run and give each a name (up to 5 are kept per query, newest first). Compare looks at <b>two at a time</b>: the result on screen now vs the <b>one</b> snapshot you pick — so you can compare today against yesterday, or against any earlier saved run.</div></details>"
 
+      + "<details style='" + det + "'><summary style='" + sum + "'>Comparing large results — use Compare CSVs</summary>"
+      + "<div style='margin-top:7px'>Snapshots and on-screen results hold up to the first <b>2,000 rows</b>, and browser storage caps a snapshot at about 5MB. For bigger results, click <b>Download CSV</b> on each run (it saves <b>all</b> rows), then use <b>Compare CSVs</b> to diff any two files with the same added/removed/changed logic — no row limit, and the files work across machines or teammates.</div></details>"
+
       + "<details style='" + det + "'><summary style='" + sum + "'>Edge cases &amp; limits</summary>"
       + "<ul style='margin:7px 0 0;padding-left:18px'>"
       + "<li>No key → warns, no diff. Duplicate keys → warns “first kept”.</li>"
@@ -12189,6 +12240,94 @@
       + "<li>No LIMIT → saves all fetched rows (≤49,999); check the “saved N rows” count.</li>"
       + "<li>Stored in <b>this browser</b> only; clearing browser data removes them.</li></ul></details>";
     box.appendChild(body);
+    modal.appendChild(box);
+    modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    try { makeDraggable(box, hdr); } catch (e) {}
+  }
+
+  // ── Compare two CSV files ─────────────────────────────────────────────────
+  // Diff ANY two CSVs (e.g. two "Download CSV" exports from different runs) with the
+  // same key + added/removed/changed engine the snapshot compare uses. No row cap and
+  // no browser-storage limit — this is the complete-data path for big results, and it
+  // works for files from any query/machine/teammate. Reuses qeDiffSnapshots +
+  // openQeDiffModal so there is ONE diff implementation.
+  function openQeCsvCompare() {
+    var old = document.getElementById("dc-qe-csv-cmp"); if (old) old.remove();
+    var modal = document.createElement("div"); modal.id = "dc-qe-csv-cmp";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
+    var box = document.createElement("div");
+    box.style.cssText = "position:fixed;top:9vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(560px,94vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    var hdr = document.createElement("div");
+    hdr.style.cssText = "padding:13px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div style='font:700 15px system-ui'>Compare two CSV files</div>";
+    var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
+    closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
+    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.5;";
+    box.appendChild(body);
+
+    var snapOld = null, snapNew = null;   // parsed {columns, rows} for each side
+    var mkFileRow = function (label, hint) {
+      return "<div style='font:700 12px system-ui;margin:2px 0 4px'>" + label + " <span style='font-weight:400;color:#94a3b8'>" + hint + "</span></div>";
+    };
+    body.innerHTML =
+      "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin-bottom:12px'>"
+      + "Pick two CSV files (for example, two <b>Download CSV</b> exports of the same query from different runs). This shows what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span>, and <span style='color:#b45309'>changed</span>. No row limit — good for large results.</div>"
+      + mkFileRow("Older file", "(the earlier run)")
+      + "<input type='file' id='dc-csv-old' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + "<div id='dc-csv-old-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
+      + mkFileRow("Newer file", "(the later run)")
+      + "<input type='file' id='dc-csv-new' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + "<div id='dc-csv-new-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
+      + "<div style='display:flex;align-items:center;gap:6px;margin:4px 0 2px'><span style='font:700 12px system-ui'>Key column:</span>"
+      + "<select id='dc-csv-key' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
+      + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>The column that uniquely identifies a row (usually an ID). Rows are matched by this between the two files.</div>"
+      + "<div id='dc-csv-msg' style='font-size:11px;color:#b45309;min-height:14px;margin-bottom:8px'></div>"
+      + "<button id='dc-csv-go' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
+
+    var keySel = body.querySelector("#dc-csv-key");
+    var goBtn = body.querySelector("#dc-csv-go");
+    var msg = body.querySelector("#dc-csv-msg");
+
+    function refreshKeyOptions() {
+      // offer only columns PRESENT IN BOTH files (a key must exist on both sides)
+      if (!snapOld || !snapNew) { keySel.disabled = true; keySel.innerHTML = "<option>load both files first</option>"; goBtn.disabled = true; goBtn.style.opacity = ".5"; return; }
+      var common = snapNew.columns.filter(function (c) { return snapOld.columns.indexOf(c) >= 0; });
+      if (!common.length) { keySel.disabled = true; keySel.innerHTML = "<option>no shared columns</option>"; goBtn.disabled = true; goBtn.style.opacity = ".5"; msg.textContent = "⚠ These files share no column names — are they from the same query?"; return; }
+      msg.textContent = "";
+      keySel.disabled = false;
+      keySel.innerHTML = common.map(function (c) { return "<option value='" + String(c).replace(/'/g, "") + "'>" + String(c).replace(/</g, "") + "</option>"; }).join("");
+      var def = common.find(function (c) { return /(^|_)id(__c)?$/i.test(c) || /primary/i.test(c); }); if (def) keySel.value = def;
+      goBtn.disabled = false; goBtn.style.opacity = "1";
+    }
+    function loadFile(input, infoEl, assign) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var snap = qeCsvToSnapshot(String(reader.result || ""));
+          assign(snap);
+          infoEl.textContent = "✓ " + f.name + " — " + snap.rows.length.toLocaleString() + " rows, " + snap.columns.length + " columns";
+          infoEl.style.color = "#059669";
+        } catch (e) { infoEl.textContent = "⚠ couldn't read this file"; infoEl.style.color = "#b45309"; assign(null); }
+        refreshKeyOptions();
+      };
+      reader.onerror = function () { infoEl.textContent = "⚠ couldn't read this file"; infoEl.style.color = "#b45309"; assign(null); refreshKeyOptions(); };
+      reader.readAsText(f);
+    }
+    body.querySelector("#dc-csv-old").onchange = function () { loadFile(this, body.querySelector("#dc-csv-old-info"), function (s) { snapOld = s; }); };
+    body.querySelector("#dc-csv-new").onchange = function () { loadFile(this, body.querySelector("#dc-csv-new-info"), function (s) { snapNew = s; }); };
+    goBtn.onclick = function () {
+      if (!snapOld || !snapNew) return;
+      var keyCols = [keySel.value].filter(Boolean);
+      // reuse the SAME diff engine + results modal as snapshot compare
+      var d = qeDiffSnapshots(snapOld, snapNew, keyCols);
+      // label the diff header as the older file (prevSnap carries .label/.ts; use filename)
+      openQeDiffModal(d, keyCols, { label: "older CSV", columns: snapOld.columns });
+    };
+
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
@@ -13850,6 +13989,13 @@
       var clearBtn = document.createElement("button");
       clearBtn.textContent = "Clear all"; clearBtn.title = "Delete ALL saved snapshots for this query";
       clearBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#64748b;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 11px system-ui;";
+      // "Compare CSVs" — diff two downloaded CSV files (no row/storage cap). Reuses the
+      // same key + added/removed/changed engine as snapshot compare.
+      var csvCmpBtn = document.createElement("button");
+      csvCmpBtn.textContent = "Compare CSVs";
+      csvCmpBtn.title = "Compare two CSV files (e.g. two Download CSV exports from different runs). No row limit — good for large results.";
+      csvCmpBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#4338ca;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 11px system-ui;";
+      csvCmpBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
       // "?" help — opens the full how-it-works + testing-steps guide (no org calls).
       var helpBtn = document.createElement("button");
       helpBtn.textContent = "?"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
@@ -13912,7 +14058,7 @@
         setTimeout(function () { snapMsg.textContent = ""; }, 2000);
       };
       snapBar.appendChild(saveSnapBtn); snapBar.appendChild(keyWrap);
-      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
+      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(csvCmpBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
       refreshSnapList();
 
       box.appendChild(hdr);

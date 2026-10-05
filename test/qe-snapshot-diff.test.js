@@ -238,6 +238,87 @@ console.log("\n7d. qeSnapOtherBucketCount — explains LIMIT 1 vs LIMIT 2 bucket
   eq("empty bucket not counted", otherBuckets(q2), 1);
 }
 
+// ── 7e. CSV parsing + shape conversion (powers "Compare two CSV files") ───────────
+// The diff engine is reused as-is; only the SOURCE differs (a parsed CSV vs a snapshot).
+// So we lock the parser (quotes/commas/newlines/CRLF/BOM) and the {columns,rows} shape.
+console.log("\n7e. qeCsvParse + qeCsvToSnapshot");
+{
+  function qeCsvParse(text) {
+    var rows = [], row = [], field = "", i = 0, inQ = false;
+    var s = String(text == null ? "" : text);
+    if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+    for (i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (inQ) {
+        if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+        else field += c;
+      } else {
+        if (c === '"') inQ = true;
+        else if (c === ",") { row.push(field); field = ""; }
+        else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (c === "\r") { }
+        else field += c;
+      }
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    if (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === "") rows.pop();
+    return rows;
+  }
+  function qeCsvToSnapshot(text) {
+    var cells = qeCsvParse(text);
+    if (!cells.length) return { columns: [], rows: [] };
+    var header = cells[0].map(function (h, i) { return String(h || "").trim() || ("col" + (i + 1)); });
+    var seen = Object.create(null), columns = header.map(function (h) { if (seen[h]) { seen[h]++; return h + "_" + seen[h]; } seen[h] = 1; return h; });
+    var rows = [];
+    for (var r = 1; r < cells.length; r++) { var o = {}, cr = cells[r]; for (var c = 0; c < columns.length; c++) o[columns[c]] = cr[c] == null ? "" : cr[c]; rows.push(o); }
+    return { columns: columns, rows: rows };
+  }
+
+  // basic
+  var basic = qeCsvParse("a,b,c\n1,2,3\n4,5,6");
+  eq("basic: 3 rows (header + 2)", basic.length, 3);
+  eq("basic: 3 cols", basic[0].length, 3);
+  eq("basic: cell value", basic[1][2], "3");
+  // trailing newline ignored
+  eq("trailing newline doesn't add a blank row", qeCsvParse("a,b\n1,2\n").length, 2);
+  // CRLF
+  eq("CRLF handled", qeCsvParse("a,b\r\n1,2\r\n").length, 2);
+  // quoted comma
+  var qc = qeCsvParse('a,b\n"x,y",z');
+  eq("quoted comma kept in one field", qc[1][0], "x,y");
+  eq("quoted comma: 2 fields", qc[1].length, 2);
+  // escaped quote
+  var eq2 = qeCsvParse('a\n"she said ""hi"""');
+  eq("escaped double-quote -> single quote", eq2[1][0], 'she said "hi"');
+  // newline inside quotes
+  var nl = qeCsvParse('a,b\n"line1\nline2",z');
+  eq("newline inside quotes stays one row", nl.length, 2);
+  eq("newline inside quotes stays one field", nl[1][0], "line1\nline2");
+  // BOM
+  eq("UTF-8 BOM stripped from first header", qeCsvParse("﻿a,b\n1,2")[0][0], "a");
+  // empty
+  eq("empty text -> 0 rows", qeCsvParse("").length, 0);
+
+  // shape conversion
+  var csvSnap = qeCsvToSnapshot('Id,Status\n1,Active\n2,Paused');
+  eq("snapshot columns", csvSnap.columns.join(","), "Id,Status");
+  eq("snapshot row count (excludes header)", csvSnap.rows.length, 2);
+  eq("snapshot row as object", csvSnap.rows[0].Status, "Active");
+  // blank + duplicate headers
+  var dup = qeCsvToSnapshot(',Name,Name\nx,a,b');
+  eq("blank header named col1", dup.columns[0], "col1");
+  eq("duplicate header suffixed", dup.columns[2], "Name_2");
+
+  // end-to-end: two CSVs through the SAME diff engine
+  var oldSnap = qeCsvToSnapshot('Id,Status\n1,Active\n2,Active\n3,Paused');
+  var newSnap = qeCsvToSnapshot('Id,Status\n1,Active\n2,Inactive\n4,Active'); // 2 changed, 3 removed, 4 added
+  var d = diffSnapshots(oldSnap, newSnap, ["Id"]);
+  eq("csv diff: 1 added (Id 4)", d.added.length, 1);
+  eq("csv diff: 1 removed (Id 3)", d.removed.length, 1);
+  eq("csv diff: 1 changed (Id 2)", d.changed.length, 1);
+  eq("csv diff: changed field is Status", d.changed[0].fields.join(","), "Status");
+}
+
 // ── Source presence ──────────────────────────────────────────────────────────────
 console.log("\n8. Source presence (independent qeSnap module wired)");
 {
@@ -267,6 +348,15 @@ console.log("\n8. Source presence (independent qeSnap module wired)");
   ok("long detail is collapsed behind <details> (scannable by default)", /<details/.test(src) && /<summary/.test(src));
   ok("inline hint warns about other buckets", /other quer/i.test(src));
   ok("inline hint warns non-unique key", /not unique/i.test(src));
+  // Compare-two-CSV-files feature
+  ok("CSV parser defined", /function qeCsvParse\s*\(/.test(src));
+  ok("CSV->snapshot shape converter defined", /function qeCsvToSnapshot\s*\(/.test(src));
+  ok("Compare-CSVs modal defined", /function openQeCsvCompare\s*\(/.test(src));
+  ok("Compare CSVs button wired into toolbar", /csvCmpBtn/.test(src) && /openQeCsvCompare\(\)/.test(src));
+  ok("CSV compare reuses the SAME diff engine (qeDiffSnapshots)", /openQeCsvCompare[\s\S]{0,7000}qeDiffSnapshots\(/.test(src));
+  ok("CSV compare reuses the SAME results modal (openQeDiffModal)", /openQeCsvCompare[\s\S]{0,7000}openQeDiffModal\(/.test(src));
+  ok("uses a file input to read CSV from disk", /openQeCsvCompare[\s\S]{0,3000}type='file'/.test(src) && /readAsText/.test(src));
+  ok("help mentions Compare CSVs for large results", /Compare CSVs/.test(src) && /2,000 rows/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
