@@ -12146,30 +12146,40 @@
     var sum = "cursor:pointer;font:700 12px system-ui;color:#4338ca;outline:none;";
     body.innerHTML =
       // ── the crisp part: 3 lines everyone reads ──
-      "<div style='font-size:13px'><b>Compare</b> diffs the rows <b>on screen now</b> against a <b>saved snapshot</b> → "
+      // ── WHY this exists: the problem it solves, in plain words ──
+      "<div style='font-size:13px'><b>Why use this?</b> A query only shows you <b>today's</b> result. If you run the same query again later, there's no built-in way to see <b>what changed</b>. This lets you save a result and compare a later run against it, so you can spot exactly what was added, removed, or changed — without eyeballing two exports.</div>"
+
+      + "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin:10px 0'>"
+      + "Works for <b>any query</b> — any object or table. Handy whenever a result changes over time: audience/segment membership, records before vs after a job, data-quality checks, row counts, config, and so on. If you only ever need the latest result, you can ignore these buttons.</div>"
+
+      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>How it works</div>"
+      + "<div style='font-size:13px'><b>Compare</b> diffs the rows <b>on screen now</b> against a <b>saved snapshot</b> → "
       + "<span style='color:#059669'>+added</span> / <span style='color:#dc2626'>−removed</span> / <span style='color:#b45309'>~changed</span>. "
       + "The current result doesn't need saving — just run the query. Save only to keep a run for later.</div>"
 
       + "<div style='background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:9px 12px;margin:12px 0;color:#166534'>"
-      + "<b>Key = how rows are matched between runs.</b> Pick a <b>stable, unique ID</b> (e.g. " + code("Segmented_Entity_Id__c") + ").<br>"
-      + "<span style='color:#92400e'>✗ Don't use a JSON/hash column or a repeating value (like " + code("Delta_Type__c") + ") — the diff warns you if you do.</span></div>"
+      + "<b>Key = how rows are matched between runs.</b> Pick a column with a <b>unique value for each row that stays the same over time</b> — usually an <b>ID</b> or <b>primary-key</b> column.<br>"
+      + "<span style='color:#92400e'>✗ Avoid columns that repeat across rows (like a status or type) or that change when the record changes (like a JSON or hash value) — the tool warns you if your choice looks risky.</span></div>"
 
       + "<div style='font:700 12px system-ui;margin:14px 0 5px'>Test in 3 steps</div>"
       + "<ol style='margin:0;padding-left:20px'>"
       + "<li>Run a query → <b>Save snapshot</b> (name it <code>day1</code>).</li>"
       + "<li>Later / next run: run the <b>same</b> query again.</li>"
       + "<li>Pick <code>day1</code> → <b>Compare</b>. Done.</li></ol>"
-      + "<div style='font-size:11px;color:#64748b;margin-top:5px'>Prove it instantly: save, edit one non-key field in the org, re-run the same query, Compare → that row shows under ~changed.</div>"
+      + "<div style='font-size:11px;color:#64748b;margin-top:5px'>Want to see it work right away? Save a snapshot, change one value in your data, run the same query again, then Compare — that row shows up under ~changed.</div>"
 
       // ── everything else: collapsed, read only if curious ──
-      + "<details style='" + det + "'><summary style='" + sum + "'>Why doesn't my snapshot show up?</summary>"
-      + "<div style='margin-top:7px'>Snapshots are filed by the <b>exact query text</b> (one set per query). " + code("LIMIT 1") + " and " + code("LIMIT 2") + " — or any changed filter/column — are treated as different queries, so their snapshots don't mix. <b>Run the identical query</b> to compare over time.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Why don't I see my saved snapshot?</summary>"
+      + "<div style='margin-top:7px'>Each snapshot is tied to the <b>query you ran when you saved it</b>. If you change the query in any way — different columns, a different filter, a different row limit, or a different table — it counts as a <b>new query</b>, and only snapshots from that same query appear.<br><br>"
+      + "<b>To compare over time, run the same query each time</b> (same text) and save a snapshot on each run.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>More on the Key</summary>"
-      + "<div style='margin-top:7px'>A JSON/hash value <b>changes when the record is edited</b> → used as the key, an edited row looks like <b>removed + added</b> instead of <b>changed</b>. Keep JSON/hash as a normal column so its change is flagged under ~changed. A non-unique key makes rows collapse together (diff warns “duplicate key — first kept”).</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>How to choose a good Key</summary>"
+      + "<div style='margin-top:7px'>A good key uniquely identifies a row <b>and</b> doesn't change over time.<br><br>"
+      + "If you pick a column whose value changes when the record is edited (such as a JSON or hash value), an edited row will look like it was <b>removed and then added</b>, instead of <b>changed</b>. Keep those as normal columns — then their change shows up correctly under ~changed.<br><br>"
+      + "If two rows share the same key value, the tool keeps the first and warns you (“duplicate key — first kept”), so pick a column that's truly unique.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>Day 1 / 2 / 3 &amp; multiple snapshots</summary>"
-      + "<div style='margin-top:7px'>Save <code>day1</code>, <code>day2</code>, … (max 5 per query). Compare is 2-way: pick <b>one</b> snapshot at a time — vs <code>day2</code> = changes since day 2, vs <code>day1</code> = since day 1.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Keeping several snapshots &amp; comparing</summary>"
+      + "<div style='margin-top:7px'>You can save a snapshot on each run and give each a name (up to 5 are kept per query, newest first). Compare looks at <b>two at a time</b>: the result on screen now vs the <b>one</b> snapshot you pick — so you can compare today against yesterday, or against any earlier saved run.</div></details>"
 
       + "<details style='" + det + "'><summary style='" + sum + "'>Edge cases &amp; limits</summary>"
       + "<ul style='margin:7px 0 0;padding-left:18px'>"
@@ -13818,7 +13828,7 @@
       snapBar.style.cssText = "padding:7px 20px;background:#f1f5f9;border-bottom:1px solid #e2e8f0;font-size:12px;color:#334155;flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;";
       var saveSnapBtn = document.createElement("button");
       saveSnapBtn.textContent = "📌 Save snapshot";
-      saveSnapBtn.title = "Save this result locally so you can compare a future run against it (activation history).";
+      saveSnapBtn.title = "Save this result in your browser so you can compare a future run of the same query against it.";
       saveSnapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:5px 11px;cursor:pointer;font:600 12px system-ui;";
       var keyWrap = document.createElement("span"); keyWrap.style.cssText = "display:flex;align-items:center;gap:5px;color:#64748b;";
       var keySel = document.createElement("select");
@@ -13853,13 +13863,13 @@
         var list = qeSnapList(snapSql);
         if (!list.length) {
           var others = qeSnapOtherBucketCount(snapSql);
-          if (others > 0) bits.push("No snapshots for <b>this exact query</b>. You have snapshots under " + others + " other quer" + (others === 1 ? "y" : "ies") + " — snapshots only compare an <b>identical</b> query (changing LIMIT/filter/columns makes a new set). Click <b>?</b> for details.");
+          if (others > 0) bits.push("No snapshots saved for the query you just ran. You do have snapshots from " + others + " other quer" + (others === 1 ? "y" : "ies") + " — a snapshot only shows up when you run the <b>same query</b> it was saved with. Click <b>?</b> for details.");
         }
         // key quality on the CURRENT rows
         var kq = qeKeyQuality(rows, keySel.value);
         if (kq.total) {
-          if (kq.dups > 0) bits.push("⚠ Key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> (" + kq.dups + " of " + kq.total + " rows repeat it) — the diff will be unreliable. Pick a unique ID column.");
-          else if (kq.jsonish > 0) bits.push("⚠ Key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like JSON/hash — if the record is edited this value changes, so edits show as <b>removed + added</b>, not <b>changed</b>. Prefer a stable ID; keep JSON as a normal column. Click <b>?</b>.");
+          if (kq.dups > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> — " + kq.dups + " of " + kq.total + " rows share the same value, so the comparison won't be reliable. Pick a column with a unique value per row (usually an ID). Click <b>?</b>.");
+          else if (kq.jsonish > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like a JSON or hash value, which usually changes when the record changes. If that happens, edited rows show up as <b>removed + added</b> instead of <b>changed</b>. Prefer an ID column instead. Click <b>?</b>.");
         }
         snapHint.innerHTML = bits.join("<br>");
         snapHint.style.display = bits.length ? "block" : "none";
