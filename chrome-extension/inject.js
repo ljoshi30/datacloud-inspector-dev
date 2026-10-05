@@ -11892,6 +11892,112 @@
     styleTabs("table"); renderTable();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // QE SNAPSHOTS — retain a query result + compare a later run (activation history).
+  // Stored in localStorage keyed by the SQL; keep the last N per query. The diff is
+  // key-based (user picks the identity column) → added / removed / changed rows.
+  // Dev-only, independent module. (QE team: visualize activation-history DMO + retain
+  // so day-over-day changes compare.)
+  // ═══════════════════════════════════════════════════════════════════════════════
+  var QE_SNAP_PREFIX = "dc_qe_snap_", QE_SNAP_MAX = 5;
+  function qeSnapKey(sql) {
+    // stable short hash of the normalized SQL so the same query maps to the same bucket
+    var s = String(sql || "").replace(/\s+/g, " ").trim().toLowerCase();
+    var h = 0; for (var i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+    return QE_SNAP_PREFIX + (h >>> 0).toString(36);
+  }
+  function qeSnapList(sql) {
+    try { var raw = localStorage.getItem(qeSnapKey(sql)); if (!raw) return []; var arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+  }
+  function qeSnapSave(sql, columns, rows, tableName) {
+    var list = qeSnapList(sql);
+    var snap = { ts: null, label: "", tableName: tableName || "", sql: String(sql || ""), columns: columns || [], rows: rows || [] };
+    // ts is stamped by caller-provided Date (scripts can't use Date.now here); UI passes it.
+    try { snap.ts = (typeof Date !== "undefined" && Date.now) ? Date.now() : 0; } catch (e) { snap.ts = 0; }
+    list.unshift(snap);
+    while (list.length > QE_SNAP_MAX) list.pop();
+    // guard the ~5MB localStorage cap: drop oldest until it fits
+    for (;;) {
+      try { localStorage.setItem(qeSnapKey(sql), JSON.stringify(list)); break; }
+      catch (e) { if (list.length <= 1) { try { localStorage.removeItem(qeSnapKey(sql)); } catch (e2) {} return { ok: false, error: "too large for local storage" }; } list.pop(); }
+    }
+    return { ok: true, count: list.length };
+  }
+  function qeRowKey(row, keyCols) { return keyCols.map(function (k) { return String(row[k] == null ? "" : row[k]); }).join(""); }
+  function qeDiffSnapshots(prev, curr, keyCols) {
+    var warnings = [];
+    var prevRows = (prev && prev.rows) || [], currRows = (curr && curr.rows) || [];
+    if (!keyCols || !keyCols.length) { warnings.push("no key column selected"); return { added: [], removed: [], changed: [], unchanged: 0, warnings: warnings }; }
+    var prevCols = (prev && prev.columns) || [], currCols = (curr && curr.columns) || [];
+    var addedCols = currCols.filter(function (c) { return prevCols.indexOf(c) < 0; });
+    var droppedCols = prevCols.filter(function (c) { return currCols.indexOf(c) < 0; });
+    if (addedCols.length) warnings.push("new columns: " + addedCols.join(", "));
+    if (droppedCols.length) warnings.push("removed columns: " + droppedCols.join(", "));
+    var prevMap = new Map(), currMap = new Map(), dupPrev = 0, dupCurr = 0;
+    prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) dupPrev++; else prevMap.set(k, r); });
+    currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) dupCurr++; else currMap.set(k, r); });
+    if (dupPrev) warnings.push(dupPrev + " duplicate key(s) in previous (first kept)");
+    if (dupCurr) warnings.push(dupCurr + " duplicate key(s) in current (first kept)");
+    var allCols = currCols.slice(); prevCols.forEach(function (c) { if (allCols.indexOf(c) < 0) allCols.push(c); });
+    var added = [], removed = [], changed = [], unchanged = 0;
+    currMap.forEach(function (cr, k) {
+      if (!prevMap.has(k)) { added.push(cr); return; }
+      var pr = prevMap.get(k), diffFields = [];
+      allCols.forEach(function (c) { var a = pr[c] == null ? "" : String(pr[c]); var b = cr[c] == null ? "" : String(cr[c]); if (a !== b) diffFields.push(c); });
+      if (diffFields.length) changed.push({ key: k, before: pr, after: cr, fields: diffFields }); else unchanged++;
+    });
+    prevMap.forEach(function (pr, k) { if (!currMap.has(k)) removed.push(pr); });
+    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings };
+  }
+
+  // Render the diff (added/removed/changed) in a modal with sections.
+  function openQeDiffModal(diff, keyCols, prevSnap) {
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+    var old = document.getElementById("dc-qe-diff-modal"); if (old) old.remove();
+    var modal = document.createElement("div"); modal.id = "dc-qe-diff-modal";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
+    var box = document.createElement("div");
+    box.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(900px,95vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    var when = prevSnap && prevSnap.ts ? new Date(prevSnap.ts).toLocaleString() : "previous snapshot";
+    var hdr = document.createElement("div");
+    hdr.style.cssText = "padding:12px 16px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div><div style='font:700 14px system-ui'>Compare vs " + esc(when) + "</div><div style='font:400 11px system-ui;opacity:.85'>key: " + esc(keyCols.join(" + ")) + " &bull; <span style='color:#86efac'>+" + diff.added.length + " added</span> &bull; <span style='color:#fca5a5'>-" + diff.removed.length + " removed</span> &bull; <span style='color:#fde68a'>~" + diff.changed.length + " changed</span> &bull; " + diff.unchanged + " unchanged</div></div>";
+    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
+    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 16px;min-height:0;background:#f8fafc;"; box.appendChild(body);
+
+    var html = "";
+    if (diff.warnings.length) html += "<div style='background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;padding:7px 10px;margin-bottom:12px;font-size:11px;color:#92400e'>&#9888; " + diff.warnings.map(esc).join(" &bull; ") + "</div>";
+    function tbl(title, color, rows2, cols2) {
+      if (!rows2.length) return "<div style='margin:0 0 10px;font-size:12px;color:#94a3b8'>" + title + ": none</div>";
+      var h = "<div style='font:700 12px system-ui;color:" + color + ";margin:4px 0 6px'>" + title + " (" + rows2.length + ")</div>";
+      h += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden;margin-bottom:14px'><thead><tr style='background:#1e293b;color:#fff'>";
+      cols2.forEach(function (c) { h += "<th style='text-align:left;padding:5px 8px;white-space:nowrap'>" + esc(c) + "</th>"; });
+      h += "</tr></thead><tbody>";
+      rows2.slice(0, 500).forEach(function (r, i) { h += "<tr style='background:" + (i % 2 ? "#f9fafb" : "#fff") + "'>"; cols2.forEach(function (c) { h += "<td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(r[c]) + "'>" + esc(r[c] == null ? "" : r[c]) + "</td>"; }); h += "</tr>"; });
+      h += "</tbody></table>";
+      if (rows2.length > 500) h += "<div style='font-size:11px;color:#94a3b8;margin:-8px 0 12px'>showing first 500 of " + rows2.length + "</div>";
+      return h;
+    }
+    var curCols = (prevSnap && prevSnap.columns) || (diff.added[0] ? Object.keys(diff.added[0]) : keyCols);
+    html += tbl("➕ Added rows", "#059669", diff.added, curCols);
+    html += tbl("➖ Removed rows", "#dc2626", diff.removed, curCols);
+    // changed: show key + which fields changed, before → after
+    if (diff.changed.length) {
+      html += "<div style='font:700 12px system-ui;color:#b45309;margin:4px 0 6px'>✎ Changed rows (" + diff.changed.length + ")</div>";
+      html += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden'><thead><tr style='background:#1e293b;color:#fff'><th style='text-align:left;padding:5px 8px'>Key</th><th style='text-align:left;padding:5px 8px'>Field</th><th style='text-align:left;padding:5px 8px'>Before</th><th style='text-align:left;padding:5px 8px'>After</th></tr></thead><tbody>";
+      var cnt = 0;
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { if (cnt++ > 1000) return; html += "<tr><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-family:SF Mono,monospace'>" + esc(ch.key) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-weight:600'>" + esc(f) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#fef2f2'>" + esc(ch.before[f] == null ? "" : ch.before[f]) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#f0fdf4'>" + esc(ch.after[f] == null ? "" : ch.after[f]) + "</td></tr>"; }); });
+      html += "</tbody></table>";
+    } else html += "<div style='font-size:12px;color:#94a3b8'>Changed: none</div>";
+    body.innerHTML = html;
+
+    modal.appendChild(box);
+    modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    try { makeDraggable(box, hdr); } catch (e) {}
+  }
+
   // ── Query Editor launcher (FAB) — "Export results to CSV" ─────────────────
   // SF's Query Editor shows results but can't export them. This button reads the user's
   // SQL, re-runs it via our proven query path (up to 49,999 rows), and downloads the
@@ -13483,8 +13589,55 @@
       dlBtn2.onclick = function () { downloadBtn.click(); };
       footer.appendChild(dlBtn2);
 
+      // ── Snapshot / compare toolbar (activation-history retain + day-over-day diff) ──
+      var snapSql = (_lastResult && _lastResult.sql) || (_lastResult && _lastResult.tableName) || "qe";
+      var snapBar = document.createElement("div");
+      snapBar.style.cssText = "padding:7px 20px;background:#f1f5f9;border-bottom:1px solid #e2e8f0;font-size:12px;color:#334155;flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;";
+      var saveSnapBtn = document.createElement("button");
+      saveSnapBtn.textContent = "📌 Save snapshot";
+      saveSnapBtn.title = "Save this result locally so you can compare a future run against it (activation history).";
+      saveSnapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:5px 11px;cursor:pointer;font:600 12px system-ui;";
+      var keyWrap = document.createElement("span"); keyWrap.style.cssText = "display:flex;align-items:center;gap:5px;color:#64748b;";
+      var keySel = document.createElement("select");
+      keySel.title = "Row identity: the column(s) that uniquely identify a row, used to match rows between runs.";
+      keySel.style.cssText = "border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:200px;";
+      allCols.forEach(function (c) { var o = document.createElement("option"); o.value = c; o.textContent = c; keySel.appendChild(o); });
+      // default key = first column that looks like an Id/PK
+      (function () { var def = allCols.find(function (c) { return /(^|_)id(__c)?$/i.test(c) || /primary/i.test(c); }); if (def) keySel.value = def; })();
+      keyWrap.appendChild(document.createTextNode("Key:")); keyWrap.appendChild(keySel);
+      var cmpSel = document.createElement("select");
+      cmpSel.style.cssText = "border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:240px;";
+      var cmpBtn = document.createElement("button");
+      cmpBtn.textContent = "Compare";
+      cmpBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:5px 12px;cursor:pointer;font:600 12px system-ui;";
+      var snapMsg = document.createElement("span"); snapMsg.style.cssText = "color:#64748b;font-size:11px;";
+      function refreshSnapList() {
+        var list = qeSnapList(snapSql);
+        cmpSel.innerHTML = list.length ? list.map(function (s, i) { var dt = s.ts ? new Date(s.ts).toLocaleString() : ("snapshot " + (i + 1)); return "<option value='" + i + "'>" + dt.replace(/</g, "") + " (" + (s.rows ? s.rows.length : 0) + " rows)</option>"; }).join("") : "<option value=''>no saved snapshots</option>";
+        cmpSel.disabled = !list.length; cmpBtn.disabled = !list.length;
+        cmpSel.style.opacity = cmpBtn.style.opacity = list.length ? "1" : ".5";
+      }
+      saveSnapBtn.onclick = function () {
+        var res = qeSnapSave(snapSql, allCols, rows, _lastResult && _lastResult.tableName);
+        snapMsg.textContent = res.ok ? ("✓ saved (" + res.count + " kept)") : ("⚠ " + (res.error || "save failed"));
+        snapMsg.style.color = res.ok ? "#059669" : "#b45309";
+        refreshSnapList();
+        setTimeout(function () { snapMsg.textContent = ""; }, 2500);
+      };
+      cmpBtn.onclick = function () {
+        var list = qeSnapList(snapSql); var idx = parseInt(cmpSel.value, 10);
+        if (isNaN(idx) || !list[idx]) return;
+        var keyCols = [keySel.value].filter(Boolean);
+        var d = qeDiffSnapshots(list[idx], { columns: allCols, rows: rows }, keyCols);
+        openQeDiffModal(d, keyCols, list[idx]);
+      };
+      snapBar.appendChild(saveSnapBtn); snapBar.appendChild(keyWrap);
+      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(snapMsg);
+      refreshSnapList();
+
       box.appendChild(hdr);
       box.appendChild(note);
+      box.appendChild(snapBar);
       if (emptyCount > 0) box.appendChild(emptyBanner);
       box.appendChild(tableWrap);
       box.appendChild(footer);
