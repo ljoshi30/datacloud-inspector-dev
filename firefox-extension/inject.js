@@ -12133,72 +12133,51 @@
     var modal = document.createElement("div"); modal.id = "dc-qe-snap-help";
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
     var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(760px,95vw);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    box.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(560px,94vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
     var hdr = document.createElement("div");
     hdr.style.cssText = "padding:13px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-    hdr.innerHTML = "<div style='font:700 15px system-ui'>Snapshots &amp; Compare — how it works + how to test</div>";
+    hdr.innerHTML = "<div style='font:700 15px system-ui'>Snapshots &amp; Compare</div>";
     var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
     closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
     closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
-    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.6;";
-    var S = "margin:18px 0 7px;font:700 13px system-ui;color:#4338ca;";          // section head
-    var CARD = "background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin:6px 0;";
-    var WARN = "background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;margin:6px 0;color:#92400e;";
-    var GOOD = "background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 12px;margin:6px 0;color:#166534;";
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.55;";
     var code = function (t) { return "<code style='background:#eef2ff;color:#4338ca;border-radius:4px;padding:1px 5px;font:600 12px SF Mono,monospace'>" + t + "</code>"; };
+    var det = "margin:10px 0 0;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#f8fafc;";
+    var sum = "cursor:pointer;font:700 12px system-ui;color:#4338ca;outline:none;";
     body.innerHTML =
-      "<div style='" + CARD + "'><b>In one line:</b> <b>Save snapshot</b> keeps a copy of a result; <b>Compare</b> diffs the result currently on screen against a saved snapshot and shows what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span>, and <span style='color:#b45309'>changed</span>.</div>"
+      // ── the crisp part: 3 lines everyone reads ──
+      "<div style='font-size:13px'><b>Compare</b> diffs the rows <b>on screen now</b> against a <b>saved snapshot</b> → "
+      + "<span style='color:#059669'>+added</span> / <span style='color:#dc2626'>−removed</span> / <span style='color:#b45309'>~changed</span>. "
+      + "The current result doesn't need saving — just run the query. Save only to keep a run for later.</div>"
 
-      + "<div style='" + S + "'>What does Compare actually compare?</div>"
-      + "<div>It compares <b>all rows</b> of two full result sets — not a single record:</div>"
-      + "<ul style='margin:6px 0;padding-left:20px'>"
-      + "<li><b>Current</b> = the rows on screen now (your latest Fetch &amp; Export) — this does <b>not</b> need to be saved.</li>"
-      + "<li><b>Previous</b> = whichever snapshot you pick in the <i>compare to</i> dropdown.</li></ul>"
-      + "<div>Every row falls into one of four buckets, shown in the compare header: "
-      + "<span style='color:#059669'>+added</span> (key only in current), "
-      + "<span style='color:#dc2626'>−removed</span> (key only in snapshot), "
-      + "<span style='color:#b45309'>~changed</span> (same key, a value differs — it lists which field), "
-      + "and <b>unchanged</b>.</div>"
+      + "<div style='background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:9px 12px;margin:12px 0;color:#166534'>"
+      + "<b>Key = how rows are matched between runs.</b> Pick a <b>stable, unique ID</b> (e.g. " + code("Segmented_Entity_Id__c") + ").<br>"
+      + "<span style='color:#92400e'>✗ Don't use a JSON/hash column or a repeating value (like " + code("Delta_Type__c") + ") — the diff warns you if you do.</span></div>"
 
-      + "<div style='" + S + "'>The Key — the most important setting</div>"
-      + "<div>The Key is the column that answers <i>“is this the same record in both runs?”</i> The tool matches rows by the Key, then compares their other columns. A good key is <b>unique</b> (no two rows share it) and <b>stable</b> (doesn't change when the record is edited).</div>"
-      + "<div style='" + GOOD + "'>✓ Good key: a stable ID like " + code("Segmented_Entity_Id__c") + " or " + code("Id__c") + ". It stays the same across runs, so edits show up correctly as <b>~changed</b>.</div>"
-      + "<div style='" + WARN + "'>⚠ Avoid a <b>JSON / hash</b> column as the key (e.g. " + code("Hash_Activation_Record") + " or a JSON blob). When you edit the record, the hash/JSON itself changes → the key changes → the tool sees it as <b>1 removed + 1 added</b> instead of <b>1 changed</b>. Keep JSON/hash as a <i>normal</i> column — then its change is correctly flagged under <b>~changed</b>.</div>"
-      + "<div style='" + WARN + "'>⚠ Avoid a non-unique column (e.g. " + code("Delta_Type__c") + " = just I/D). Many rows collapse to one key; the diff warns <i>“N duplicate key(s) — first kept”</i> and the result is meaningless.</div>"
+      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>Test in 3 steps</div>"
+      + "<ol style='margin:0;padding-left:20px'>"
+      + "<li>Run a query → <b>Save snapshot</b> (name it <code>day1</code>).</li>"
+      + "<li>Later / next run: run the <b>same</b> query again.</li>"
+      + "<li>Pick <code>day1</code> → <b>Compare</b>. Done.</li></ol>"
+      + "<div style='font-size:11px;color:#64748b;margin-top:5px'>Prove it instantly: save, edit one non-key field in the org, re-run the same query, Compare → that row shows under ~changed.</div>"
 
-      + "<div style='" + S + "'>What is a “bucket”? (why a snapshot can “disappear”)</div>"
-      + "<div>Snapshots are filed by the <b>exact query text</b> — think <b>one folder per query</b>. Only spacing and letter-case are ignored. So these are <b>different folders</b> and never mix:</div>"
-      + "<ul style='margin:6px 0;padding-left:20px'>"
-      + "<li>" + code("… LIMIT 1") + " vs " + code("… LIMIT 2") + " → different bucket</li>"
-      + "<li>a different filter, column list, or table → different bucket</li></ul>"
-      + "<div>That's why a snapshot saved under " + code("LIMIT 1") + " won't appear in the dropdown when you run " + code("LIMIT 2") + ". To compare day-over-day, <b>run the exact same query</b> each time.</div>"
+      // ── everything else: collapsed, read only if curious ──
+      + "<details style='" + det + "'><summary style='" + sum + "'>Why doesn't my snapshot show up?</summary>"
+      + "<div style='margin-top:7px'>Snapshots are filed by the <b>exact query text</b> (one set per query). " + code("LIMIT 1") + " and " + code("LIMIT 2") + " — or any changed filter/column — are treated as different queries, so their snapshots don't mix. <b>Run the identical query</b> to compare over time.</div></details>"
 
-      + "<div style='" + S + "'>Step-by-step: test it in a real org</div>"
-      + "<div style='" + CARD + "'>"
-      + "<b>Day 1</b><br>1. Run your query (e.g. " + code("SELECT * FROM \"TDI_AA_…__dlm\" LIMIT 50") + ") → <b>▶ Fetch &amp; Export</b> → <b>👁 View Results</b>.<br>"
-      + "2. Set <b>Key</b> to a stable ID column.<br>"
-      + "3. Click <b>📌 Save snapshot</b>, name it <code>day1</code>.<br><br>"
-      + "<b>Day 2</b> (after an activation run / after editing records)<br>"
-      + "4. Run the <b>same query</b> again → Fetch &amp; Export → View Results.<br>"
-      + "5. Pick <code>day1</code> in <i>compare to</i> → <b>Compare</b>. You'll see added / removed / changed.<br>"
-      + "6. Want to keep day 2 too? Click <b>Save snapshot</b> → <code>day2</code>.<br><br>"
-      + "<b>Day 3</b><br>"
-      + "7. Run the same query → the dropdown now lists <code>day1</code> and <code>day2</code>.<br>"
-      + "8. Compare vs <code>day2</code> = what changed since day 2; compare vs <code>day1</code> = since day 1. "
-      + "It's a 2-way diff — you pick <b>one</b> snapshot at a time (max 5 kept per query).</div>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>More on the Key</summary>"
+      + "<div style='margin-top:7px'>A JSON/hash value <b>changes when the record is edited</b> → used as the key, an edited row looks like <b>removed + added</b> instead of <b>changed</b>. Keep JSON/hash as a normal column so its change is flagged under ~changed. A non-unique key makes rows collapse together (diff warns “duplicate key — first kept”).</div></details>"
 
-      + "<div style='" + GOOD + "'><b>Quick way to prove it works now</b> (no waiting): save a snapshot, edit one record's non-key field in the org, re-run the <b>same</b> SQL, Compare → that row appears under <b>~changed</b> with the exact field shown before → after.</div>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Day 1 / 2 / 3 &amp; multiple snapshots</summary>"
+      + "<div style='margin-top:7px'>Save <code>day1</code>, <code>day2</code>, … (max 5 per query). Compare is 2-way: pick <b>one</b> snapshot at a time — vs <code>day2</code> = changes since day 2, vs <code>day1</code> = since day 1.</div></details>"
 
-      + "<div style='" + S + "'>Edge cases the tool handles for you</div>"
-      + "<ul style='margin:6px 0;padding-left:20px'>"
-      + "<li><b>No key selected</b> → it won't guess; it warns and shows no diff.</li>"
-      + "<li><b>Duplicate keys</b> → warns “N duplicate key(s) — first kept”.</li>"
-      + "<li><b>Columns differ between runs</b> (schema drift) → warns which columns were added/removed; affected rows show as changed.</li>"
-      + "<li><b>First run / empty side</b> → everything shows as added (or removed) — expected.</li>"
-      + "<li><b>Too big to save</b> (&gt; ~5MB localStorage) → it tells you the size and does not half-save; use Download CSV to keep that run.</li>"
-      + "<li><b>No LIMIT</b> → saves every fetched row (up to 49,999). Confirm the “✓ saved N rows” matches the real total before trusting removed/added.</li></ul>"
-
-      + "<div style='font-size:11px;color:#94a3b8;margin-top:14px'>Snapshots live only in <b>this browser</b> (localStorage), per query, newest 5 kept. Clearing browser data removes them.</div>";
+      + "<details style='" + det + "'><summary style='" + sum + "'>Edge cases &amp; limits</summary>"
+      + "<ul style='margin:7px 0 0;padding-left:18px'>"
+      + "<li>No key → warns, no diff. Duplicate keys → warns “first kept”.</li>"
+      + "<li>Columns differ between runs → warns which were added/removed.</li>"
+      + "<li>Too big (&gt;~5MB) → tells you the size, doesn't half-save; use Download CSV.</li>"
+      + "<li>No LIMIT → saves all fetched rows (≤49,999); check the “saved N rows” count.</li>"
+      + "<li>Stored in <b>this browser</b> only; clearing browser data removes them.</li></ul></details>";
     box.appendChild(body);
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });

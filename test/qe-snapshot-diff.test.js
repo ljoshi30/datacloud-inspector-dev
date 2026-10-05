@@ -257,9 +257,10 @@ console.log("\n8. Source presence (independent qeSnap module wired)");
   ok("other-bucket helper defined", /function qeSnapOtherBucketCount\s*\(/.test(src));
   ok("in-tool help modal defined", /function openQeSnapHelp\s*\(/.test(src));
   ok("help button wired into toolbar", /helpBtn/.test(src) && /openQeSnapHelp\(\)/.test(src));
-  ok("help covers the Key + JSON/hash trap", /JSON\s*\/\s*hash|removed \+ added|remove\+add/i.test(src) && /stable ID/i.test(src));
-  ok("help covers bucket / identical-query rule", /bucket/i.test(src) && /identical/i.test(src));
-  ok("help has step-by-step day1/day2/day3 test steps", /Day 1/.test(src) && /Day 2/.test(src) && /Day 3/.test(src));
+  ok("help covers the Key + JSON/hash trap", /JSON\/hash|removed \+ added|remove\+add/i.test(src) && /stable,? unique ID|stable ID/i.test(src));
+  ok("help covers identical-query rule (buckets, collapsed)", /exact query text/i.test(src) && /identical query/i.test(src));
+  ok("help has a quick test (3 steps) + day1/day2/day3 detail", /Test in 3 steps/.test(src) && /day1/.test(src) && /day2/.test(src));
+  ok("long detail is collapsed behind <details> (scannable by default)", /<details/.test(src) && /<summary/.test(src));
   ok("inline hint warns about other buckets", /other quer/i.test(src));
   ok("inline hint warns non-unique key", /not unique/i.test(src));
 }
