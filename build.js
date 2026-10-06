@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "ext-only-strip.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "segment-apiname.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -158,7 +158,7 @@ try { new Function(publicCode); } catch (e) {
   process.exit(1);
 }
 // sanity: no in-dev entry points survive in the public code
-["openSegmentExport", "ensureExploreLauncher", "openExploreModal", "readSegmentRules", "openFocusPanel", "hideOtherForDmo"].forEach(sym => {
+["openSegmentExport", "ensureExploreLauncher", "openExploreModal", "readSegmentRules", "openFocusPanel", "hideOtherForDmo", "segApiInfo", "openSegApiPanel"].forEach(sym => {
   if (new RegExp("function\\s+" + sym + "\\b").test(publicCode)) {
     console.error("ERROR: in-dev function '" + sym + "' still defined in public build; aborting.");
     process.exit(1);

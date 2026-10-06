@@ -17026,166 +17026,196 @@ processJSON();
     }, 1000);
   }
 
-  // Segment page: show API names on hover (per-DMO tracking) — SEPARATE from if/else chain
+  /* @strip:start dev
+   * SEGMENT API-NAME DECORATOR (dev-only until approved for public).
+   * Shows the real API name of each attribute on the Segment builder — left palette
+   * (runtime_cdp-attribute-row / -attribute-group-row) AND used rules (simple/aggregation
+   * conditions). Reads the API name DIRECTLY off the element's LWC property (proven via
+   * DOM Probe v2/v3 — see memory data360-segment-builder-dom): no API call, no label-
+   * matching, no collision guessing. Replaces the OLD fetchDmo/labelToDevName approach,
+   * which matched by lowercased label (collision-prone) and targeted a data-tid="attr-row"
+   * DOM that no longer exists on this page.
+   *   • Hover tooltip: a floating chip near the row with object · field [· PK] [type].
+   *   • Toggle panel: "API names" list of every visible attribute + used rule, searchable.
+   * Zero mutation of SF's shadow DOM → survives SF re-renders, can't break the page. */
   if (detailPageType === "Segment") {
-    (function() {
-      var fieldsByDmo = {};   // "Individual" → { "contact type": "TDI_Contact_Type__c", ... }
-      var fetchingDmos = {};  // track in-flight requests
-      var currentDmo = "";    // currently displayed DMO label
-      var labelToDevName = {}; // "Individual Additional Information" → "TDI_TDI_GI_Individual_Additional__dlm"
-      var dmoListLoaded = false;
-
-      // Step 1: Fetch ALL DMO names (label→devName map) — one API call
-      function loadDmoList(callback) {
-        if (dmoListLoaded) { callback(); return; }
-        var reqId = "dclist-" + Math.random().toString(36).slice(2, 8);
-        function onList(ev) {
-          if (!ev.data || ev.data.__dcRes !== "dc-dmo-list" || ev.data.id !== reqId) return;
-          window.removeEventListener("message", onList);
-          if (ev.data.ok && ev.data.resp) {
-            // Response could be array of DMOs or object with array
-            var dmos = Array.isArray(ev.data.resp) ? ev.data.resp : (ev.data.resp.dataModelObject || ev.data.resp.dataModelObjects || ev.data.resp.objects || []);
-            dmos.forEach(function(d) {
-              var label = d.label || d.masterLabel || "";
-              var name = d.name || d.developerName || "";
-              if (label && name) labelToDevName[label.toLowerCase()] = name;
-            });
-            dmoListLoaded = true;
-          } else {
-          }
-          callback();
+    (function segApiNameFeature() {
+      function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+      // Classify a segment element and extract its API-name info, or null. Reads the
+      // element's own LWC prop directly — the authoritative source, no guessing.
+      function segApiInfo(el) {
+        if (!el) return null;
+        var an = segSafeGet(el, "attributeNode");
+        if (an && (an.fieldApiName || an.objectApiName)) {
+          return { kind: "attribute", label: an.label || "", fieldApi: an.fieldApiName || "", objectApi: an.objectApiName || "", isPk: !!an.isPrimaryKey, fieldType: an.fieldType || "" };
         }
-        window.addEventListener("message", onList);
-        window.postMessage({ __dcReq: "dc-dmo-list", id: reqId, dataspace: "TDI" }, "*");
-        setTimeout(function() { window.removeEventListener("message", onList); callback(); }, 8000);
+        var gn = segSafeGet(el, "groupNode");
+        if (gn && gn.objectApiName) {
+          return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
+        }
+        var sc = segSafeGet(el, "simpleCondition");
+        if (sc) {
+          var subj = sc.subject || {};
+          return { kind: "rule", label: sc.label || "", fieldApi: (subj.fieldApiName || sc.attributeName || ""), objectApi: subj.objectApiName || "", fieldType: "" };
+        }
+        var ac = segSafeGet(el, "aggregationCondition") || segSafeGet(el, "calculatedInsightCondition");
+        if (ac && ac.subject) {
+          return { kind: "rule", label: ac.label || "", fieldApi: ac.subject.fieldApiName || ac.attributeName || "", objectApi: ac.subject.objectApiName || "", fieldType: "" };
+        }
+        return null;
+      }
+      function segChipText(info) {
+        if (!info) return "";
+        if (info.kind === "group") return info.objectApi;
+        if (!info.fieldApi) return info.objectApi || "";
+        return info.fieldApi;
+      }
+      function segTooltip(info) {
+        if (!info) return "";
+        if (info.kind === "group") return "DMO: " + info.objectApi + (info.pkApi ? "  (PK: " + info.pkApi + ")" : "");
+        var parts = [];
+        if (info.objectApi) parts.push(info.objectApi);
+        if (info.fieldApi) parts.push(info.fieldApi);
+        var s = parts.join(" · ");
+        if (info.isPk) s += "  • PK";
+        if (info.fieldType) s += "  [" + info.fieldType + "]";
+        return s;
+      }
+      var SEG_TAGS = {
+        "runtime_cdp-attribute-row": 1, "runtime_cdp-attribute-group-row": 1,
+        "runtime_cdp-segment-builder-simple-condition": 1,
+        "runtime_cdp-segment-builder-aggregation-condition": 1,
+        "runtime_cdp-segment-builder-calculated-insight-condition": 1
+      };
+      // Collect every decoratable element currently in the (shadow) DOM.
+      function collectSegEls() {
+        var out = [];
+        (function walk(root, depth) {
+          if (depth > 14) return;
+          var all; try { all = root.querySelectorAll("*"); } catch (e) { return; }
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (SEG_TAGS[(el.tagName || "").toLowerCase()]) out.push(el);
+            if (el.shadowRoot) walk(el.shadowRoot, depth + 1);
+          }
+        })(document, 0);
+        return out;
       }
 
-      // Fetch DMO fields using exact dev name from lookup
-      function fetchDmo(label, callback) {
-        if (fieldsByDmo[label]) { callback(); return; }
-        if (fetchingDmos[label]) return;
-        fetchingDmos[label] = true;
-        var devName = labelToDevName[label.toLowerCase()];
-        if (!devName) {
-          fetchingDmos[label] = false;
-          return;
-        }
-        var reqId = "dcseg-" + Math.random().toString(36).slice(2, 8);
-        var done = false;
-        function handler(ev) {
-          if (done || !ev.data || ev.data.__dcRes !== "dc-dmo-fields" || ev.data.id !== reqId) return;
-          done = true; window.removeEventListener("message", handler);
-          if (ev.data.ok && ev.data.resp && ev.data.resp.fields && ev.data.resp.fields.length > 0) {
-            fieldsByDmo[label] = {};
-            ev.data.resp.fields.forEach(function(f) { fieldsByDmo[label][f.label.toLowerCase()] = f.name; });
-            fetchingDmos[label] = false;
-            callback();
-          } else {
-            fetchingDmos[label] = false;
-          }
-        }
-        window.addEventListener("message", handler);
-        window.postMessage({ __dcReq: "dc-dmo-fields", id: reqId, dmoName: devName, dataspace: "TDI" }, "*");
-        setTimeout(function() { if (!done) { done = true; window.removeEventListener("message", handler); fetchingDmos[label] = false; } }, 5000);
+      // ── Floating hover chip (overlay — never mutates SF's shadow DOM) ───────────
+      var tip = null;
+      function ensureTip() {
+        if (tip) return tip;
+        tip = document.createElement("div");
+        tip.id = "dc-seg-api-tip";
+        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.4 SFMono-Regular,Menlo,monospace;padding:5px 9px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .1s;";
+        document.body.appendChild(tip);
+        return tip;
       }
+      function showTip(info, x, y) {
+        var t = ensureTip();
+        t.textContent = segTooltip(info);
+        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 470) + "px";
+        t.style.top = (y + 16) + "px";
+        t.style.opacity = "1";
+      }
+      function hideTip() { if (tip) tip.style.opacity = "0"; }
 
-      // Apply tooltips using ONLY the current DMO's field map
-      function applyTooltips() {
-        var map = fieldsByDmo[currentDmo];
-        if (!map) return;
-        function walk(root, depth) {
-          if (depth > 12) return;
-          var rows = root.querySelectorAll("[data-tid]");
-          for (var i = 0; i < rows.length; i++) {
-            if (rows[i].getAttribute("data-tid") !== "attr-row") continue;
-            var nameDiv = rows[i].querySelector(".name");
-            if (!nameDiv) continue;
-            var label = nameDiv.textContent.trim();
-            var api = map[label.toLowerCase()];
-            if (api) {
-              nameDiv.title = api;
-              nameDiv.style.cursor = "help";
-            } else {
-              nameDiv.title = "";
-              nameDiv.style.cursor = "";
+      // One delegated mousemove handles ALL rows (works through shadow DOM via composedPath).
+      function onMove(e) {
+        var path = (e.composedPath && e.composedPath()) || [];
+        var info = null;
+        for (var i = 0; i < path.length; i++) {
+          var el = path[i];
+          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) { info = segApiInfo(el); break; }
+        }
+        if (info && (info.fieldApi || info.objectApi)) showTip(info, e.clientX, e.clientY);
+        else hideTip();
+      }
+      document.addEventListener("mousemove", onMove, true);
+
+      // ── Toggle panel: list every visible attribute + rule with its API name ──────
+      function buildPanelList(infos) {
+        var byObj = {}, order = [];
+        infos.filter(Boolean).forEach(function (i) {
+          if (i.kind === "group" || !i.fieldApi) return;
+          var o = i.objectApi || "(unknown)";
+          if (!byObj[o]) { byObj[o] = {}; order.push(o); }
+          byObj[o][i.fieldApi] = i.label || "";
+        });
+        return order.map(function (o) {
+          return { object: o, fields: Object.keys(byObj[o]).sort().map(function (f) { return { fieldApi: f, label: byObj[o][f] }; }) };
+        });
+      }
+      function openSegApiPanel() {
+        var old = document.getElementById("dc-seg-api-panel"); if (old) { old.remove(); return; }
+        var infos = collectSegEls().map(segApiInfo).filter(Boolean);
+        var list = buildPanelList(infos);
+        var usedRules = infos.filter(function (i) { return i.kind === "rule"; });
+        var panel = document.createElement("div");
+        panel.id = "dc-seg-api-panel";
+        panel.style.cssText = "position:fixed;top:70px;right:18px;z-index:2147483646;width:390px;max-height:80vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
+        var hdr = document.createElement("div");
+        hdr.style.cssText = "padding:11px 14px;background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
+        hdr.innerHTML = "<b style='font:700 13px system-ui'>Segment API names</b>";
+        var x = document.createElement("button"); x.innerHTML = "&times;"; x.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;"; x.onclick = function () { panel.remove(); };
+        hdr.appendChild(x); panel.appendChild(hdr);
+        var search = document.createElement("input");
+        search.placeholder = "Search label or API name…";
+        search.style.cssText = "margin:10px 14px 6px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;font:12px system-ui;";
+        panel.appendChild(search);
+        var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:4px 14px 14px;min-height:0;";
+        panel.appendChild(body);
+        var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+        function render(q) {
+          q = (q || "").trim().toLowerCase();
+          var html = "";
+          if (usedRules.length) {
+            var ur = usedRules.filter(function (r) { return !q || (r.label + " " + r.fieldApi + " " + r.objectApi).toLowerCase().indexOf(q) >= 0; });
+            if (ur.length) {
+              html += "<div style='font:700 11px system-ui;color:#7c3aed;margin:8px 0 4px'>USED IN THIS SEGMENT (" + ur.length + ")</div>";
+              ur.forEach(function (r) { html += "<div style='padding:4px 0;border-bottom:1px solid #f1f5f9'><div style='font-weight:600'>" + esc(r.label || r.fieldApi) + "</div><div style='font:600 11px SFMono-Regular,monospace;color:#475569'>" + esc(r.objectApi) + " · " + esc(r.fieldApi) + "</div></div>"; });
             }
           }
-          var els = root.querySelectorAll("*");
-          for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) walk(els[j].shadowRoot, depth + 1); }
-        }
-        walk(document, 0);
-      }
-
-      // Detect which DMO is currently shown from "Attributes in X" heading
-      function detectCurrentDmo() {
-        var found = "";
-        function walk(root, depth) {
-          if (depth > 8 || found) return;
-          root.querySelectorAll("*").forEach(function(el) {
-            if (found) return;
-            var txt = (el.textContent || "").trim();
-            if (/^Attributes in /i.test(txt) && txt.length < 60) {
-              found = txt.replace(/^Attributes in\s*/i, "").trim();
-            }
+          list.forEach(function (grp) {
+            var fields = grp.fields.filter(function (f) { return !q || (f.label + " " + f.fieldApi + " " + grp.object).toLowerCase().indexOf(q) >= 0; });
+            if (!fields.length) return;
+            html += "<div style='font:700 11px SFMono-Regular,monospace;color:#0d6efd;margin:12px 0 4px;word-break:break-all'>" + esc(grp.object) + "</div>";
+            fields.forEach(function (f) { html += "<div style='padding:3px 0;display:flex;justify-content:space-between;gap:8px'><span>" + esc(f.label) + "</span><span style='font:600 11px SFMono-Regular,monospace;color:#475569;word-break:break-all;text-align:right'>" + esc(f.fieldApi) + "</span></div>"; });
           });
-          root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !found) walk(el.shadowRoot, depth + 1); });
+          if (!html) html = "<div style='color:#94a3b8;padding:12px 0'>No attributes found. Open a DMO's attributes in the left panel, then reopen this.</div>";
+          body.innerHTML = html;
         }
-        walk(document, 0);
-        return found;
+        search.oninput = function () { render(search.value); };
+        render("");
+        document.body.appendChild(panel);
+        try { if (typeof makeDraggable === "function") makeDraggable(panel, hdr); } catch (e) {}
       }
 
-      // Main check: detect DMO, fetch if needed, apply tooltips
-      function checkAndAnnotate() {
-        var dmo = detectCurrentDmo();
-        if (!dmo) {
-          // Fallback: try "Segment On" text for initial load
-          function findSegOn(root, depth) {
-            if (depth > 8 || dmo) return;
-            root.querySelectorAll("*").forEach(function(el) {
-              if (dmo) return;
-              var txt = (el.textContent || "").trim();
-              if (/Segment On/i.test(txt) && txt.length < 80 && el.children.length < 5) {
-                var m = txt.match(/Segment On\s*[:\s]*(.+)/i);
-                if (m) dmo = m[1].trim();
-              }
-            });
-            root.querySelectorAll("*").forEach(function(el) { if (el.shadowRoot && !dmo) findSegOn(el.shadowRoot, depth + 1); });
-          }
-          findSegOn(document, 0);
-        }
-        if (!dmo) return;
-
-        if (dmo !== currentDmo) {
-          currentDmo = dmo;
-          // Clear old tooltips (they belong to previous DMO)
-          function clearTitles(root, depth) {
-            if (depth > 12) return;
-            var rows = root.querySelectorAll("[data-tid]");
-            for (var i = 0; i < rows.length; i++) {
-              if (rows[i].getAttribute("data-tid") !== "attr-row") continue;
-              var nd = rows[i].querySelector(".name");
-              if (nd) { nd.title = ""; nd.style.cursor = ""; }
-            }
-            var els = root.querySelectorAll("*");
-            for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) clearTitles(els[j].shadowRoot, depth + 1); }
-          }
-          clearTitles(document, 0);
-        }
-
-        fetchDmo(currentDmo, applyTooltips);
+      // Launch button (small FAB) — distinct id so it coexists with other launchers.
+      function ensureSegApiBtn() {
+        if (document.getElementById("dc-seg-api-btn")) return;
+        var btn = document.createElement("button");
+        btn.id = "dc-seg-api-btn";
+        btn.title = "Show API names of segment attributes (hover any row, or click for the full list)";
+        btn.textContent = "{ } API names";
+        btn.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483646;border:none;border-radius:10px;padding:9px 14px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 4px 16px rgba(124,58,237,.45);";
+        btn.onclick = openSegApiPanel;
+        document.body.appendChild(btn);
       }
+      // Wait for the builder to render, then show the button (bounded retries).
+      var tries = 0;
+      var iv = setInterval(function () {
+        tries++;
+        if (collectSegEls().length) { ensureSegApiBtn(); clearInterval(iv); }
+        else if (tries >= 20) clearInterval(iv);
+      }, 1000);
 
-      // Run on initial load — first get ALL DMO names, then annotate
-      setTimeout(function() { loadDmoList(checkAndAnnotate); }, 3000);
-
-      // Watch for DOM changes (user navigates between DMOs)
-      var debounceTimer = null;
-      new MutationObserver(function() {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(checkAndAnnotate, 500);
-      }).observe(document.body, { childList: true, subtree: true });
+      // expose for debugging/tests-in-browser (harmless)
+      try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
     })();
   }
+  /* @strip:end */
 
   if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
