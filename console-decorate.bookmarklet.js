@@ -17060,6 +17060,20 @@ processJSON();
   if (detailPageType === "Segment" || detailPageType === "Activation") {
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+      // Readable join-path from a condition's .path/.joinPath (array of hops; each hop a
+      // pair [{objectApiName,fieldApiName},{objectApiName,fieldApiName}]). "" for direct.
+      function segPathString(pathArr) {
+        if (!pathArr || !pathArr.length) return "";
+        var hops = [];
+        for (var i = 0; i < pathArr.length; i++) {
+          var hop = pathArr[i]; if (!hop || !hop.length) continue;
+          var a = hop[0] || {}, b = hop[1] || {};
+          var left = (a.objectApiName || "") + (a.fieldApiName ? "." + a.fieldApiName : "");
+          var right = (b.objectApiName || "") + (b.fieldApiName ? "." + b.fieldApiName : "");
+          if (left && right) hops.push(left + " → " + right); else if (left || right) hops.push(left || right);
+        }
+        return hops.join("  ⇒  ");
+      }
       // Classify a segment element and extract its API-name info, or null. Reads the
       // element's own LWC prop directly — the authoritative source, no guessing.
       function segApiInfo(el) {
@@ -17085,7 +17099,9 @@ processJSON();
           var subj = c.subject || {};
           var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
-          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
+          // aggregate conditions nest the real field in .filter; the join path is on .path/.joinPath
+          if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", path: segPathString(c.path || c.joinPath || "") };
         }
         // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
         var ral = segSafeGet(el, "relatedAttributesLimit");
@@ -17095,10 +17111,10 @@ processJSON();
         // ACTIVATION drag chip / quick-attribute row → API name on .details
         var dt = segSafeGet(el, "details");
         if (dt && typeof dt === "object") {
-          var ds = dt.subject || {};
+          var ds = dt.subject || (dt.filter && dt.filter.subject) || {};
           var df = ds.fieldApiName || dt.fieldApiName || dt.targetFieldName || dt.attributeName || "";
-          var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || "";
-          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "" };
+          var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || dt.containerObjectApiName || "";
+          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "", path: segPathString(dt.path || dt.joinPath || "") };
         }
         // ACTIVATION main attribute-table cell → only {rowUid,name}; join by uid to the
         // datatable .data[] (label/output/object) + activation-summary.includedAttributes[]
@@ -17161,6 +17177,7 @@ processJSON();
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
         if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
+        if (info.path) s += "\nPath: " + info.path;   // related-object join path (shown on edit only in SF)
         return s;
       }
       var SEG_TAGS = {
@@ -17215,7 +17232,9 @@ processJSON();
         if (tip) return tip;
         tip = document.createElement("div");
         tip.id = "dc-seg-api-tip";
-        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.4 SFMono-Regular,Menlo,monospace;padding:5px 9px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .1s;";
+        // white-space:pre-wrap so the "\nPath: …" line renders on its own line and long
+        // paths wrap instead of overflowing; cap width so it stays readable.
+        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.5 SFMono-Regular,Menlo,monospace;padding:6px 10px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:520px;white-space:pre-wrap;word-break:break-word;opacity:0;transition:opacity .1s;";
         document.body.appendChild(tip);
         return tip;
       }
@@ -17223,7 +17242,7 @@ processJSON();
         var t = ensureTip();
         // extra hint that a click copies — only useful while the feature is on
         t.textContent = segTooltip(info) + "   ⧉ click to copy";
-        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 470) + "px";
+        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 540) + "px";
         t.style.top = (y + 16) + "px";
         t.style.opacity = "1";
       }

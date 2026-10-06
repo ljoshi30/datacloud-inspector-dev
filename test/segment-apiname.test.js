@@ -43,7 +43,10 @@ function segApiInfo(el) {
     var subj = c.subject || {};
     var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
     var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
-    if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
+    // related conditions carry a join path on .path/.joinPath; aggregates nest the field in .filter
+    if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
+    var path = c.path || c.joinPath || "";
+    if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", path: segPathString(path) };
   }
   // 4) ACTIVATION: a drag chip / quick-attribute row — API name on .details
   var dt = safeGet(el, "details");
@@ -99,7 +102,42 @@ function segTooltip(info) {
   var s = parts.join(" · ");
   if (info.isPk) s += "  • PK";
   if (info.fieldType) s += "  [" + info.fieldType + "]";
+  if (info.ambiguous) s += "  (?)";
+  if (info.path) s += "\nPath: " + info.path;
   return s;
+}
+
+// Build a readable join-path string from a condition's path/joinPath (array of hops,
+// each hop = [{objectApiName,fieldApiName},{objectApiName,fieldApiName}]).
+function segPathString(pathArr) {
+  if (!pathArr || !pathArr.length) return "";
+  var hops = [];
+  for (var i = 0; i < pathArr.length; i++) {
+    var hop = pathArr[i];
+    if (!hop || !hop.length) continue;
+    var a = hop[0] || {}, b = hop[1] || {};
+    var left = (a.objectApiName || "") + (a.fieldApiName ? "." + a.fieldApiName : "");
+    var right = (b.objectApiName || "") + (b.fieldApiName ? "." + b.fieldApiName : "");
+    if (left && right) hops.push(left + " → " + right);
+    else if (left || right) hops.push(left || right);
+  }
+  return hops.join("  ⇒  ");
+}
+
+// ── 0. path string builder ──────────────────────────────────────────────────────
+console.log("\n0. segPathString — related-object join path");
+{
+  var path = [
+    [{ objectApiName: "TDI_UnifiedIndividualApp6__dlm", fieldApiName: "Id__c" }, { objectApiName: "TDI_UnifiedContactPointEmailApp6__dlm", fieldApiName: "PartyId__c" }]
+  ];
+  eq("single hop", segPathString(path), "TDI_UnifiedIndividualApp6__dlm.Id__c → TDI_UnifiedContactPointEmailApp6__dlm.PartyId__c");
+  var multi = [
+    [{ objectApiName: "A__dlm", fieldApiName: "x__c" }, { objectApiName: "B__dlm", fieldApiName: "y__c" }],
+    [{ objectApiName: "B__dlm", fieldApiName: "z__c" }, { objectApiName: "C__dlm", fieldApiName: "w__c" }]
+  ];
+  eq("multi hop joined with ⇒", segPathString(multi), "A__dlm.x__c → B__dlm.y__c  ⇒  B__dlm.z__c → C__dlm.w__c");
+  eq("empty/null path → ''", segPathString(null), "");
+  eq("direct condition (no path) → ''", segPathString([]), "");
 }
 
 // ── 1. left-palette attribute ─────────────────────────────────────────────────────
@@ -160,6 +198,19 @@ console.log("\n3c. RANK & LIMIT / aggregation / CI conditions also resolve");
 }
 
 // ── 3d. ACTIVATION — drag-item chip (.details) ──────────────────────────────────────
+console.log("\n3c2. related condition carries a join PATH → tooltip shows it");
+{
+  var rel = segApiInfo({ simpleCondition: {
+    attributeName: "EmailAddress__c",
+    subject: { objectApiName: "TDI_UnifiedContactPointEmailApp6__dlm", fieldApiName: "EmailAddress__c" },
+    path: [[{ objectApiName: "TDI_UnifiedIndividualApp6__dlm", fieldApiName: "Id__c" }, { objectApiName: "TDI_UnifiedContactPointEmailApp6__dlm", fieldApiName: "PartyId__c" }]]
+  } });
+  ok("path captured on info", !!rel.path);
+  ok("tooltip includes a Path: line", /\nPath: .+→.+/.test(segTooltip(rel)));
+  var direct = segApiInfo({ simpleCondition: { attributeName: "FirstName__c", subject: { objectApiName: "TDI_UnifiedIndividualApp6__dlm", fieldApiName: "FirstName__c" }, path: null } });
+  ok("direct condition has NO path line", !/\nPath:/.test(segTooltip(direct)));
+}
+
 console.log("\n3d. activation drag-item → .details.fieldApiName / .subject");
 {
   var quick = segApiInfo({ details: { label: "Segment Code", fieldApiName: "Segment_Code__c", targetObjectName: "TDI_UnifiedIndividualTdir__dlm", primaryObjectName: "TDI_UnifiedIndividualTdir__dlm" } });
@@ -337,6 +388,8 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("LABEL fallback for chips/summary lines (built from real props only)", /function segBuildLabelIndex\s*\(/.test(src) && /function segLabelLookup\s*\(/.test(src));
   ok("label fallback strips trailing × and leading index", /\[×✕✖xX\]|\\s\*\[×/.test(src) || /replace\(\/\\s\*\[/.test(src));
   ok("ambiguous label marked (?), never silently wrong", /ambiguous/.test(src) && /\(\?\)/.test(src));
+  ok("PATH: builds join-path string from condition .path/.joinPath", /function segPathString\s*\(/.test(src));
+  ok("PATH: tooltip shows a Path line for related conditions", /Path: /.test(src) || /\\nPath/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

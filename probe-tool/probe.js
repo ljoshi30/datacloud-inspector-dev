@@ -1,15 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v6 — Activation Summary panel internals ("Attributes Included")
+ * DOM PROBE v7 — Segment condition CONTAINER PATH values
  *
- * We already have runtime_cdp-activation-summary.includedAttributes[] = ordered
- * {uid,label,attributeName,entityName}. To show API names on each line of the
- * "Attributes Included (N)" list WITHOUT guessing, we need its INTERNAL DOM: what
- * element each line is, whether a line carries an index/uid/data-* we can map to
- * includedAttributes[i], and the visible text per line. v6 dumps exactly that.
+ * Earlier probes showed condition elements expose containerPathForDisplay /
+ * containerPath / containerJoinPath (+ simpleCondition.path/joinPath/pathForDisplay)
+ * but we never captured their VALUES. v7 dumps exactly those, per condition, so we
+ * can show the path on hover (the "Container Path" that today only appears on edit)
+ * and add it to the export — WITHOUT guessing the shape.
  *
+ * Run on the SEGMENT page with the Insurance Policy / related conditions visible.
  * Read-only. Copies JSON to clipboard; also window.__DOM_PROBE.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe6() {
+(function DomProbe7() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -22,52 +23,53 @@
     return acc;
   }
   function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
-  function ownText(el) {
-    var s = "";
-    try { for (var i = 0; i < el.childNodes.length; i++) { var c = el.childNodes[i]; if (c.nodeType === 3) { var t = (c.nodeValue || "").trim(); if (t) s += t + " "; } } } catch (e) {}
-    return s.trim();
+  function g(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+  function sketch(v, d) {
+    d = d || 0;
+    if (v == null) return v;
+    var t = typeof v;
+    if (t === "function") return undefined;
+    if (t !== "object") return (t === "string" && v.length > 300) ? v.slice(0, 300) + "…" : v;
+    if (d >= 4) return Array.isArray(v) ? ("array[" + v.length + "]") : "obj";
+    if (Array.isArray(v)) return v.slice(0, 8).map(function (x) { return sketch(x, d + 1); });
+    var out = {}, keys; try { keys = Object.keys(v); } catch (e) { return "obj?"; }
+    keys.slice(0, 30).forEach(function (k) { try { var s = sketch(v[k], d + 1); if (s !== undefined) out[k] = s; } catch (e) {} });
+    return out;
   }
-  function fullText(el) { try { return (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80); } catch (e) { return ""; } }
-  function attrsOf(el) {
-    var o = {};
-    try { for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; o[a.name] = (a.value || "").slice(0, 40); } } catch (e) {}
-    return o;
-  }
-  function safeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+  var COND = {
+    "runtime_cdp-segment-builder-simple-condition": 1,
+    "runtime_cdp-segment-builder-aggregation-condition": 1,
+    "runtime_cdp-segment-builder-calculated-insight-condition": 1,
+    "runtime_cdp-segment-builder-condition-set": 1,
+    "runtime_cdp-canvas-item": 1
+  };
+  // path-related prop names to capture (element-level + inside the condition object)
+  var PATH_PROPS = ["containerPathForDisplay", "containerPath", "containerJoinPath", "pathForDisplay", "path", "joinPath", "displayPath"];
 
   var ALL = deepAll(document, []);
-  var summary = ALL.filter(function (el) { return tagOf(el) === "runtime_cdp-activation-summary"; })[0];
-
-  var out = { _tool: "dom-probe", _version: 6, page: location.href };
-  if (!summary) {
-    out.error = "runtime_cdp-activation-summary not found — scroll so the 'Attributes Included' panel is visible, then re-run.";
-  } else {
-    // the ordered data model we want to map lines onto
-    var inc = safeGet(summary, "includedAttributes") || [];
-    out.includedAttributes = inc.slice(0, 60).map(function (a) { return { uid: a && a.uid, label: a && a.label, attributeName: a && a.attributeName, entityName: a && a.entityName }; });
-
-    // dump the summary's shadow tree, but ONLY leaf-ish nodes that show text (the lines),
-    // with their tag, attrs, own-text, and a hint whether an ancestor has a uid/index attr.
-    var lines = [];
-    (function walk(root, depth) {
-      if (depth > 10) return;
-      var kids; try { kids = root.children; } catch (e) { return; }
-      for (var i = 0; i < (kids ? kids.length : 0); i++) {
-        var el = kids[i];
-        var ot = ownText(el);
-        var at = attrsOf(el);
-        var interesting = ot || Object.keys(at).some(function (k) { return /uid|index|key|data-|id$/i.test(k); });
-        if (interesting && lines.length < 80) {
-          lines.push({ tag: tagOf(el), ownText: ot.slice(0, 60), text: fullText(el), attrs: at, childCount: (el.children ? el.children.length : 0) });
-        }
-        if (el.shadowRoot) walk(el.shadowRoot, depth + 1);
-        walk(el, depth + 1);
+  var samples = [];
+  ALL.forEach(function (el) {
+    if (!COND[tagOf(el)]) return;
+    if (samples.length >= 12) return;
+    var rec = { tag: tagOf(el), elementPath: {}, conditionPath: {} };
+    PATH_PROPS.forEach(function (p) { var v = g(el, p); if (v != null && v !== "") rec.elementPath[p] = sketch(v, 0); });
+    // the inner condition object (simpleCondition / aggregationCondition / item.details…)
+    ["simpleCondition", "aggregationCondition", "calculatedInsightCondition", "condition", "item"].forEach(function (cp) {
+      var c = g(el, cp);
+      if (c && typeof c === "object") {
+        var inner = {};
+        PATH_PROPS.forEach(function (p) { var v = g(c, p); if (v != null && v !== "") inner[p] = sketch(v, 0); });
+        var subj = g(c, "subject"); if (subj) inner.subject = sketch(subj, 0);
+        if (g(c, "attributeName")) inner.attributeName = g(c, "attributeName");
+        if (Object.keys(inner).length) rec.conditionPath[cp] = inner;
       }
-    })(summary.shadowRoot || summary, 0);
-    out.summaryLineNodes = lines;
-    out.summaryAttrs = attrsOf(summary);
-  }
+    });
+    // only keep conditions that actually carry some path info (the related ones)
+    if (Object.keys(rec.elementPath).length || Object.keys(rec.conditionPath).length) samples.push(rec);
+  });
 
+  var out = { _tool: "dom-probe", _version: 7, page: location.href, note: "container-path prop VALUES on condition elements", conditionsWithPath: samples.length, samples: samples };
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
 
@@ -81,22 +83,22 @@
   panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:320px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v6</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v7</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
-    + "<div id='dc-probe-status' style='font-weight:700;color:" + (summary ? "#059669" : "#b45309") + ";margin-bottom:8px'>" + (summary ? ("✓ Copied (" + kb + " KB) — summary found") : "⚠ Summary panel not found") + "</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.5'>" + (summary ? ((out.includedAttributes ? out.includedAttributes.length : 0) + " included attrs, " + ((out.summaryLineNodes || []).length) + " line nodes") : "Scroll so 'Attributes Included' is visible, then re-run.") + "</div>"
+    + "<div id='dc-probe-status' style='font-weight:700;color:" + (samples.length ? "#059669" : "#b45309") + ";margin-bottom:8px'>" + (samples.length ? ("✓ Copied (" + kb + " KB) — " + samples.length + " conditions with path") : "⚠ No path props found") + "</div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.5'>" + (samples.length ? "Paste it back." : "Scroll so the Insurance Policy / related conditions are visible, then re-run.") + "</div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
-  copyText(json, function (ok) { if (!ok && summary) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
+  copyText(json, function (ok) { if (!ok && samples.length) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
   panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v6-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
+  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v7-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v6 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v7 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
