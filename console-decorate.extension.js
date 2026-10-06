@@ -17147,18 +17147,34 @@ processJSON();
           return { object: o, fields: Object.keys(byObj[o]).sort().map(function (f) { return { fieldApi: f, label: byObj[o][f] }; }) };
         });
       }
+      // Small "copied" toast (self-contained; no dependency on other features).
+      function segToast(msg) {
+        var t = document.createElement("div");
+        t.textContent = msg;
+        t.style.cssText = "position:fixed;bottom:84px;right:24px;z-index:2147483647;background:#059669;color:#fff;font:600 12px system-ui;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transition:opacity .15s;";
+        document.body.appendChild(t);
+        requestAnimationFrame(function () { t.style.opacity = "1"; });
+        setTimeout(function () { t.style.opacity = "0"; setTimeout(function () { t.remove(); }, 200); }, 1400);
+      }
+      function segCopy(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { segToast("Copied " + text); }, function () { segToast("Copy blocked"); });
+        else { try { var ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); segToast("Copied " + text); } catch (e) { segToast("Copy blocked"); } }
+      }
+      // Panel opened FROM the launcher menu. Anchors bottom-right (same side as the FAB),
+      // adds click-to-copy on any API name, search, and counts. Toggles if already open.
       function openSegApiPanel() {
         var old = document.getElementById("dc-seg-api-panel"); if (old) { old.remove(); return; }
         var infos = collectSegEls().map(segApiInfo).filter(Boolean);
         var list = buildPanelList(infos);
         var usedRules = infos.filter(function (i) { return i.kind === "rule"; });
+        var totalFields = list.reduce(function (n, g) { return n + g.fields.length; }, 0);
         var panel = document.createElement("div");
         panel.id = "dc-seg-api-panel";
-        panel.style.cssText = "position:fixed;top:70px;right:18px;z-index:2147483646;width:390px;max-height:80vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
+        panel.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483646;width:400px;max-height:72vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
         var hdr = document.createElement("div");
         hdr.style.cssText = "padding:11px 14px;background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-        hdr.innerHTML = "<b style='font:700 13px system-ui'>Segment API names</b>";
-        var x = document.createElement("button"); x.innerHTML = "&times;"; x.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;"; x.onclick = function () { panel.remove(); };
+        hdr.innerHTML = "<div><div style='font:700 13px system-ui'>Segment API names</div><div style='font:400 10px system-ui;opacity:.85'>" + usedRules.length + " used &bull; " + totalFields + " available &bull; click any to copy</div></div>";
+        var x = document.createElement("button"); x.innerHTML = "&times;"; x.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;flex:none;"; x.onclick = function () { panel.remove(); };
         hdr.appendChild(x); panel.appendChild(hdr);
         var search = document.createElement("input");
         search.placeholder = "Search label or API name…";
@@ -17167,6 +17183,8 @@ processJSON();
         var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:4px 14px 14px;min-height:0;";
         panel.appendChild(body);
         var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+        // a clickable api-name chip (copies on click)
+        var apiCell = function (api) { return "<span class='dc-seg-copy' data-api='" + esc(api) + "' title='Click to copy' style='font:600 11px SFMono-Regular,Menlo,monospace;color:#4338ca;background:#eef2ff;border-radius:4px;padding:1px 6px;cursor:pointer;word-break:break-all'>" + esc(api) + "</span>"; };
         function render(q) {
           q = (q || "").trim().toLowerCase();
           var html = "";
@@ -17174,44 +17192,33 @@ processJSON();
             var ur = usedRules.filter(function (r) { return !q || (r.label + " " + r.fieldApi + " " + r.objectApi).toLowerCase().indexOf(q) >= 0; });
             if (ur.length) {
               html += "<div style='font:700 11px system-ui;color:#7c3aed;margin:8px 0 4px'>USED IN THIS SEGMENT (" + ur.length + ")</div>";
-              ur.forEach(function (r) { html += "<div style='padding:4px 0;border-bottom:1px solid #f1f5f9'><div style='font-weight:600'>" + esc(r.label || r.fieldApi) + "</div><div style='font:600 11px SFMono-Regular,monospace;color:#475569'>" + esc(r.objectApi) + " · " + esc(r.fieldApi) + "</div></div>"; });
+              ur.forEach(function (r) { html += "<div style='padding:5px 0;border-bottom:1px solid #f1f5f9'><div style='font-weight:600;margin-bottom:2px'>" + esc(r.label || r.fieldApi) + "</div><div style='word-break:break-all'>" + apiCell(r.objectApi) + " " + apiCell(r.fieldApi) + "</div></div>"; });
             }
           }
           list.forEach(function (grp) {
             var fields = grp.fields.filter(function (f) { return !q || (f.label + " " + f.fieldApi + " " + grp.object).toLowerCase().indexOf(q) >= 0; });
             if (!fields.length) return;
-            html += "<div style='font:700 11px SFMono-Regular,monospace;color:#0d6efd;margin:12px 0 4px;word-break:break-all'>" + esc(grp.object) + "</div>";
-            fields.forEach(function (f) { html += "<div style='padding:3px 0;display:flex;justify-content:space-between;gap:8px'><span>" + esc(f.label) + "</span><span style='font:600 11px SFMono-Regular,monospace;color:#475569;word-break:break-all;text-align:right'>" + esc(f.fieldApi) + "</span></div>"; });
+            html += "<div style='margin:12px 0 4px'>" + apiCell(grp.object) + "</div>";
+            fields.forEach(function (f) { html += "<div style='padding:4px 0;display:flex;justify-content:space-between;gap:8px;align-items:center'><span>" + esc(f.label) + "</span>" + apiCell(f.fieldApi) + "</div>"; });
           });
-          if (!html) html = "<div style='color:#94a3b8;padding:12px 0'>No attributes found. Open a DMO's attributes in the left panel, then reopen this.</div>";
+          if (!html) html = "<div style='color:#94a3b8;padding:12px 0'>No attributes found yet. Open a DMO's attributes in the left panel (or add a rule), then reopen this.</div>";
           body.innerHTML = html;
         }
+        // one delegated click → copy whichever chip was clicked
+        body.addEventListener("click", function (e) {
+          var c = e.target && e.target.closest ? e.target.closest(".dc-seg-copy") : null;
+          if (c && c.getAttribute("data-api")) segCopy(c.getAttribute("data-api"));
+        });
         search.oninput = function () { render(search.value); };
         render("");
         document.body.appendChild(panel);
+        search.focus();
         try { if (typeof makeDraggable === "function") makeDraggable(panel, hdr); } catch (e) {}
       }
 
-      // Launch button (small FAB) — distinct id so it coexists with other launchers.
-      function ensureSegApiBtn() {
-        if (document.getElementById("dc-seg-api-btn")) return;
-        var btn = document.createElement("button");
-        btn.id = "dc-seg-api-btn";
-        btn.title = "Show API names of segment attributes (hover any row, or click for the full list)";
-        btn.textContent = "{ } API names";
-        btn.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483646;border:none;border-radius:10px;padding:9px 14px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 4px 16px rgba(124,58,237,.45);";
-        btn.onclick = openSegApiPanel;
-        document.body.appendChild(btn);
-      }
-      // Wait for the builder to render, then show the button (bounded retries).
-      var tries = 0;
-      var iv = setInterval(function () {
-        tries++;
-        if (collectSegEls().length) { ensureSegApiBtn(); clearInterval(iv); }
-        else if (tries >= 20) clearInterval(iv);
-      }, 1000);
-
-      // expose for debugging/tests-in-browser (harmless)
+      // Expose so the EXISTING segment launcher menu can open it (added there, dev-gated
+      // via `typeof openSegApiPanel === "function"`), instead of a separate floating button.
+      try { window.__dcOpenSegApiPanel = openSegApiPanel; } catch (e) {}
       try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
     })();
   }
@@ -17257,6 +17264,16 @@ processJSON();
       const separator = document.createElement("div");
       separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
 
+      // Segment-only "API names" entry — opens the hover/copy panel. Dev-gated at runtime:
+      // the panel fn (window.__dcOpenSegApiPanel) only exists when the dev-only segment
+      // API-name feature loaded, so this row is absent from the public build automatically.
+      let segApiRow = null;
+      if (isSegment && typeof window.__dcOpenSegApiPanel === "function") {
+        const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Show attribute API names (hover rows, or open the searchable list)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, "Hover rows or open the list");
+        segApiRow.onclick = (e) => { e.stopPropagation(); try { closeMenu(); } catch (err) {} try { window.__dcOpenSegApiPanel(); } catch (err) {} };
+      }
+
       const dismissRow = document.createElement("button");
       dismissRow.title = "Remove Data 360 Inspector";
       dismissRow.innerHTML = "<span style='font:500 12px/1 -apple-system,sans-serif;color:#ef4444;display:flex;align-items:center;gap:6px;padding:2px 0;'><span style='font-size:14px;line-height:1;'>×</span>Remove</span>";
@@ -17266,6 +17283,7 @@ processJSON();
       dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
 
       menu.appendChild(dl);
+      if (segApiRow) menu.appendChild(segApiRow);
       menu.appendChild(separator);
       menu.appendChild(dismissRow);
 
