@@ -195,6 +195,47 @@ console.log("\n3e. activation datatable cell → uid join (table data + summary)
   eq("related row output name", rel.outputName, "EmailAddress");
 }
 
+// ── 3f. label-index fallback (for chips / summary lines that carry no prop) ─────────
+console.log("\n3f. label index + lookup (modal chips, Attributes-Included lines)");
+{
+  // mirror of segBuildLabelIndex over a flat list of {label,fieldApi,objectApi}
+  function buildLabelIndex(entries) {
+    var idx = {};
+    entries.forEach(function (e) {
+      var l = String(e.label || "").trim().toLowerCase();
+      if (!l || (!e.fieldApi && !e.objectApi)) return;
+      var cur = idx[l];
+      if (!cur) { idx[l] = { label: e.label, fieldApi: e.fieldApi || "", objectApi: e.objectApi || "", ambiguous: false }; return; }
+      if (e.fieldApi && cur.fieldApi && e.fieldApi !== cur.fieldApi) cur.ambiguous = true;
+      if (!cur.fieldApi && e.fieldApi) cur.fieldApi = e.fieldApi;
+      if (!cur.objectApi && e.objectApi) cur.objectApi = e.objectApi;
+    });
+    return idx;
+  }
+  function lookup(idx, text) {
+    var raw = String(text || "").replace(/\s*[×✕✖xX]\s*$/, "").replace(/^\s*\d+\.\s*/, "").trim();
+    if (!raw || raw.length > 60) return null;
+    return idx[raw.toLowerCase()] || null;
+  }
+  var idx = buildLabelIndex([
+    { label: "Contact Type", fieldApi: "TDI_Contact_Type__c", objectApi: "TDI_UnifiedIndividualTdir__dlm" },
+    { label: "First Name", fieldApi: "FirstName__c", objectApi: "TDI_UnifiedIndividualTdir__dlm" },
+    { label: "Account number", fieldApi: "", objectApi: "TDI_InsuranceAccount__dlm" }, // related: object only
+  ]);
+  eq("chip 'Contact Type ×' → field api (trailing × stripped)", lookup(idx, "Contact Type ×").fieldApi, "TDI_Contact_Type__c");
+  eq("summary '2. First Name' → field api (index prefix stripped)", lookup(idx, "2. First Name").fieldApi, "FirstName__c");
+  eq("related 'Account number' → object only, no fabricated field", lookup(idx, "Account number").fieldApi, "");
+  eq("related 'Account number' → object api present", lookup(idx, "Account number").objectApi, "TDI_InsuranceAccount__dlm");
+  ok("unknown label → null (never guesses)", lookup(idx, "Totally Unknown Thing") === null);
+
+  // ambiguity: same label, two different field APIs → marked, not silently wrong
+  var amb = buildLabelIndex([
+    { label: "Account Multiline", fieldApi: "TDI_Account_Multiline__c", objectApi: "A__dlm" },
+    { label: "Account Multiline", fieldApi: "TDI_GI_Account_Multiline__c", objectApi: "B__dlm" },
+  ]);
+  ok("colliding label flagged ambiguous", lookup(amb, "Account Multiline").ambiguous === true);
+}
+
 // ── 4. the COLLISION this feature solves ───────────────────────────────────────────
 console.log("\n4. same label, different API name across DMOs → distinguished");
 {
@@ -293,6 +334,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("ACTIVATION: datatable cell resolved by uid-join", /rowUid/.test(src) && /includedAttributes/.test(src) && /buildUidResolver|segBuildUidResolver|_resolveUid/.test(src));
   ok("ACTIVATION: never fabricates a field api (related rows show object+output only)", /activationAttr/.test(src));
   ok("ACTIVATION: toggle wired into activation launcher", /__dcToggleSegApi/.test(src));
+  ok("LABEL fallback for chips/summary lines (built from real props only)", /function segBuildLabelIndex\s*\(/.test(src) && /function segLabelLookup\s*\(/.test(src));
+  ok("label fallback strips trailing × and leading index", /\[×✕✖xX\]|\\s\*\[×/.test(src) || /replace\(\/\\s\*\[/.test(src));
+  ok("ambiguous label marked (?), never silently wrong", /ambiguous/.test(src) && /\(\?\)/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

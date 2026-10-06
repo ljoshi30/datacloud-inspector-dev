@@ -17160,6 +17160,7 @@ processJSON();
         var s = parts.join(" · ");
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
+        if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
         return s;
       }
       var SEG_TAGS = {
@@ -17228,11 +17229,73 @@ processJSON();
       }
       function hideTip() { if (tip) tip.style.opacity = "0"; }
 
+      // ── Label → API-name index (for chips / summary lines that carry no prop) ────
+      // Built ONLY from authoritative props already in the DOM (attributeNode / groupNode
+      // / drag-item.details / datatable.data[] / summary.includedAttributes[]). This is
+      // NOT blind label-matching against a fetched schema — every entry came from a real
+      // element's own data on THIS page. If one label maps to >1 distinct field API
+      // (collision across DMOs), it's marked ambiguous so we never show a wrong one.
+      function segBuildLabelIndex() {
+        var idx = {};
+        function add(label, fieldApi, objectApi) {
+          var l = String(label == null ? "" : label).trim().toLowerCase();
+          if (!l || (!fieldApi && !objectApi)) return;
+          var cur = idx[l];
+          if (!cur) { idx[l] = { label: label, fieldApi: fieldApi || "", objectApi: objectApi || "", ambiguous: false }; return; }
+          if (fieldApi && cur.fieldApi && fieldApi !== cur.fieldApi) cur.ambiguous = true;
+          if (!cur.fieldApi && fieldApi) cur.fieldApi = fieldApi;
+          if (!cur.objectApi && objectApi) cur.objectApi = objectApi;
+        }
+        collectRaw().forEach(function (el) {
+          var an = segSafeGet(el, "attributeNode");
+          if (an && an.label) add(an.label, an.fieldApiName, an.objectApiName);
+          var gn = segSafeGet(el, "groupNode");
+          if (gn && (gn.label || gn.fullLabel)) {
+            add(gn.label || gn.fullLabel, "", gn.objectApiName);
+            var ch = gn.children; if (ch && ch.length) for (var k = 0; k < ch.length; k++) { var cf = ch[k]; if (cf && cf.label) add(cf.label, cf.fieldApiName, cf.objectApiName); }
+          }
+          var dt = segSafeGet(el, "details");
+          if (dt && (dt.label || dt.name)) add(dt.label || dt.name, (dt.subject && dt.subject.fieldApiName) || dt.fieldApiName || dt.targetFieldName, (dt.subject && dt.subject.objectApiName) || dt.targetObjectName || dt.primaryObjectName);
+          var data = segSafeGet(el, "data");
+          if (data && data.length) for (var i = 0; i < data.length; i++) { var d = data[i]; if (d && d.name) add(d.name, "", d.entityName); }
+          var inc = segSafeGet(el, "includedAttributes");
+          if (inc && inc.length) for (var j = 0; j < inc.length; j++) { var a = inc[j]; if (a && a.label) add(a.label, a.attributeName, a.entityName); }
+        });
+        return idx;
+      }
+      var _segLblMap = null, _segLblAt = 0;
+      function segLabelLookup(text) {
+        var raw = String(text == null ? "" : text).trim();
+        // strip a trailing remove-"×"/"x" and surrounding whitespace, and a leading "N. " index
+        raw = raw.replace(/\s*[×✕✖xX]\s*$/, "").replace(/^\s*\d+\.\s*/, "").trim();
+        if (!raw || raw.length > 60) return null;
+        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
+        if (!_segLblMap || (now - _segLblAt) > 1500) { _segLblMap = segBuildLabelIndex(); _segLblAt = now; }
+        var hit = _segLblMap[raw.toLowerCase()];
+        if (!hit) return null;
+        return { kind: "label", label: hit.label, fieldApi: hit.fieldApi, objectApi: hit.objectApi, ambiguous: hit.ambiguous, fieldType: "" };
+      }
+
       function infoFromEvent(e) {
         var path = (e.composedPath && e.composedPath()) || [];
+        // 1) exact element match (attribute rows, conditions, drag chips, table cells)
         for (var i = 0; i < path.length; i++) {
           var el = path[i];
-          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) return segApiInfo(el);
+          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) {
+            var info = segApiInfo(el);
+            if (info && (info.fieldApi || info.objectApi)) return info;
+          }
+        }
+        // 2) fallback for chips / summary lines with no prop: match the innermost leaf's
+        //    own text against the label index. Walk innermost→outward, take the first
+        //    element whose SHORT text resolves to a known attribute.
+        for (var j = 0; j < path.length && j < 6; j++) {
+          var le = path[j];
+          if (!le || !le.getAttribute) continue;
+          var t = ""; try { t = (le.textContent || "").trim(); } catch (e2) {}
+          if (!t || t.length > 60) continue;
+          var hit = segLabelLookup(t);
+          if (hit && (hit.fieldApi || hit.objectApi)) return hit;
         }
         return null;
       }
