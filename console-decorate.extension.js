@@ -3525,11 +3525,13 @@
       } catch (e) {}
       return out;
     }
-    // AUTHORITATIVE API + join-path straight off the element's condition prop (same
-    // source hover uses — proven via DOM Probe). Far more reliable than label-matching
-    // `.entity.fields[]`. Returns {objApi, fieldApi, path} ("" when absent — never faked).
+    // AUTHORITATIVE API names straight off the element's condition prop (same source
+    // hover uses — proven via DOM Probe). Far more reliable than label-matching
+    // `.entity.fields[]`. Returns {objApi, fieldApi} ("" when absent — never faked).
+    // NOTE: no path here — .path/.joinPath is the internal identity join, NOT SF's
+    // "Container Path"; pending a probe for the real container-path property.
     function condApiAndPath(condEl) {
-      const out = { objApi: "", fieldApi: "", path: "" };
+      const out = { objApi: "", fieldApi: "" };
       try {
         const CP = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition", "condition"];
         let c = null;
@@ -3539,19 +3541,6 @@
         const subj = c.subject || (c.filter && c.filter.subject) || {};
         out.fieldApi = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
         out.objApi = subj.objectApiName || c.objectApiName || c.containerObjectApiName || "";
-        // join path (array of hops [{objectApiName,fieldApiName},{...}]) → readable string
-        const pa = c.path || c.joinPath || null;
-        if (pa && pa.length) {
-          const hops = [];
-          for (let h = 0; h < pa.length; h++) {
-            const hop = pa[h]; if (!hop || !hop.length) continue;
-            const a = hop[0] || {}, b = hop[1] || {};
-            const L = (a.objectApiName || "") + (a.fieldApiName ? "." + a.fieldApiName : "");
-            const R = (b.objectApiName || "") + (b.fieldApiName ? "." + b.fieldApiName : "");
-            if (L && R) hops.push(L + " -> " + R); else if (L || R) hops.push(L || R);
-          }
-          out.path = hops.join("  =>  ");
-        }
       } catch (e) {}
       return out;
     }
@@ -3567,11 +3556,11 @@
         const b = concat.slice(a.length);
         if (b && allTexts.includes(b)) {
           const objectLabel = a.replace(/:$/, "").trim(), fieldLabel = b.trim();
-          // Prefer the authoritative prop; fall back to the old entity label-match only
-          // for anything it couldn't supply. Path has no label-match equivalent.
+          // Prefer the authoritative prop (reliable API names); fall back to the old
+          // entity label-match only for anything it couldn't supply.
           const auth = condApiAndPath(condEl);
           const api = (auth.objApi || auth.fieldApi) ? auth : apiNamesFor(condEl, objectLabel, fieldLabel);
-          return { objectLabel, fieldLabel, objApi: api.objApi || "", fieldApi: api.fieldApi || "", path: auth.path || "" };
+          return { objectLabel, fieldLabel, objApi: api.objApi || "", fieldApi: api.fieldApi || "" };
         }
       }
       // Fallback: return empty (condition will be skipped)
@@ -3692,19 +3681,19 @@
         if (tag === "runtime_cdp-segment-builder-condition-set") {
           items.push(buildSetNode(el));
         } else if (tag === "runtime_cdp-segment-builder-simple-condition") {
-          const { objectLabel, fieldLabel, objApi, fieldApi, path } = extractLabels(el);
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
           if (!objectLabel && !fieldLabel) continue;
           const { operator, values } = parseComparison(getCompSummary(el));
-          items.push({ type: "simple", objectLabel, fieldLabel, operator, values, objApi, fieldApi, path });
+          items.push({ type: "simple", objectLabel, fieldLabel, operator, values, objApi, fieldApi });
         } else if (tag === "runtime_cdp-segment-builder-aggregation-condition") {
-          const { objectLabel, fieldLabel: aggFunc, objApi, path } = extractLabels(el);
+          const { objectLabel, fieldLabel: aggFunc, objApi } = extractLabels(el);
           const { operator, values } = parseComparison(getCompSummary(el));
           const sf = getSubFilters(el);
-          items.push({ type: "aggregation", objectLabel, fieldLabel: aggFunc, operator, values, subFilters: sf.items, subJoin: sf.join, objApi, path });
+          items.push({ type: "aggregation", objectLabel, fieldLabel: aggFunc, operator, values, subFilters: sf.items, subJoin: sf.join, objApi });
         } else if (tag === "runtime_cdp-segment-builder-calculated-insight-condition") {
-          const { objectLabel, fieldLabel, objApi, fieldApi, path } = extractLabels(el);
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
           const { operator, values } = parseComparison(getCompSummary(el));
-          items.push({ type: "ci", objectLabel, fieldLabel, operator, values, objApi, fieldApi, path });
+          items.push({ type: "ci", objectLabel, fieldLabel, operator, values, objApi, fieldApi });
         } else if (tag === "runtime_cdp-segment-builder-base-segment-item") {
           const bs = readBaseSegmentItem(el);
           if (bs.name) items.push({ type: "nested-segment", objectLabel: bs.name, fieldLabel: bs.publishBehavior, operator: "", values: "", publishSchedule: bs.publishSchedule });
@@ -4534,7 +4523,7 @@
     }
     const row = (n) => {
       const s = splitEntityAttr(n.entity, n.attr);
-      return { attr: s.attr, op: n.op, v1: n.v1 || "", v2: n.v2 || "", entity: s.entity, path: n.path || "" };
+      return { attr: s.attr, op: n.op, v1: n.v1 || "", v2: n.v2 || "", entity: s.entity };
     };
     // flatten a list of nodes (which may include nested groups) into flat cond rows
     function flattenRows(nodes) {
@@ -4551,7 +4540,7 @@
 
     // render one tab's tree onto a given worksheet (shared by single + multi-sheet)
     function renderSheet(ws, tree) {
-      const NCOLS = 11;
+      const NCOLS = 10;
       const widths = [5, 7, 27, 26, 12, 24, 8, 6, 6, 9];
       widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
       const thin = { style: "thin", color: { argb: "FF" + GRID } };
@@ -4583,7 +4572,7 @@
       //   Join groups    = joins a group-of-groups, e.g. (A OR B) (medium)
       //   Join all blocks= the top-level join across every block (thick)
       const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Attribute",
-        "Operator", "Value 1", "Value 2", "Path\n(related join)", "Join in\ngroup", "Join\ngroups", "Join all\nblocks"];
+        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks"];
       HEAD.forEach((h, i) => {
         const cell = ws.getCell(3, i + 1); cell.value = h;
         cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
@@ -4604,7 +4593,7 @@
       }
 
       // Data rows
-      const PATHC = 8, INNER = 9, MID = 10, OUTER = 11, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
+      const INNER = 8, MID = 9, OUTER = 10, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
       const blocks = flatten(tree);
       let r = 4; const dataFirst = 4;
       const records = [];
@@ -4630,12 +4619,6 @@
             hc.font = { bold: true, size: 10, color: { argb: "FF1A1A1A" } };
             hc.fill = fill(col(headerEntity)[1]); hc.alignment = { horizontal: "left", vertical: "middle" };
             for (let c = ENT; c <= V2; c++) { ws.getCell(r, c).fill = fill(col(headerEntity)[1]); boxRange(r, r, c, c, "thin", GRID); }
-            // container join path on the header's Path cell (related containers only)
-            var hpc = ws.getCell(r, PATHC);
-            hpc.value = grp.path || blk.path || "";
-            hpc.font = { name: "Consolas", size: 8, color: { argb: "FF6B4EA8" } };
-            hpc.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
-            hpc.fill = fill(col(headerEntity)[1]); boxRange(r, r, PATHC, PATHC, "thin", GRID);
             ws.getRow(r).height = 18; r++;
           }
           const attrStart = r;
@@ -4677,14 +4660,9 @@
             fo.font = { size: 9, color: { argb: "FF1F3864" } }; fo.fill = fill("F2F2F2");
             setValueCell(ws.getCell(r, V1), row.v1); ws.getCell(r, V1).alignment = { horizontal: "left", vertical: "middle" };
             setValueCell(ws.getCell(r, V2), row.v2); ws.getCell(r, V2).alignment = { horizontal: "center", vertical: "middle" };
-            // Path column (related-object join path; blank for direct). Monospace, wraps.
-            const pc = ws.getCell(r, PATHC);
-            pc.value = row.path || "";
-            pc.font = { name: "Consolas", size: 8, color: { argb: "FF6B4EA8" } };
-            pc.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
             const from = isMember ? ATTR : ENT;
             for (let c = from; c <= V2; c++) if (!(isMember === false && c === ENT)) ws.getCell(r, c).fill = fill(light);
-            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c); cols.push(PATHC);
+            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c);
             cols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
             ws.getRow(r).height = 16; r++;
           });
@@ -4731,9 +4709,9 @@
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
       // readable: rail columns stay narrow, value/notes columns can grow.
       if (typeof ws.autoSize === "function") ws.autoSize({
-        //     Blk Grp Ent Attr Op  V1  V2  Path Jin Jgr Jall Notes
-        min: [  4,  6, 18, 18, 10, 12,  6,  22,  8,  8,  9,  30],
-        max: [  6, 10, 40, 40, 18, 40, 14,  60, 10, 10, 12,  60],
+        //     Blk Grp Ent Attr Op  V1  V2  Jin Jgr Jall Notes
+        min: [  4,  6, 18, 18, 10, 12,  6,  8,  8,  9,  30],
+        max: [  6, 10, 40, 40, 18, 40, 14, 10, 10, 12,  60],
       });
     }
 
@@ -4871,12 +4849,9 @@
         const inner = `<span class="entity">${esc(n.entity)}</span>
             <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>
             <span class="op">${esc(n.op)}</span> ${val}`;
-        // Join-path line (related-object conditions only; "" for direct) — the "Container
-        // Path" SF shows only on edit. Rendered small + monospace under the condition.
-        const pathLine = n.path ? `<div class="cond-path" title="Join path">↳ ${esc(n.path)}</div>` : "";
-        if (member) return `<div class="member">${inner}${pathLine}</div>`;
+        if (member) return `<div class="member">${inner}</div>`;
         const chip = kindChip(n.kind || "direct", n.objApi);
-        return `<div class="card" style="--bg:${light}"><div class="card-main">${chip}${inner}</div>${pathLine}</div>`;
+        return `<div class="card" style="--bg:${light}"><div class="card-main">${chip}${inner}</div></div>`;
       }
 
       // Inline type chip on a container header so it reads at a glance what to drag.
@@ -4895,10 +4870,9 @@
                           : "";
         // Show the full API name of the related object next to the label, when scraped.
         const api = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
-        const pathLine = n.path ? `<div class="cond-path" style="padding:2px 10px 4px" title="Join path">↳ ${esc(n.path)}</div>` : "";
         const head = `<div class="cont-head" style="background:${dark}">${kindChip(n.kind || "related", n.objApi)}<b>${esc(n.entity)}</b>${api}${agg}</div>`;
         const body = renderJoin(n.children, n.join, false, true);
-        return `<div class="container" style="--bg:${light}">${head}${pathLine}${body}</div>`;
+        return `<div class="container" style="--bg:${light}">${head}${body}</div>`;
       }
 
       // Rank & Limit rule — a labeled card with Object / Group|Sort By / Field / Limit.
@@ -5005,7 +4979,6 @@
       .kchip-sub { display:inline-block; font:700 9px/1 system-ui; color:#16325c; background:#fff;
                    border:1px solid rgba(0,0,0,.18); padding:2px 6px; border-radius:9px; margin-right:7px; vertical-align:middle; }
       .cont-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#5c6b8a; margin-left:8px; vertical-align:middle; }
-      .cond-path { font:600 10px/1.4 "SF Mono",Menlo,monospace; color:#6b4ea8; margin-top:3px; word-break:break-word; }
       .container > .stack, .container > .grp { padding:0; }
       .container .card { box-shadow:none; }
       .member { position:relative; padding:10px 12px; border-top:1px dashed #e2e6ee; }
@@ -5069,7 +5042,7 @@
       var attr = n.fieldLabel || "";
       if (n.type === "nested-segment") { attr = attr || "(nested segment)"; }
       return { t: "cond", entity: entity, attr: attr, op: op, v1: v1, v2: v2,
-               objApi: n.objApi || "", fieldApi: n.fieldApi || "", path: n.path || "" };
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
     }
     // "(API: field_api__c on Object__dlm)" suffix when API names are available.
     // A Rank & Limit row from readRankLimitFromDOM: fieldLabel = "Group By"/"Sort By",
@@ -5105,7 +5078,7 @@
         var agg = isCi ? (node.fieldLabel || "Calculated Insight")
                        : [node.fieldLabel, node.operator, node.values].filter(Boolean).join(" ");
         var c = { t: "container", entity: node.objectLabel || "", agg: agg, join: node.subJoin || "AND",
-                  kind: isCi ? "ci" : "related", objApi: node.objApi || "", path: node.path || "",
+                  kind: isCi ? "ci" : "related", objApi: node.objApi || "",
                   children: (node.subFilters || []).map(function (sf) { return condOf(Object.assign({ type: "simple" }, sf)); }) };
         // A CI with an inline operator/value but no sub-filters: keep the comparison as a member row.
         if (isCi && !c.children.length && (node.operator || node.values)) {
@@ -17111,18 +17084,6 @@ processJSON();
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
       // Readable join-path from a condition's .path/.joinPath (array of hops; each hop a
       // pair [{objectApiName,fieldApiName},{objectApiName,fieldApiName}]). "" for direct.
-      function segPathString(pathArr) {
-        if (!pathArr || !pathArr.length) return "";
-        var hops = [];
-        for (var i = 0; i < pathArr.length; i++) {
-          var hop = pathArr[i]; if (!hop || !hop.length) continue;
-          var a = hop[0] || {}, b = hop[1] || {};
-          var left = (a.objectApiName || "") + (a.fieldApiName ? "." + a.fieldApiName : "");
-          var right = (b.objectApiName || "") + (b.fieldApiName ? "." + b.fieldApiName : "");
-          if (left && right) hops.push(left + " → " + right); else if (left || right) hops.push(left || right);
-        }
-        return hops.join("  ⇒  ");
-      }
       // Classify a segment element and extract its API-name info, or null. Reads the
       // element's own LWC prop directly — the authoritative source, no guessing.
       function segApiInfo(el) {
@@ -17148,9 +17109,11 @@ processJSON();
           var subj = c.subject || {};
           var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
-          // aggregate conditions nest the real field in .filter; the join path is on .path/.joinPath
+          // aggregate conditions nest the real field in .filter
           if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
-          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", path: segPathString(c.path || c.joinPath || "") };
+          // NOTE: path intentionally NOT shown — .path/.joinPath is the internal identity
+          // join, NOT SF's "Container Path". Pending a probe for the real container-path prop.
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
         }
         // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
         var ral = segSafeGet(el, "relatedAttributesLimit");
@@ -17163,7 +17126,7 @@ processJSON();
           var ds = dt.subject || (dt.filter && dt.filter.subject) || {};
           var df = ds.fieldApiName || dt.fieldApiName || dt.targetFieldName || dt.attributeName || "";
           var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || dt.containerObjectApiName || "";
-          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "", path: segPathString(dt.path || dt.joinPath || "") };
+          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "" };
         }
         // ACTIVATION main attribute-table cell → only {rowUid,name}; join by uid to the
         // datatable .data[] (label/output/object) + activation-summary.includedAttributes[]
@@ -17226,7 +17189,6 @@ processJSON();
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
         if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
-        if (info.path) s += "\nPath: " + info.path;   // related-object join path (shown on edit only in SF)
         return s;
       }
       var SEG_TAGS = {
