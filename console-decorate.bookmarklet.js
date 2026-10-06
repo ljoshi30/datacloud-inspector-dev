@@ -15498,7 +15498,7 @@ processJSON();
       apiBtn.id = "dc-act-api-btn";
       var _apiOn = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
       apiBtn.textContent = _apiOn ? "{ } API names: On" : "{ } API names";
-      apiBtn.title = "Toggle API-name hints: hover any attribute/rule to see its API name, click the row to copy it";
+      apiBtn.title = "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy it (clicks are left alone)";
       apiBtn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;border:none;border-radius:20px;padding:10px 16px;cursor:pointer;font:700 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(124,58,237,.4);";
       apiBtn.onclick = function () {
         var on = false; try { on = window.__dcToggleSegApi(); } catch (e) {}
@@ -17095,8 +17095,59 @@ processJSON();
   if (detailPageType === "Segment" || detailPageType === "Activation") {
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
-      // Readable join-path from a condition's .path/.joinPath (array of hops; each hop a
-      // pair [{objectApiName,fieldApiName},{objectApiName,fieldApiName}]). "" for direct.
+
+      // ── Container Path (SF's label route, reconstructed from attributeLibraryMetadata) ──
+      // displayPath = array of hops; hop = [leftNode,rightNode]; node = {objectLabel,fieldLabel}.
+      // String = each hop's LEFT as "obj.field", then the final hop's RIGHT, joined " > ".
+      // Proven byte-for-byte against real SF Container Path strings (see test).
+      function segDisplayPathString(dp) {
+        if (!dp || !dp.length) return "";
+        var stops = [];
+        for (var i = 0; i < dp.length; i++) { var h = dp[i]; if (!h || !h.length) continue; var L = h[0] || {}; stops.push((L.objectLabel || "") + (L.fieldLabel ? "." + L.fieldLabel : "")); }
+        var last = dp[dp.length - 1]; var R = (last && last[1]) || {};
+        stops.push((R.objectLabel || "") + (R.fieldLabel ? "." + R.fieldLabel : ""));
+        return stops.join(" > ");
+      }
+      // canonical key for a joinPath (api hops) so a condition can be matched to a candidate.
+      function segJoinPathKey(jp) {
+        if (!jp || !jp.length) return "";
+        return jp.map(function (h) { var a = (h && h[0]) || {}, b = (h && h[1]) || {}; return (a.objectApiName || "") + "." + (a.fieldApiName || "") + "->" + (b.objectApiName || "") + "." + (b.fieldApiName || ""); }).join("|");
+      }
+      // Resolve a related object's Container Path. Single candidate → use it. Multiple →
+      // match the condition's own joinPath to the candidate joinPaths[i]; null if no match
+      // (ambiguous — we never guess which path).
+      function segResolveContainerPath(node, condJoinPath) {
+        if (!node) return null;
+        var dps = node.displayPaths || [], jps = node.joinPaths || [];
+        if (!dps.length) return null;
+        if (dps.length === 1) return segDisplayPathString(dps[0]);
+        var key = segJoinPathKey(condJoinPath);
+        if (key) { for (var i = 0; i < jps.length && i < dps.length; i++) { if (segJoinPathKey(jps[i]) === key) return segDisplayPathString(dps[i]); } }
+        return null;
+      }
+      // Lazily build objectApiName → metadata node (carrying displayPaths/joinPaths) from
+      // attributeLibraryMetadata._nodeIndexByNodeId (found on any canvas-item/condition).
+      var _segPathIdx = null, _segPathAt = 0;
+      function segPathNodeFor(objectApi) {
+        if (!objectApi) return null;
+        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
+        if (!_segPathIdx || (now - _segPathAt) > 2000) {
+          _segPathIdx = {};
+          var metaEl = null;
+          var all = collectRaw();
+          for (var i = 0; i < all.length; i++) { var m = segSafeGet(all[i], "attributeLibraryMetadata"); if (m && segSafeGet(m, "_nodeIndexByNodeId")) { metaEl = m; break; } }
+          if (metaEl) {
+            var idx = segSafeGet(metaEl, "_nodeIndexByNodeId") || {};
+            Object.keys(idx).forEach(function (id) {
+              var n = idx[id]; if (!n || !n.objectApiName) return;
+              if (n.displayPaths || n.joinPaths) _segPathIdx[n.objectApiName] = { displayPaths: n.displayPaths || [], joinPaths: n.joinPaths || [] };
+            });
+          }
+          _segPathAt = now;
+        }
+        return _segPathIdx[objectApi] || null;
+      }
+
       // Classify a segment element and extract its API-name info, or null. Reads the
       // element's own LWC prop directly — the authoritative source, no guessing.
       function segApiInfo(el) {
@@ -17124,9 +17175,14 @@ processJSON();
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
           // aggregate conditions nest the real field in .filter
           if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
-          // NOTE: path intentionally NOT shown — .path/.joinPath is the internal identity
-          // join, NOT SF's "Container Path". Pending a probe for the real container-path prop.
-          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
+          // Container Path: SF's label route for a RELATED object, reconstructed from
+          // attributeLibraryMetadata.displayPaths and matched to this condition's own
+          // joinPath. "" for direct (same-object) conditions. The condition's joinPath may
+          // live on .joinPath or .path (aggregates: on the outer object, not .filter).
+          var cjp = c.joinPath || c.path || (c.filter && (c.filter.joinPath || c.filter.path)) || null;
+          var cpath = "";
+          try { var node = segPathNodeFor(o); if (node) cpath = segResolveContainerPath(node, cjp) || ""; } catch (e) {}
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cpath };
         }
         // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
         var ral = segSafeGet(el, "relatedAttributesLimit");
@@ -17202,6 +17258,7 @@ processJSON();
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
         if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
+        if (info.containerPath) s += "\nContainer Path: " + info.containerPath;   // SF's label route (related objects)
         return s;
       }
       var SEG_TAGS = {
@@ -17246,26 +17303,26 @@ processJSON();
       }
 
       // ── Hover chip (overlay — never mutates SF's shadow DOM) ────────────────────
-      // OFF by default. Turned on from the launcher menu ("API names: On/Off"). While
-      // ON: hovering any attribute/rule/group row shows its API name; CLICKING that row
-      // copies the field API name (object API if it's a group header). No modal/panel.
+      // OFF by default. Turned on from the launcher menu ("API names: On/Off"). While ON:
+      // hovering any attribute/rule/group row shows its API name. To COPY, press "c" while
+      // hovering (we do NOT hijack row clicks — SF's edit/drill-in/select stay fully normal).
       var segOn = false;         // feature toggle
-      var hoverInfo = null;      // info under the cursor right now (for click-to-copy)
+      var hoverInfo = null;      // info under the cursor right now (for copy-on-"c")
       var tip = null;
       function ensureTip() {
         if (tip) return tip;
         tip = document.createElement("div");
         tip.id = "dc-seg-api-tip";
-        // white-space:pre-wrap so the "\nPath: …" line renders on its own line and long
-        // paths wrap instead of overflowing; cap width so it stays readable.
+        // pointer-events:none is CRITICAL — the overlay must never intercept clicks meant
+        // for SF controls underneath it. white-space:pre-wrap renders the Path on its own line.
         tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.5 SFMono-Regular,Menlo,monospace;padding:6px 10px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:520px;white-space:pre-wrap;word-break:break-word;opacity:0;transition:opacity .1s;";
         document.body.appendChild(tip);
         return tip;
       }
       function showTip(info, x, y) {
         var t = ensureTip();
-        // extra hint that a click copies — only useful while the feature is on
-        t.textContent = segTooltip(info) + "   ⧉ click to copy";
+        // hint that pressing "c" copies — no click hijacking
+        t.textContent = segTooltip(info) + "\n⌨ press C to copy";
         t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 540) + "px";
         t.style.top = (y + 16) + "px";
         t.style.opacity = "1";
@@ -17350,23 +17407,29 @@ processJSON();
         if (info && (info.fieldApi || info.objectApi)) showTip(info, e.clientX, e.clientY);
         else hideTip();
       }
-      // Click a row while the feature is ON → copy its API name (capture phase so SF's
-      // own click still works too — we only READ, then let the event continue).
-      function onClick(e) {
-        if (!segOn) return;
-        var info = infoFromEvent(e);
-        if (!info) return;
+      // Copy by pressing "c" while hovering a row (feature ON). We DELIBERATELY do NOT
+      // listen for row clicks — hijacking clicks broke SF's own edit / drill-into-related /
+      // select interactions (they'd trigger a copy instead of the real action). Keyboard
+      // copy is unambiguous and leaves every mouse interaction untouched.
+      function onKey(e) {
+        if (!segOn || !hoverInfo) return;
+        if (e.key !== "c" && e.key !== "C") return;
+        // ignore when typing in an input/textarea/contenteditable (don't steal real typing)
+        var ae = document.activeElement, tn = ae && ae.tagName ? ae.tagName.toLowerCase() : "";
+        if (tn === "input" || tn === "textarea" || (ae && ae.isContentEditable)) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;   // let real Cmd/Ctrl+C work normally
+        var info = hoverInfo;
         var api = (info.kind === "group") ? info.objectApi : (info.fieldApi || info.objectApi);
-        if (api) segCopy(api);
+        if (api) { segCopy(api); e.preventDefault(); }
       }
       document.addEventListener("mousemove", onMove, true);
-      document.addEventListener("click", onClick, true);
+      document.addEventListener("keydown", onKey, true);
 
       // Toggle entry point for the launcher. Returns the new state (true = on).
       function toggleSegApi(force) {
         segOn = (typeof force === "boolean") ? force : !segOn;
         if (!segOn) hideTip();
-        segToast(segOn ? "API names ON — hover a row (click to copy)" : "API names OFF");
+        segToast(segOn ? "API names ON — hover a row, press C to copy" : "API names OFF");
         return segOn;
       }
       function segApiIsOn() { return segOn; }
@@ -17433,12 +17496,12 @@ processJSON();
       if (isSegment && typeof window.__dcToggleSegApi === "function") {
         const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
         const onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, click the row to copy it", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, click to copy" : "Off — click to enable hover");
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
         const segSub = segApiRow.querySelector("span:last-child");
         segApiRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
-          if (segSub) segSub.textContent = on ? "On — hover a row, click to copy" : "Off — click to enable hover";
+          if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
           // leave the menu open so the user sees the state flip; closes on outside click
         };
       }

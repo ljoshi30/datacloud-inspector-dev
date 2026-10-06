@@ -326,7 +326,8 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("hover is a TOGGLE, off by default", /var segOn = false/.test(src) && /function toggleSegApi\s*\(/.test(src));
   ok("toggle exposed to launcher (no modal, no panel)", /window\.__dcToggleSegApi/.test(src) && !/dc-seg-api-panel/.test(src) && !/function openSegApiPanel/.test(src));
   ok("launcher row TOGGLES (segment-only, dev-gated on toggle fn)", /dc-seg-api-row/.test(src) && /typeof window\.__dcToggleSegApi === "function"/.test(src));
-  ok("CLICK a row copies its API name (copy on the hover itself)", /function onClick\s*\(/.test(src) && /segCopy\(/.test(src));
+  ok("COPY via keyboard 'c' (does NOT hijack row clicks)", /function onKey\s*\(/.test(src) && /addEventListener\("keydown", onKey/.test(src) && /segOn[\s\S]{0,2000}function onKey/.test(src));
+  ok("tooltip overlay keeps pointer-events:none (never intercepts SF clicks)", /dc-seg-api-tip[\s\S]{0,400}pointer-events:none/.test(src));
   ok("copy has a toast", /function segCopy\s*\(/.test(src) && /segToast/.test(src));
   ok("no separate floating button, no search box, no modal", !/dc-seg-api-btn/.test(src) && !/Search label or API name/.test(src));
   ok("RANK & LIMIT rows covered (tag + condition prop)", /runtime_cdp-segment-builder-group-rank-limit-condition/.test(src) && /groupRankLimitCondition|rankLimitCondition/.test(src));
@@ -349,6 +350,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("EXPORT xlsx row() carries objApi/fieldApi", /objApi: n\.objApi \|\| ""/.test(src) && /fieldApi: n\.fieldApi \|\| ""/.test(src));
   ok("EXPORT HTML shows field API inline (not just hover)", /fld-api/.test(src) && /n\.fieldApi \? /.test(src));
   ok("PATH removed from hover + export (wrong data; pending probe)", !/function segPathString/.test(src) && !/cond-path/.test(src) && !/Path\\n\(related join\)/.test(src));
+  ok("CONTAINER PATH reconstructed + shown on hover (related objects)", /segResolveContainerPath/.test(src) && /containerPath/.test(src) && /Container Path: /.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 
