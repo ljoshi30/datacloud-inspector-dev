@@ -3430,6 +3430,22 @@
         if (!objectLabel) objectLabel = t;
       }
 
+      // AUTHORITATIVE api names from the element prop (proven via DOM Probe v10): the
+      // group-rank-limit-condition exposes .groupRankLimitCondition.conditions[] — each a
+      // SingleFilterCondition with .subject.{fieldApiName,objectApiName} + .comparison._ruleType
+      // ("groupBy"/"sortBy"). The text scrape above gives labels; this gives the real APIs.
+      var rankObjApi = "", rankFieldApi = "";
+      try {
+        var grc = safeGet(condEl, "groupRankLimitCondition");
+        var conds = grc && (grc.conditions || grc._conditions);
+        if (conds && conds.length) {
+          var sc = conds[0];
+          var subj = (sc && sc.subject) || {};
+          rankFieldApi = subj.fieldApiName || sc.attributeName || "";
+          rankObjApi = subj.objectApiName || grc.selectedObjectApiName || "";
+        } else if (grc) { rankObjApi = grc.selectedObjectApiName || ""; }
+      } catch (e) {}
+
       // Emit one structured row per block:
       //   objectLabel = DMO name, fieldLabel = rank type, operator = rank field, values = "Limit: N ..."
       if (rankType || rankField || limitVal || objectLabel) {
@@ -3438,6 +3454,8 @@
           fieldLabel:  rankType  || "",
           operator:    rankField || "",
           values:      limitVal  ? "Limit: " + limitVal : "",
+          objApi:      rankObjApi,
+          fieldApi:    rankFieldApi,
         });
       } else if (uniq.length) {
         // Fallback: emit a single row with whatever text we found
@@ -4889,11 +4907,14 @@
       // Rank & Limit rule — a labeled card with Object / Group|Sort By / Field / Limit.
       function renderRank(n) {
         const [light, dark] = color(n.entity);
-        const head = `<div class="cont-head" style="background:${dark}">${kindChip("rank")}<b>${esc(n.entity || "Rank & Limit")}</b></div>`;
+        // object API next to the DMO label; field API next to the ranked field.
+        const oApi = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
+        const fApi = n.fieldApi ? `<span class="fld-api">${esc(n.fieldApi)}</span>` : "";
+        const head = `<div class="cont-head" style="background:${dark}">${kindChip("rank")}<b>${esc(n.entity || "Rank & Limit")}</b>${oApi}</div>`;
         const rows = [];
-        if (n.rankType) rows.push(`<span class="rk-k">${esc(n.rankType)}</span> <b class="attr">${esc(n.rankField || "")}</b>`);
+        if (n.rankType) rows.push(`<span class="rk-k">${esc(n.rankType)}</span> <b class="attr">${esc(n.rankField || "")}</b>${fApi}`);
         if (n.limit)    rows.push(`<span class="rk-k">Limit</span> <b class="attr">${esc(n.limit)}</b>`);
-        if (!rows.length && n.attr) rows.push(`<b class="attr">${esc(n.attr)}</b>`);
+        if (!rows.length && n.attr) rows.push(`<b class="attr">${esc(n.attr)}</b>${fApi}`);
         const body = rows.map((r) => `<div class="member">${r}</div>`).join("");
         return `<div class="container rank" style="--bg:${light}">${head}${body}</div>`;
       }
@@ -5064,6 +5085,7 @@
       var limit = (n.values || "").replace(/^Limit:\s*/i, "").trim();
       return { t: "rank", entity: n.objectLabel || "Rank & Limit",
                rankType: n.fieldLabel || "", rankField: n.operator || "", limit: limit,
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "",
                attr: [n.fieldLabel, n.operator, n.values].filter(Boolean).join(" ") };
     }
     // Waterfall member (a Segment in Priority order) OR a true nested segment.
@@ -15488,76 +15510,97 @@ processJSON();
   }
 
   // Create the activation launcher button (extension-only)
+  // Unified Activation launcher — the SAME FAB + popover menu used on every other page
+  // (same inspector icon, same dark menu, same drag), instead of separate floating pills.
+  // Menu rows: "Export Activation" (extension/bridge only) and, dev-only, an "API names"
+  // ON/OFF toggle row. Rebuilt idempotently (bails if the FAB already exists).
   function ensureActivationLauncher() {
-    /* @strip:start dev
-     * Dev-only "API names" toggle for the Activation wizard. Works in BOTH bookmarklet
-     * and extension (unlike Export Activation, which is bridge-only), so it lives before
-     * the bridge gate. Gated on the toggle fn existing (absent in public builds). */
-    if (typeof window.__dcToggleSegApi === "function" && !document.getElementById("dc-act-api-btn")) {
-      var apiBtn = document.createElement("button");
-      apiBtn.id = "dc-act-api-btn";
-      var _apiOn = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-      apiBtn.textContent = _apiOn ? "{ } API names: On" : "{ } API names";
-      apiBtn.title = "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy it (clicks are left alone)";
-      apiBtn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;border:none;border-radius:20px;padding:10px 16px;cursor:pointer;font:700 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(124,58,237,.4);";
-      apiBtn.onclick = function () {
-        var on = false; try { on = window.__dcToggleSegApi(); } catch (e) {}
-        apiBtn.textContent = on ? "{ } API names: On" : "{ } API names";
-      };
-      document.body.appendChild(apiBtn);
-    }
-    /* @strip:end */
-    // Extension-only feature (export needs the bridge)
-    if (!extBridgePresent()) return;
-    if (document.getElementById("dc-activation-bar")) return;
+    if (document.getElementById("dc-bar") || document.getElementById("dc-act-bar")) return;
 
     var wrap = document.createElement("div");
-    wrap.id = "dc-activation-bar";
-    // sit the export button ABOVE the API-names toggle so they don't overlap
-    wrap.style.cssText = "position:fixed;bottom:64px;left:20px;z-index:2147483646;";
+    wrap.id = "dc-act-bar";
+    wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none";
 
-    var btn = document.createElement("button");
-    btn.textContent = "📋 Export Activation";
-    btn.title = "Export this activation's target, attributes and field mappings (with API names) to HTML / Sheets so you can review or share the configuration.";
-    btn.style.cssText = "border:none;border-radius:20px;padding:10px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);box-shadow:0 3px 12px rgba(16,185,129,.3);transition:transform .1s,box-shadow .1s;";
-    btn.onmouseenter = function () {
-      btn.style.transform = "scale(1.03)";
-      btn.style.boxShadow = "0 4px 16px rgba(16,185,129,.4)";
-    };
-    btn.onmouseleave = function () {
-      btn.style.transform = "scale(1)";
-      btn.style.boxShadow = "0 3px 12px rgba(16,185,129,.3)";
-    };
+    var menu = document.createElement("div");
+    menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s cubic-bezier(.34,1.56,.64,1),transform .2s cubic-bezier(.34,1.56,.64,1);opacity:0;transform:translateY(12px) scale(.95);";
+    menu.setAttribute("aria-hidden", "true");
 
-    var note = document.createElement("div");
-    note.style.cssText = "margin-top:8px;font-size:11px;color:#dc2626;background:#fff;border:1px solid #fecaca;border-radius:6px;padding:6px 10px;display:none;max-width:280px;box-shadow:0 2px 8px rgba(0,0,0,.1);";
-
-    btn.onclick = function () {
-      var activationId = getActivationIdFromUrl();
-      if (!activationId) {
-        note.textContent = "Couldn't find the activation ID in the URL.";
-        note.style.display = "block";
-        return;
-      }
-
-      btn.disabled = true;
-      btn.textContent = "Reading…";
-      note.style.display = "none";
-
-      fetchActivationViaBridge(activationId).then(function (data) {
-        btn.disabled = false;
-        btn.textContent = "📋 Export Activation";
-        showActivationModal(data);
-      }).catch(function (err) {
-        btn.disabled = false;
-        btn.textContent = "📋 Export Activation";
-        note.textContent = String(err && err.message || err);
-        note.style.display = "block";
-      });
+    var mkBtn = function (id, label, title, iconGrad, iconSvg, subtitle) {
+      var b = document.createElement("button");
+      b.id = id; b.title = title;
+      b.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;transition:background .12s;";
+      b.onmouseenter = function () { b.style.background = "rgba(255,255,255,.07)"; };
+      b.onmouseleave = function () { b.style.background = "#111827"; };
+      b.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:" + iconGrad + ";display:flex;align-items:center;justify-content:center;'>" + iconSvg + "</div>"
+        + "<div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>" + label + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + subtitle + "</span></div>";
+      return b;
     };
 
-    wrap.appendChild(btn);
-    wrap.appendChild(note);
+    // Export Activation — only meaningful with the bridge (extension); hidden otherwise.
+    if (typeof extBridgePresent === "function" && extBridgePresent()) {
+      var exportIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M8 1v9M4 6l4 4 4-4'/><rect x='2' y='13' width='12' height='2' rx='1'/></svg>";
+      var exportRow = mkBtn("dc-act-export-row", "Export Activation", "Export this activation's target, attributes and field mappings (with API names) to HTML / Sheets.", "linear-gradient(135deg,#10b981,#059669)", exportIconSvg, "Target, attributes & mappings");
+      var exErr = exportRow.querySelector("span:last-child");
+      exportRow.onclick = function (e) {
+        e.stopPropagation();
+        var activationId = getActivationIdFromUrl();
+        if (!activationId) { if (exErr) exErr.textContent = "Couldn't find the activation ID in the URL."; return; }
+        var lbl = exportRow.querySelector("span:first-child"); if (lbl) lbl.textContent = "Reading…";
+        fetchActivationViaBridge(activationId).then(function (data) {
+          if (lbl) lbl.textContent = "Export Activation"; showActivationModal(data);
+        }).catch(function (err) { if (lbl) lbl.textContent = "Export Activation"; if (exErr) exErr.textContent = String(err && err.message || err); });
+      };
+      menu.appendChild(exportRow);
+    }
+
+    /* @strip:start dev
+     * Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn,
+     * which only exists in the dev build → absent from public automatically. */
+    var apiRow = null;
+    if (typeof window.__dcToggleSegApi === "function") {
+      var apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+      var onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
+      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+      var apiSub = apiRow.querySelector("span:last-child");
+      apiRow.onclick = function (e) {
+        e.stopPropagation();
+        var on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
+        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+      };
+      menu.appendChild(apiRow);
+    }
+    /* @strip:end */
+
+    // Nothing to show (no bridge AND no dev toggle) → don't render an empty FAB.
+    if (!menu.childElementCount) return;
+
+    var separator = document.createElement("div");
+    separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
+    var dismissRow = document.createElement("button");
+    dismissRow.title = "Remove Data 360 Inspector";
+    dismissRow.innerHTML = "<span style='font:500 12px/1 -apple-system,sans-serif;color:#ef4444;display:flex;align-items:center;gap:6px;padding:2px 0;'><span style='font-size:14px;line-height:1;'>×</span>Remove</span>";
+    dismissRow.style.cssText = "display:flex;align-items:center;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;transition:background .12s;";
+    dismissRow.onmouseenter = function () { dismissRow.style.background = "rgba(239,68,68,.08)"; };
+    dismissRow.onmouseleave = function () { dismissRow.style.background = "#111827"; };
+    dismissRow.onclick = function (e) { e.stopPropagation(); wrap.remove(); };
+    menu.appendChild(separator); menu.appendChild(dismissRow);
+
+    var fab = document.createElement("button");
+    fab.id = "dc-act-fab";
+    fab.title = "Data 360 Inspector";
+    fab.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'><circle cx='12' cy='12' r='10' stroke='#fff' stroke-width='1.5'/><circle cx='12' cy='4' r='1.2' fill='#fff'/><circle cx='17.7' cy='6.3' r='1.2' fill='#fff'/><circle cx='20' cy='12' r='1.2' fill='#fff'/><circle cx='17.7' cy='17.7' r='1.2' fill='#fff'/><circle cx='12' cy='20' r='1.2' fill='#fff'/><circle cx='6.3' cy='17.7' r='1.2' fill='#fff'/><circle cx='4' cy='12' r='1.2' fill='#fff'/><circle cx='6.3' cy='6.3' r='1.2' fill='#fff'/><circle cx='12' cy='9.5' r='2.5' fill='#fff'/><path d='M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4' stroke='#fff' stroke-width='1.5' stroke-linecap='round'/></svg>";
+    fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;pointer-events:auto;background:linear-gradient(135deg,#2d2b55 0%,#5b4f9e 100%);box-shadow:0 4px 18px rgba(91,79,158,.5);display:flex;align-items:center;justify-content:center;transition:box-shadow .15s,transform .12s;flex-shrink:0;";
+    fab.onmouseenter = function () { fab.style.boxShadow = "0 6px 24px rgba(91,79,158,.65)"; fab.style.transform = "scale(1.07)"; };
+    fab.onmouseleave = function () { fab.style.boxShadow = "0 4px 18px rgba(91,79,158,.5)"; fab.style.transform = "scale(1)"; };
+
+    var menuOpen = false;
+    var openMenu = function () { menuOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.setAttribute("aria-hidden", "false"); menu.style.pointerEvents = "auto"; };
+    var closeMenu = function () { menuOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.setAttribute("aria-hidden", "true"); menu.style.pointerEvents = "none"; };
+    fab.onclick = function (e) { e.stopPropagation(); menuOpen ? closeMenu() : openMenu(); };
+    document.addEventListener("pointerdown", function (e) { if (menuOpen && !wrap.contains(e.target)) closeMenu(); }, true);
+
+    wrap.appendChild(menu);
+    wrap.appendChild(fab);
     document.body.appendChild(wrap);
   }
 
@@ -17175,6 +17218,9 @@ processJSON();
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
           // aggregate conditions nest the real field in .filter
           if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
+          // Rank & Limit: the ranked field lives in .conditions[0].subject (proven v10),
+          // NOT on the top-level prop. selectedObjectApiName is the object.
+          if (!f && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
           // Container Path: SF's label route for a RELATED object, reconstructed from
           // attributeLibraryMetadata.displayPaths and matched to this condition's own
           // joinPath. "" for direct (same-object) conditions. The condition's joinPath may
