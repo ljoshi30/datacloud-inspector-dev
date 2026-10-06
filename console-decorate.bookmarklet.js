@@ -4852,8 +4852,13 @@
         if (n.op === "Is Between") val = `<b>${esc(n.v1)}</b> <span class="op">AND</span> <b>${esc(n.v2)}</b>`;
         else if (n.v1) val = `<b>${esc(n.v1)}</b>`;
         const [light] = color(n.entity);
+        // Inline field API name next to the attribute (always visible — no hover needed).
+        // Blank when not scraped. Object API also shown for member rows (card headers show
+        // the object API separately via renderContainer).
+        const fApi = n.fieldApi ? `<span class="fld-api">${esc(n.fieldApi)}</span>` : "";
+        const oApi = (member && n.objApi) ? `<span class="fld-api obj">${esc(n.objApi)}</span>` : "";
         const inner = `<span class="entity">${esc(n.entity)}</span>
-            <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>
+            <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>${fApi}${oApi}
             <span class="op">${esc(n.op)}</span> ${val}`;
         if (member) return `<div class="member">${inner}</div>`;
         const chip = kindChip(n.kind || "direct", n.objApi);
@@ -4985,6 +4990,8 @@
       .kchip-sub { display:inline-block; font:700 9px/1 system-ui; color:#16325c; background:#fff;
                    border:1px solid rgba(0,0,0,.18); padding:2px 6px; border-radius:9px; margin-right:7px; vertical-align:middle; }
       .cont-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#5c6b8a; margin-left:8px; vertical-align:middle; }
+      .fld-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; margin-left:7px; vertical-align:middle; }
+      .fld-api.obj { color:#5c6b8a; background:#f1f5f9; }
       .container > .stack, .container > .grp { padding:0; }
       .container .card { box-shadow:none; }
       .member { position:relative; padding:10px 12px; border-top:1px dashed #e2e6ee; }
