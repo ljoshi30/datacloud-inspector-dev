@@ -3665,10 +3665,10 @@
         const items = [];
         for (const el of getDirectChildren(nestedSet)) {
           if ((el.tagName || "").toLowerCase() !== "runtime_cdp-segment-builder-simple-condition") continue;
-          const { objectLabel, fieldLabel } = extractLabels(el);
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
           if (!objectLabel && !fieldLabel) continue;
           const { operator, values } = parseComparison(getCompSummary(el));
-          items.push({ objectLabel, fieldLabel, operator, values });
+          items.push({ objectLabel, fieldLabel, operator, values, objApi, fieldApi });
         }
         return { items, join };
       }
@@ -3681,10 +3681,10 @@
       const items = [];
       eachElement(aggEl.shadowRoot || aggEl, (el) => {
         if ((el.tagName || "").toLowerCase() !== "runtime_cdp-segment-builder-simple-condition") return;
-        const { objectLabel, fieldLabel } = extractLabels(el);
+        const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
         if (!objectLabel && !fieldLabel) return;
         const { operator, values } = parseComparison(getCompSummary(el));
-        items.push({ objectLabel, fieldLabel, operator, values });
+        items.push({ objectLabel, fieldLabel, operator, values, objApi, fieldApi });
       });
       return { items, join: "AND" };
     }
@@ -17446,12 +17446,41 @@ processJSON();
         return null;
       }
       // One delegated mousemove handles ALL rows (works through shadow DOM via composedPath).
+      // Native-tooltip suppression: SF puts a browser `title=` on many rows, which pops up
+      // its own grey tooltip ON TOP of ours. While the feature is ON and we're showing our
+      // chip for a row, we temporarily MOVE the title into data-dc-title (removing title so
+      // the native tooltip can't fire), and restore it the moment we leave / toggle off.
+      // Non-destructive: the original value is always put back.
+      var _titleStash = [];   // [{el, val}] elements we stripped title from this hover
+      function restoreTitles() {
+        for (var i = 0; i < _titleStash.length; i++) {
+          var s = _titleStash[i];
+          try { if (s.el && !s.el.getAttribute("title") && s.el.getAttribute("data-dc-title") != null) { s.el.setAttribute("title", s.val); s.el.removeAttribute("data-dc-title"); } } catch (e) {}
+        }
+        _titleStash = [];
+      }
+      function suppressTitles(path) {
+        for (var i = 0; i < path.length && i < 8; i++) {
+          var el = path[i];
+          if (!el || !el.getAttribute || !el.hasAttribute) continue;
+          try {
+            var tv = el.getAttribute("title");
+            if (tv != null && tv !== "") { el.setAttribute("data-dc-title", tv); el.removeAttribute("title"); _titleStash.push({ el: el, val: tv }); }
+          } catch (e) {}
+        }
+      }
       function onMove(e) {
-        if (!segOn) return;
+        if (!segOn) { if (_titleStash.length) restoreTitles(); return; }
         var info = infoFromEvent(e);
         hoverInfo = info;
-        if (info && (info.fieldApi || info.objectApi)) showTip(info, e.clientX, e.clientY);
-        else hideTip();
+        // restore any titles from the previous row, then (if on a decoratable row) suppress
+        // the native title on THIS row's path so only our chip shows.
+        restoreTitles();
+        if (info && (info.fieldApi || info.objectApi)) {
+          var path = (e.composedPath && e.composedPath()) || [];
+          suppressTitles(path);
+          showTip(info, e.clientX, e.clientY);
+        } else hideTip();
       }
       // Copy by pressing "c" while hovering a row (feature ON). We DELIBERATELY do NOT
       // listen for row clicks — hijacking clicks broke SF's own edit / drill-into-related /
@@ -17474,7 +17503,7 @@ processJSON();
       // Toggle entry point for the launcher. Returns the new state (true = on).
       function toggleSegApi(force) {
         segOn = (typeof force === "boolean") ? force : !segOn;
-        if (!segOn) hideTip();
+        if (!segOn) { hideTip(); restoreTitles(); }   // put SF's native tooltips back
         segToast(segOn ? "API names ON — hover a row, press C to copy" : "API names OFF");
         return segOn;
       }
