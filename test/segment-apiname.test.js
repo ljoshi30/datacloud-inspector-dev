@@ -390,6 +390,12 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("ambiguous label marked (?), never silently wrong", /ambiguous/.test(src) && /\(\?\)/.test(src));
   ok("PATH: builds join-path string from condition .path/.joinPath", /function segPathString\s*\(/.test(src));
   ok("PATH: tooltip shows a Path line for related conditions", /Path: /.test(src) || /\\nPath/.test(src));
+  // EXPORT (documentation): authoritative API + Path column
+  ok("EXPORT reads authoritative api+path (condApiAndPath)", /function condApiAndPath\s*\(/.test(src));
+  ok("EXPORT extractLabels prefers authoritative over entity label-match", /condApiAndPath\(condEl\)/.test(src) && /auth\.objApi \|\| auth\.fieldApi/.test(src));
+  ok("EXPORT HTML renders a cond-path line", /cond-path/.test(src));
+  ok("EXPORT xlsx has a Path column (header + PATHC cell)", /Path\\n\(related join\)/.test(src) && /PATHC/.test(src));
+  ok("EXPORT carries path through condOf/row", /path: n\.path \|\| ""/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 
