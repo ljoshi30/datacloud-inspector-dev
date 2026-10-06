@@ -344,6 +344,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   // EXPORT (documentation): authoritative API names (NO path — path pending a real probe)
   ok("EXPORT reads authoritative api (condApiAndPath)", /function condApiAndPath\s*\(/.test(src));
   ok("EXPORT extractLabels prefers authoritative over entity label-match", /condApiAndPath\(condEl\)/.test(src) && /auth\.objApi \|\| auth\.fieldApi/.test(src));
+  ok("EXPORT xlsx has Object API + Field API columns", /"Object API", "Field API"/.test(src) && /OBJAPI = 11, FLDAPI = 12/.test(src));
+  ok("EXPORT xlsx writes the api cells (OBJAPI/FLDAPI)", /ws\.getCell\(r, OBJAPI\)/.test(src) && /ws\.getCell\(r, FLDAPI\)/.test(src));
+  ok("EXPORT xlsx row() carries objApi/fieldApi", /objApi: n\.objApi \|\| ""/.test(src) && /fieldApi: n\.fieldApi \|\| ""/.test(src));
   ok("PATH removed from hover + export (wrong data; pending probe)", !/function segPathString/.test(src) && !/cond-path/.test(src) && !/Path\\n\(related join\)/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }

@@ -1,16 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v7 — Segment condition CONTAINER PATH values
+ * DOM PROBE v9 — expand attributeLibraryMetadata.displayPaths (Container Path source)
  *
- * Earlier probes showed condition elements expose containerPathForDisplay /
- * containerPath / containerJoinPath (+ simpleCondition.path/joinPath/pathForDisplay)
- * but we never captured their VALUES. v7 dumps exactly those, per condition, so we
- * can show the path on hover (the "Container Path" that today only appears on edit)
- * and add it to the export — WITHOUT guessing the shape.
+ * v8 proved SF's "Container Path" is reconstructed from attributeLibraryMetadata,
+ * not stored on the condition. v9 dumps, for each RELATED group node in
+ * attributeLibraryMetadata._nodeIndexByNodeId, the FULLY-EXPANDED path structures:
+ *   paths / displayPaths / joinPaths  (earlier probes truncated these to "array[1]")
+ * plus objectApiName/label/primaryKeyFieldApiName, so we can see how a hop encodes
+ * {object label, fk field label} and rebuild the exact "A.fk > B.fk > C" string.
  *
- * Run on the SEGMENT page with the Insurance Policy / related conditions visible.
+ * RUN on the SEGMENT page (any state — the metadata is on the canvas-item/condition).
  * Read-only. Copies JSON to clipboard; also window.__DOM_PROBE.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe7() {
+(function DomProbe9() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -24,52 +25,73 @@
   }
   function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
   function g(o, k) { try { return o[k]; } catch (e) { return undefined; } }
-  function sketch(v, d) {
-    d = d || 0;
+  // FULL sketch (deeper + wider than usual) so path arrays are not truncated
+  function sketch(v, d, maxD) {
+    d = d || 0; maxD = maxD || 8;
     if (v == null) return v;
     var t = typeof v;
     if (t === "function") return undefined;
     if (t !== "object") return (t === "string" && v.length > 300) ? v.slice(0, 300) + "…" : v;
-    if (d >= 4) return Array.isArray(v) ? ("array[" + v.length + "]") : "obj";
-    if (Array.isArray(v)) return v.slice(0, 8).map(function (x) { return sketch(x, d + 1); });
+    if (d >= maxD) return Array.isArray(v) ? ("array[" + v.length + "]") : "obj";
+    if (Array.isArray(v)) return v.slice(0, 20).map(function (x) { return sketch(x, d + 1, maxD); });
     var out = {}, keys; try { keys = Object.keys(v); } catch (e) { return "obj?"; }
-    keys.slice(0, 30).forEach(function (k) { try { var s = sketch(v[k], d + 1); if (s !== undefined) out[k] = s; } catch (e) {} });
+    keys.slice(0, 60).forEach(function (k) { try { var s = sketch(v[k], d + 1, maxD); if (s !== undefined) out[k] = s; } catch (e) {} });
     return out;
   }
 
-  var COND = {
-    "runtime_cdp-segment-builder-simple-condition": 1,
-    "runtime_cdp-segment-builder-aggregation-condition": 1,
-    "runtime_cdp-segment-builder-calculated-insight-condition": 1,
-    "runtime_cdp-segment-builder-condition-set": 1,
-    "runtime_cdp-canvas-item": 1
-  };
-  // path-related prop names to capture (element-level + inside the condition object)
-  var PATH_PROPS = ["containerPathForDisplay", "containerPath", "containerJoinPath", "pathForDisplay", "path", "joinPath", "displayPath"];
-
+  // find the first element exposing attributeLibraryMetadata
   var ALL = deepAll(document, []);
-  var samples = [];
-  ALL.forEach(function (el) {
-    if (!COND[tagOf(el)]) return;
-    if (samples.length >= 12) return;
-    var rec = { tag: tagOf(el), elementPath: {}, conditionPath: {} };
-    PATH_PROPS.forEach(function (p) { var v = g(el, p); if (v != null && v !== "") rec.elementPath[p] = sketch(v, 0); });
-    // the inner condition object (simpleCondition / aggregationCondition / item.details…)
-    ["simpleCondition", "aggregationCondition", "calculatedInsightCondition", "condition", "item"].forEach(function (cp) {
-      var c = g(el, cp);
-      if (c && typeof c === "object") {
-        var inner = {};
-        PATH_PROPS.forEach(function (p) { var v = g(c, p); if (v != null && v !== "") inner[p] = sketch(v, 0); });
-        var subj = g(c, "subject"); if (subj) inner.subject = sketch(subj, 0);
-        if (g(c, "attributeName")) inner.attributeName = g(c, "attributeName");
-        if (Object.keys(inner).length) rec.conditionPath[cp] = inner;
-      }
-    });
-    // only keep conditions that actually carry some path info (the related ones)
-    if (Object.keys(rec.elementPath).length || Object.keys(rec.conditionPath).length) samples.push(rec);
-  });
+  var meta = null, metaTag = "";
+  for (var i = 0; i < ALL.length; i++) {
+    var m = g(ALL[i], "attributeLibraryMetadata");
+    if (m && typeof m === "object" && g(m, "_nodeIndexByNodeId")) { meta = m; metaTag = tagOf(ALL[i]); break; }
+  }
 
-  var out = { _tool: "dom-probe", _version: 7, page: location.href, note: "container-path prop VALUES on condition elements", conditionsWithPath: samples.length, samples: samples };
+  var out = { _tool: "dom-probe", _version: 9, page: location.href, foundOn: metaTag };
+  if (!meta) {
+    out.error = "attributeLibraryMetadata not found — open the segment builder (not the list), then re-run.";
+  } else {
+    var idx = g(meta, "_nodeIndexByNodeId") || {};
+    var relatedNodes = [];
+    Object.keys(idx).forEach(function (id) {
+      var n = idx[id];
+      if (!n || typeof n !== "object") return;
+      // related CONTAINER nodes carry paths/displayPaths; attribute leaves don't
+      var hasPaths = g(n, "paths") || g(n, "displayPaths") || g(n, "joinPaths");
+      if (!hasPaths) return;
+      relatedNodes.push({
+        id: id,
+        objectApiName: g(n, "objectApiName"),
+        label: g(n, "label"),
+        fullLabel: g(n, "fullLabel"),
+        primaryKeyFieldApiName: g(n, "primaryKeyFieldApiName"),
+        dataEntityCategoryId: g(n, "dataEntityCategoryId"),
+        parentId: g(n, "parentId"),
+        // THE important bit — fully expanded:
+        paths: sketch(g(n, "paths"), 0, 9),
+        displayPaths: sketch(g(n, "displayPaths"), 0, 9),
+        joinPaths: sketch(g(n, "joinPaths"), 0, 9),
+        pathCardinalityTypeList: sketch(g(n, "pathCardinalityTypeList"), 0, 4)
+      });
+    });
+    out.relatedNodeCount = relatedNodes.length;
+    out.relatedNodes = relatedNodes.slice(0, 12);
+    out.foreignKeyDict = sketch(g(meta, "_foreignKeyDict"), 0, 5);
+    // also: what a condition stores to pick its path (so we can match condition→path)
+    var condSample = null;
+    for (var j = 0; j < ALL.length; j++) {
+      var c = g(ALL[j], "simpleCondition") || g(ALL[j], "aggregationCondition");
+      if (c && typeof c === "object" && (c.subject || c.path || c.joinPath)) {
+        condSample = { tag: tagOf(ALL[j]), attributeName: g(c, "attributeName"), subject: sketch(g(c, "subject"), 0, 4),
+          path: sketch(g(c, "path"), 0, 6), joinPath: sketch(g(c, "joinPath"), 0, 6),
+          containerCid: g(c, "parentCid") || g(c, "entityScopedGroupCid") || null,
+          pathForDisplay: sketch(g(c, "pathForDisplay"), 0, 6) };
+        break;
+      }
+    }
+    out.conditionSample = condSample;
+  }
+
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
 
@@ -80,25 +102,25 @@
   var kb = Math.round(json.length / 1024);
   var panel = document.createElement("div");
   panel.id = PANEL_ID;
-  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:320px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
+  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:330px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v7</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v9 — displayPaths</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
-    + "<div id='dc-probe-status' style='font-weight:700;color:" + (samples.length ? "#059669" : "#b45309") + ";margin-bottom:8px'>" + (samples.length ? ("✓ Copied (" + kb + " KB) — " + samples.length + " conditions with path") : "⚠ No path props found") + "</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.5'>" + (samples.length ? "Paste it back." : "Scroll so the Insurance Policy / related conditions are visible, then re-run.") + "</div>"
+    + "<div id='dc-probe-status' style='font-weight:700;color:" + (meta ? "#059669" : "#b45309") + ";margin-bottom:8px'>" + (meta ? ("✓ Copied (" + kb + " KB) — " + (out.relatedNodeCount || 0) + " related node(s)") : "⚠ metadata not found — open the segment builder, then re-run") + "</div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.5'>" + (meta ? "Paste it back." : "") + "</div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
-  copyText(json, function (ok) { if (!ok && samples.length) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
+  copyText(json, function (ok) { if (!ok && meta) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
   panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v7-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
+  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v9-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v7 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v9 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();

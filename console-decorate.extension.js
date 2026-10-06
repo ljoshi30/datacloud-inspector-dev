@@ -4523,7 +4523,8 @@
     }
     const row = (n) => {
       const s = splitEntityAttr(n.entity, n.attr);
-      return { attr: s.attr, op: n.op, v1: n.v1 || "", v2: n.v2 || "", entity: s.entity };
+      return { attr: s.attr, op: n.op, v1: n.v1 || "", v2: n.v2 || "", entity: s.entity,
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
     };
     // flatten a list of nodes (which may include nested groups) into flat cond rows
     function flattenRows(nodes) {
@@ -4540,7 +4541,7 @@
 
     // render one tab's tree onto a given worksheet (shared by single + multi-sheet)
     function renderSheet(ws, tree) {
-      const NCOLS = 10;
+      const NCOLS = 12;
       const widths = [5, 7, 27, 26, 12, 24, 8, 6, 6, 9];
       widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
       const thin = { style: "thin", color: { argb: "FF" + GRID } };
@@ -4572,7 +4573,8 @@
       //   Join groups    = joins a group-of-groups, e.g. (A OR B) (medium)
       //   Join all blocks= the top-level join across every block (thick)
       const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Attribute",
-        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks"];
+        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks",
+        "Object API", "Field API"];
       HEAD.forEach((h, i) => {
         const cell = ws.getCell(3, i + 1); cell.value = h;
         cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
@@ -4594,6 +4596,7 @@
 
       // Data rows
       const INNER = 8, MID = 9, OUTER = 10, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
+      const OBJAPI = 11, FLDAPI = 12;   // API-name columns appended AFTER the join rails
       const blocks = flatten(tree);
       let r = 4; const dataFirst = 4;
       const records = [];
@@ -4660,9 +4663,12 @@
             fo.font = { size: 9, color: { argb: "FF1F3864" } }; fo.fill = fill("F2F2F2");
             setValueCell(ws.getCell(r, V1), row.v1); ws.getCell(r, V1).alignment = { horizontal: "left", vertical: "middle" };
             setValueCell(ws.getCell(r, V2), row.v2); ws.getCell(r, V2).alignment = { horizontal: "center", vertical: "middle" };
+            // API-name columns (appended after the join rails). Monospace; blank when not scraped.
+            const oac = ws.getCell(r, OBJAPI); oac.value = row.objApi || ""; oac.font = { name: "Consolas", size: 8, color: { argb: "FF5C6B8A" } }; oac.alignment = { horizontal: "left", vertical: "middle" };
+            const fac = ws.getCell(r, FLDAPI); fac.value = row.fieldApi || ""; fac.font = { name: "Consolas", size: 8, color: { argb: "FF4338CA" } }; fac.alignment = { horizontal: "left", vertical: "middle" };
             const from = isMember ? ATTR : ENT;
             for (let c = from; c <= V2; c++) if (!(isMember === false && c === ENT)) ws.getCell(r, c).fill = fill(light);
-            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c);
+            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c); cols.push(OBJAPI); cols.push(FLDAPI);
             cols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
             ws.getRow(r).height = 16; r++;
           });
@@ -4709,9 +4715,9 @@
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
       // readable: rail columns stay narrow, value/notes columns can grow.
       if (typeof ws.autoSize === "function") ws.autoSize({
-        //     Blk Grp Ent Attr Op  V1  V2  Jin Jgr Jall Notes
-        min: [  4,  6, 18, 18, 10, 12,  6,  8,  8,  9,  30],
-        max: [  6, 10, 40, 40, 18, 40, 14, 10, 10, 12,  60],
+        //     Blk Grp Ent Attr Op  V1  V2  Jin Jgr Jall ObjAPI FldAPI
+        min: [  4,  6, 18, 18, 10, 12,  6,  8,  8,  9,  24,  22],
+        max: [  6, 10, 40, 40, 18, 40, 14, 10, 10, 12,  48,  44],
       });
     }
 
