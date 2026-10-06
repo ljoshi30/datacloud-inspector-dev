@@ -17053,14 +17053,20 @@ processJSON();
         if (gn && gn.objectApiName) {
           return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
         }
-        var sc = segSafeGet(el, "simpleCondition");
-        if (sc) {
-          var subj = sc.subject || {};
-          return { kind: "rule", label: sc.label || "", fieldApi: (subj.fieldApiName || sc.attributeName || ""), objectApi: subj.objectApiName || "", fieldType: "" };
-        }
-        var ac = segSafeGet(el, "aggregationCondition") || segSafeGet(el, "calculatedInsightCondition");
-        if (ac && ac.subject) {
-          return { kind: "rule", label: ac.label || "", fieldApi: ac.subject.fieldApiName || ac.attributeName || "", objectApi: ac.subject.objectApiName || "", fieldType: "" };
+        // Any condition-like element (simple / aggregation / calculated-insight /
+        // rank-limit). We read whichever container prop the element actually exposes —
+        // all share the same {subject:{fieldApiName,objectApiName}} shape (proven for
+        // simpleCondition; the others reuse it). Rank & Limit rows use their own prop,
+        // so include its known names here.
+        var CONDITION_PROPS = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition",
+          "groupRankLimitCondition", "rankLimitCondition", "rankAndLimitCondition", "condition"];
+        for (var ci = 0; ci < CONDITION_PROPS.length; ci++) {
+          var c = segSafeGet(el, CONDITION_PROPS[ci]);
+          if (!c || typeof c !== "object") continue;
+          var subj = c.subject || {};
+          var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
+          var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
         }
         return null;
       }
@@ -17085,7 +17091,8 @@ processJSON();
         "runtime_cdp-attribute-row": 1, "runtime_cdp-attribute-group-row": 1,
         "runtime_cdp-segment-builder-simple-condition": 1,
         "runtime_cdp-segment-builder-aggregation-condition": 1,
-        "runtime_cdp-segment-builder-calculated-insight-condition": 1
+        "runtime_cdp-segment-builder-calculated-insight-condition": 1,
+        "runtime_cdp-segment-builder-group-rank-limit-condition": 1
       };
       // Collect every decoratable element currently in the (shadow) DOM.
       function collectSegEls() {
@@ -17102,51 +17109,6 @@ processJSON();
         return out;
       }
 
-      // ── Floating hover chip (overlay — never mutates SF's shadow DOM) ───────────
-      var tip = null;
-      function ensureTip() {
-        if (tip) return tip;
-        tip = document.createElement("div");
-        tip.id = "dc-seg-api-tip";
-        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.4 SFMono-Regular,Menlo,monospace;padding:5px 9px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .1s;";
-        document.body.appendChild(tip);
-        return tip;
-      }
-      function showTip(info, x, y) {
-        var t = ensureTip();
-        t.textContent = segTooltip(info);
-        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 470) + "px";
-        t.style.top = (y + 16) + "px";
-        t.style.opacity = "1";
-      }
-      function hideTip() { if (tip) tip.style.opacity = "0"; }
-
-      // One delegated mousemove handles ALL rows (works through shadow DOM via composedPath).
-      function onMove(e) {
-        var path = (e.composedPath && e.composedPath()) || [];
-        var info = null;
-        for (var i = 0; i < path.length; i++) {
-          var el = path[i];
-          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) { info = segApiInfo(el); break; }
-        }
-        if (info && (info.fieldApi || info.objectApi)) showTip(info, e.clientX, e.clientY);
-        else hideTip();
-      }
-      document.addEventListener("mousemove", onMove, true);
-
-      // ── Toggle panel: list every visible attribute + rule with its API name ──────
-      function buildPanelList(infos) {
-        var byObj = {}, order = [];
-        infos.filter(Boolean).forEach(function (i) {
-          if (i.kind === "group" || !i.fieldApi) return;
-          var o = i.objectApi || "(unknown)";
-          if (!byObj[o]) { byObj[o] = {}; order.push(o); }
-          byObj[o][i.fieldApi] = i.label || "";
-        });
-        return order.map(function (o) {
-          return { object: o, fields: Object.keys(byObj[o]).sort().map(function (f) { return { fieldApi: f, label: byObj[o][f] }; }) };
-        });
-      }
       // Small "copied" toast (self-contained; no dependency on other features).
       function segToast(msg) {
         var t = document.createElement("div");
@@ -17160,87 +17122,73 @@ processJSON();
         if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { segToast("Copied " + text); }, function () { segToast("Copy blocked"); });
         else { try { var ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); segToast("Copied " + text); } catch (e) { segToast("Copy blocked"); } }
       }
-      // Panel opened FROM the launcher menu. Anchors bottom-right (same side as the FAB),
-      // adds click-to-copy on any API name, search, and counts. Toggles if already open.
-      function openSegApiPanel() {
-        var old = document.getElementById("dc-seg-api-panel"); if (old) { old.remove(); return; }
-        var infos = collectSegEls().map(segApiInfo).filter(Boolean);
-        // Two CLEAN, separate data sets:
-        //  • attributes = left-palette rows (have a label) → grouped list with label + api
-        //  • usedRules  = conditions on the right (NO label; SF renders each one several
-        //    times via canvas+shim, so DEDUPE by object|field) → chip-only list
-        var attrInfos = infos.filter(function (i) { return i.kind === "attribute" && i.fieldApi; });
-        var ruleSeen = {}, usedRules = [];
-        infos.filter(function (i) { return i.kind === "rule" && i.fieldApi; }).forEach(function (r) {
-          var k = (r.objectApi || "") + "|" + r.fieldApi;
-          if (!ruleSeen[k]) { ruleSeen[k] = 1; usedRules.push(r); }
-        });
-        var availList = buildPanelList(attrInfos);  // group attrs by object (label kept)
-        var usedList = buildPanelList(usedRules);   // group rules by object (label blank → chip-only)
-        var availCount = availList.reduce(function (n, g) { return n + g.fields.length; }, 0);
 
-        var panel = document.createElement("div");
-        panel.id = "dc-seg-api-panel";
-        panel.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483646;width:410px;max-height:74vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
-        var hdr = document.createElement("div");
-        hdr.style.cssText = "padding:11px 14px;background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-        hdr.innerHTML = "<div><div style='font:700 13px system-ui'>Segment API names</div><div style='font:400 10px system-ui;opacity:.85'>Click any API name to copy</div></div>";
-        var x = document.createElement("button"); x.innerHTML = "&times;"; x.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;flex:none;"; x.onclick = function () { panel.remove(); };
-        hdr.appendChild(x); panel.appendChild(hdr);
-        var search = document.createElement("input");
-        search.placeholder = "Search label or API name…";
-        search.style.cssText = "margin:10px 14px 6px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:7px;font:12px system-ui;";
-        panel.appendChild(search);
-        var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:4px 14px 14px;min-height:0;";
-        panel.appendChild(body);
-        var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
-        // clickable api-name chip (copies on click)
-        var apiCell = function (api) { return "<span class='dc-seg-copy' data-api='" + esc(api) + "' title='Click to copy' style='font:600 11px SFMono-Regular,Menlo,monospace;color:#4338ca;background:#eef2ff;border-radius:4px;padding:2px 6px;cursor:pointer;word-break:break-all;display:inline-block'>" + esc(api) + "</span>"; };
-        var objHead = function (obj) { return "<div style='margin:13px 0 5px;padding-bottom:3px;border-bottom:1px solid #eef2ff'>" + apiCell(obj) + "</div>"; };
-        var matchQ = function (f, obj, q) { return !q || (String(f.label || "") + " " + f.fieldApi + " " + obj).toLowerCase().indexOf(q) >= 0; };
-        // Render one grouped section. withLabel=true → "label … api" rows; false → chip-only.
-        function section(titleText, color, groups, withLabel, q) {
-          var inner = "", total = 0;
-          groups.forEach(function (grp) {
-            var fields = grp.fields.filter(function (f) { return matchQ(f, grp.object, q); });
-            if (!fields.length) return;
-            total += fields.length;
-            inner += objHead(grp.object);
-            fields.forEach(function (f) {
-              if (withLabel && f.label) inner += "<div style='padding:4px 0;display:flex;justify-content:space-between;gap:10px;align-items:baseline'><span style='flex:1'>" + esc(f.label) + "</span>" + apiCell(f.fieldApi) + "</div>";
-              else inner += "<div style='padding:4px 0'>" + apiCell(f.fieldApi) + "</div>";
-            });
-          });
-          if (!inner) return "";
-          return "<div style='font:700 11px system-ui;color:" + color + ";letter-spacing:.03em;margin:10px 0 2px'>" + titleText + " (" + total + ")</div>" + inner;
-        }
-        function render(q) {
-          q = (q || "").trim().toLowerCase();
-          var html = "";
-          html += section("USED IN THIS SEGMENT", "#7c3aed", usedList, false, q);
-          html += section("ATTRIBUTES ON SCREEN", "#0d6efd", availList, true, q);
-          if (!html) {
-            html = usedList.length || availList.length
-              ? "<div style='color:#94a3b8;padding:12px 0'>Nothing matches “" + esc(q) + "”.</div>"
-              : "<div style='color:#64748b;padding:12px 0;line-height:1.5'>Hover any attribute or rule to see its API name.<br><br>To list them here, <b>open a DMO's attributes</b> in the left panel (or add a rule), then reopen this.</div>";
-          }
-          body.innerHTML = html;
-        }
-        // one delegated click → copy whichever chip was clicked
-        body.addEventListener("click", function (e) {
-          var c = e.target && e.target.closest ? e.target.closest(".dc-seg-copy") : null;
-          if (c && c.getAttribute("data-api")) segCopy(c.getAttribute("data-api"));
-        });
-        search.oninput = function () { render(search.value); };
-        render("");
-        document.body.appendChild(panel);
-        search.focus();
-        try { if (typeof makeDraggable === "function") makeDraggable(panel, hdr); } catch (e) {}
+      // ── Hover chip (overlay — never mutates SF's shadow DOM) ────────────────────
+      // OFF by default. Turned on from the launcher menu ("API names: On/Off"). While
+      // ON: hovering any attribute/rule/group row shows its API name; CLICKING that row
+      // copies the field API name (object API if it's a group header). No modal/panel.
+      var segOn = false;         // feature toggle
+      var hoverInfo = null;      // info under the cursor right now (for click-to-copy)
+      var tip = null;
+      function ensureTip() {
+        if (tip) return tip;
+        tip = document.createElement("div");
+        tip.id = "dc-seg-api-tip";
+        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.4 SFMono-Regular,Menlo,monospace;padding:5px 9px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .1s;";
+        document.body.appendChild(tip);
+        return tip;
       }
+      function showTip(info, x, y) {
+        var t = ensureTip();
+        // extra hint that a click copies — only useful while the feature is on
+        t.textContent = segTooltip(info) + "   ⧉ click to copy";
+        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 470) + "px";
+        t.style.top = (y + 16) + "px";
+        t.style.opacity = "1";
+      }
+      function hideTip() { if (tip) tip.style.opacity = "0"; }
 
-      // Expose so the EXISTING segment launcher menu can open it (added there, dev-gated
-      // via `typeof openSegApiPanel === "function"`), instead of a separate floating button.
-      try { window.__dcOpenSegApiPanel = openSegApiPanel; } catch (e) {}
+      function infoFromEvent(e) {
+        var path = (e.composedPath && e.composedPath()) || [];
+        for (var i = 0; i < path.length; i++) {
+          var el = path[i];
+          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) return segApiInfo(el);
+        }
+        return null;
+      }
+      // One delegated mousemove handles ALL rows (works through shadow DOM via composedPath).
+      function onMove(e) {
+        if (!segOn) return;
+        var info = infoFromEvent(e);
+        hoverInfo = info;
+        if (info && (info.fieldApi || info.objectApi)) showTip(info, e.clientX, e.clientY);
+        else hideTip();
+      }
+      // Click a row while the feature is ON → copy its API name (capture phase so SF's
+      // own click still works too — we only READ, then let the event continue).
+      function onClick(e) {
+        if (!segOn) return;
+        var info = infoFromEvent(e);
+        if (!info) return;
+        var api = (info.kind === "group") ? info.objectApi : (info.fieldApi || info.objectApi);
+        if (api) segCopy(api);
+      }
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("click", onClick, true);
+
+      // Toggle entry point for the launcher. Returns the new state (true = on).
+      function toggleSegApi(force) {
+        segOn = (typeof force === "boolean") ? force : !segOn;
+        if (!segOn) hideTip();
+        segToast(segOn ? "API names ON — hover a row (click to copy)" : "API names OFF");
+        return segOn;
+      }
+      function segApiIsOn() { return segOn; }
+
+      // Expose so the EXISTING segment launcher menu can toggle it (dev-gated there via
+      // `typeof window.__dcToggleSegApi === "function"`). No separate button, no modal.
+      try { window.__dcToggleSegApi = toggleSegApi; } catch (e) {}
+      try { window.__dcSegApiIsOn = segApiIsOn; } catch (e) {}
       try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
     })();
   }
@@ -17286,14 +17234,21 @@ processJSON();
       const separator = document.createElement("div");
       separator.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:4px 0;";
 
-      // Segment-only "API names" entry — opens the hover/copy panel. Dev-gated at runtime:
-      // the panel fn (window.__dcOpenSegApiPanel) only exists when the dev-only segment
-      // API-name feature loaded, so this row is absent from the public build automatically.
+      // Segment-only "API names" entry — TOGGLES the hover-to-copy overlay (no panel).
+      // Dev-gated at runtime: the toggle fn (window.__dcToggleSegApi) only exists when the
+      // dev-only segment feature loaded, so this row is absent from the public build.
       let segApiRow = null;
-      if (isSegment && typeof window.__dcOpenSegApiPanel === "function") {
+      if (isSegment && typeof window.__dcToggleSegApi === "function") {
         const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
-        segApiRow = mkBtn("dc-seg-api-row", "API names", "Show attribute API names (hover rows, or open the searchable list)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, "Hover rows or open the list");
-        segApiRow.onclick = (e) => { e.stopPropagation(); try { closeMenu(); } catch (err) {} try { window.__dcOpenSegApiPanel(); } catch (err) {} };
+        const onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, click the row to copy it", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, click to copy" : "Off — click to enable hover");
+        const segSub = segApiRow.querySelector("span:last-child");
+        segApiRow.onclick = (e) => {
+          e.stopPropagation();
+          let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
+          if (segSub) segSub.textContent = on ? "On — hover a row, click to copy" : "Off — click to enable hover";
+          // leave the menu open so the user sees the state flip; closes on outside click
+        };
       }
 
       const dismissRow = document.createElement("button");

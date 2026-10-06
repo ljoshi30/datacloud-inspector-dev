@@ -33,11 +33,17 @@ function segApiInfo(el) {
   if (gn && gn.objectApiName) {
     return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
   }
-  // 3) used rule (right side)
-  var sc = safeGet(el, "simpleCondition");
-  if (sc) {
-    var subj = sc.subject || {};
-    return { kind: "rule", label: sc.label || "", fieldApi: (subj.fieldApiName || sc.attributeName || ""), objectApi: subj.objectApiName || "", fieldType: "" };
+  // 3) any condition (simple / aggregation / calculated-insight / rank-limit) — all share
+  //    the {subject:{fieldApiName,objectApiName}} shape; rank-limit uses its own prop name.
+  var CONDITION_PROPS = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition",
+    "groupRankLimitCondition", "rankLimitCondition", "rankAndLimitCondition", "condition"];
+  for (var ci = 0; ci < CONDITION_PROPS.length; ci++) {
+    var c = safeGet(el, CONDITION_PROPS[ci]);
+    if (!c || typeof c !== "object") continue;
+    var subj = c.subject || {};
+    var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
+    var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
+    if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
   }
   return null;
 }
@@ -106,6 +112,17 @@ console.log("\n3b. rule falls back to attributeName when subject missing fieldAp
 {
   var el = { simpleCondition: { attributeName: "Foo__c", subject: { objectApiName: "X__dlm" } } };
   eq("fallback to attributeName", segApiInfo(el).fieldApi, "Foo__c");
+}
+console.log("\n3c. RANK & LIMIT / aggregation / CI conditions also resolve");
+{
+  var rl = segApiInfo({ groupRankLimitCondition: { subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "DaystoExpiration__c" }, label: "Days to Expiration" } });
+  eq("rank-limit kind rule", rl.kind, "rule");
+  eq("rank-limit fieldApi", rl.fieldApi, "DaystoExpiration__c");
+  eq("rank-limit objectApi", rl.objectApi, "TDI_InsurancePolicy__dlm");
+  var rl2 = segApiInfo({ groupRankLimitCondition: { selectedObjectApiName: "TDI_UnifiedIndividualTdir__dlm", attributeName: "Id__c" } });
+  eq("rank-limit via selectedObjectApiName/attributeName", rl2.objectApi, "TDI_UnifiedIndividualTdir__dlm");
+  var agg = segApiInfo({ aggregationCondition: { subject: { objectApiName: "A__dlm", fieldApiName: "Count__c" } } });
+  eq("aggregation condition resolves", agg.fieldApi, "Count__c");
 }
 
 // ── 4. the COLLISION this feature solves ───────────────────────────────────────────
@@ -189,15 +206,15 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("segApiInfo defined", /function segApiInfo\s*\(/.test(src));
   ok("reads attributeNode.fieldApiName directly", /attributeNode[\s\S]{0,80}fieldApiName/.test(src));
   ok("reads groupNode.objectApiName", /groupNode[\s\S]{0,80}objectApiName/.test(src));
-  ok("reads simpleCondition.subject", /simpleCondition[\s\S]{0,120}subject/.test(src));
-  ok("hover tooltip wired (segApiTooltip or title set)", /segApiTooltip|dc-seg-api-tip/.test(src));
-  ok("panel wired", /dc-seg-api-panel|openSegApiPanel/.test(src));
-  ok("panel opened FROM existing launcher (no separate floating button)", /__dcOpenSegApiPanel/.test(src) && !/dc-seg-api-btn/.test(src));
-  ok("launcher has an 'API names' menu row (segment-only, dev-gated)", /dc-seg-api-row/.test(src) && /typeof window\.__dcOpenSegApiPanel === "function"/.test(src));
-  ok("panel rows are click-to-copy with a toast", /dc-seg-copy/.test(src) && /function segCopy\s*\(/.test(src) && /segToast/.test(src));
-  ok("used rules DEDUPED (SF renders each condition several times)", /ruleSeen/.test(src));
-  ok("used vs attributes shown as SEPARATE sections (no blank-left rows)", /USED IN THIS SEGMENT/.test(src) && /ATTRIBUTES ON SCREEN/.test(src));
-  ok("no misleading fixed 'available' count in header (counts are per-section)", !/" used &bull; "/.test(src));
+  ok("reads condition .subject (simple + others via CONDITION_PROPS)", /CONDITION_PROPS/.test(src) && /simpleCondition/.test(src) && /c\.subject/.test(src));
+  ok("hover tooltip wired (overlay chip)", /dc-seg-api-tip/.test(src));
+  ok("hover is a TOGGLE, off by default", /var segOn = false/.test(src) && /function toggleSegApi\s*\(/.test(src));
+  ok("toggle exposed to launcher (no modal, no panel)", /window\.__dcToggleSegApi/.test(src) && !/dc-seg-api-panel/.test(src) && !/function openSegApiPanel/.test(src));
+  ok("launcher row TOGGLES (segment-only, dev-gated on toggle fn)", /dc-seg-api-row/.test(src) && /typeof window\.__dcToggleSegApi === "function"/.test(src));
+  ok("CLICK a row copies its API name (copy on the hover itself)", /function onClick\s*\(/.test(src) && /segCopy\(/.test(src));
+  ok("copy has a toast", /function segCopy\s*\(/.test(src) && /segToast/.test(src));
+  ok("no separate floating button, no search box, no modal", !/dc-seg-api-btn/.test(src) && !/Search label or API name/.test(src));
+  ok("RANK & LIMIT rows covered (tag + condition prop)", /runtime_cdp-segment-builder-group-rank-limit-condition/.test(src) && /groupRankLimitCondition|rankLimitCondition/.test(src));
   ok("targets the real tags", /runtime_cdp-attribute-row/.test(src) && /runtime_cdp-segment-builder-simple-condition/.test(src));
   ok("OLD fragile label-matching annotation removed (no fetchDmo/labelToDevName)", !/function fetchDmo\s*\(/.test(src) && !/labelToDevName\s*[=\[]/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
