@@ -45,7 +45,41 @@ function segApiInfo(el) {
     var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
     if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
   }
+  // 4) ACTIVATION: a drag chip / quick-attribute row — API name on .details
+  var dt = safeGet(el, "details");
+  if (dt && typeof dt === "object") {
+    var ds = dt.subject || {};
+    var df = ds.fieldApiName || dt.fieldApiName || dt.targetFieldName || dt.attributeName || "";
+    var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || "";
+    if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "" };
+  }
+  // 5) ACTIVATION main table cell — only {rowUid,name}; join to the datatable's data /
+  //    summary includedAttributes by uid to get the field api. Caller passes a resolver.
+  var rowUid = safeGet(el, "rowUid");
+  if (rowUid && typeof el._resolveUid === "function") {
+    var r = el._resolveUid(rowUid);
+    if (r && (r.fieldApi || r.objectApi)) return { kind: "activationAttr", label: r.label || safeGet(el, "name") || "", fieldApi: r.fieldApi || "", objectApi: r.objectApi || "", outputName: r.outputName || "", fieldType: "" };
+  }
   return null;
+}
+
+// Build a uid → {label, fieldApi, objectApi, outputName} resolver from a datatable's
+// .data[] (label/output/object) joined with activation-summary.includedAttributes[]
+// (the field api). Mirrors segBuildUidResolver in source.
+function buildUidResolver(datatableData, includedAttributes) {
+  var byUid = {};
+  (datatableData || []).forEach(function (d) {
+    if (!d || !d.uid) return;
+    byUid[d.uid] = { label: d.name || "", outputName: d.defaultOutputName || d.preferredName || "", objectApi: d.entityName || "", fieldApi: "" };
+  });
+  (includedAttributes || []).forEach(function (a) {
+    if (!a || !a.uid) return;
+    if (!byUid[a.uid]) byUid[a.uid] = { label: a.label || "", outputName: "", objectApi: a.entityName || "", fieldApi: "" };
+    byUid[a.uid].fieldApi = a.attributeName || byUid[a.uid].fieldApi;
+    if (!byUid[a.uid].objectApi) byUid[a.uid].objectApi = a.entityName || "";
+    if (!byUid[a.uid].label) byUid[a.uid].label = a.label || "";
+  });
+  return function (uid) { return byUid[uid] || null; };
 }
 
 // Chip text shown on hover / in the panel. Prefer field API; include object for context.
@@ -123,6 +157,42 @@ console.log("\n3c. RANK & LIMIT / aggregation / CI conditions also resolve");
   eq("rank-limit via selectedObjectApiName/attributeName", rl2.objectApi, "TDI_UnifiedIndividualTdir__dlm");
   var agg = segApiInfo({ aggregationCondition: { subject: { objectApiName: "A__dlm", fieldApiName: "Count__c" } } });
   eq("aggregation condition resolves", agg.fieldApi, "Count__c");
+}
+
+// ── 3d. ACTIVATION — drag-item chip (.details) ──────────────────────────────────────
+console.log("\n3d. activation drag-item → .details.fieldApiName / .subject");
+{
+  var quick = segApiInfo({ details: { label: "Segment Code", fieldApiName: "Segment_Code__c", targetObjectName: "TDI_UnifiedIndividualTdir__dlm", primaryObjectName: "TDI_UnifiedIndividualTdir__dlm" } });
+  eq("quick-attr fieldApi", quick.fieldApi, "Segment_Code__c");
+  eq("quick-attr objectApi", quick.objectApi, "TDI_UnifiedIndividualTdir__dlm");
+  var cond = segApiInfo({ details: { attributeName: "TDI_Account_Multiline__c", subject: { objectApiName: "TDI_UnifiedIndividualTdir__dlm", fieldApiName: "TDI_Account_Multiline__c" } } });
+  eq("condition-drag fieldApi via subject", cond.fieldApi, "TDI_Account_Multiline__c");
+}
+
+// ── 3e. ACTIVATION — main table cell resolved by uid-join ───────────────────────────
+console.log("\n3e. activation datatable cell → uid join (table data + summary)");
+{
+  var tableData = [
+    { uid: "u1", name: "Unified Individual Id", defaultOutputName: "Id", entityName: "TDI_UnifiedIndividualTdir__dlm" },
+    { uid: "u2", name: "Contact Type", defaultOutputName: "Contact Type", entityName: "TDI_UnifiedIndividualTdir__dlm" },
+    { uid: "u3", name: "Email Address", defaultOutputName: "EmailAddress", entityName: "TDI_ContactPointEmail__dlm" }, // related: no field api in summary
+  ];
+  var summary = [
+    { uid: "u1", label: "Unified Individual Id", attributeName: "Id__c", entityName: "TDI_UnifiedIndividualTdir__dlm" },
+    { uid: "u2", label: "Contact Type", attributeName: "TDI_Contact_Type__c", entityName: "TDI_UnifiedIndividualTdir__dlm" },
+  ];
+  var resolve = buildUidResolver(tableData, summary);
+  var cell = { rowUid: "u2", name: "Contact Type", _resolveUid: resolve };
+  var info = segApiInfo(cell);
+  eq("cell kind", info.kind, "activationAttr");
+  eq("cell field api (from summary join)", info.fieldApi, "TDI_Contact_Type__c");
+  eq("cell object api", info.objectApi, "TDI_UnifiedIndividualTdir__dlm");
+  eq("cell output name carried", info.outputName, "Contact Type");
+  // related-entity row: object + output known, field api NOT fabricated
+  var rel = segApiInfo({ rowUid: "u3", name: "Email Address", _resolveUid: resolve });
+  eq("related row object api", rel.objectApi, "TDI_ContactPointEmail__dlm");
+  eq("related row has NO fabricated field api", rel.fieldApi, "");
+  eq("related row output name", rel.outputName, "EmailAddress");
 }
 
 // ── 4. the COLLISION this feature solves ───────────────────────────────────────────
@@ -217,6 +287,12 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("RANK & LIMIT rows covered (tag + condition prop)", /runtime_cdp-segment-builder-group-rank-limit-condition/.test(src) && /groupRankLimitCondition|rankLimitCondition/.test(src));
   ok("targets the real tags", /runtime_cdp-attribute-row/.test(src) && /runtime_cdp-segment-builder-simple-condition/.test(src));
   ok("OLD fragile label-matching annotation removed (no fetchDmo/labelToDevName)", !/function fetchDmo\s*\(/.test(src) && !/labelToDevName\s*[=\[]/.test(src));
+  // ACTIVATION coverage
+  ok("ACTIVATION: runs on activation page too (not just Segment)", /detailPageType === "Segment" \|\| detailPageType === "Activation"/.test(src) || /onSegApiPage/.test(src));
+  ok("ACTIVATION: drag-item .details read for api name", /details[\s\S]{0,120}(targetFieldName|fieldApiName)/.test(src) && /runtime_cdp-drag-item/.test(src));
+  ok("ACTIVATION: datatable cell resolved by uid-join", /rowUid/.test(src) && /includedAttributes/.test(src) && /buildUidResolver|segBuildUidResolver|_resolveUid/.test(src));
+  ok("ACTIVATION: never fabricates a field api (related rows show object+output only)", /activationAttr/.test(src));
+  ok("ACTIVATION: toggle wired into activation launcher", /__dcToggleSegApi/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

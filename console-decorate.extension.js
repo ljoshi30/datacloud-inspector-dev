@@ -15454,13 +15454,32 @@ processJSON();
 
   // Create the activation launcher button (extension-only)
   function ensureActivationLauncher() {
-    // Extension-only feature
+    /* @strip:start dev
+     * Dev-only "API names" toggle for the Activation wizard. Works in BOTH bookmarklet
+     * and extension (unlike Export Activation, which is bridge-only), so it lives before
+     * the bridge gate. Gated on the toggle fn existing (absent in public builds). */
+    if (typeof window.__dcToggleSegApi === "function" && !document.getElementById("dc-act-api-btn")) {
+      var apiBtn = document.createElement("button");
+      apiBtn.id = "dc-act-api-btn";
+      var _apiOn = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
+      apiBtn.textContent = _apiOn ? "{ } API names: On" : "{ } API names";
+      apiBtn.title = "Toggle API-name hints: hover any attribute/rule to see its API name, click the row to copy it";
+      apiBtn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;border:none;border-radius:20px;padding:10px 16px;cursor:pointer;font:700 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);box-shadow:0 3px 12px rgba(124,58,237,.4);";
+      apiBtn.onclick = function () {
+        var on = false; try { on = window.__dcToggleSegApi(); } catch (e) {}
+        apiBtn.textContent = on ? "{ } API names: On" : "{ } API names";
+      };
+      document.body.appendChild(apiBtn);
+    }
+    /* @strip:end */
+    // Extension-only feature (export needs the bridge)
     if (!extBridgePresent()) return;
     if (document.getElementById("dc-activation-bar")) return;
 
     var wrap = document.createElement("div");
     wrap.id = "dc-activation-bar";
-    wrap.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483646;";
+    // sit the export button ABOVE the API-names toggle so they don't overlap
+    wrap.style.cssText = "position:fixed;bottom:64px;left:20px;z-index:2147483646;";
 
     var btn = document.createElement("button");
     btn.textContent = "📋 Export Activation";
@@ -17027,18 +17046,18 @@ processJSON();
   }
 
   /* @strip:start dev
-   * SEGMENT API-NAME DECORATOR (dev-only until approved for public).
-   * Shows the real API name of each attribute on the Segment builder — left palette
-   * (runtime_cdp-attribute-row / -attribute-group-row) AND used rules (simple/aggregation
-   * conditions). Reads the API name DIRECTLY off the element's LWC property (proven via
-   * DOM Probe v2/v3 — see memory data360-segment-builder-dom): no API call, no label-
-   * matching, no collision guessing. Replaces the OLD fetchDmo/labelToDevName approach,
-   * which matched by lowercased label (collision-prone) and targeted a data-tid="attr-row"
-   * DOM that no longer exists on this page.
-   *   • Hover tooltip: a floating chip near the row with object · field [· PK] [type].
-   *   • Toggle panel: "API names" list of every visible attribute + used rule, searchable.
-   * Zero mutation of SF's shadow DOM → survives SF re-renders, can't break the page. */
-  if (detailPageType === "Segment") {
+   * SEGMENT + ACTIVATION API-NAME DECORATOR (dev-only until approved for public).
+   * Shows the real API name of each attribute on the Segment builder AND the Activation
+   * wizard — left palette (runtime_cdp-attribute-row / -attribute-group-row), used rules
+   * (simple/aggregation/rank-limit conditions), activation drag chips (runtime_cdp-drag-
+   * item.details), and the activation attribute table (runtime_cdp-activation-attribute-
+   * datatable, resolved by uid against activation-summary.includedAttributes). Reads the
+   * API name DIRECTLY off the element's LWC property (proven via DOM Probe v2–v5 — see
+   * memory data360-segment-builder-dom): no API call, no label-matching, no guessing.
+   *   • Hover (toggle): a floating chip with object · field [· PK] [type].
+   *   • Click a row (while on): copies its API name. No modal/panel.
+   * Zero mutation of SF's shadow DOM → survives re-renders, can't break the page. */
+  if (detailPageType === "Segment" || detailPageType === "Activation") {
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
       // Classify a segment element and extract its API-name info, or null. Reads the
@@ -17068,7 +17087,63 @@ processJSON();
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
           if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
         }
+        // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
+        var ral = segSafeGet(el, "relatedAttributesLimit");
+        if (ral && (ral.attributeName)) {
+          return { kind: "rule", label: "Sort By", fieldApi: ral.attributeName || "", objectApi: segSafeGet(el, "activationEntityName") || "", fieldType: "" };
+        }
+        // ACTIVATION drag chip / quick-attribute row → API name on .details
+        var dt = segSafeGet(el, "details");
+        if (dt && typeof dt === "object") {
+          var ds = dt.subject || {};
+          var df = ds.fieldApiName || dt.fieldApiName || dt.targetFieldName || dt.attributeName || "";
+          var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || "";
+          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "" };
+        }
+        // ACTIVATION main attribute-table cell → only {rowUid,name}; join by uid to the
+        // datatable .data[] (label/output/object) + activation-summary.includedAttributes[]
+        // (the field api). Field api is NOT fabricated for related rows that lack it.
+        var rowUid = segSafeGet(el, "rowUid");
+        if (rowUid) {
+          var r = segResolveUid(rowUid);
+          if (r && (r.fieldApi || r.objectApi)) return { kind: "activationAttr", label: r.label || segSafeGet(el, "name") || "", fieldApi: r.fieldApi || "", objectApi: r.objectApi || "", outputName: r.outputName || "", fieldType: "" };
+        }
         return null;
+      }
+      // Build/refresh a uid → {label,fieldApi,objectApi,outputName} map by scanning the
+      // activation datatables (.data[]) and the activation-summary (.includedAttributes[]).
+      // Rebuilt on demand (cheap) so it reflects the current attribute set.
+      function segBuildUidResolver() {
+        var byUid = {};
+        collectRaw().forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-attribute-datatable") {
+            var data = segSafeGet(el, "data");
+            if (data && data.length) for (var i = 0; i < data.length; i++) {
+              var d = data[i]; if (!d || !d.uid) continue;
+              if (!byUid[d.uid]) byUid[d.uid] = { label: "", fieldApi: "", objectApi: "", outputName: "" };
+              byUid[d.uid].label = byUid[d.uid].label || d.name || "";
+              byUid[d.uid].outputName = byUid[d.uid].outputName || d.defaultOutputName || d.preferredName || "";
+              byUid[d.uid].objectApi = byUid[d.uid].objectApi || d.entityName || "";
+            }
+          } else if (tag === "runtime_cdp-activation-summary") {
+            var inc = segSafeGet(el, "includedAttributes");
+            if (inc && inc.length) for (var j = 0; j < inc.length; j++) {
+              var a = inc[j]; if (!a || !a.uid) continue;
+              if (!byUid[a.uid]) byUid[a.uid] = { label: "", fieldApi: "", objectApi: "", outputName: "" };
+              byUid[a.uid].fieldApi = a.attributeName || byUid[a.uid].fieldApi;
+              byUid[a.uid].objectApi = byUid[a.uid].objectApi || a.entityName || "";
+              byUid[a.uid].label = byUid[a.uid].label || a.label || "";
+            }
+          }
+        });
+        return byUid;
+      }
+      var _segUidMap = null, _segUidAt = 0;
+      function segResolveUid(uid) {
+        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
+        if (!_segUidMap || (now - _segUidAt) > 1500) { _segUidMap = segBuildUidResolver(); _segUidAt = now; }
+        return _segUidMap[uid] || null;
       }
       function segChipText(info) {
         if (!info) return "";
@@ -17092,21 +17167,26 @@ processJSON();
         "runtime_cdp-segment-builder-simple-condition": 1,
         "runtime_cdp-segment-builder-aggregation-condition": 1,
         "runtime_cdp-segment-builder-calculated-insight-condition": 1,
-        "runtime_cdp-segment-builder-group-rank-limit-condition": 1
+        "runtime_cdp-segment-builder-group-rank-limit-condition": 1,
+        // ACTIVATION
+        "runtime_cdp-drag-item": 1,
+        "runtime_cdp-activation-attribute-datatable-attribute-column": 1,
+        "runtime_cdp-activation-related-attribute-limit": 1
       };
-      // Collect every decoratable element currently in the (shadow) DOM.
-      function collectSegEls() {
+      // Walk ALL elements through shadow DOM once (used by the uid resolver, which needs
+      // the datatable + summary elements that aren't in SEG_TAGS).
+      function collectRaw() {
         var out = [];
         (function walk(root, depth) {
           if (depth > 14) return;
           var all; try { all = root.querySelectorAll("*"); } catch (e) { return; }
-          for (var i = 0; i < all.length; i++) {
-            var el = all[i];
-            if (SEG_TAGS[(el.tagName || "").toLowerCase()]) out.push(el);
-            if (el.shadowRoot) walk(el.shadowRoot, depth + 1);
-          }
+          for (var i = 0; i < all.length; i++) { var el = all[i]; out.push(el); if (el.shadowRoot) walk(el.shadowRoot, depth + 1); }
         })(document, 0);
         return out;
+      }
+      // Collect every decoratable (hover-target) element currently in the (shadow) DOM.
+      function collectSegEls() {
+        return collectRaw().filter(function (el) { return SEG_TAGS[(el.tagName || "").toLowerCase()]; });
       }
 
       // Small "copied" toast (self-contained; no dependency on other features).
@@ -17190,6 +17270,12 @@ processJSON();
       try { window.__dcToggleSegApi = toggleSegApi; } catch (e) {}
       try { window.__dcSegApiIsOn = segApiIsOn; } catch (e) {}
       try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
+      // On the Activation wizard the launcher already ran (before this block set the toggle
+      // fn), so its "API names" button was skipped. Re-run it now — it's idempotent (bails
+      // if its buttons already exist) and will add the toggle button on this pass.
+      if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
+        try { ensureActivationLauncher(); } catch (e) {}
+      }
     })();
   }
   /* @strip:end */
