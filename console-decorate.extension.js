@@ -17165,15 +17165,26 @@ processJSON();
       function openSegApiPanel() {
         var old = document.getElementById("dc-seg-api-panel"); if (old) { old.remove(); return; }
         var infos = collectSegEls().map(segApiInfo).filter(Boolean);
-        var list = buildPanelList(infos);
-        var usedRules = infos.filter(function (i) { return i.kind === "rule"; });
-        var totalFields = list.reduce(function (n, g) { return n + g.fields.length; }, 0);
+        // Two CLEAN, separate data sets:
+        //  • attributes = left-palette rows (have a label) → grouped list with label + api
+        //  • usedRules  = conditions on the right (NO label; SF renders each one several
+        //    times via canvas+shim, so DEDUPE by object|field) → chip-only list
+        var attrInfos = infos.filter(function (i) { return i.kind === "attribute" && i.fieldApi; });
+        var ruleSeen = {}, usedRules = [];
+        infos.filter(function (i) { return i.kind === "rule" && i.fieldApi; }).forEach(function (r) {
+          var k = (r.objectApi || "") + "|" + r.fieldApi;
+          if (!ruleSeen[k]) { ruleSeen[k] = 1; usedRules.push(r); }
+        });
+        var availList = buildPanelList(attrInfos);  // group attrs by object (label kept)
+        var usedList = buildPanelList(usedRules);   // group rules by object (label blank → chip-only)
+        var availCount = availList.reduce(function (n, g) { return n + g.fields.length; }, 0);
+
         var panel = document.createElement("div");
         panel.id = "dc-seg-api-panel";
-        panel.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483646;width:400px;max-height:72vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
+        panel.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483646;width:410px;max-height:74vh;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);display:flex;flex-direction:column;font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;";
         var hdr = document.createElement("div");
         hdr.style.cssText = "padding:11px 14px;background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-        hdr.innerHTML = "<div><div style='font:700 13px system-ui'>Segment API names</div><div style='font:400 10px system-ui;opacity:.85'>" + usedRules.length + " used &bull; " + totalFields + " available &bull; click any to copy</div></div>";
+        hdr.innerHTML = "<div><div style='font:700 13px system-ui'>Segment API names</div><div style='font:400 10px system-ui;opacity:.85'>Click any API name to copy</div></div>";
         var x = document.createElement("button"); x.innerHTML = "&times;"; x.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px;flex:none;"; x.onclick = function () { panel.remove(); };
         hdr.appendChild(x); panel.appendChild(hdr);
         var search = document.createElement("input");
@@ -17183,25 +17194,36 @@ processJSON();
         var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:4px 14px 14px;min-height:0;";
         panel.appendChild(body);
         var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
-        // a clickable api-name chip (copies on click)
-        var apiCell = function (api) { return "<span class='dc-seg-copy' data-api='" + esc(api) + "' title='Click to copy' style='font:600 11px SFMono-Regular,Menlo,monospace;color:#4338ca;background:#eef2ff;border-radius:4px;padding:1px 6px;cursor:pointer;word-break:break-all'>" + esc(api) + "</span>"; };
+        // clickable api-name chip (copies on click)
+        var apiCell = function (api) { return "<span class='dc-seg-copy' data-api='" + esc(api) + "' title='Click to copy' style='font:600 11px SFMono-Regular,Menlo,monospace;color:#4338ca;background:#eef2ff;border-radius:4px;padding:2px 6px;cursor:pointer;word-break:break-all;display:inline-block'>" + esc(api) + "</span>"; };
+        var objHead = function (obj) { return "<div style='margin:13px 0 5px;padding-bottom:3px;border-bottom:1px solid #eef2ff'>" + apiCell(obj) + "</div>"; };
+        var matchQ = function (f, obj, q) { return !q || (String(f.label || "") + " " + f.fieldApi + " " + obj).toLowerCase().indexOf(q) >= 0; };
+        // Render one grouped section. withLabel=true → "label … api" rows; false → chip-only.
+        function section(titleText, color, groups, withLabel, q) {
+          var inner = "", total = 0;
+          groups.forEach(function (grp) {
+            var fields = grp.fields.filter(function (f) { return matchQ(f, grp.object, q); });
+            if (!fields.length) return;
+            total += fields.length;
+            inner += objHead(grp.object);
+            fields.forEach(function (f) {
+              if (withLabel && f.label) inner += "<div style='padding:4px 0;display:flex;justify-content:space-between;gap:10px;align-items:baseline'><span style='flex:1'>" + esc(f.label) + "</span>" + apiCell(f.fieldApi) + "</div>";
+              else inner += "<div style='padding:4px 0'>" + apiCell(f.fieldApi) + "</div>";
+            });
+          });
+          if (!inner) return "";
+          return "<div style='font:700 11px system-ui;color:" + color + ";letter-spacing:.03em;margin:10px 0 2px'>" + titleText + " (" + total + ")</div>" + inner;
+        }
         function render(q) {
           q = (q || "").trim().toLowerCase();
           var html = "";
-          if (usedRules.length) {
-            var ur = usedRules.filter(function (r) { return !q || (r.label + " " + r.fieldApi + " " + r.objectApi).toLowerCase().indexOf(q) >= 0; });
-            if (ur.length) {
-              html += "<div style='font:700 11px system-ui;color:#7c3aed;margin:8px 0 4px'>USED IN THIS SEGMENT (" + ur.length + ")</div>";
-              ur.forEach(function (r) { html += "<div style='padding:5px 0;border-bottom:1px solid #f1f5f9'><div style='font-weight:600;margin-bottom:2px'>" + esc(r.label || r.fieldApi) + "</div><div style='word-break:break-all'>" + apiCell(r.objectApi) + " " + apiCell(r.fieldApi) + "</div></div>"; });
-            }
+          html += section("USED IN THIS SEGMENT", "#7c3aed", usedList, false, q);
+          html += section("ATTRIBUTES ON SCREEN", "#0d6efd", availList, true, q);
+          if (!html) {
+            html = usedList.length || availList.length
+              ? "<div style='color:#94a3b8;padding:12px 0'>Nothing matches “" + esc(q) + "”.</div>"
+              : "<div style='color:#64748b;padding:12px 0;line-height:1.5'>Hover any attribute or rule to see its API name.<br><br>To list them here, <b>open a DMO's attributes</b> in the left panel (or add a rule), then reopen this.</div>";
           }
-          list.forEach(function (grp) {
-            var fields = grp.fields.filter(function (f) { return !q || (f.label + " " + f.fieldApi + " " + grp.object).toLowerCase().indexOf(q) >= 0; });
-            if (!fields.length) return;
-            html += "<div style='margin:12px 0 4px'>" + apiCell(grp.object) + "</div>";
-            fields.forEach(function (f) { html += "<div style='padding:4px 0;display:flex;justify-content:space-between;gap:8px;align-items:center'><span>" + esc(f.label) + "</span>" + apiCell(f.fieldApi) + "</div>"; });
-          });
-          if (!html) html = "<div style='color:#94a3b8;padding:12px 0'>No attributes found yet. Open a DMO's attributes in the left panel (or add a rule), then reopen this.</div>";
           body.innerHTML = html;
         }
         // one delegated click → copy whichever chip was clicked

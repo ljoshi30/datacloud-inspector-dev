@@ -160,6 +160,27 @@ console.log("\n6. buildPanelList — rows grouped by object, deduped");
   eq("object B has 1 field", list[1].fields.length, 1);
 }
 
+// ── 6b. used-rule dedupe (SF renders each condition multiple times: canvas + shim) ──
+console.log("\n6b. rule dedupe by object|field (fixes the inflated 'used' count)");
+{
+  function dedupeRules(ruleInfos) {
+    var seen = {}, out = [];
+    ruleInfos.filter(function (i) { return i && i.kind === "rule" && i.fieldApi; }).forEach(function (r) {
+      var k = (r.objectApi || "") + "|" + r.fieldApi;
+      if (!seen[k]) { seen[k] = 1; out.push(r); }
+    });
+    return out;
+  }
+  var raw = [
+    { kind: "rule", fieldApi: "TDI_Account_Multiline__c", objectApi: "A__dlm" },
+    { kind: "rule", fieldApi: "TDI_Account_Multiline__c", objectApi: "A__dlm" }, // dup render
+    { kind: "rule", fieldApi: "TDI_Account_Multiline__c", objectApi: "A__dlm" }, // dup render
+    { kind: "rule", fieldApi: "DaystoExpiration__c", objectApi: "B__dlm" },
+    { kind: "rule", fieldApi: "", objectApi: "C__dlm" },                         // no field → dropped
+  ];
+  eq("5 raw rule elements collapse to 2 real rules", dedupeRules(raw).length, 2);
+}
+
 // ── 7. source presence ──────────────────────────────────────────────────────────────
 console.log("\n7. source presence (wired, dev-only, reads props directly)");
 {
@@ -174,6 +195,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("panel opened FROM existing launcher (no separate floating button)", /__dcOpenSegApiPanel/.test(src) && !/dc-seg-api-btn/.test(src));
   ok("launcher has an 'API names' menu row (segment-only, dev-gated)", /dc-seg-api-row/.test(src) && /typeof window\.__dcOpenSegApiPanel === "function"/.test(src));
   ok("panel rows are click-to-copy with a toast", /dc-seg-copy/.test(src) && /function segCopy\s*\(/.test(src) && /segToast/.test(src));
+  ok("used rules DEDUPED (SF renders each condition several times)", /ruleSeen/.test(src));
+  ok("used vs attributes shown as SEPARATE sections (no blank-left rows)", /USED IN THIS SEGMENT/.test(src) && /ATTRIBUTES ON SCREEN/.test(src));
+  ok("no misleading fixed 'available' count in header (counts are per-section)", !/" used &bull; "/.test(src));
   ok("targets the real tags", /runtime_cdp-attribute-row/.test(src) && /runtime_cdp-segment-builder-simple-condition/.test(src));
   ok("OLD fragile label-matching annotation removed (no fetchDmo/labelToDevName)", !/function fetchDmo\s*\(/.test(src) && !/labelToDevName\s*[=\[]/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
