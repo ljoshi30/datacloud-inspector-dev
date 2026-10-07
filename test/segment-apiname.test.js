@@ -33,18 +33,30 @@ function segApiInfo(el) {
   if (gn && gn.objectApiName) {
     return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
   }
-  // 3) any condition (simple / aggregation / calculated-insight / rank-limit) — all share
-  //    the {subject:{fieldApiName,objectApiName}} shape; rank-limit uses its own prop name.
-  var CONDITION_PROPS = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition",
+  // 3a) aggregation container header (Count / Sum / …). Reads ONLY its own subject —
+  //     a bare Count owns NO field, and we NEVER descend into .filter / .conditions (those
+  //     are nested member conditions). Prevents a Count header showing a member's field/path.
+  var aggC = safeGet(el, "aggregationCondition");
+  if (aggC && typeof aggC === "object") {
+    var aSub = aggC.subject || {};
+    var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
+    var aFld = aSub.fieldApiName || "";
+    if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", containerPath: "", isAggregate: true };
+  }
+  // 3b) simple / calculated-insight / rank-limit — all share the
+  //     {subject:{fieldApiName,objectApiName}} shape; rank-limit uses .conditions[0].subject.
+  var CONDITION_PROPS = ["simpleCondition", "calculatedInsightCondition",
     "groupRankLimitCondition", "rankLimitCondition", "rankAndLimitCondition", "condition"];
   for (var ci = 0; ci < CONDITION_PROPS.length; ci++) {
-    var c = safeGet(el, CONDITION_PROPS[ci]);
+    var cProp = CONDITION_PROPS[ci];
+    var c = safeGet(el, cProp);
     if (!c || typeof c !== "object") continue;
     var subj = c.subject || {};
     var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
     var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
-    // aggregates nest the real field in .filter
-    if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
+    // Rank & Limit ONLY: ranked field in .conditions[0].subject (restricted to rank props
+    // so a general descent can't pull a nested member's field onto a header).
+    if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
     if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
   }
   // 4) ACTIVATION: a drag chip / quick-attribute row — API name on .details
@@ -159,8 +171,34 @@ console.log("\n3c. RANK & LIMIT / aggregation / CI conditions also resolve");
   eq("rank-limit objectApi", rl.objectApi, "TDI_InsurancePolicy__dlm");
   var rl2 = segApiInfo({ groupRankLimitCondition: { selectedObjectApiName: "TDI_UnifiedIndividualTdir__dlm", attributeName: "Id__c" } });
   eq("rank-limit via selectedObjectApiName/attributeName", rl2.objectApi, "TDI_UnifiedIndividualTdir__dlm");
+  // aggregation WITH an explicit field (Sum/Average on a field) → that field, no fabrication
   var agg = segApiInfo({ aggregationCondition: { subject: { objectApiName: "A__dlm", fieldApiName: "Count__c" } } });
   eq("aggregation condition resolves", agg.fieldApi, "Count__c");
+  eq("aggregation object resolves", agg.objectApi, "A__dlm");
+}
+
+// ── 3c-bug. A BARE Count container must NOT fabricate a field or a container path ──────
+// Repro of the reported bug: hovering "Insurance Policy : Count At Least 1" showed
+// DaystoExpiration__c + "Container Path: Insurance Policy.Primary Insured > …" even though
+// the edit view has only Container Object Name (no field, no path). The agg header owns no
+// field; its nested MEMBER conditions must never leak up onto the header.
+console.log("\n3c-bug. bare Count aggregation header shows object only — never a field/path");
+{
+  // SF shapes a Count header as an aggregationCondition whose field-bearing data lives in
+  // nested members (.filter / .conditions), NOT on its own subject.
+  var count = segApiInfo({
+    aggregationCondition: {
+      label: "Count", selectedObjectApiName: "TDI_InsurancePolicy__dlm",
+      subject: { objectApiName: "TDI_InsurancePolicy__dlm" },   // no fieldApiName
+      filter: { subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "DaystoExpiration__c" } },
+      conditions: [{ subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "DaystoExpiration__c" } }],
+      joinPath: [[{ objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "TDI_PrimaryInsured__c" }, { objectApiName: "TDI_UnifiedIndividualTdi__dlm", fieldApiName: "Id__c" }]]
+    }
+  });
+  eq("Count resolves to the object", count.objectApi, "TDI_InsurancePolicy__dlm");
+  eq("Count has NO fabricated field", count.fieldApi, "");
+  eq("Count has NO fabricated container path", count.containerPath, "");
+  ok("Count flagged isAggregate", count.isAggregate === true);
 }
 
 // ── 3d. ACTIVATION — drag-item chip (.details) ──────────────────────────────────────
@@ -322,6 +360,8 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("reads attributeNode.fieldApiName directly", /attributeNode[\s\S]{0,80}fieldApiName/.test(src));
   ok("reads groupNode.objectApiName", /groupNode[\s\S]{0,80}objectApiName/.test(src));
   ok("reads condition .subject (simple + others via CONDITION_PROPS)", /CONDITION_PROPS/.test(src) && /simpleCondition/.test(src) && /c\.subject/.test(src));
+  ok("aggregation header reads its OWN subject only (no .filter/.conditions descent)", /aggregationCondition/.test(src) && /never fabricated from nested members|NEVER descend/.test(src));
+  ok("bare Count aggregate yields no field (isAggregate flag present)", /isAggregate: true/.test(src));
   ok("hover tooltip wired (overlay chip)", /dc-seg-api-tip/.test(src));
   ok("hover is a TOGGLE, off by default", /var segOn = false/.test(src) && /function toggleSegApi\s*\(/.test(src));
   ok("toggle exposed to launcher (no modal, no panel)", /window\.__dcToggleSegApi/.test(src) && !/dc-seg-api-panel/.test(src) && !/function openSegApiPanel/.test(src));
@@ -341,17 +381,18 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("ACTIVATION: toggle wired into activation launcher", /__dcToggleSegApi/.test(src));
   ok("ACTIVATION: unified FAB launcher (same icon/menu, not a separate pill)", /dc-act-fab/.test(src) && /dc-act-api-row/.test(src) && !/dc-act-api-btn/.test(src));
   ok("ACTIVATION: Export Activation is a menu row", /dc-act-export-row/.test(src));
-  ok("RANK & LIMIT: field api read from .conditions[0].subject", /c\.conditions && c\.conditions\.length/.test(src) && /groupRankLimitCondition/.test(src));
+  ok("RANK & LIMIT: field api read from .conditions[0].subject (restricted to rank props)", /\/rank\/i\.test\(cProp\) && c\.conditions && c\.conditions\.length/.test(src) && /groupRankLimitCondition/.test(src));
   ok("LABEL fallback for chips/summary lines (built from real props only)", /function segBuildLabelIndex\s*\(/.test(src) && /function segLabelLookup\s*\(/.test(src));
   ok("label fallback strips trailing × and leading index", /\[×✕✖xX\]|\\s\*\[×/.test(src) || /replace\(\/\\s\*\[/.test(src));
   ok("ambiguous label marked (?), never silently wrong", /ambiguous/.test(src) && /\(\?\)/.test(src));
   // EXPORT (documentation): authoritative API names (NO path — path pending a real probe)
   ok("EXPORT reads authoritative api (condApiAndPath)", /function condApiAndPath\s*\(/.test(src));
   ok("EXPORT extractLabels prefers authoritative over entity label-match", /condApiAndPath\(condEl\)/.test(src) && /auth\.objApi \|\| auth\.fieldApi/.test(src));
-  ok("EXPORT xlsx has Object API + Field API columns", /"Object API", "Field API"/.test(src) && /OBJAPI = 11, FLDAPI = 12/.test(src));
+  ok("EXPORT xlsx Object API sits right AFTER Object, Field API right AFTER Attribute", /"Object API",[\s\S]{0,40}"Attribute", "Field API"/.test(src) && /ENT = 3, OBJAPI = 4, ATTR = 5, FLDAPI = 6/.test(src));
   ok("EXPORT xlsx writes the api cells (OBJAPI/FLDAPI)", /ws\.getCell\(r, OBJAPI\)/.test(src) && /ws\.getCell\(r, FLDAPI\)/.test(src));
   ok("EXPORT xlsx row() carries objApi/fieldApi", /objApi: n\.objApi \|\| ""/.test(src) && /fieldApi: n\.fieldApi \|\| ""/.test(src));
-  ok("EXPORT HTML shows field API inline (not just hover)", /fld-api/.test(src) && /n\.fieldApi \? /.test(src));
+  ok("EXPORT HTML shows API name UNDER the label (not beside/dangling)", /function labelWithApi\s*\(/.test(src) && /class="api-under"/.test(src) && /labelWithApi\(n\.attr, n\.fieldApi, "fld"\)/.test(src));
+  ok("EXPORT HTML direct card shows object API under the object label", /labelWithApi\(n\.entity, member \? "" : n\.objApi, "obj"\)/.test(src));
   ok("PATH removed from hover + export (wrong data; pending probe)", !/function segPathString/.test(src) && !/cond-path/.test(src) && !/Path\\n\(related join\)/.test(src));
   ok("CONTAINER PATH reconstructed + shown on hover (related objects)", /segResolveContainerPath/.test(src) && /containerPath/.test(src) && /Container Path: /.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));

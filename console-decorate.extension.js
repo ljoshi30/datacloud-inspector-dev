@@ -4560,7 +4560,10 @@
     // render one tab's tree onto a given worksheet (shared by single + multi-sheet)
     function renderSheet(ws, tree) {
       const NCOLS = 12;
-      const widths = [5, 7, 27, 26, 12, 24, 8, 6, 6, 9];
+      // Columns: Blk | Group | Object/Entity | Object API | Attribute | Field API |
+      //          Operator | Value 1 | Value 2 | Join in group | Join groups | Join all blocks
+      // (each API name sits in the column immediately AFTER the label it belongs to).
+      const widths = [5, 7, 27, 26, 26, 24, 12, 24, 8, 6, 6, 9];
       widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
       const thin = { style: "thin", color: { argb: "FF" + GRID } };
       const fill = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb: "FF" + argb } });
@@ -4590,9 +4593,9 @@
       //   Join in group  = joins rows WITHIN one grouped block (thin)
       //   Join groups    = joins a group-of-groups, e.g. (A OR B) (medium)
       //   Join all blocks= the top-level join across every block (thick)
-      const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Attribute",
-        "Operator", "Value 1", "Value 2", "Join in\ngroup", "Join\ngroups", "Join all\nblocks",
-        "Object API", "Field API"];
+      const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Object API",
+        "Attribute", "Field API", "Operator", "Value 1", "Value 2", "Join in\ngroup",
+        "Join\ngroups", "Join all\nblocks"];
       HEAD.forEach((h, i) => {
         const cell = ws.getCell(3, i + 1); cell.value = h;
         cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
@@ -4613,8 +4616,10 @@
       }
 
       // Data rows
-      const INNER = 8, MID = 9, OUTER = 10, ENT = 3, ATTR = 4, OPC = 5, V1 = 6, V2 = 7;
-      const OBJAPI = 11, FLDAPI = 12;   // API-name columns appended AFTER the join rails
+      // Each API-name column sits immediately AFTER the label it describes:
+      //   Object/Entity(3) · Object API(4) · Attribute(5) · Field API(6) · Operator(7) …
+      const ENT = 3, OBJAPI = 4, ATTR = 5, FLDAPI = 6, OPC = 7, V1 = 8, V2 = 9;
+      const INNER = 10, MID = 11, OUTER = 12;   // join rails, now the three right-most cols
       const blocks = flatten(tree);
       let r = 4; const dataFirst = 4;
       const records = [];
@@ -4681,12 +4686,20 @@
             fo.font = { size: 9, color: { argb: "FF1F3864" } }; fo.fill = fill("F2F2F2");
             setValueCell(ws.getCell(r, V1), row.v1); ws.getCell(r, V1).alignment = { horizontal: "left", vertical: "middle" };
             setValueCell(ws.getCell(r, V2), row.v2); ws.getCell(r, V2).alignment = { horizontal: "center", vertical: "middle" };
-            // API-name columns (appended after the join rails). Monospace; blank when not scraped.
+            // API-name columns sit DIRECTLY after their label (Object API after Object,
+            // Field API after Attribute). Monospace, kept white (no row tint) so they read
+            // as metadata; blank when not scraped (never fabricated).
             const oac = ws.getCell(r, OBJAPI); oac.value = row.objApi || ""; oac.font = { name: "Consolas", size: 8, color: { argb: "FF5C6B8A" } }; oac.alignment = { horizontal: "left", vertical: "middle" };
             const fac = ws.getCell(r, FLDAPI); fac.value = row.fieldApi || ""; fac.font = { name: "Consolas", size: 8, color: { argb: "FF4338CA" } }; fac.alignment = { horizontal: "left", vertical: "middle" };
+            // Row tint across the label/value span. API columns stay white; the direct
+            // attribute's entity cell keeps its own dark colour.
             const from = isMember ? ATTR : ENT;
-            for (let c = from; c <= V2; c++) if (!(isMember === false && c === ENT)) ws.getCell(r, c).fill = fill(light);
-            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c); cols.push(OBJAPI); cols.push(FLDAPI);
+            for (let c = from; c <= V2; c++) {
+              if (c === OBJAPI || c === FLDAPI) continue;            // API cols stay white
+              if (!isMember && c === ENT) continue;                 // direct entity cell = dark
+              ws.getCell(r, c).fill = fill(light);
+            }
+            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c);   // API cols are within ENT..V2 now
             cols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
             ws.getRow(r).height = 16; r++;
           });
@@ -4733,9 +4746,9 @@
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
       // readable: rail columns stay narrow, value/notes columns can grow.
       if (typeof ws.autoSize === "function") ws.autoSize({
-        //     Blk Grp Ent Attr Op  V1  V2  Jin Jgr Jall ObjAPI FldAPI
-        min: [  4,  6, 18, 18, 10, 12,  6,  8,  8,  9,  24,  22],
-        max: [  6, 10, 40, 40, 18, 40, 14, 10, 10, 12,  48,  44],
+        //     Blk Grp Ent ObjAPI Attr FldAPI Op  V1  V2  Jin Jgr Jall
+        min: [  4,  6, 18,  24,   18,  22,    10, 12,  6,  8,  8,  9],
+        max: [  6, 10, 40,  48,   40,  44,    18, 40, 14, 10, 10, 12],
       });
     }
 
@@ -4863,6 +4876,14 @@
         return { entity: e, attr: a };
       }
 
+      // Render a human label with its API name stacked directly UNDERNEATH (not beside /
+      // dangling at the end). Top line = the label; second line = the monospace API name.
+      // Blank second line when the API name wasn't scraped (never fabricated).
+      function labelWithApi(label, api, cls) {
+        const under = api ? `<span class="api-under">${esc(api)}</span>` : "";
+        return `<span class="lblcol ${cls || ""}"><span class="lbltop">${esc(label == null ? "" : label)}</span>${under}</span>`;
+      }
+
       function renderCond(n, member) {
         const sea = splitEntityAttr(n.entity, n.attr);
         n = Object.assign({}, n, { entity: sea.entity, attr: sea.attr });
@@ -4870,14 +4891,13 @@
         if (n.op === "Is Between") val = `<b>${esc(n.v1)}</b> <span class="op">AND</span> <b>${esc(n.v2)}</b>`;
         else if (n.v1) val = `<b>${esc(n.v1)}</b>`;
         const [light] = color(n.entity);
-        // Inline field API name next to the attribute (always visible — no hover needed).
-        // Blank when not scraped. Object API also shown for member rows (card headers show
-        // the object API separately via renderContainer).
-        const fApi = n.fieldApi ? `<span class="fld-api">${esc(n.fieldApi)}</span>` : "";
-        const oApi = (member && n.objApi) ? `<span class="fld-api obj">${esc(n.objApi)}</span>` : "";
-        const inner = `<span class="entity">${esc(n.entity)}</span>
-            <span class="dot">&bull;</span> <b class="attr">${esc(n.attr)}</b>${fApi}${oApi}
-            <span class="op">${esc(n.op)}</span> ${val}`;
+        // API names go UNDER their labels: object API under the object label, field API
+        // under the field label. On member rows the container header already states the
+        // object, so repeating it under every member row is noise → object API only on
+        // direct cards (which have no header). Field API is always shown under the field.
+        const entUnit = labelWithApi(n.entity, member ? "" : n.objApi, "obj");
+        const attrUnit = labelWithApi(n.attr, n.fieldApi, "fld");
+        const inner = `${entUnit}<span class="dot">&bull;</span> ${attrUnit}<span class="op">${esc(n.op)}</span> ${val}`;
         if (member) return `<div class="member">${inner}</div>`;
         const chip = kindChip(n.kind || "direct", n.objApi);
         return `<div class="card" style="--bg:${light}"><div class="card-main">${chip}${inner}</div></div>`;
@@ -5013,6 +5033,16 @@
       .cont-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#5c6b8a; margin-left:8px; vertical-align:middle; }
       .fld-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; margin-left:7px; vertical-align:middle; }
       .fld-api.obj { color:#5c6b8a; background:#f1f5f9; }
+      /* Stacked label + API name: the API name sits directly UNDER its label (not beside
+         it, not dangling at the end of the row). Keeps condition rows aligned on a baseline. */
+      .lblcol { display:inline-flex; flex-direction:column; vertical-align:top; margin:0 2px; line-height:1.25; }
+      .lblcol .lbltop { white-space:nowrap; }
+      .lblcol.obj .lbltop { color:var(--sub); }
+      .lblcol.fld .lbltop { color:var(--txt); font-weight:700; }
+      .api-under { font:600 10px/1.2 "SF Mono",Menlo,monospace; margin-top:2px; align-self:flex-start; }
+      .lblcol.fld .api-under { color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; }
+      .lblcol.obj .api-under { color:#5c6b8a; background:#f1f5f9; border-radius:4px; padding:1px 5px; }
+      .card-main, .member { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 4px; }
       .container > .stack, .container > .grp { padding:0; }
       .container .card { box-shadow:none; }
       .member { position:relative; padding:10px 12px; border-top:1px dashed #e2e6ee; }
@@ -17203,29 +17233,41 @@ processJSON();
         if (gn && gn.objectApiName) {
           return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
         }
-        // Any condition-like element (simple / aggregation / calculated-insight /
-        // rank-limit). We read whichever container prop the element actually exposes —
-        // all share the same {subject:{fieldApiName,objectApiName}} shape (proven for
-        // simpleCondition; the others reuse it). Rank & Limit rows use their own prop,
-        // so include its known names here.
-        var CONDITION_PROPS = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition",
+        // Aggregation container header (Count / Sum / Average / …). The header names the
+        // RELATED OBJECT + the aggregate function; it owns NO field of its own unless the
+        // aggregate itself targets one (Sum/Average), and it has NO container path. We read
+        // ONLY the aggregation's own subject — we NEVER descend into .filter / .conditions,
+        // because those are the MEMBER conditions nested inside the container (each decorates
+        // on its own hover). Descending would surface a member's field on the header, e.g. a
+        // bare "Count At Least 1" wrongly showing DaystoExpiration__c + a reconstructed path
+        // (SF's edit view for a Count has only Container Object Name — no field, no path).
+        var aggC = segSafeGet(el, "aggregationCondition");
+        if (aggC && typeof aggC === "object") {
+          var aSub = aggC.subject || {};
+          var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
+          var aFld = aSub.fieldApiName || "";   // empty for a bare Count — never fabricated from nested members
+          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", containerPath: "", isAggregate: true };
+        }
+        // Simple / calculated-insight / rank-limit conditions. All share the
+        // {subject:{fieldApiName,objectApiName}} shape (proven for simpleCondition; the
+        // others reuse it). Rank & Limit keeps its ranked field in .conditions[0].subject.
+        var CONDITION_PROPS = ["simpleCondition", "calculatedInsightCondition",
           "groupRankLimitCondition", "rankLimitCondition", "rankAndLimitCondition", "condition"];
         for (var ci = 0; ci < CONDITION_PROPS.length; ci++) {
-          var c = segSafeGet(el, CONDITION_PROPS[ci]);
+          var cProp = CONDITION_PROPS[ci];
+          var c = segSafeGet(el, cProp);
           if (!c || typeof c !== "object") continue;
           var subj = c.subject || {};
           var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
           var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
-          // aggregate conditions nest the real field in .filter
-          if (!f && c.filter && c.filter.subject) { f = c.filter.subject.fieldApiName || ""; o = o || c.filter.subject.objectApiName || ""; }
-          // Rank & Limit: the ranked field lives in .conditions[0].subject (proven v10),
-          // NOT on the top-level prop. selectedObjectApiName is the object.
-          if (!f && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
+          // Rank & Limit ONLY: the ranked field lives in .conditions[0].subject (proven
+          // v10), NOT on the top-level prop. Restrict this descent to the rank props — a
+          // general .conditions[] descent would pull a nested member's field onto a header.
+          if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
           // Container Path: SF's label route for a RELATED object, reconstructed from
           // attributeLibraryMetadata.displayPaths and matched to this condition's own
-          // joinPath. "" for direct (same-object) conditions. The condition's joinPath may
-          // live on .joinPath or .path (aggregates: on the outer object, not .filter).
-          var cjp = c.joinPath || c.path || (c.filter && (c.filter.joinPath || c.filter.path)) || null;
+          // joinPath. "" for direct (same-object) conditions or when ambiguous (never guessed).
+          var cjp = c.joinPath || c.path || null;
           var cpath = "";
           try { var node = segPathNodeFor(o); if (node) cpath = segResolveContainerPath(node, cjp) || ""; } catch (e) {}
           if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cpath };
