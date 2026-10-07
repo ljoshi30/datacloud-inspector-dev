@@ -4486,9 +4486,13 @@
           // Limit) — not attribute/operator/value conditions — so mark setting:true
           // and render them as "Label: value" property lines (see renderSheet).
           const rrows = [];
-          if (node.rankType) rrows.push({ label: node.rankType, value: node.rankField || "", setting: true, entity: node.entity });
-          if (node.limit)    rrows.push({ label: "Limit", value: node.limit, setting: true, entity: node.entity });
-          if (!rrows.length) rrows.push({ label: node.attr || "(rank & limit)", value: "", setting: true, entity: node.entity });
+          // Carry the scraped API names onto the rank rows so Excel can show them (same
+          // authoritative source hover/HTML use: .groupRankLimitCondition.conditions[0].subject).
+          // Field API only on the Group By / Sort By row (that's the row that names a field);
+          // object API on every rank row (it's the ranked DMO).
+          if (node.rankType) rrows.push({ label: node.rankType, value: node.rankField || "", setting: true, entity: node.entity, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
+          if (node.limit)    rrows.push({ label: "Limit", value: node.limit, setting: true, entity: node.entity, objApi: node.objApi || "" });
+          if (!rrows.length) rrows.push({ label: node.attr || "(rank & limit)", value: "", setting: true, entity: node.entity, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
           blocks.push({ entity: node.entity, container: true, agg: "Rank & Limit", blockJoin, kind: "rank", note: node.note || "",
             groups: [{ grp: "", box: false, join: "AND", rows: rrows, descriptive: true }] });
         } else if (node.t === "nested") {
@@ -4659,14 +4663,25 @@
             // "Label: value" property line across ATTR→V2 so nothing masquerades as
             // a queryable field with an operator.
             if (row.setting) {
-              ws.mergeCells(r, ATTR, r, V2);
+              // Property line (rank/limit, nested-segment publish settings). After the
+              // column reorder the API columns (Object API=4, Field API=6) sit INSIDE the
+              // old ATTR..V2 span, so instead of one merged "Label: value" cell we lay it
+              // out as columns: Attribute=label, Field API next to it, and the long value in
+              // the merged Operator→Value2 tail. API names populate (ranked DMO + field);
+              // blank for publish settings. This is why Rank & Limit now shows API in Excel.
               const pc = ws.getCell(r, ATTR);
-              pc.value = "•  " + row.label + (row.value ? ":   " + row.value : "");
+              pc.value = "•  " + row.label;
               pc.font = { size: 9, italic: true, color: { argb: "FF44546A" } };
               pc.alignment = { horizontal: "left", vertical: "middle" };
-              for (let c = ATTR; c <= V2; c++) ws.getCell(r, c).fill = fill(light);
-              const scols = [1, 2, ATTR];
-              scols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
+              const roac = ws.getCell(r, OBJAPI); roac.value = row.objApi || ""; roac.font = { name: "Consolas", size: 8, color: { argb: "FF5C6B8A" } }; roac.alignment = { horizontal: "left", vertical: "middle" };
+              const rfac = ws.getCell(r, FLDAPI); rfac.value = row.fieldApi || ""; rfac.font = { name: "Consolas", size: 8, color: { argb: "FF4338CA" } }; rfac.alignment = { horizontal: "left", vertical: "middle" };
+              if (OPC <= V2) ws.mergeCells(r, OPC, r, V2);   // the long "value" lives in the tail
+              const vc = ws.getCell(r, OPC);
+              vc.value = row.value || "";
+              vc.font = { size: 9, italic: true, color: { argb: "FF44546A" } };
+              vc.alignment = { horizontal: "left", vertical: "middle" };
+              for (let c = ATTR; c <= V2; c++) { if (c === OBJAPI || c === FLDAPI) continue; ws.getCell(r, c).fill = fill(light); }
+              [1, 2, ATTR, OBJAPI, FLDAPI, OPC].forEach((c) => boxRange(r, r, c, c, "thin", GRID));
               ws.getRow(r).height = 16; r++;
               return;
             }

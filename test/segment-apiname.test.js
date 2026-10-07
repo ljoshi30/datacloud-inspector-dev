@@ -351,6 +351,31 @@ console.log("\n6b. rule dedupe by object|field (fixes the inflated 'used' count)
   eq("5 raw rule elements collapse to 2 real rules", dedupeRules(raw).length, 2);
 }
 
+// ── 6c. Rank & Limit API names reach the Excel SETTING rows ──────────────────────────
+// Rank rows render as setting:true property lines in Excel. Those lines previously merged
+// over the API columns → blank Object/Field API for Rank & Limit (reported bug). The rank
+// node carries objApi/fieldApi (scraped from .groupRankLimitCondition.conditions[0].subject);
+// flatten() must copy them onto the Group By / Sort By setting row (field api), and object
+// api onto every rank setting row (incl. Limit).
+console.log("\n6c. Rank & Limit setting rows carry API names for Excel");
+{
+  // mirror of flatten()'s t==="rank" branch (the API-carrying part)
+  function rankSettingRows(node) {
+    const rrows = [];
+    if (node.rankType) rrows.push({ label: node.rankType, value: node.rankField || "", setting: true, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
+    if (node.limit)    rrows.push({ label: "Limit", value: node.limit, setting: true, objApi: node.objApi || "" });
+    if (!rrows.length) rrows.push({ label: node.attr || "(rank & limit)", value: "", setting: true, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
+    return rrows;
+  }
+  var gb = rankSettingRows({ rankType: "Group By", rankField: "Civic No", limit: "34 records per group", objApi: "TDI_UnifiedIndividualTdir__dlm", fieldApi: "Civic_No__c" });
+  eq("Group By row keeps field api", gb[0].fieldApi, "Civic_No__c");
+  eq("Group By row keeps object api", gb[0].objApi, "TDI_UnifiedIndividualTdir__dlm");
+  eq("Limit row keeps object api", gb[1].objApi, "TDI_UnifiedIndividualTdir__dlm");
+  eq("Limit row has no (fabricated) field api", gb[1].fieldApi, undefined);
+  var sb = rankSettingRows({ rankType: "Sort By", rankField: "First Name", objApi: "TDI_UnifiedIndividualTdir__dlm", fieldApi: "FirstName__c" });
+  eq("Sort By row keeps field api", sb[0].fieldApi, "FirstName__c");
+}
+
 // ── 7. source presence ──────────────────────────────────────────────────────────────
 console.log("\n7. source presence (wired, dev-only, reads props directly)");
 {
@@ -390,6 +415,8 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("EXPORT extractLabels prefers authoritative over entity label-match", /condApiAndPath\(condEl\)/.test(src) && /auth\.objApi \|\| auth\.fieldApi/.test(src));
   ok("EXPORT xlsx Object API sits right AFTER Object, Field API right AFTER Attribute", /"Object API",[\s\S]{0,40}"Attribute", "Field API"/.test(src) && /ENT = 3, OBJAPI = 4, ATTR = 5, FLDAPI = 6/.test(src));
   ok("EXPORT xlsx writes the api cells (OBJAPI/FLDAPI)", /ws\.getCell\(r, OBJAPI\)/.test(src) && /ws\.getCell\(r, FLDAPI\)/.test(src));
+  ok("EXPORT xlsx SETTING rows (Rank & Limit) also write API cells (not merged over)", /row\.setting[\s\S]{0,900}ws\.getCell\(r, OBJAPI\)[\s\S]{0,200}ws\.getCell\(r, FLDAPI\)/.test(src));
+  ok("EXPORT rank setting rows carry objApi/fieldApi from the node", /rrows\.push\(\{ label: node\.rankType,[\s\S]{0,120}fieldApi: node\.fieldApi/.test(src));
   ok("EXPORT xlsx row() carries objApi/fieldApi", /objApi: n\.objApi \|\| ""/.test(src) && /fieldApi: n\.fieldApi \|\| ""/.test(src));
   ok("EXPORT HTML shows API name UNDER the label (not beside/dangling)", /function labelWithApi\s*\(/.test(src) && /class="api-under"/.test(src) && /labelWithApi\(n\.attr, n\.fieldApi, "fld"\)/.test(src));
   ok("EXPORT HTML direct card shows object API under the object label", /labelWithApi\(n\.entity, member \? "" : n\.objApi, "obj"\)/.test(src));
