@@ -41,7 +41,7 @@ function segApiInfo(el) {
     var aSub = aggC.subject || {};
     var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
     var aFld = aSub.fieldApiName || "";
-    if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", containerPath: "", isAggregate: true };
+    if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true };
   }
   // 3b) simple / calculated-insight / rank-limit — all share the
   //     {subject:{fieldApiName,objectApiName}} shape; rank-limit uses .conditions[0].subject.
@@ -177,12 +177,12 @@ console.log("\n3c. RANK & LIMIT / aggregation / CI conditions also resolve");
   eq("aggregation object resolves", agg.objectApi, "A__dlm");
 }
 
-// ── 3c-bug. A BARE Count container must NOT fabricate a field or a container path ──────
+// ── 3c-bug. A BARE Count container must NOT fabricate a field ──────────────────────────
 // Repro of the reported bug: hovering "Insurance Policy : Count At Least 1" showed
-// DaystoExpiration__c + "Container Path: Insurance Policy.Primary Insured > …" even though
-// the edit view has only Container Object Name (no field, no path). The agg header owns no
-// field; its nested MEMBER conditions must never leak up onto the header.
-console.log("\n3c-bug. bare Count aggregation header shows object only — never a field/path");
+// DaystoExpiration__c even though the edit view has only Container Object Name. The agg
+// header owns no field; its nested MEMBER conditions must never leak up onto the header.
+// (Container Path is no longer emitted by ANY branch — it isn't stored in the DOM.)
+console.log("\n3c-bug. bare Count aggregation header shows object only — never a field");
 {
   // SF shapes a Count header as an aggregationCondition whose field-bearing data lives in
   // nested members (.filter / .conditions), NOT on its own subject.
@@ -197,7 +197,7 @@ console.log("\n3c-bug. bare Count aggregation header shows object only — never
   });
   eq("Count resolves to the object", count.objectApi, "TDI_InsurancePolicy__dlm");
   eq("Count has NO fabricated field", count.fieldApi, "");
-  eq("Count has NO fabricated container path", count.containerPath, "");
+  ok("no containerPath key at all (feature removed — not in DOM)", !("containerPath" in count));
   ok("Count flagged isAggregate", count.isAggregate === true);
 }
 
@@ -394,7 +394,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("EXPORT HTML shows API name UNDER the label (not beside/dangling)", /function labelWithApi\s*\(/.test(src) && /class="api-under"/.test(src) && /labelWithApi\(n\.attr, n\.fieldApi, "fld"\)/.test(src));
   ok("EXPORT HTML direct card shows object API under the object label", /labelWithApi\(n\.entity, member \? "" : n\.objApi, "obj"\)/.test(src));
   ok("PATH removed from hover + export (wrong data; pending probe)", !/function segPathString/.test(src) && !/cond-path/.test(src) && !/Path\\n\(related join\)/.test(src));
-  ok("CONTAINER PATH reconstructed + shown on hover (related objects)", /segResolveContainerPath/.test(src) && /containerPath/.test(src) && /Container Path: /.test(src));
+  ok("CONTAINER PATH removed — not shown on hover (not stored in DOM, never reconstructed)", !/segResolveContainerPath/.test(src) && !/segDisplayPathString/.test(src) && !/\bcontainerPath\b/.test(src) && !/"\\nContainer Path: "|Container Path: " \+/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

@@ -17169,57 +17169,17 @@ processJSON();
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
-      // ── Container Path (SF's label route, reconstructed from attributeLibraryMetadata) ──
-      // displayPath = array of hops; hop = [leftNode,rightNode]; node = {objectLabel,fieldLabel}.
-      // String = each hop's LEFT as "obj.field", then the final hop's RIGHT, joined " > ".
-      // Proven byte-for-byte against real SF Container Path strings (see test).
-      function segDisplayPathString(dp) {
-        if (!dp || !dp.length) return "";
-        var stops = [];
-        for (var i = 0; i < dp.length; i++) { var h = dp[i]; if (!h || !h.length) continue; var L = h[0] || {}; stops.push((L.objectLabel || "") + (L.fieldLabel ? "." + L.fieldLabel : "")); }
-        var last = dp[dp.length - 1]; var R = (last && last[1]) || {};
-        stops.push((R.objectLabel || "") + (R.fieldLabel ? "." + R.fieldLabel : ""));
-        return stops.join(" > ");
-      }
-      // canonical key for a joinPath (api hops) so a condition can be matched to a candidate.
-      function segJoinPathKey(jp) {
-        if (!jp || !jp.length) return "";
-        return jp.map(function (h) { var a = (h && h[0]) || {}, b = (h && h[1]) || {}; return (a.objectApiName || "") + "." + (a.fieldApiName || "") + "->" + (b.objectApiName || "") + "." + (b.fieldApiName || ""); }).join("|");
-      }
-      // Resolve a related object's Container Path. Single candidate → use it. Multiple →
-      // match the condition's own joinPath to the candidate joinPaths[i]; null if no match
-      // (ambiguous — we never guess which path).
-      function segResolveContainerPath(node, condJoinPath) {
-        if (!node) return null;
-        var dps = node.displayPaths || [], jps = node.joinPaths || [];
-        if (!dps.length) return null;
-        if (dps.length === 1) return segDisplayPathString(dps[0]);
-        var key = segJoinPathKey(condJoinPath);
-        if (key) { for (var i = 0; i < jps.length && i < dps.length; i++) { if (segJoinPathKey(jps[i]) === key) return segDisplayPathString(dps[i]); } }
-        return null;
-      }
-      // Lazily build objectApiName → metadata node (carrying displayPaths/joinPaths) from
-      // attributeLibraryMetadata._nodeIndexByNodeId (found on any canvas-item/condition).
-      var _segPathIdx = null, _segPathAt = 0;
-      function segPathNodeFor(objectApi) {
-        if (!objectApi) return null;
-        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
-        if (!_segPathIdx || (now - _segPathAt) > 2000) {
-          _segPathIdx = {};
-          var metaEl = null;
-          var all = collectRaw();
-          for (var i = 0; i < all.length; i++) { var m = segSafeGet(all[i], "attributeLibraryMetadata"); if (m && segSafeGet(m, "_nodeIndexByNodeId")) { metaEl = m; break; } }
-          if (metaEl) {
-            var idx = segSafeGet(metaEl, "_nodeIndexByNodeId") || {};
-            Object.keys(idx).forEach(function (id) {
-              var n = idx[id]; if (!n || !n.objectApiName) return;
-              if (n.displayPaths || n.joinPaths) _segPathIdx[n.objectApiName] = { displayPaths: n.displayPaths || [], joinPaths: n.joinPaths || [] };
-            });
-          }
-          _segPathAt = now;
-        }
-        return _segPathIdx[objectApi] || null;
-      }
+      // ── Container Path: DELIBERATELY NOT SHOWN ──────────────────────────────────────
+      // SF's "Container Path" breadcrumb (e.g. "Unified Indv Contact Point Email TDIR.Party
+      // > Unified Individual TDIR.Unified Individual Id") is NOT stored anywhere on the
+      // condition — the v8 probe confirmed no path-valued property exists on any condition
+      // element; the literal string only appears as rendered text inside the edit dropdown.
+      // We previously RECONSTRUCTED it from attributeLibraryMetadata.displayPaths/joinPaths.
+      // That reconstruction, however correct in tests, is still a DERIVED value — and the
+      // whole point of this decorator is "show only what's really in the DOM, never guess".
+      // A reconstructed string that can't be read back verbatim is exactly the kind of
+      // ambiguity we want to avoid, so the Container Path is removed from the hover entirely.
+      // Hover shows ONLY the object API · field API read straight off the element's props.
 
       // Classify a segment element and extract its API-name info, or null. Reads the
       // element's own LWC prop directly — the authoritative source, no guessing.
@@ -17246,7 +17206,7 @@ processJSON();
           var aSub = aggC.subject || {};
           var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
           var aFld = aSub.fieldApiName || "";   // empty for a bare Count — never fabricated from nested members
-          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", containerPath: "", isAggregate: true };
+          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true };
         }
         // Simple / calculated-insight / rank-limit conditions. All share the
         // {subject:{fieldApiName,objectApiName}} shape (proven for simpleCondition; the
@@ -17264,13 +17224,9 @@ processJSON();
           // v10), NOT on the top-level prop. Restrict this descent to the rank props — a
           // general .conditions[] descent would pull a nested member's field onto a header.
           if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
-          // Container Path: SF's label route for a RELATED object, reconstructed from
-          // attributeLibraryMetadata.displayPaths and matched to this condition's own
-          // joinPath. "" for direct (same-object) conditions or when ambiguous (never guessed).
-          var cjp = c.joinPath || c.path || null;
-          var cpath = "";
-          try { var node = segPathNodeFor(o); if (node) cpath = segResolveContainerPath(node, cjp) || ""; } catch (e) {}
-          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cpath };
+          // No Container Path: it isn't stored on the condition (only object + field API
+          // are). See the note above — we show only what's really on the element's props.
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
         }
         // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
         var ral = segSafeGet(el, "relatedAttributesLimit");
@@ -17346,7 +17302,6 @@ processJSON();
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
         if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
-        if (info.containerPath) s += "\nContainer Path: " + info.containerPath;   // SF's label route (related objects)
         return s;
       }
       var SEG_TAGS = {
