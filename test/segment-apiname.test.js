@@ -41,7 +41,10 @@ function segApiInfo(el) {
     var aSub = aggC.subject || {};
     var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
     var aFld = aSub.fieldApiName || "";
-    if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true };
+    // Container Path read VERBATIM from the open edit panel (source: segFindOpenPathFor).
+    // Mirror uses an injected el._openPath to stay pure; "" when not open / single-path.
+    var aPath = typeof el._openPath === "function" ? (el._openPath(aObj) || "") : "";
+    if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true, containerPath: aPath };
   }
   // 3b) simple / calculated-insight / rank-limit — all share the
   //     {subject:{fieldApiName,objectApiName}} shape; rank-limit uses .conditions[0].subject.
@@ -57,7 +60,8 @@ function segApiInfo(el) {
     // Rank & Limit ONLY: ranked field in .conditions[0].subject (restricted to rank props
     // so a general descent can't pull a nested member's field onto a header).
     if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
-    if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
+    var cPath = typeof el._openPath === "function" ? (el._openPath(o) || "") : "";
+    if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cPath };
   }
   // 4) ACTIVATION: a drag chip / quick-attribute row — API name on .details
   var dt = safeGet(el, "details");
@@ -193,12 +197,56 @@ console.log("\n3c-bug. bare Count aggregation header shows object only — never
       filter: { subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "DaystoExpiration__c" } },
       conditions: [{ subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "DaystoExpiration__c" } }],
       joinPath: [[{ objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "TDI_PrimaryInsured__c" }, { objectApiName: "TDI_UnifiedIndividualTdi__dlm", fieldApiName: "Id__c" }]]
+      // NOTE: no _openPath here → container is COLLAPSED → no path shown (matches SF).
     }
   });
   eq("Count resolves to the object", count.objectApi, "TDI_InsurancePolicy__dlm");
   eq("Count has NO fabricated field", count.fieldApi, "");
-  ok("no containerPath key at all (feature removed — not in DOM)", !("containerPath" in count));
+  eq("collapsed Count shows NO container path (not reconstructed from joinPath)", count.containerPath, "");
   ok("Count flagged isAggregate", count.isAggregate === true);
+}
+
+// ── 3c-path. Container Path shown VERBATIM only when the container is open in edit mode ──
+// Proven via DOM Probe v11: the open canvas-item's innerText literally carries
+//   "…\n*Container Path\n<path>\nMeasurement\n…". We READ that line; we never derive it.
+console.log("\n3c-path. Container Path read verbatim from open edit panel (never reconstructed)");
+{
+  var SF_PATH = "Insurance Policy.Insurance Account Number > TDI Insurance Account.Insurance Account Primary Insured > Unified Individual TDI.Unified Individual Id";
+  // mirror of segReadRenderedContainerPath (source) — extracts the line after the label
+  function readRenderedPath(innerText) {
+    if (!innerText || innerText.indexOf("Container Path") < 0) return "";
+    var lines = innerText.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length; });
+    for (var i = 0; i < lines.length - 1; i++) {
+      if (/^\*?\s*Container Path$/i.test(lines[i])) {
+        var val = lines[i + 1];
+        if (val && val.indexOf(" > ") >= 0 && val.indexOf(".") >= 0) return val;
+        if (val && /\S\.\S/.test(val) && !/^(Measurement|Operator|Object|Attribute|Value|Lower Bound|Upper Bound)$/i.test(val)) return val;
+        return "";
+      }
+    }
+    return "";
+  }
+  var realInner = "Insurance Policy\n*Container Path\n" + SF_PATH + "\nMeasurement\nCount\nOperator\nAt Least\n*Value\nInsurance Policy:\nObject\nAttribute\nOperator\nIs Between\n*Lower Bound\nAND\n*Upper Bound";
+  eq("extracts the exact SF path string from real innerText", readRenderedPath(realInner), SF_PATH);
+  eq("no 'Container Path' label in text → ''", readRenderedPath("Insurance Policy\nMeasurement\nCount"), "");
+  eq("label present but next line is a field label (single-path edge) → ''", readRenderedPath("X\n*Container Path\nMeasurement\nCount"), "");
+  // single-hop path (object.field, no ' > ')
+  eq("single-hop object.field path accepted", readRenderedPath("Y\nContainer Path\nEngagement Consent.Unified Individual Id\nMeasurement"), "Engagement Consent.Unified Individual Id");
+
+  // segApiInfo attaches the verbatim path when the container is open (via _openPath hook)
+  var openCount = segApiInfo({
+    aggregationCondition: { label: "Count", selectedObjectApiName: "TDI_InsurancePolicy__dlm", subject: { objectApiName: "TDI_InsurancePolicy__dlm" } },
+    _openPath: function (obj) { return obj === "TDI_InsurancePolicy__dlm" ? SF_PATH : ""; }
+  });
+  eq("open Count shows the verbatim container path", openCount.containerPath, SF_PATH);
+  eq("open Count still has NO fabricated field", openCount.fieldApi, "");
+  // a simple condition on the same open container also surfaces it
+  var openCond = segApiInfo({
+    simpleCondition: { label: "Days to Expiration", subject: { objectApiName: "TDI_InsurancePolicy__dlm", fieldApiName: "TDI_DaysToExpiration__c" } },
+    _openPath: function () { return SF_PATH; }
+  });
+  eq("open condition surfaces verbatim path", openCond.containerPath, SF_PATH);
+  eq("open condition keeps its real field api", openCond.fieldApi, "TDI_DaysToExpiration__c");
 }
 
 // ── 3d. ACTIVATION — drag-item chip (.details) ──────────────────────────────────────
@@ -420,8 +468,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("EXPORT xlsx row() carries objApi/fieldApi", /objApi: n\.objApi \|\| ""/.test(src) && /fieldApi: n\.fieldApi \|\| ""/.test(src));
   ok("EXPORT HTML shows API name UNDER the label (not beside/dangling)", /function labelWithApi\s*\(/.test(src) && /class="api-under"/.test(src) && /labelWithApi\(n\.attr, n\.fieldApi, "fld"\)/.test(src));
   ok("EXPORT HTML direct card shows object API under the object label", /labelWithApi\(n\.entity, member \? "" : n\.objApi, "obj"\)/.test(src));
-  ok("PATH removed from hover + export (wrong data; pending probe)", !/function segPathString/.test(src) && !/cond-path/.test(src) && !/Path\\n\(related join\)/.test(src));
-  ok("CONTAINER PATH removed — not shown on hover (not stored in DOM, never reconstructed)", !/segResolveContainerPath/.test(src) && !/segDisplayPathString/.test(src) && !/\bcontainerPath\b/.test(src) && !/"\\nContainer Path: "|Container Path: " \+/.test(src));
+  ok("CONTAINER PATH read VERBATIM from open edit panel (not reconstructed)", /function segReadRenderedContainerPath\s*\(/.test(src) && /function segFindOpenPathFor\s*\(/.test(src) && /inFilterEditMode/.test(src) && /Container Path: " \+ info\.containerPath/.test(src));
+  ok("CONTAINER PATH never reconstructed (no displayPaths/joinPaths derivation)", !/function segResolveContainerPath/.test(src) && !/function segDisplayPathString/.test(src) && !/function segJoinPathKey/.test(src) && !/function segPathNodeFor/.test(src));
+  ok("Container Path reader keys off the literal rendered label + ' > ' hop separator", /\^\\\*\?\\s\*Container Path\$/.test(src) && /indexOf\(" > "\)/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

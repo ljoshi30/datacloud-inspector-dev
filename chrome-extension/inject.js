@@ -17184,17 +17184,61 @@ processJSON();
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
-      // ── Container Path: DELIBERATELY NOT SHOWN ──────────────────────────────────────
-      // SF's "Container Path" breadcrumb (e.g. "Unified Indv Contact Point Email TDIR.Party
-      // > Unified Individual TDIR.Unified Individual Id") is NOT stored anywhere on the
-      // condition — the v8 probe confirmed no path-valued property exists on any condition
-      // element; the literal string only appears as rendered text inside the edit dropdown.
-      // We previously RECONSTRUCTED it from attributeLibraryMetadata.displayPaths/joinPaths.
-      // That reconstruction, however correct in tests, is still a DERIVED value — and the
-      // whole point of this decorator is "show only what's really in the DOM, never guess".
-      // A reconstructed string that can't be read back verbatim is exactly the kind of
-      // ambiguity we want to avoid, so the Container Path is removed from the hover entirely.
-      // Hover shows ONLY the object API · field API read straight off the element's props.
+      // ── Container Path: READ VERBATIM from the open edit panel (never reconstructed) ──
+      // SF shows a "Container Path" breadcrumb ONLY when a related/aggregation container
+      // has >1 way back to the segment-on entity AND the container is OPEN in edit mode
+      // (builderState.inFilterEditMode === true). Proven via DOM Probe v11: the open
+      // canvas-item's rendered innerText literally contains
+      //   "…\n*Container Path\n<the path>\nMeasurement\n…"
+      // e.g. "Insurance Policy.Insurance Account Number > TDI Insurance Account.Insurance
+      //       Account Primary Insured > Unified Individual TDI.Unified Individual Id".
+      // We extract that line AS-IS (read, not derive). It is NOT on the collapsed card and
+      // NOT on any condition prop, so a single-path or collapsed container shows nothing —
+      // which exactly matches SF. We earlier reconstructed it from displayPaths and removed
+      // that (derived != read); this reader shows only the real on-screen string.
+      // Returns "" when no Container Path is rendered in the given subtree.
+      function segReadRenderedContainerPath(el) {
+        if (!el) return "";
+        var t = "";
+        try { t = el.innerText || el.textContent || ""; } catch (e) { return ""; }
+        if (!t || t.indexOf("Container Path") < 0) return "";
+        // Normalise, then take the line directly AFTER the "*Container Path" / "Container
+        // Path" label line, up to the next field label (Measurement / Operator / Object / …).
+        var lines = t.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length; });
+        for (var i = 0; i < lines.length - 1; i++) {
+          if (/^\*?\s*Container Path$/i.test(lines[i])) {
+            var val = lines[i + 1];
+            // sanity: a path has the " > " hop separator and a "." (object.field). Guard
+            // against grabbing a stray label — if it doesn't look like a path, show nothing.
+            if (val && val.indexOf(" > ") >= 0 && val.indexOf(".") >= 0) return val;
+            // single-hop paths (no " > ") are still valid: object.field form
+            if (val && /\S\.\S/.test(val) && !/^(Measurement|Operator|Object|Attribute|Value|Lower Bound|Upper Bound)$/i.test(val)) return val;
+            return "";
+          }
+        }
+        return "";
+      }
+      // Find the open-in-edit container element whose rendered text we can read the path
+      // from. The edit panel lives on a runtime_cdp-canvas-item whose builderState has
+      // inFilterEditMode === true; we match by the container object api when we can, else
+      // fall back to the single element currently in edit mode.
+      function segFindOpenPathFor(objectApi) {
+        var best = "";
+        var els = collectRaw();
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if ((el.tagName || "").toLowerCase() !== "runtime_cdp-canvas-item") continue;
+          var bs = segSafeGet(el, "builderState");
+          if (!bs || bs.inFilterEditMode !== true) continue;
+          // prefer the one whose container object matches this condition's object
+          var inObj = bs.inFilterEditModeContainerObjectApiName || "";
+          var path = segReadRenderedContainerPath(el);
+          if (!path) continue;
+          if (objectApi && inObj && inObj === objectApi) return path;   // exact match wins
+          if (!best) best = path;                                       // first open path as fallback
+        }
+        return best;
+      }
 
       // Classify a segment element and extract its API-name info, or null. Reads the
       // element's own LWC prop directly — the authoritative source, no guessing.
@@ -17214,14 +17258,17 @@ processJSON();
         // ONLY the aggregation's own subject — we NEVER descend into .filter / .conditions,
         // because those are the MEMBER conditions nested inside the container (each decorates
         // on its own hover). Descending would surface a member's field on the header, e.g. a
-        // bare "Count At Least 1" wrongly showing DaystoExpiration__c + a reconstructed path
-        // (SF's edit view for a Count has only Container Object Name — no field, no path).
+        // bare "Count At Least 1" wrongly showing DaystoExpiration__c (SF's edit view for a
+        // Count has only Container Object Name + the Container Path).
         var aggC = segSafeGet(el, "aggregationCondition");
         if (aggC && typeof aggC === "object") {
           var aSub = aggC.subject || {};
           var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
           var aFld = aSub.fieldApiName || "";   // empty for a bare Count — never fabricated from nested members
-          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true };
+          // Container Path shown VERBATIM only if this container is currently open in edit
+          // mode (that's the only time SF renders it). "" otherwise — never reconstructed.
+          var aPath = ""; try { aPath = segFindOpenPathFor(aObj); } catch (e) {}
+          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true, containerPath: aPath };
         }
         // Simple / calculated-insight / rank-limit conditions. All share the
         // {subject:{fieldApiName,objectApiName}} shape (proven for simpleCondition; the
@@ -17239,9 +17286,10 @@ processJSON();
           // v10), NOT on the top-level prop. Restrict this descent to the rank props — a
           // general .conditions[] descent would pull a nested member's field onto a header.
           if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
-          // No Container Path: it isn't stored on the condition (only object + field API
-          // are). See the note above — we show only what's really on the element's props.
-          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "" };
+          // Container Path shown VERBATIM only if this condition's container is open in edit
+          // mode (read off the rendered edit panel; "" otherwise — never reconstructed).
+          var cPath = ""; try { cPath = segFindOpenPathFor(o); } catch (e) {}
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cPath };
         }
         // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
         var ral = segSafeGet(el, "relatedAttributesLimit");
@@ -17317,6 +17365,9 @@ processJSON();
         if (info.isPk) s += "  • PK";
         if (info.fieldType) s += "  [" + info.fieldType + "]";
         if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
+        // Container Path is the LITERAL string SF renders in the open edit panel (read, not
+        // reconstructed). Only present when the container is in edit mode + multi-path.
+        if (info.containerPath) s += "\nContainer Path: " + info.containerPath;
         return s;
       }
       var SEG_TAGS = {
