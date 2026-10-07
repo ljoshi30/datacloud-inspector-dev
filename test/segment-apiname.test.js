@@ -424,6 +424,49 @@ console.log("\n6c. Rank & Limit setting rows carry API names for Excel");
   eq("Sort By row keeps field api", sb[0].fieldApi, "FirstName__c");
 }
 
+// ── 6d. Container Path CAPTURED into the export (HTML + Excel), via the REAL renderers ──
+// SF renders the path only while a container is open in edit mode; a cache remembers each
+// opened container's literal path, and the export stamps it onto the container node. This
+// drives the actual SEGX renderSheet + renderSegmentBody from source (no mirror) to prove
+// a captured containerPath lands in BOTH outputs — exactly, never reconstructed.
+console.log("\n6d. Container Path captured into export (real HTML + Excel renderers)");
+{
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8").split("\n");
+  // locate the self-contained SEGX module (var SEGX = (function(){…})();)
+  let s = -1, e = -1;
+  for (let i = 0; i < src.length; i++) { if (s < 0 && /^\s*var SEGX = \(function \(\) \{/.test(src[i])) s = i; }
+  // the module's OUTER close is exactly two-space-indented "})();" — inner IIFEs close with
+  // "})(SEGX_NS);", so this pattern uniquely marks the end.
+  if (s >= 0) { for (let i = s + 1; i < src.length; i++) { if (/^ {2}\}\)\(\);\s*$/.test(src[i])) { e = i; break; } } }
+  if (s < 0 || e < 0) { ok("SEGX module located for render test", false, "s=" + s + " e=" + e); }
+  else {
+    const mod = src.slice(s, e + 1).join("\n").replace(/^\s*var SEGX = /, "");
+    let SEGX = null; try { SEGX = eval(mod); } catch (err) { ok("SEGX evaluated", false, err.message); }
+    if (SEGX) {
+      const SF = "Insurance Policy.Insurance Account Number > TDI Insurance Account.Insurance Account Primary Insured > Unified Individual TDI.Unified Individual Id";
+      const kit = { t: "root", tab: "Include", join: "AND", children: [
+        { t: "container", entity: "Insurance Policy", agg: "Count At Least 1", kind: "related",
+          objApi: "TDI_InsurancePolicy__dlm", containerPath: SF, join: "AND", children: [
+            { t: "cond", entity: "Insurance Policy", attr: "Days to Expiration", op: "Is Between", v1: "88", v2: "92", objApi: "TDI_InsurancePolicy__dlm", fieldApi: "TDI_DaysToExpiration__c" } ] } ] };
+      // HTML (path is HTML-escaped: > becomes &gt;)
+      const html = SEGX.renderSegmentBody(kit, { tabs: false });
+      const escaped = SF.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      ok("HTML export has a Container Path line", /class="cont-path"/.test(html));
+      ok("HTML export shows the exact literal path (escaped)", html.indexOf(escaped) >= 0);
+      ok("HTML export never reconstructs — path only present because we set it", SEGX.renderSegmentBody({ t: "root", tab: "Include", join: "AND", children: [{ t: "container", entity: "X", kind: "related", objApi: "Y__dlm", join: "AND", children: [] }] }, { tabs: false }).indexOf("cont-path") < 0);
+      // Excel
+      const wb = new SEGX.MiniXLSX.Workbook();
+      const ws = wb.addWorksheet("Include", { views: [{ showGridLines: false }] });
+      SEGX.renderSheet(ws, kit);
+      let found = false, objCol = "";
+      for (let r = 4; r <= ws._maxR; r++) { let line = ""; for (let c = 1; c <= 12; c++) { const cell = ws._cells[r + "," + c]; if (cell && cell.value != null) line += String(cell.value) + "|"; } if (line.indexOf("Container Path") >= 0 && line.indexOf(SF) >= 0) { found = true; const oc = ws._cells[r + ",4"]; objCol = oc && oc.value != null ? String(oc.value) : ""; } }
+      ok("Excel export has a Container Path setting row with the literal path", found);
+      eq("Excel Container Path row carries the object API (col 4)", objCol, "TDI_InsurancePolicy__dlm");
+    }
+  }
+}
+
 // ── 7. source presence ──────────────────────────────────────────────────────────────
 console.log("\n7. source presence (wired, dev-only, reads props directly)");
 {
@@ -471,6 +514,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("CONTAINER PATH read VERBATIM from open edit panel (not reconstructed)", /function segReadRenderedContainerPath\s*\(/.test(src) && /function segFindOpenPathFor\s*\(/.test(src) && /inFilterEditMode/.test(src) && /Container Path: " \+ info\.containerPath/.test(src));
   ok("CONTAINER PATH never reconstructed (no displayPaths/joinPaths derivation)", !/function segResolveContainerPath/.test(src) && !/function segDisplayPathString/.test(src) && !/function segJoinPathKey/.test(src) && !/function segPathNodeFor/.test(src));
   ok("Container Path reader keys off the literal rendered label + ' > ' hop separator", /\^\\\*\?\\s\*Container Path\$/.test(src) && /indexOf\(" > "\)/.test(src));
+  ok("EXPORT captures Container Path via a cache (keyed by container object api)", /__dcContainerPathCache/.test(src) && /function dcCaptureOpenContainerPaths\s*\(/.test(src) && /function dcExtractContainerPath\s*\(/.test(src));
+  ok("EXPORT HTML renders a cont-path line; Excel adds a Container Path setting row", /class="cont-path"/.test(src) && /label: "Container Path", value: node\.containerPath/.test(src));
+  ok("EXPORT container path never reconstructed (cache stores only literal rendered string)", /_dcPathCache\[obj\] = path/.test(src) && !/function segResolveContainerPath/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
 }
 

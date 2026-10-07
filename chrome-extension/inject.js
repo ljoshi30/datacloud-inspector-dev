@@ -3116,6 +3116,53 @@
     })(el);
     return out.replace(/\s+/g, " ").trim();
   }
+
+  // ── Container Path capture cache (for the EXPORT) ───────────────────────────────────
+  // SF renders a container's "Container Path" breadcrumb ONLY while that container is OPEN
+  // in edit mode (proven DOM Probe v11: the open runtime_cdp-canvas-item.innerText carries
+  // "…\n*Container Path\n<path>\nMeasurement\n…", builderState.inFilterEditMode === true).
+  // Only one container is open at a time, so a single export snapshot can't see them all.
+  // Instead we CACHE each path (keyed by container object api) the moment it's visible —
+  // so as the user opens each multi-path container, we remember its exact string, and the
+  // export can later stamp every container it has seen. We only ever store the LITERAL
+  // rendered string (read, never reconstructed); collapsed/single-path containers add
+  // nothing. The cache lives on window so hover + export share one source of truth.
+  var _dcPathCache = (function () { try { if (!window.__dcContainerPathCache) window.__dcContainerPathCache = {}; return window.__dcContainerPathCache; } catch (e) { return {}; } })();
+  // Pull the literal path line out of an open container's rendered text (same rule as hover).
+  function dcExtractContainerPath(innerText) {
+    if (!innerText || innerText.indexOf("Container Path") < 0) return "";
+    var lines = String(innerText).split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length; });
+    for (var i = 0; i < lines.length - 1; i++) {
+      if (/^\*?\s*Container Path$/i.test(lines[i])) {
+        var val = lines[i + 1];
+        if (val && val.indexOf(" > ") >= 0 && val.indexOf(".") >= 0) return val;
+        if (val && /\S\.\S/.test(val) && !/^(Measurement|Operator|Object|Attribute|Value|Lower Bound|Upper Bound)$/i.test(val)) return val;
+        return "";
+      }
+    }
+    return "";
+  }
+  // Scan any container currently open in edit mode and record its path into the cache.
+  // Called opportunistically (on hover-move and at export time). Returns the cache.
+  function dcCaptureOpenContainerPaths() {
+    try {
+      var items = document.querySelectorAll("runtime_cdp-canvas-item");
+      // querySelectorAll won't pierce shadow DOM; walk deep instead.
+      var all = []; (function walk(root, d) { if (d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { var el = q[i]; if ((el.tagName || "").toLowerCase() === "runtime_cdp-canvas-item") all.push(el); if (el.shadowRoot) walk(el.shadowRoot, d + 1); } })(document, 0);
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i], bs = null; try { bs = el.builderState; } catch (e) {}
+        if (!bs || bs.inFilterEditMode !== true) continue;
+        var obj = bs.inFilterEditModeContainerObjectApiName || "";
+        var txt = ""; try { txt = el.innerText || el.textContent || ""; } catch (e) {}
+        var path = dcExtractContainerPath(txt);
+        if (obj && path) _dcPathCache[obj] = path;   // remember the literal string for this object
+      }
+    } catch (e) {}
+    return _dcPathCache;
+  }
+  // Keep the cache warm while the user works (opening a container fires mousemoves).
+  try { document.addEventListener("mousemove", function () { dcCaptureOpenContainerPaths(); }, true); } catch (e) {}
+
   // Parse a runtime_cdp-segment-builder-base-segment-item (a nested segment, and
   // the tier content of a waterfall). Confirmed via probe10 across 4 real segments:
   //   tokens: [..., "base-segment-chart-icon", <SEGMENT NAME>, "base-segment-link", ...,
@@ -4513,8 +4560,13 @@
           blocks.push({ entity: node.entity, container: true, agg: label, blockJoin, kind: node.waterfall ? "priority" : "nested", note: node.note || "",
             groups: [{ grp: "", box: false, join: "AND", rows: nrows, descriptive: true }] });
         } else if (node.t === "container") {
+          // When a Container Path was captured for this container (multi-path, user opened
+          // it), document it as the first row under the header — a literal "Container Path:
+          // <breadcrumb>" setting line (never reconstructed).
+          const crows = flattenRows(node.children);
+          if (node.containerPath) crows.unshift({ label: "Container Path", value: node.containerPath, setting: true, entity: node.entity, objApi: node.objApi || "" });
           blocks.push({ entity: node.entity, container: true, agg: node.agg, blockJoin, kind: node.kind || "related", note: node.note || "",
-            groups: [{ grp: "", box: false, join: node.join, rows: flattenRows(node.children) }] });
+            groups: [{ grp: "", box: false, join: node.join, rows: crows }] });
         } else if (node.t === "group") {
           // group of conds/containers => one block with multiple groups joined by node.join.
           // Each sub-group keeps its OWN kind (related/direct/ci) + objApi + how-to note,
@@ -4935,8 +4987,11 @@
         // Show the full API name of the related object next to the label, when scraped.
         const api = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
         const head = `<div class="cont-head" style="background:${dark}">${kindChip(n.kind || "related", n.objApi)}<b>${esc(n.entity)}</b>${api}${agg}</div>`;
+        // Container Path (the literal SF breadcrumb, captured while the container was open).
+        // Only shown for multi-path containers the user opened; omitted otherwise.
+        const pathLine = n.containerPath ? `<div class="cont-path"><span class="cont-path-k">Container Path</span>${esc(n.containerPath)}</div>` : "";
         const body = renderJoin(n.children, n.join, false, true);
-        return `<div class="container" style="--bg:${light}">${head}${body}</div>`;
+        return `<div class="container" style="--bg:${light}">${head}${pathLine}${body}</div>`;
       }
 
       // Rank & Limit rule — a labeled card with Object / Group|Sort By / Field / Limit.
@@ -5046,6 +5101,8 @@
       .kchip-sub { display:inline-block; font:700 9px/1 system-ui; color:#16325c; background:#fff;
                    border:1px solid rgba(0,0,0,.18); padding:2px 6px; border-radius:9px; margin-right:7px; vertical-align:middle; }
       .cont-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#5c6b8a; margin-left:8px; vertical-align:middle; }
+      .cont-path { padding:6px 12px; background:#f8fafc; border-bottom:1px solid var(--bd); font:600 11px/1.4 "SF Mono",Menlo,monospace; color:#334155; word-break:break-word; }
+      .cont-path-k { display:inline-block; font:700 9px/1 system-ui; color:#64748b; background:#e2e8f0; border-radius:4px; padding:2px 6px; margin-right:7px; letter-spacing:.03em; vertical-align:middle; }
       .fld-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; margin-left:7px; vertical-align:middle; }
       .fld-api.obj { color:#5c6b8a; background:#f1f5f9; }
       /* Stacked label + API name: the API name sits directly UNDER its label (not beside
@@ -5157,8 +5214,12 @@
         var isCi = node.type === "ci";
         var agg = isCi ? (node.fieldLabel || "Calculated Insight")
                        : [node.fieldLabel, node.operator, node.values].filter(Boolean).join(" ");
+        // Container Path (literal, captured while the container was open — see cache). Only
+        // present for multi-path containers the user has opened; "" otherwise. Never derived.
+        var cpath = "";
+        try { dcCaptureOpenContainerPaths(); cpath = (node.objApi && _dcPathCache[node.objApi]) || ""; } catch (e) {}
         var c = { t: "container", entity: node.objectLabel || "", agg: agg, join: node.subJoin || "AND",
-                  kind: isCi ? "ci" : "related", objApi: node.objApi || "",
+                  kind: isCi ? "ci" : "related", objApi: node.objApi || "", containerPath: cpath,
                   children: (node.subFilters || []).map(function (sf) { return condOf(Object.assign({ type: "simple" }, sf)); }) };
         // A CI with an inline operator/value but no sub-filters: keep the comparison as a member row.
         if (isCi && !c.children.length && (node.operator || node.values)) {
