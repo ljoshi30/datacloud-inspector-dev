@@ -17283,10 +17283,17 @@ processJSON();
       cancelHide();
       btn.href = dcDmoUrl(hit.api);
       btn.title = "Open " + hit.api + " in a new tab";
-      var r; try { r = hit.row.getBoundingClientRect(); } catch (er) { return; }
+      // Anchor the button to the NAME cell (Object Label = the row-header cell), not the
+      // far right of the whole row — so it sits right next to the DMO name. Fall back to
+      // the first cell, then the whole row, if the row-header isn't found.
+      var cell = null;
+      try { cell = hit.row.querySelector('[role="rowheader"]') || hit.row.querySelector('th') || hit.row.querySelector('td'); } catch (er) {}
+      var anchor = cell || hit.row;
+      var r; try { r = anchor.getBoundingClientRect(); } catch (er) { return; }
       if (!r || !r.height) return;
       btn.style.top = Math.round(r.top + r.height / 2 - 12) + "px";
-      btn.style.left = Math.round(Math.min(r.right - 30, window.innerWidth - 30)) + "px";
+      // just inside the name cell's right edge (clamped to viewport)
+      btn.style.left = Math.round(Math.min(r.right - 26, window.innerWidth - 30)) + "px";
       btn.style.display = "flex";
     }, true);
     document.addEventListener("mouseout", function (e) {
