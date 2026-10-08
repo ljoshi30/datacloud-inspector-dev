@@ -17210,6 +17210,110 @@ processJSON();
     watchNavigation();
   }
 
+  /* @strip:start dev
+   * ── DMO "open in new tab" (Data Model LIST view) ─────────────────────────────────
+   * Problem: on the Data Model list the DMO rows are NOT real links — the clickable
+   * label is a custom-event cell (href="javascript:void(0)"), so right-click → open in
+   * new tab doesn't work and you have to duplicate the tab. Salesforce is also moving
+   * Data Cloud to the left vertical nav whose items are href-empty buttons too.
+   * Fix (proven, not guessed): the DMO list is a runtime_cdp-custom-datatable whose
+   * `.data[]` carries every row's `name` = the DMO API name (e.g. Foo__dlm) + `label`
+   * (DOM Probe v15). A DMO detail page is <origin>/lightning/n/standard-DataModel?
+   * c__objectApiName=<name> — the SAME param this tool already READS off live DMO pages
+   * (see readDmoMeta / location.href match on c__objectApiName). So we can build a real
+   * per-row link. We overlay a small ⧉ "open in new tab" button on each row (on hover);
+   * clicking it opens that DMO in a new tab. Zero mutation of SF data; pure overlay. */
+  function dcIsDataModelListPage() {
+    try { var h = location.href; return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); } catch (e) { return false; }
+  }
+  // Build the authoritative DMO detail URL from an API name (proven format: same
+  // c__objectApiName param this tool already READS off live DMO pages).
+  function dcDmoUrl(apiName) {
+    try { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(apiName); } catch (e) { return ""; }
+  }
+  // Read the live datatable row model: normalized label text → apiName. Source is the
+  // datatable component's own .data[] (proven via DOM Probe v15: [{name, label,
+  // objectLabel:{label}}]) — authoritative, not scraped from cell markup.
+  var _dcDmoModel = null, _dcDmoModelAt = 0;
+  function dcReadDmoRowModel() {
+    var now = 0; try { now = (performance && performance.now) ? performance.now() : 0; } catch (e) {}
+    if (_dcDmoModel && (now - _dcDmoModelAt) < 1500) return _dcDmoModel;
+    var map = {};
+    try {
+      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+        var data = null; try { data = dt.data; } catch (e) {}
+        if (!data || !data.length) return;
+        for (var i = 0; i < data.length; i++) {
+          var r = data[i]; if (!r || !r.name) continue;
+          var lbl = (r.label || (r.objectLabel && r.objectLabel.label) || "").trim().replace(/\s+/g, " ");
+          if (lbl) map[lbl] = r.name;
+        }
+      });
+    } catch (e) {}
+    _dcDmoModel = map; _dcDmoModelAt = now;
+    return map;
+  }
+  // SINGLE floating ⧉ button (appended to body — NEVER mutates SF's DOM / datatable, so
+  // it can't disturb virtual-scroll measurements). On hover over a row whose text matches
+  // a known DMO label, we position the shared button at that row's right edge. Clicking it
+  // opens that DMO in a new tab. Pure, reversible overlay.
+  function dcInstallDmoHoverButton() {
+    if (!dcIsDataModelListPage()) return;
+    if (document.getElementById("dc-dmo-newtab")) return;
+    var btn = document.createElement("a");
+    btn.id = "dc-dmo-newtab";
+    btn.target = "_blank"; btn.rel = "noopener";
+    btn.textContent = "⧉";
+    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);   // let the real link open; don't trigger SF row nav
+    document.body.appendChild(btn);
+
+    var curApi = "", hideT = null;
+    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 220); }
+    function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
+    btn.addEventListener("mouseenter", cancelHide);
+    btn.addEventListener("mouseleave", hideSoon);
+
+    // Walk up a few hops from the hovered node to find an element whose exact text is a
+    // known DMO label (the label cell). Content-based match against the authoritative
+    // datatable model — no cell-structure guessing, no DOM mutation.
+    document.addEventListener("mouseover", function (e) {
+      if (!dcIsDataModelListPage()) { btn.style.display = "none"; return; }
+      var model = dcReadDmoRowModel();
+      if (!model || !Object.keys(model).length) return;
+      var node = e.target, hit = null, hitEl = null;
+      for (var h = 0; h < 5 && node && node.nodeType === 1; h++) {
+        var t = ""; try { t = (node.textContent || "").trim().replace(/\s+/g, " "); } catch (er) {}
+        if (t && t.length <= 160 && model[t]) { hit = model[t]; hitEl = node; break; }
+        node = node.parentElement;
+      }
+      if (!hit || !hitEl) return;
+      curApi = hit;
+      btn.href = dcDmoUrl(hit);
+      btn.title = "Open “" + (node.textContent || "").trim().replace(/\s+/g, " ") + "” in a new tab  (" + hit + ")";
+      var r; try { r = hitEl.getBoundingClientRect(); } catch (er) { return; }
+      if (!r || !r.height) return;
+      cancelHide();
+      btn.style.top = Math.round(r.top + r.height / 2 - 11) + "px";
+      btn.style.left = Math.round(Math.min(r.right + 6, window.innerWidth - 28)) + "px";
+      btn.style.display = "block";
+    }, true);
+    document.addEventListener("mouseout", function (e) {
+      // hide when leaving a matched row (unless moving onto the button)
+      if (e.relatedTarget === btn) return;
+      hideSoon();
+    }, true);
+    // hide on scroll (position would go stale)
+    window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
+  }
+  if (dcIsDataModelListPage()) {
+    try {
+      dcInstallDmoHoverButton();
+      if (typeof watchNavigation === "function") watchNavigation();
+    } catch (e) {}
+  }
+  /* @strip:end */
+
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
   // Lightning SPA: when the tool injects, the URL/route may not be final yet, so the
   // one-shot detection above can miss and no FAB appears. Re-check a few times and
