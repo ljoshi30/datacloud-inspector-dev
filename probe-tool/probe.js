@@ -1,18 +1,20 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v17 — LEFT VERTICAL NAV route, via the LABEL-CLIMB (can't come back empty)
+ * DOM PROBE v18 — DMO list RENDERED ROWS: find a reliable per-row key anchor
  *
- * v16 filtered by exact tag runtime_cdp-desktop-vertical-navigation-item and returned
- * 0 on fullcopy — yet v14's ancestor chain clearly contained that tag. So instead of
- * trusting a tag filter, we do what v14 PROVED works: find each nav LABEL leaf by its
- * text, climb UP through every custom-element ancestor, and dump EACH ancestor's full
- * prop surface + route-looking strings. The route (pageReference, url, navigationTarget,
- * standard-NAME, or the one.app hash) must be on one of those ancestors — this reports
- * all of them so we see exactly which prop holds it. No tag guessing; no empty result if
- * the labels render.
+ * The hover ⧉ feature matched a row by its VISIBLE text against .data[] labels, but
+ * the list truncates labels ("Activation Audience - …") so the match fails → no button.
+ * Lightning datatables usually tag each rendered <tr> with data-row-key-value="<keyField>"
+ * (here keyField = "name" = the DMO api). If that's present we read the api straight off
+ * the hovered row — no text matching, truncation-proof. This probe inspects the ACTUAL
+ * rendered rows under runtime_cdp-custom-datatable and reports, per row:
+ *   - the <tr> (and its cells') attributes — looking for data-row-key-value / data-* keys
+ *   - the api-name cell's full text + its title attr (full value even when display-truncated)
+ *   - which element in the row is the clickable label
+ * Plus: does .data[] still line up 1:1 with rendered rows (so index-mapping is a fallback)?
  *
- * RUN on the fullcopy org (LEFT vertical nav). Expand the nav so labels render. Read-only.
+ * RUN on the Data Model LIST page. Read-only. Copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe17() {
+(function DomProbe18() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -25,93 +27,72 @@
     return acc;
   }
   function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
-  function ownText(el) { try { var s = ""; for (var i = 0; i < el.childNodes.length; i++) { var n = el.childNodes[i]; if (n.nodeType === 3) s += n.nodeValue; } return s.replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
-  function attrsOf(el) { var o = {}; try { for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; o[a.name] = String(a.value).slice(0, 240); } } catch (e) {} return o; }
-  function sketch(v, d, maxD) {
-    d = d || 0; maxD = maxD || 5;
-    if (v == null) return v;
-    var t = typeof v;
-    if (t === "function") return "ƒ";
-    if (t !== "object") return (t === "string" && v.length > 400) ? v.slice(0, 400) + "…" : v;
-    if (d >= maxD) return Array.isArray(v) ? ("array[" + v.length + "]") : "obj";
-    if (Array.isArray(v)) return v.slice(0, 10).map(function (x) { return sketch(x, d + 1, maxD); });
-    var out = {}, keys; try { keys = Object.keys(v); } catch (e) { return "obj?"; }
-    keys.slice(0, 60).forEach(function (k) { try { var s = sketch(v[k], d + 1, maxD); if (s !== undefined) out[k] = s; } catch (e) {} });
-    return out;
-  }
-  function propNames(el) {
-    var names = {};
-    try { Object.keys(el).forEach(function (k) { names[k] = 1; }); } catch (e) {}
-    var proto = Object.getPrototypeOf(el), hops = 0;
-    while (proto && hops < 12) {
-      var dsc; try { dsc = Object.getOwnPropertyDescriptors(proto); } catch (e) { dsc = null; }
-      if (dsc) Object.keys(dsc).forEach(function (k) { if (k === "constructor") return; var d = dsc[k]; if (d && (typeof d.get === "function" || "value" in d)) names[k] = 1; });
-      proto = Object.getPrototypeOf(proto); hops++;
-    }
-    return Object.keys(names);
-  }
-  var NOISE = /^(template|refs|shadowRoot|parentNode|parentElement|children|childNodes|classList|style|dataset|attributes|next|previous|first|last|offset|client|scroll|aria[A-Z]|innerHTML|outerHTML|innerText|outerText|textContent|node[A-Z]|baseURI|is[A-Z]|tagName|localName|namespace|prefix|ownerDocument|assignedSlot|part|slot|contentEditable|isContentEditable|inputMode|enterKeyHint|virtualKeyboardPolicy|spellcheck|autocapitalize|writingSuggestions|draggable|hidden|inert|accessKey|title|lang|dir|translate|autocorrect|nonce|elementTiming|focusGroup|autofocus|accessKeyLabel|ENTITY|ELEMENT_|ATTRIBUTE_|TEXT_|CDATA|PROCESSING|COMMENT|DOCUMENT|NOTATION|oninvalid|on[a-z]+)$/;
-  function usefulProps(el) {
-    var out = {};
-    propNames(el).forEach(function (k) {
-      if (NOISE.test(k)) return;
-      var v; try { v = el[k]; } catch (e) { return; }
-      if (v === undefined || typeof v === "function") return;
-      var s = sketch(v, 0, 5);
-      if (s !== undefined && !(typeof s === "object" && !Object.keys(s).length)) out[k] = s;
-    });
-    return out;
-  }
-  var ROUTE = /\/lightning\/|standard-[A-Za-z]|\/one\/one\.app#|c__[A-Za-z]|objectApiName|pageReference|navigationTarget|runtime_cdp:|\/o\/|\/n\/|\/r\//;
-  function routeStrings(el) {
+  function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
+  function attrsOf(el) { var o = {}; try { for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; o[a.name] = String(a.value).slice(0, 200); } } catch (e) {} return o; }
+  // attributes anywhere in the subtree that look like a row key / id (data-row-key-value etc.)
+  function keyAttrsInSubtree(root) {
     var hits = {};
-    propNames(el).forEach(function (k) {
-      if (NOISE.test(k)) return;
-      var v; try { v = el[k]; } catch (e) { return; }
-      if (typeof v === "string") { if (ROUTE.test(v)) hits[k] = v.slice(0, 300); }
-      else if (v && typeof v === "object") { var j = ""; try { j = JSON.stringify(v); } catch (e) {} if (j && ROUTE.test(j)) hits[k] = j.slice(0, 600); }
+    deepAll(root, []).slice(0, 120).forEach(function (el) {
+      try {
+        for (var i = 0; i < el.attributes.length; i++) {
+          var a = el.attributes[i];
+          if (/row-key|rowkey|data-row|row-id|rowid|data-key|data-id|data-name|data-recordid|__dlm/i.test(a.name + "=" + a.value)) {
+            hits[tagOf(el) + "[" + a.name + "]"] = String(a.value).slice(0, 120);
+          }
+        }
+      } catch (e) {}
     });
-    try { for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; if (ROUTE.test(a.value)) hits["@" + a.name] = a.value.slice(0, 300); } } catch (e) {}
     return hits;
   }
 
   var ALL = deepAll(document, []);
-  var NAV_LABELS = ["Data Streams", "Data Lake Objects", "Data Transforms", "Data Model",
-    "Identity Resolution", "Data Spaces", "Data Governance", "Intelligent Context",
-    "Document AI", "Search Indexes", "Knowledge Harmonization", "Query Editor",
-    "Data Explorer", "Data Graphs"];
+  var dts = ALL.filter(function (el) { return tagOf(el) === "runtime_cdp-custom-datatable"; });
 
-  // tally of every custom-element tag that contains "nav" (so we SEE the real tag names)
-  var navTagTally = {};
-  ALL.forEach(function (el) { var t = tagOf(el); if (/nav/.test(t) && t.indexOf("-") >= 0) navTagTally[t] = (navTagTally[t] || 0) + 1; });
+  var report = dts.slice(0, 2).map(function (dt) {
+    // the authoritative model
+    var data = null; try { data = dt.data; } catch (e) {}
+    var dataSample = (data || []).slice(0, 3).map(function (r) { return { name: r && r.name, label: r && r.label, objectLabel: r && r.objectLabel && r.objectLabel.label }; });
+    var keyField = null; try { keyField = dt.keyField; } catch (e) {}
 
-  var items = [];
-  NAV_LABELS.forEach(function (label) {
-    var leaf = null;
-    for (var i = 0; i < ALL.length; i++) { if (ownText(ALL[i]) === label) { leaf = ALL[i]; break; } }
-    if (!leaf) return;
-    // climb up to 12 hops; for EACH custom-element (tag has a dash) ancestor, dump route
-    // strings + a trimmed prop surface. This is what v14 proved reaches the nav item.
-    var chain = [], node = leaf;
-    for (var h = 0; h < 12 && node; h++) {
-      var tg = tagOf(node);
-      var rs = routeStrings(node);
-      var entry = { tag: tg, attrs: attrsOf(node), routeStrings: rs };
-      // only dump full props for custom elements OR when a route hit exists (keep JSON small)
-      if (tg.indexOf("-") >= 0 || Object.keys(rs).length) entry.props = usefulProps(node);
-      chain.push(entry);
-      var p = node.parentElement; if (!p) { try { var rn = node.getRootNode(); p = rn && rn.host ? rn.host : null; } catch (e) { p = null; } }
-      node = p;
-    }
-    items.push({ label: label, climb: chain });
+    // rendered rows: find <tr> elements inside this datatable's subtree
+    var rows = deepAll(dt, []).filter(function (el) { return tagOf(el) === "tr"; });
+    var rowSamples = rows.slice(0, 4).map(function (tr) {
+      // cells
+      var cells = [];
+      try {
+        var tds = tr.querySelectorAll("td,th");
+        for (var i = 0; i < tds.length && i < 10; i++) {
+          var c = tds[i];
+          var a = c.querySelector && c.querySelector("a,span[title],lightning-base-formatted-text");
+          cells.push({
+            cellTag: tagOf(c),
+            text: txt(c).slice(0, 60),
+            title: (function () { try { var t = c.querySelector("[title]"); return t ? (t.getAttribute("title") || "").slice(0, 120) : ((c.getAttribute && c.getAttribute("title")) || ""); } catch (e) { return ""; } })(),
+            attrs: attrsOf(c),
+            innerLinkTag: a ? tagOf(a) : "",
+            innerLinkTitle: a ? ((a.getAttribute && a.getAttribute("title")) || "").slice(0, 120) : ""
+          });
+        }
+      } catch (e) {}
+      return {
+        trAttrs: attrsOf(tr),
+        rowText: txt(tr).slice(0, 100),
+        keyAttrs: keyAttrsInSubtree(tr),
+        cells: cells
+      };
+    });
+
+    return {
+      tag: "runtime_cdp-custom-datatable",
+      keyField: keyField,
+      dataLen: data ? data.length : 0,
+      dataSample: dataSample,
+      renderedRowCount: rows.length,
+      rowSamples: rowSamples
+    };
   });
 
-  var out = {
-    _tool: "dom-probe", _version: 17, page: location.href, origin: location.origin,
-    navTagTally: navTagTally,
-    labelsFound: items.length,
-    items: items
-  };
+  var out = { _tool: "dom-probe", _version: 18, page: location.href, origin: location.origin, datatables: dts.length, report: report };
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
 
@@ -120,29 +101,29 @@
     else { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); cb(ok); } catch (e) { cb(false); } }
   }
   var kb = Math.round(json.length / 1024);
-  var withRoute = items.filter(function (x) { return x.climb.some(function (c) { return Object.keys(c.routeStrings).length; }); }).length;
+  var keyFound = report.some(function (r) { return r.rowSamples.some(function (s) { return Object.keys(s.keyAttrs).length || /row-key/i.test(JSON.stringify(s.trAttrs)); }); });
   var panel = document.createElement("div");
   panel.id = PANEL_ID;
   panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v17 · Left nav (climb)</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v18 · DMO rows</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
     + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Labels found: <b>" + items.length + "</b><br>With a route value in the climb: <b>" + withRoute + "</b><br>Nav tags seen: <b>" + Object.keys(navTagTally).length + "</b></div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Datatables: <b>" + dts.length + "</b><br>Rendered rows: <b>" + (report[0] ? report[0].renderedRowCount : 0) + "</b> · .data[]: <b>" + (report[0] ? report[0].dataLen : 0) + "</b><br>Row-key attr found: <b>" + (keyFound ? "yes" : "no") + "</b></div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
-    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on the fullcopy org with the LEFT vertical nav. Expand it so labels render, then click.</div>"
+    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on the Data Model LIST page. Scroll a few rows into view first.</div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
   copyText(json, function (ok) { if (!ok) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
   panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v17-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
+  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v18-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v17 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v18 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
