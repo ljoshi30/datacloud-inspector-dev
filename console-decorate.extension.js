@@ -17312,6 +17312,89 @@ processJSON();
       if (typeof watchNavigation === "function") watchNavigation();
     } catch (e) {}
   }
+
+  /* ── LEFT NAV "open in new tab" ──────────────────────────────────────────────────
+   * The Data Cloud LEFT vertical nav (becoming the default) renders items as
+   * <a role="button" href=""> — empty href, so right-click → new tab fails. SF navigates
+   * via a JS handler; there's no URL to grab. Fix: map each item BY LABEL to its standard
+   * Salesforce route (captured from the TOP nav bar's REAL hrefs on tdidev — DOM Probe v13;
+   * these are standard-object routes, identical across orgs, not guessed) and overlay a ⧉
+   * that opens <origin> + route in a new tab. We attach to the item's own <a>/aria-label.
+   * Matches both the left vertical nav AND the top nav (harmless there — those already work,
+   * but a ⧉ is still a convenient explicit new-tab affordance). Pure body-overlay, no DOM
+   * mutation. */
+  var DC_NAV_ROUTES = {
+    "Data Streams": "/lightning/o/DataStream/home",
+    "Data Lake Objects": "/lightning/o/DataLakeObjectInstance/home",
+    "Data Transforms": "/lightning/o/MktDataTransform/home",
+    "Data Model": "/lightning/n/standard-DataModel",
+    "Identity Resolution": "/lightning/o/IdentityResolution/home",
+    "Data Spaces": "/lightning/o/DataSpace/home",
+    "Data Governance": "/lightning/n/standard-DataGovernance",
+    "Search Indexes": "/lightning/o/DataSemanticSearch/home",
+    "Query Editor": "/lightning/o/DataQueryWorkspace/home",
+    "Data Explorer": "/one/one.app#eyJjb21wb25lbnREZWYiOiJydW50aW1lX2NkcDpkYXRhVmlld1RhYiIsImF0dHJpYnV0ZXMiOnt9LCJzdGF0ZSI6e319",
+    "Data Graphs": "/lightning/o/DataGraph/home"
+  };
+  // The label of a nav item from its aria-label or its own text.
+  function dcNavLabelOf(el) {
+    var lbl = "";
+    try { lbl = (el.getAttribute && el.getAttribute("aria-label")) || ""; } catch (e) {}
+    if (!lbl) { try { lbl = (el.getAttribute && el.getAttribute("title")) || ""; } catch (e) {} }
+    if (!lbl) { try { lbl = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
+    return lbl;
+  }
+  // From a hovered node, climb to a nav-item anchor whose label is a known DC nav item.
+  // Only matches real nav anchors (role=button/link OR slds-nav-vertical__action OR a
+  // context-bar label action) so random page text can't trigger it.
+  function dcNavItemFrom(node) {
+    for (var h = 0; h < 6 && node && node.nodeType === 1; h++) {
+      var tag = (node.tagName || "").toLowerCase();
+      var cls = ""; try { cls = (node.getAttribute && node.getAttribute("class")) || ""; } catch (e) {}
+      var role = ""; try { role = (node.getAttribute && node.getAttribute("role")) || ""; } catch (e) {}
+      var looksNav = tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
+      if (looksNav) {
+        var lbl = dcNavLabelOf(node);
+        if (lbl && DC_NAV_ROUTES[lbl]) return { label: lbl, route: DC_NAV_ROUTES[lbl], el: node };
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+  function dcInstallNavNewTabButton() {
+    if (document.getElementById("dc-nav-newtab")) return;
+    var btn = document.createElement("a");
+    btn.id = "dc-nav-newtab";
+    btn.target = "_blank"; btn.rel = "noopener";
+    btn.textContent = "⧉";
+    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);   // open the link; don't trigger SF nav
+    document.body.appendChild(btn);
+    var hideT = null;
+    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 250); }
+    function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
+    btn.addEventListener("mouseenter", cancelHide);
+    btn.addEventListener("mouseleave", hideSoon);
+    document.addEventListener("mouseover", function (e) {
+      var hit = dcNavItemFrom(e.target);
+      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
+      if (!hit) return;
+      cancelHide();
+      try { btn.href = location.origin + hit.route; } catch (er) { return; }
+      btn.title = "Open " + hit.label + " in a new tab";
+      var r; try { r = hit.el.getBoundingClientRect(); } catch (er) { return; }
+      if (!r || !r.height) return;
+      btn.style.top = Math.round(r.top + r.height / 2 - 11) + "px";
+      btn.style.left = Math.round(Math.min(r.right - 24, window.innerWidth - 28)) + "px";
+      btn.style.display = "flex";
+    }, true);
+    document.addEventListener("mouseout", function (e) {
+      if (e.relatedTarget === btn) return;
+      if (!dcNavItemFrom(e.relatedTarget)) hideSoon();
+    }, true);
+    window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
+  }
+  try { dcInstallNavNewTabButton(); } catch (e) {}
   /* @strip:end */
 
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
