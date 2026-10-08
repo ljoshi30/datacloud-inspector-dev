@@ -17231,32 +17231,29 @@ processJSON();
   function dcDmoUrl(apiName) {
     try { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(apiName); } catch (e) { return ""; }
   }
-  // Read the live datatable row model: normalized label text → apiName. Source is the
-  // datatable component's own .data[] (proven via DOM Probe v15: [{name, label,
-  // objectLabel:{label}}]) — authoritative, not scraped from cell markup.
-  var _dcDmoModel = null, _dcDmoModelAt = 0;
-  function dcReadDmoRowModel() {
-    var now = 0; try { now = (performance && performance.now) ? performance.now() : 0; } catch (e) {}
-    if (_dcDmoModel && (now - _dcDmoModelAt) < 1500) return _dcDmoModel;
-    var map = {};
-    try {
-      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
-        var data = null; try { data = dt.data; } catch (e) {}
-        if (!data || !data.length) return;
-        for (var i = 0; i < data.length; i++) {
-          var r = data[i]; if (!r || !r.name) continue;
-          var lbl = (r.label || (r.objectLabel && r.objectLabel.label) || "").trim().replace(/\s+/g, " ");
-          if (lbl) map[lbl] = r.name;
+  // Read the DMO API name off a hovered row. The datatable renders each data row as
+  //   <tr role="row" data-row-key-value="<DMO api>" data-row-number="N">
+  // (proven via DOM Probe v20; keyField === "name" === the DMO api). This is the
+  // AUTHORITATIVE per-row key — truncation-proof and unambiguous (the visible label is
+  // truncated AND duplicated across rows, so text matching failed; this doesn't).
+  // Returns "" for the header row ("HEADER") or anything that isn't a DMO api token.
+  var DC_DMO_API_RE = /__(?:dlm|dll|c)$/i;
+  function dcRowApiFrom(node) {
+    for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
+      try {
+        if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
+          var k = node.getAttribute("data-row-key-value");
+          if (k && k !== "HEADER" && DC_DMO_API_RE.test(k)) return { api: k, row: node };
         }
-      });
-    } catch (e) {}
-    _dcDmoModel = map; _dcDmoModelAt = now;
-    return map;
+      } catch (e) {}
+      node = node.parentElement;
+    }
+    return null;
   }
   // SINGLE floating ⧉ button (appended to body — NEVER mutates SF's DOM / datatable, so
-  // it can't disturb virtual-scroll measurements). On hover over a row whose text matches
-  // a known DMO label, we position the shared button at that row's right edge. Clicking it
-  // opens that DMO in a new tab. Pure, reversible overlay.
+  // it can't disturb virtual-scroll measurements). On hover over a DMO row, read its
+  // data-row-key-value and position the shared button at the row's right edge. Clicking
+  // it opens that DMO in a new tab. Pure, reversible overlay.
   function dcInstallDmoHoverButton() {
     if (!dcIsDataModelListPage()) return;
     if (document.getElementById("dc-dmo-newtab")) return;
@@ -17264,46 +17261,41 @@ processJSON();
     btn.id = "dc-dmo-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
-    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
+    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);   // let the real link open; don't trigger SF row nav
     document.body.appendChild(btn);
 
-    var curApi = "", hideT = null;
-    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 220); }
+    var hideT = null;
+    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 250); }
     function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
     btn.addEventListener("mouseenter", cancelHide);
     btn.addEventListener("mouseleave", hideSoon);
 
-    // Walk up a few hops from the hovered node to find an element whose exact text is a
-    // known DMO label (the label cell). Content-based match against the authoritative
-    // datatable model — no cell-structure guessing, no DOM mutation.
+    // Hover a DMO row → read its data-row-key-value (the DMO api) and show the button at
+    // the row's right edge. mouseover fires through shadow DOM via its composed path, so
+    // we check e.target AND the composedPath to reliably catch the <tr>.
     document.addEventListener("mouseover", function (e) {
       if (!dcIsDataModelListPage()) { btn.style.display = "none"; return; }
-      var model = dcReadDmoRowModel();
-      if (!model || !Object.keys(model).length) return;
-      var node = e.target, hit = null, hitEl = null;
-      for (var h = 0; h < 5 && node && node.nodeType === 1; h++) {
-        var t = ""; try { t = (node.textContent || "").trim().replace(/\s+/g, " "); } catch (er) {}
-        if (t && t.length <= 160 && model[t]) { hit = model[t]; hitEl = node; break; }
-        node = node.parentElement;
-      }
-      if (!hit || !hitEl) return;
-      curApi = hit;
-      btn.href = dcDmoUrl(hit);
-      btn.title = "Open “" + (node.textContent || "").trim().replace(/\s+/g, " ") + "” in a new tab  (" + hit + ")";
-      var r; try { r = hitEl.getBoundingClientRect(); } catch (er) { return; }
-      if (!r || !r.height) return;
+      var hit = dcRowApiFrom(e.target);
+      // if the direct target didn't resolve (text node inside a cell), try the composed path
+      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) { hit = dcRowApiFrom(p[i]); } }
+      if (!hit) return;
       cancelHide();
-      btn.style.top = Math.round(r.top + r.height / 2 - 11) + "px";
-      btn.style.left = Math.round(Math.min(r.right + 6, window.innerWidth - 28)) + "px";
-      btn.style.display = "block";
+      btn.href = dcDmoUrl(hit.api);
+      btn.title = "Open " + hit.api + " in a new tab";
+      var r; try { r = hit.row.getBoundingClientRect(); } catch (er) { return; }
+      if (!r || !r.height) return;
+      btn.style.top = Math.round(r.top + r.height / 2 - 12) + "px";
+      btn.style.left = Math.round(Math.min(r.right - 30, window.innerWidth - 30)) + "px";
+      btn.style.display = "flex";
     }, true);
     document.addEventListener("mouseout", function (e) {
-      // hide when leaving a matched row (unless moving onto the button)
-      if (e.relatedTarget === btn) return;
-      hideSoon();
+      if (e.relatedTarget === btn) return;   // moving onto the button → keep it
+      // only hide when actually leaving a DMO row (not when moving between cells of the same row)
+      var stillOnRow = dcRowApiFrom(e.relatedTarget);
+      if (!stillOnRow) hideSoon();
     }, true);
-    // hide on scroll (position would go stale)
+    // hide on scroll (row geometry goes stale)
     window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
   }
   if (dcIsDataModelListPage()) {
