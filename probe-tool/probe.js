@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v13 — DATA CLOUD LEFT NAV + LIST ROWS ("open in a new tab")
+ * DOM PROBE v14 — DATA CLOUD LEFT NAV + LIST ROWS ("open in a new tab")
  *
  * Goal (two halves, one run):
  *  (NAV) Does each left-nav item ("Data Streams", "Data Transforms", "Data Model", …)
@@ -16,7 +16,7 @@
  * RUN on a Data Cloud LIST page (e.g. Data Model / Data Lake Objects) with the left
  * nav visible. Read-only. Copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe13() {
+(function DomProbe14() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -100,15 +100,45 @@
     // find any descendant anchor with an href under the leaf's clickable ancestor chain
     var descHref = "";
     try { var a = (clickable || leaf).querySelector && (clickable || leaf).querySelector("a[href]"); if (a) descHref = a.href || a.getAttribute("href") || ""; } catch (e) {}
+    // ── climb further to the NAV-ITEM HOST (the LWC that owns the route) and deep-dump it.
+    // v12 proved the inner <a> has an empty href — the real target (pageReference / url /
+    // apiName / developerName) lives on the lightning-vertical-navigation-item or
+    // one-app-nav-bar-item-root ancestor. Collect the first such host and sketch ALL props.
+    var NAVITEM_TAGS = ["lightning-vertical-navigation-item", "lightning-vertical-navigation-item-icon",
+      "one-app-nav-bar-item-root", "one-app-nav-bar-item", "forcenavdesktopitem"];
+    var navHost = null, chainTags = [], n2 = leaf;
+    for (var hh = 0; hh < 14 && n2; hh++) {
+      var tg2 = tagOf(n2); if (tg2.indexOf("-") >= 0) chainTags.push(tg2);
+      if (!navHost && NAVITEM_TAGS.indexOf(tg2) >= 0) navHost = n2;
+      var pp = n2.parentElement; if (!pp) { try { var rr = n2.getRootNode(); pp = rr && rr.host ? rr.host : null; } catch (e) { pp = null; } }
+      n2 = pp;
+    }
+    var navHostDump = null;
+    if (navHost) {
+      var full = {};
+      var nm = {}; try { Object.keys(navHost).forEach(function (k) { nm[k] = 1; }); } catch (e) {}
+      var pr = Object.getPrototypeOf(navHost), hc = 0;
+      while (pr && hc < 10) { var dd; try { dd = Object.getOwnPropertyDescriptors(pr); } catch (e) { dd = null; } if (dd) Object.keys(dd).forEach(function (k) { if (k === "constructor") return; var d = dd[k]; if (d && (typeof d.get === "function" || ("value" in d && typeof d.value !== "function"))) nm[k] = 1; }); pr = Object.getPrototypeOf(pr); hc++; }
+      Object.keys(nm).forEach(function (k) {
+        if (/^(template|refs|shadowRoot|parent|children|childNodes|classList|style|dataset|attributes|next|previous|first|last|offset|client|scroll|aria|inner|outer|node[A-Z]|base|tag|local|namespace|current|translate|autocorrect|contentEditable|isContentEditable|inputMode|spellcheck|draggable|hidden|inert|accessKey|title|lang|dir|slot|id$|className|\$|ELEMENT_|ATTRIBUTE_|TEXT_|CDATA|ENTITY|PROCESSING|COMMENT|DOCUMENT|NOTATION)/.test(k)) return;
+        var v; try { v = navHost[k]; } catch (e) { return; }
+        if (v == null || typeof v === "function") return;
+        var s = sketch(v, 0, 5);
+        if (s !== undefined && !(typeof s === "object" && !Object.keys(s).length)) full[k] = s;
+      });
+      navHostDump = { tag: tagOf(navHost), attrs: attrsOf(navHost), props: full };
+    }
     items.push({
       label: label,
       leafTag: tagOf(leaf),
       clickableTag: clickable ? tagOf(clickable) : "(none — not an a/button/role)",
       ancestorChain: hops,
+      customAncestorChain: chainTags,
       selfHref: hrefOf(host),
       descendantHref: descHref,
       attrs: attrsOf(host),
-      navProps: navProps(host)
+      navProps: navProps(host),
+      navItemHost: navHostDump   // ← the LWC that owns the route (pageReference/url/apiName)
     });
   });
 
@@ -146,7 +176,7 @@
   function t_(el) { return tagOf(el); }
 
   var out = {
-    _tool: "dom-probe", _version: 13, page: location.href,
+    _tool: "dom-probe", _version: 14, page: location.href,
     origin: location.origin,
     navHostTagsSeen: navHosts,
     nav: { labelsFound: items.length, items: items },
@@ -165,7 +195,7 @@
   panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v13 · Nav + Rows</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v14 · Nav routes + Rows</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
     + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
@@ -182,6 +212,6 @@
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
   panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v12-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v13 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v14 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
