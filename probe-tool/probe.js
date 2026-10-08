@@ -1,23 +1,22 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v12 — DATA CLOUD LEFT NAV (for "open nav item in a new tab")
+ * DOM PROBE v13 — DATA CLOUD LEFT NAV + LIST ROWS ("open in a new tab")
  *
- * Goal: find out whether each left-nav item ("Data Streams", "Data Lake Objects",
- * "Data Transforms", "Data Model", …) carries a REAL navigable URL anywhere in the
- * DOM — an <a href>, a routable data-* attribute, or an LWC pageReference prop — so
- * our launcher can offer them as target="_blank" links. If there's NO url (pure JS
- * click handler) we must know that too, so we don't fake a link that 404s.
+ * Goal (two halves, one run):
+ *  (NAV) Does each left-nav item ("Data Streams", "Data Transforms", "Data Model", …)
+ *        carry a REAL navigable URL anywhere — <a href>, data-route, or LWC
+ *        pageReference — so our launcher can offer target="_blank" links? If it's a
+ *        pure JS click handler (no url) we must know, so we don't fake a 404 link.
+ *  (ROWS) Same question for LIST ROWS on the current page (DMOs, Data Streams,
+ *        Transforms, …). A DMO detail page HAS a real URL, so if the row exposes the
+ *        record id / developer name / a cell <a href>, we can build a real new-tab
+ *        link per row (today you must duplicate the tab). Capture whatever identifier
+ *        the row carries — id, apiName, developerName, pageReference, cell href.
+ * Plus the page origin so we can see the real pod/path scheme.
  *
- * Captures, compactly, for every plausible nav item:
- *  - tag, visible label text
- *  - self href + any descendant <a href> (the gold — a real URL)
- *  - data-* attributes (routes sometimes live here)
- *  - LWC props whose name/value hints at navigation (href/url/route/pageReference/
- *    attributes/apiName/objectApiName/target/to/link)
- * Plus the current page URL (so we can see the real pod/path scheme).
- *
- * RUN on any Data Cloud page that shows the left nav. Read-only. Copies JSON.
+ * RUN on a Data Cloud LIST page (e.g. Data Model / Data Lake Objects) with the left
+ * nav visible. Read-only. Copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe12() {
+(function DomProbe13() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -113,12 +112,45 @@
     });
   });
 
+  // ── (ROWS) list rows on the current page (DMO/Data Stream/Transform tables) ──
+  // Find data-table row elements, and for each capture: a cell <a href> (the gold),
+  // row-level data-* attrs, and any id/apiName/developerName/pageReference-ish props
+  // (what we'd need to BUILD a real detail URL for a new tab).
+  var ROW_TAGS = ["tr", "lightning-tree-grid-row", "lightning-datatable",
+    "runtime_cdp-data-lake-object-row", "runtime_cdp-dmo-row", "one-record-home-flexipage2",
+    "lightning-primitive-cell-factory"];
+  var rowEls = [];
+  ALL.forEach(function (el) {
+    var t = tagOf(el);
+    if (t === "tr" || /(^|-)row$/.test(t)) rowEls.push(el);
+  });
+  // keep rows that actually have an <a href> OR a navish prop OR data-row-key-value
+  var rowSamples = [];
+  rowEls.forEach(function (el) {
+    if (rowSamples.length >= 12) return;
+    var label = "";
+    try { var firstA = el.querySelector && el.querySelector("a"); if (firstA) label = txt(firstA); } catch (e) {}
+    if (!label) label = txt(el).slice(0, 60);
+    if (!label) return;
+    var cellHref = "";
+    try { var a = el.querySelector && el.querySelector("a[href]"); if (a) cellHref = a.href || a.getAttribute("href") || ""; } catch (e) {}
+    var attrs = attrsOf(el);
+    var np = navProps(el);
+    // also harvest any id-ish attribute on a descendant anchor (data-recordid etc.)
+    var anchorAttrs = {};
+    try { var a2 = el.querySelector && el.querySelector("a"); if (a2) anchorAttrs = attrsOf(a2); } catch (e) {}
+    var interesting = cellHref || Object.keys(np).length || /recordid|row-key|developername|apiname/i.test(JSON.stringify(attrs) + JSON.stringify(anchorAttrs));
+    if (!interesting) return;
+    rowSamples.push({ rowTag: t_(el), label: label, cellHref: cellHref, rowAttrs: attrs, anchorAttrs: anchorAttrs, navProps: np });
+  });
+  function t_(el) { return tagOf(el); }
+
   var out = {
-    _tool: "dom-probe", _version: 12, page: location.href,
+    _tool: "dom-probe", _version: 13, page: location.href,
     origin: location.origin,
     navHostTagsSeen: navHosts,
-    labelsFound: items.length,
-    items: items
+    nav: { labelsFound: items.length, items: items },
+    rows: { candidatesScanned: rowEls.length, withLinkOrId: rowSamples.length, samples: rowSamples }
   };
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
@@ -133,15 +165,15 @@
   panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v12 · Left Nav</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v13 · Nav + Rows</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
     + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Nav labels found: <b>" + items.length + "</b><br>With a real href: <b>" + items.filter(function (x) { return x.selfHref || x.descendantHref; }).length + "</b></div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Nav labels: <b>" + items.length + "</b> (href: <b>" + items.filter(function (x) { return x.selfHref || x.descendantHref; }).length + "</b>)<br>List rows with link/id: <b>" + rowSamples.length + "</b> of " + rowEls.length + "</div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
-    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on any Data Cloud page showing the left nav. Expand it first so all items are in the DOM.</div>"
+    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on a Data Cloud LIST page (e.g. Data Model) with the left nav visible. Expand the nav first so all items are in the DOM.</div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
@@ -150,6 +182,6 @@
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
   panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v12-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v12 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v13 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
