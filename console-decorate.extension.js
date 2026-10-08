@@ -17211,58 +17211,66 @@ processJSON();
   }
 
   /* @strip:start dev
-   * ── DMO "open in new tab" (Data Model LIST view) ─────────────────────────────────
-   * Problem: on the Data Model list the DMO rows are NOT real links — the clickable
-   * label is a custom-event cell (href="javascript:void(0)"), so right-click → open in
-   * new tab doesn't work and you have to duplicate the tab. Salesforce is also moving
-   * Data Cloud to the left vertical nav whose items are href-empty buttons too.
-   * Fix (proven, not guessed): the DMO list is a runtime_cdp-custom-datatable whose
-   * `.data[]` carries every row's `name` = the DMO API name (e.g. Foo__dlm) + `label`
-   * (DOM Probe v15). A DMO detail page is <origin>/lightning/n/standard-DataModel?
-   * c__objectApiName=<name> — the SAME param this tool already READS off live DMO pages
-   * (see readDmoMeta / location.href match on c__objectApiName). So we can build a real
-   * per-row link. We overlay a small ⧉ "open in new tab" button on each row (on hover);
-   * clicking it opens that DMO in a new tab. Zero mutation of SF data; pure overlay. */
-  function dcIsDataModelListPage() {
-    try { var h = location.href; return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); } catch (e) { return false; }
+   * ── "Open in new tab" for Data Cloud LIST rows (generic engine) ──────────────────
+   * Problem: DC list rows (DMO, DLO, CI, Segments, Data Streams, …) aren't real links —
+   * the clickable label is a custom-event cell (href="javascript:void(0)"), so right-click
+   * → open in new tab fails and you must duplicate the tab.
+   * Mechanism (proven, not guessed): every DC list is the SAME component
+   * runtime_cdp-custom-datatable; each data row renders (in shadow) as
+   *   <tr role="row" data-row-key-value="<the keyField value>" data-row-number="N">
+   * (DOM Probe v15–v20). So the per-row key is read straight off the row's
+   * data-row-key-value — truncation-proof + unambiguous (visible labels are truncated AND
+   * duplicated). What differs PER LIST is only (a) how to detect the page and (b) the
+   * detail-URL template. Those live in DC_LIST_TYPES; adding a new list = one entry, each
+   * confirmed via probe (never guessed). We overlay ONE shared ⧉ button (appended to body,
+   * never mutating SF's datatable) next to the hovered row's name cell.
+   *
+   * CONFIRMED entries: DMO (c__objectApiName — the same param the tool already reads off
+   * live DMO pages). PENDING (need a probe-confirmed detail URL before enabling): DLO, CI,
+   * Segment, DataStream — stubs commented out below. */
+  var DC_LIST_TYPES = [
+    {
+      id: "dmo",
+      // page: Data Model list (not the ERD graph, not a single DMO detail page)
+      match: function (h) { return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); },
+      // the row key is a DMO api token (Foo__dlm / __dll / __c), never "HEADER"
+      keyOk: function (k) { return !!k && k !== "HEADER" && /__(?:dlm|dll|c)$/i.test(k); },
+      // proven detail URL (same c__objectApiName param the tool reads off live DMO pages)
+      url: function (key) { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(key); }
+    }
+    // , { id:"dlo", match:h=>…, keyOk:k=>…, url:key=>… }   // PENDING probe (v21) → fill URL
+    // , { id:"ci",  match:h=>…, keyOk:k=>…, url:key=>… }   // PENDING probe (v21) → fill URL
+    // , { id:"segment", … }                               // PENDING probe (v21) → fill URL
+  ];
+  function dcActiveListType() {
+    var h = ""; try { h = location.href; } catch (e) { return null; }
+    for (var i = 0; i < DC_LIST_TYPES.length; i++) { try { if (DC_LIST_TYPES[i].match(h)) return DC_LIST_TYPES[i]; } catch (e) {} }
+    return null;
   }
-  // Build the authoritative DMO detail URL from an API name (proven format: same
-  // c__objectApiName param this tool already READS off live DMO pages).
-  function dcDmoUrl(apiName) {
-    try { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(apiName); } catch (e) { return ""; }
-  }
-  // Read the DMO API name off a hovered row. The datatable renders each data row as
-  //   <tr role="row" data-row-key-value="<DMO api>" data-row-number="N">
-  // (proven via DOM Probe v20; keyField === "name" === the DMO api). This is the
-  // AUTHORITATIVE per-row key — truncation-proof and unambiguous (the visible label is
-  // truncated AND duplicated across rows, so text matching failed; this doesn't).
-  // Returns "" for the header row ("HEADER") or anything that isn't a DMO api token.
-  var DC_DMO_API_RE = /__(?:dlm|dll|c)$/i;
-  function dcRowApiFrom(node) {
+  // From a hovered node, climb to the <tr> and return {key,row} if its data-row-key-value
+  // passes the active list type's keyOk. Null otherwise.
+  function dcRowKeyFrom(node, type) {
     for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
       try {
         if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
           var k = node.getAttribute("data-row-key-value");
-          if (k && k !== "HEADER" && DC_DMO_API_RE.test(k)) return { api: k, row: node };
+          if (type.keyOk(k)) return { key: k, row: node };
         }
       } catch (e) {}
       node = node.parentElement;
     }
     return null;
   }
-  // SINGLE floating ⧉ button (appended to body — NEVER mutates SF's DOM / datatable, so
-  // it can't disturb virtual-scroll measurements). On hover over a DMO row, read its
-  // data-row-key-value and position the shared button at the row's right edge. Clicking
-  // it opens that DMO in a new tab. Pure, reversible overlay.
-  function dcInstallDmoHoverButton() {
-    if (!dcIsDataModelListPage()) return;
-    if (document.getElementById("dc-dmo-newtab")) return;
+  // ONE shared floating ⧉ button for whatever list is active. Body-overlay; never mutates
+  // SF's datatable (so virtual scroll is undisturbed). Anchored to the row's NAME cell.
+  function dcInstallListNewTabButton() {
+    if (document.getElementById("dc-list-newtab")) return;
     var btn = document.createElement("a");
-    btn.id = "dc-dmo-newtab";
+    btn.id = "dc-list-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
-    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);   // let the real link open; don't trigger SF row nav
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);
     document.body.appendChild(btn);
 
     var hideT = null;
@@ -17271,44 +17279,38 @@ processJSON();
     btn.addEventListener("mouseenter", cancelHide);
     btn.addEventListener("mouseleave", hideSoon);
 
-    // Hover a DMO row → read its data-row-key-value (the DMO api) and show the button at
-    // the row's right edge. mouseover fires through shadow DOM via its composed path, so
-    // we check e.target AND the composedPath to reliably catch the <tr>.
     document.addEventListener("mouseover", function (e) {
-      if (!dcIsDataModelListPage()) { btn.style.display = "none"; return; }
-      var hit = dcRowApiFrom(e.target);
-      // if the direct target didn't resolve (text node inside a cell), try the composed path
-      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) { hit = dcRowApiFrom(p[i]); } }
+      var type = dcActiveListType();
+      if (!type) { btn.style.display = "none"; return; }
+      var hit = dcRowKeyFrom(e.target, type);
+      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) hit = dcRowKeyFrom(p[i], type); }
       if (!hit) return;
       cancelHide();
-      btn.href = dcDmoUrl(hit.api);
-      btn.title = "Open " + hit.api + " in a new tab";
-      // Anchor the button to the NAME cell (Object Label = the row-header cell), not the
-      // far right of the whole row — so it sits right next to the DMO name. Fall back to
-      // the first cell, then the whole row, if the row-header isn't found.
+      var href = ""; try { href = type.url(hit.key); } catch (er) {}
+      if (!href) return;
+      btn.href = href;
+      btn.title = "Open " + hit.key + " in a new tab";
+      // anchor to the NAME cell (row-header), falling back to first cell then the row
       var cell = null;
       try { cell = hit.row.querySelector('[role="rowheader"]') || hit.row.querySelector('th') || hit.row.querySelector('td'); } catch (er) {}
       var anchor = cell || hit.row;
       var r; try { r = anchor.getBoundingClientRect(); } catch (er) { return; }
       if (!r || !r.height) return;
       btn.style.top = Math.round(r.top + r.height / 2 - 12) + "px";
-      // just inside the name cell's right edge (clamped to viewport)
       btn.style.left = Math.round(Math.min(r.right - 26, window.innerWidth - 30)) + "px";
       btn.style.display = "flex";
     }, true);
     document.addEventListener("mouseout", function (e) {
-      if (e.relatedTarget === btn) return;   // moving onto the button → keep it
-      // only hide when actually leaving a DMO row (not when moving between cells of the same row)
-      var stillOnRow = dcRowApiFrom(e.relatedTarget);
-      if (!stillOnRow) hideSoon();
+      if (e.relatedTarget === btn) return;
+      var type = dcActiveListType();
+      if (!type || !dcRowKeyFrom(e.relatedTarget, type)) hideSoon();
     }, true);
-    // hide on scroll (row geometry goes stale)
     window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
   }
-  if (dcIsDataModelListPage()) {
+  if (dcActiveListType()) {
     try {
-      window.__dcDmoNewTabActive = true;   // tells the public toast-guard this page IS supported (dev build)
-      dcInstallDmoHoverButton();
+      window.__dcDmoNewTabActive = true;   // tells the public toast-guard a supported list is active (dev build)
+      dcInstallListNewTabButton();
       if (typeof watchNavigation === "function") watchNavigation();
     } catch (e) {}
   }
