@@ -17343,6 +17343,61 @@ processJSON();
     "Document AI": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6ImlkcCJ9",                           // idp
     "Knowledge Harmonization": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6Imhhcm1vbml6YXRpb24ifQ=="  // harmonization
   };
+  // ── Auto-captured nav routes (zero-maintenance, no guessing) ─────────────────────────
+  // A hardcoded map can never keep up with SF (Data Clean Room, Einstein Studio, …). So we
+  // LEARN routes from reality: a left-nav item has an empty href, but the moment you CLICK
+  // it the address bar becomes the real URL. We watch the URL and record it against the
+  // nav item that is now marked ACTIVE (slds-is-active / aria-current / .non-active absent),
+  // persisted in localStorage. After one visit, that item's ⧉ works forever — including
+  // future items. Only ever stores a REAL observed URL; never fabricated. Seeds above make
+  // the common items work before you've visited them (hybrid).
+  var DC_NAV_LS = "dc_nav_routes_learned_v1";
+  function dcLoadLearnedRoutes() { try { return JSON.parse(localStorage.getItem(DC_NAV_LS) || "{}") || {}; } catch (e) { return {}; } }
+  function dcSaveLearnedRoute(label, path) {
+    if (!label || !path) return;
+    try { var m = dcLoadLearnedRoutes(); if (m[label] === path) return; m[label] = path; localStorage.setItem(DC_NAV_LS, JSON.stringify(m)); } catch (e) {}
+  }
+  // The route for a label: learned (observed) first, then the seed map. "" if unknown.
+  function dcRouteForLabel(label) {
+    if (!label) return "";
+    var learned = dcLoadLearnedRoutes();
+    if (learned[label]) return learned[label];
+    return DC_NAV_ROUTES[label] || "";
+  }
+  // Find the currently-ACTIVE left-nav item's label (the page we're on right now).
+  // The active item drops the "non-active" class / gains slds-is-active or aria-current.
+  function dcActiveNavLabel() {
+    var best = "";
+    try {
+      var els = document.querySelectorAll ? [] : [];
+      // walk shadow DOM for nav action anchors
+      (function walk(root, d) {
+        if (d > 14 || best) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length && !best; i++) {
+          var el = q[i], cls = "";
+          try { cls = (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) {}
+          var cur = ""; try { cur = (el.getAttribute && el.getAttribute("aria-current")) || ""; } catch (e) {}
+          var isNavAction = /slds-nav-vertical__action/.test(cls);
+          if (isNavAction && (cur === "page" || cur === "true" || (!/non-active/.test(cls) && /slds-is-active|active/.test(cls)))) {
+            var lbl = dcNavLabelOf(el); if (lbl) { best = lbl; break; }
+          }
+          if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+        }
+      })(document, 0);
+    } catch (e) {}
+    return best;
+  }
+  // Capture: record the CURRENT url path against the active nav label. Called on load and
+  // whenever the URL changes (SPA nav). Stores path+hash+search exactly as the browser has it.
+  function dcCaptureCurrentNavRoute() {
+    try {
+      var label = dcActiveNavLabel();
+      if (!label) return;
+      var path = location.pathname + location.search + location.hash;
+      if (path && path.length > 1) dcSaveLearnedRoute(label, path);
+    } catch (e) {}
+  }
   // The label of a nav item from its aria-label or its own text.
   function dcNavLabelOf(el) {
     var lbl = "";
@@ -17373,8 +17428,10 @@ processJSON();
         if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
           return { label: lbl || href, route: href, el: node, abs: /^https?:/i.test(href) };
         }
-        // 2) known DC nav label → mapped route (left vertical nav, empty-href items)
-        if (lbl && DC_NAV_ROUTES[lbl]) return { label: lbl, route: DC_NAV_ROUTES[lbl], el: node };
+        // 2) empty-href left-nav item → learned (observed-on-click) route, else seed map.
+        //    Zero-maintenance: once you've visited an item its route is remembered forever.
+        var mapped = dcRouteForLabel(lbl);
+        if (lbl && mapped) return { label: lbl, route: mapped, el: node };
       }
       node = node.parentElement;
     }
@@ -17414,6 +17471,18 @@ processJSON();
     window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
   }
   try { dcInstallNavNewTabButton(); } catch (e) {}
+  // Learn the active nav item's route from the real URL — now and whenever the SPA URL
+  // changes (clicking a left-nav item makes its empty-href destination real). A tiny poll
+  // is simplest + reliable across SF's history pushes. Also capture a moment after load
+  // (the active-item class/aria settles slightly after first paint).
+  try {
+    dcCaptureCurrentNavRoute();
+    setTimeout(dcCaptureCurrentNavRoute, 1500);
+    var _dcNavUrl = location.href;
+    setInterval(function () {
+      if (location.href !== _dcNavUrl) { _dcNavUrl = location.href; setTimeout(dcCaptureCurrentNavRoute, 600); }
+    }, 1000);
+  } catch (e) {}
   /* @strip:end */
 
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
