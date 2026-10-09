@@ -17336,7 +17336,12 @@ processJSON();
     "Search Indexes": "/lightning/o/DataSemanticSearch/home",
     "Query Editor": "/lightning/o/DataQueryWorkspace/home",
     "Data Explorer": "/one/one.app#eyJjb21wb25lbnREZWYiOiJydW50aW1lX2NkcDpkYXRhVmlld1RhYiIsImF0dHJpYnV0ZXMiOnt9LCJzdGF0ZSI6e319",
-    "Data Graphs": "/lightning/o/DataGraph/home"
+    "Data Graphs": "/lightning/o/DataGraph/home",
+    // These 3 are LEFT-nav-only (empty href) + live under one base route with a #verticalNav
+    // sub-view token (proven from the address bar; base64 decodes to {"verticalNav":"…"}).
+    "Intelligent Context": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6ImNvbnRlbnRMZW5zIn0=",      // contentLens
+    "Document AI": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6ImlkcCJ9",                           // idp
+    "Knowledge Harmonization": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6Imhhcm1vbml6YXRpb24ifQ=="  // harmonization
   };
   // The label of a nav item from its aria-label or its own text.
   function dcNavLabelOf(el) {
