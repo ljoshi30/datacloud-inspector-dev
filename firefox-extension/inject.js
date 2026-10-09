@@ -17261,36 +17261,42 @@ processJSON();
     }
     return null;
   }
-  // ONE shared floating ⧉ button for whatever list is active. Body-overlay; never mutates
-  // SF's datatable (so virtual scroll is undisturbed). Anchored to the row's NAME cell.
-  function dcInstallListNewTabButton() {
-    if (document.getElementById("dc-list-newtab")) return;
-    var btn = document.createElement("a");
+  // ONE shared floating ⧉ for whatever list is active. Body-overlay; never mutates SF's
+  // datatable (virtual scroll undisturbed). Anchored to the row's NAME cell. Listeners live
+  // on `document` (survives SPA nav) and install ONCE per document; the button self-heals via
+  // dcGetListBtn() after teardown's "[id^='dc-']" sweep. One bookmarklet click → works across
+  // navigation without re-clicking.
+  var dcListHideT = null;
+  function dcListHideSoon() { if (dcListHideT) return; dcListHideT = setTimeout(function () { dcListHideT = null; var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, 250); }
+  function dcGetListBtn() {
+    var btn = document.getElementById("dc-list-newtab");
+    if (btn) return btn;
+    btn = document.createElement("a");
     btn.id = "dc-list-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);
-    document.body.appendChild(btn);
-
-    var hideT = null;
-    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 250); }
-    function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
-    btn.addEventListener("mouseenter", cancelHide);
-    btn.addEventListener("mouseleave", hideSoon);
-
+    btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
+    btn.addEventListener("mouseleave", function () { dcListHideSoon(); });
+    (document.body || document.documentElement).appendChild(btn);
+    return btn;
+  }
+  function dcInstallListNewTabButton() {
+    if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
+    window.__dcListNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
       var type = dcActiveListType();
-      if (!type) { btn.style.display = "none"; return; }
+      if (!type) { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; return; }
       var hit = dcRowKeyFrom(e.target, type);
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) hit = dcRowKeyFrom(p[i], type); }
       if (!hit) return;
-      cancelHide();
+      if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; }
       var href = ""; try { href = type.url(hit.key); } catch (er) {}
       if (!href) return;
+      var btn = dcGetListBtn();
       btn.href = href;
       btn.title = "Open " + hit.key + " in a new tab";
-      // anchor to the NAME cell (row-header), falling back to first cell then the row
       var cell = null;
       try { cell = hit.row.querySelector('[role="rowheader"]') || hit.row.querySelector('th') || hit.row.querySelector('td'); } catch (er) {}
       var anchor = cell || hit.row;
@@ -17301,19 +17307,18 @@ processJSON();
       btn.style.display = "flex";
     }, true);
     document.addEventListener("mouseout", function (e) {
-      if (e.relatedTarget === btn) return;
+      var btn = document.getElementById("dc-list-newtab");
+      if (btn && e.relatedTarget === btn) return;
       var type = dcActiveListType();
-      if (!type || !dcRowKeyFrom(e.relatedTarget, type)) hideSoon();
+      if (!type || !dcRowKeyFrom(e.relatedTarget, type)) dcListHideSoon();
     }, true);
-    window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
+    window.addEventListener("scroll", function () { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, true);
   }
-  if (dcActiveListType()) {
-    try {
-      window.__dcDmoNewTabActive = true;   // tells the public toast-guard a supported list is active (dev build)
-      dcInstallListNewTabButton();
-      if (typeof watchNavigation === "function") watchNavigation();
-    } catch (e) {}
-  }
+  // Install once (listeners persist on document). Set the toast-guard flag whenever a
+  // supported list is active now. (The mouseover handler re-checks dcActiveListType per
+  // event, so it correctly lights up only on list pages even after SPA nav.)
+  try { dcInstallListNewTabButton(); } catch (e) {}
+  if (dcActiveListType()) { try { window.__dcDmoNewTabActive = true; if (typeof watchNavigation === "function") watchNavigation(); } catch (e) {} }
 
   /* ── LEFT NAV "open in new tab" ──────────────────────────────────────────────────
    * The Data Cloud LEFT vertical nav (becoming the default) renders items as
@@ -17437,25 +17442,37 @@ processJSON();
     }
     return null;
   }
-  function dcInstallNavNewTabButton() {
-    if (document.getElementById("dc-nav-newtab")) return;
-    var btn = document.createElement("a");
+  // Persistent nav ⧉. The mouseover/out/scroll listeners live on `document`, which SURVIVES
+  // Lightning SPA navigation — so we install them ONCE per document (window-flag guarded) and
+  // they keep working across page changes WITHOUT re-clicking the bookmarklet. teardown()'s
+  // nuclear "[id^='dc-']" sweep removes the button element on nav, so we LAZILY (re)create it
+  // via getNavBtn() on each hover — the listeners persist, the button self-heals. Net: one
+  // bookmarklet click, then the nav ⧉ works forever as you navigate.
+  function dcGetNavBtn() {
+    var btn = document.getElementById("dc-nav-newtab");
+    if (btn) return btn;
+    btn = document.createElement("a");
     btn.id = "dc-nav-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
-    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);   // open the link; don't trigger SF nav
-    document.body.appendChild(btn);
-    var hideT = null;
-    function hideSoon() { if (hideT) return; hideT = setTimeout(function () { hideT = null; btn.style.display = "none"; }, 250); }
-    function cancelHide() { if (hideT) { clearTimeout(hideT); hideT = null; } }
-    btn.addEventListener("mouseenter", cancelHide);
-    btn.addEventListener("mouseleave", hideSoon);
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);
+    btn.addEventListener("mouseenter", function () { if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; } });
+    btn.addEventListener("mouseleave", function () { dcNavHideSoon(); });
+    (document.body || document.documentElement).appendChild(btn);
+    return btn;
+  }
+  var dcNavHideT = null;
+  function dcNavHideSoon() { if (dcNavHideT) return; dcNavHideT = setTimeout(function () { dcNavHideT = null; var b = document.getElementById("dc-nav-newtab"); if (b) b.style.display = "none"; }, 250); }
+  function dcInstallNavNewTabButton() {
+    if (window.__dcNavNewTabInstalled) return;   // once-per-document: listeners survive teardown + re-runs
+    window.__dcNavNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
       var hit = dcNavItemFrom(e.target);
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
       if (!hit) return;
-      cancelHide();
+      if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; }
+      var btn = dcGetNavBtn();
       try { btn.href = hit.abs ? hit.route : (location.origin + hit.route); } catch (er) { return; }
       btn.title = "Open " + hit.label + " in a new tab";
       var r; try { r = hit.el.getBoundingClientRect(); } catch (er) { return; }
@@ -17465,10 +17482,11 @@ processJSON();
       btn.style.display = "flex";
     }, true);
     document.addEventListener("mouseout", function (e) {
-      if (e.relatedTarget === btn) return;
-      if (!dcNavItemFrom(e.relatedTarget)) hideSoon();
+      var btn = document.getElementById("dc-nav-newtab");
+      if (btn && e.relatedTarget === btn) return;
+      if (!dcNavItemFrom(e.relatedTarget)) dcNavHideSoon();
     }, true);
-    window.addEventListener("scroll", function () { btn.style.display = "none"; }, true);
+    window.addEventListener("scroll", function () { var b = document.getElementById("dc-nav-newtab"); if (b) b.style.display = "none"; }, true);
   }
   try { dcInstallNavNewTabButton(); } catch (e) {}
   // Learn the active nav item's route from the real URL — now and whenever the SPA URL
@@ -17478,10 +17496,12 @@ processJSON();
   try {
     dcCaptureCurrentNavRoute();
     setTimeout(dcCaptureCurrentNavRoute, 1500);
-    var _dcNavUrl = location.href;
-    setInterval(function () {
-      if (location.href !== _dcNavUrl) { _dcNavUrl = location.href; setTimeout(dcCaptureCurrentNavRoute, 600); }
-    }, 1000);
+    if (!window.__dcNavCapturePoll) {   // once-per-document (survives teardown + re-runs; no stacked pollers)
+      var _dcNavUrl = location.href;
+      window.__dcNavCapturePoll = setInterval(function () {
+        if (location.href !== _dcNavUrl) { _dcNavUrl = location.href; setTimeout(dcCaptureCurrentNavRoute, 600); }
+      }, 1000);
+    }
   } catch (e) {}
   /* @strip:end */
 

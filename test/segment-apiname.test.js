@@ -518,6 +518,13 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("EXPORT HTML renders a cont-path line; Excel adds a Container Path setting row", /class="cont-path"/.test(src) && /label: "Container Path", value: node\.containerPath/.test(src));
   ok("EXPORT container path never reconstructed (cache stores only literal rendered string)", /_dcPathCache\[obj\] = path/.test(src) && !/function segResolveContainerPath/.test(src));
   ok("feature is dev-only (@strip wraps segApi code)", /@strip:start[\s\S]*segApiInfo[\s\S]*@strip:end/.test(src));
+  // NAV/LIST ⧉ persist across SPA navigation (bookmarklet: no re-click). Listeners install
+  // ONCE per document (window-flag guarded) + the button self-heals via a getter after
+  // teardown's [id^='dc-'] sweep. Capture poll is also once-per-document.
+  ok("NAV ⧉ installs once-per-document + button self-heals (survives nav, no re-click)", /window\.__dcNavNewTabInstalled/.test(src) && /function dcGetNavBtn\s*\(/.test(src));
+  ok("LIST ⧉ installs once-per-document + button self-heals", /window\.__dcListNewTabInstalled/.test(src) && /function dcGetListBtn\s*\(/.test(src));
+  ok("nav capture poll is once-per-document (no stacked pollers on re-run)", /window\.__dcNavCapturePoll/.test(src));
+  ok("NAV route resolve order href-first → learned → seed (zero-maintenance)", /function dcRouteForLabel\s*\(/.test(src) && /dc_nav_routes_learned_v1/.test(src) && /function dcCaptureCurrentNavRoute\s*\(/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
