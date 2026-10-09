@@ -1,22 +1,20 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v24 — classify a Data Cloud LIST: "already works" vs "needs a rule"
+ * DOM PROBE v25 — WHY the nav ⧉ matcher misses the new SF left nav
  *
- * Finding so far: standard Lightning list views (force-list-view-manager / lst-*) render
- * each row as a REAL <a href="/lightning/r/<id>/view"> → right-click new-tab already works
- * (Data Streams). Only the CUSTOM component runtime_cdp-custom-datatable renders rows as
- * javascript:void(0) → broken (DMO). This probe runs on whatever list you're on and gives
- * a one-line VERDICT so we instantly know if it needs wiring:
- *   verdict = "ALREADY_WORKS"  → rows are real /r/ links (standard list) — no fix needed
- *            = "NEEDS_RULE"    → custom datatable w/ void(0) rows — report key + sample so
- *                                we add a DC_LIST_TYPES entry (after you open one row → URL)
- *            = "UNKNOWN"       → neither pattern clearly detected (dump clues)
- * Also captures: datatable keyField + sample data-row-key-value, sample /r/ detail links,
- * grid component tags, and the page url. Read-only. Copies JSON.
+ * The nav "open in new tab" ⧉ is installed but shows nothing on the newly-released SF left
+ * nav → the matcher (dcNavItemFrom: a/role=button/link OR class slds-nav-vertical__action|
+ * slds-context-bar__label-action|navItem, label via aria-label/title/text, must be in
+ * DC_NAV_ROUTES) doesn't recognize the new structure. This probe reports, for EACH known
+ * DC nav label, the element that actually renders it + everything the matcher checks, so we
+ * fix the matcher against the REAL DOM (no guessing):
+ *   - find the leaf whose own/aria text == the label
+ *   - climb ancestors; for each, record tag, role, class, aria-label, title, href
+ *   - flag the FIRST ancestor the current matcher WOULD accept (if any) → shows the gap
+ *   - also: tally every custom-element tag containing "nav" so we see the new nav component
  *
- * RUN on each list to check (Calculated Insights, Segments, Data Lake Objects). Hard-refresh
- * first so no stale table from a previous page lingers.
+ * RUN on a page showing the LEFT nav (the new SF one). Expand it. Read-only. Copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe24() {
+(function DomProbe25() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -29,63 +27,46 @@
     return acc;
   }
   function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
-  function roleOf(el) { try { return el.getAttribute("role") || ""; } catch (e) { return ""; } }
-  function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
-  function isInside(el, host) { var n = el, h = 0; while (n && h < 60) { if (n === host) return true; var p = n.parentElement; if (!p) { try { var rn = n.getRootNode(); p = rn && rn.host ? rn.host : null; } catch (e) { p = null; } } n = p; h++; } return false; }
+  function ownText(el) { try { var s = ""; for (var i = 0; i < el.childNodes.length; i++) { var n = el.childNodes[i]; if (n.nodeType === 3) s += n.nodeValue; } return s.replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
+  function g(el, a) { try { return (el.getAttribute && el.getAttribute(a)) || ""; } catch (e) { return ""; } }
+  function labelOf(el) { return g(el, "aria-label") || g(el, "title") || ownText(el); }
+
+  // mirror of the SHIPPED matcher so we can see where it fails
+  var ROUTES = ["Data Streams", "Data Lake Objects", "Data Transforms", "Data Model",
+    "Identity Resolution", "Data Spaces", "Data Governance", "Intelligent Context",
+    "Document AI", "Search Indexes", "Knowledge Harmonization", "Query Editor",
+    "Data Explorer", "Data Graphs"];
+  function matcherAccepts(node) {
+    var tag = tagOf(node), cls = g(node, "class"), role = g(node, "role");
+    return tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
+  }
 
   var ALL = deepAll(document, []);
 
-  // custom DC datatable?
-  var dts = ALL.filter(function (el) { return tagOf(el) === "runtime_cdp-custom-datatable"; });
-  var customInfo = null;
-  if (dts.length) {
-    var dt = dts[0];
-    var data = null; try { data = dt.data; } catch (e) {}
-    var kf = null; try { kf = dt.keyField; } catch (e) {}
-    // sample data-row-key-value off rendered rows inside this datatable (shadow-crossing)
-    var inside = ALL.filter(function (el) { return el !== dt && isInside(el, dt); });
-    var keys = [];
-    inside.forEach(function (el) { if (keys.length >= 5) return; if (tagOf(el) === "tr") { var k = ""; try { k = el.getAttribute("data-row-key-value") || ""; } catch (e) {} if (k && k !== "HEADER") keys.push(k); } });
-    // do the custom rows have ONLY void(0) links (broken) or real /r/ links?
-    var voidLinks = 0, realLinks = 0;
-    inside.forEach(function (el) { if (tagOf(el) !== "a") return; var hv = ""; try { hv = el.getAttribute("href") || ""; } catch (e) {} if (/^javascript:/.test(hv)) voidLinks++; else if (/\/lightning\/r\//.test(hv) || /\/view$/.test(hv)) realLinks++; });
-    customInfo = { keyField: kf, dataLen: data ? data.length : 0, sampleKeys: keys, voidLinks: voidLinks, realLinks: realLinks };
-  }
+  // tally nav-ish custom tags
+  var navTags = {};
+  ALL.forEach(function (el) { var t = tagOf(el); if (t.indexOf("-") >= 0 && /nav/.test(t)) navTags[t] = (navTags[t] || 0) + 1; });
 
-  // standard list: real /r/<id>/view anchors in the main content
-  var detailLinks = [];
-  ALL.forEach(function (el) {
-    if (detailLinks.length >= 6) return;
-    if (tagOf(el) !== "a") return;
-    var hv = ""; try { hv = el.getAttribute("href") || ""; } catch (e) {}
-    if (/\/lightning\/r\/[a-zA-Z0-9]{15,18}\/view/.test(hv) || /\/lightning\/r\/[A-Za-z_]+\/[a-zA-Z0-9]{15,18}\//.test(hv)) {
-      var rid = ""; try { rid = el.getAttribute("data-recordid") || ""; } catch (e) {}
-      detailLinks.push({ href: hv, recordId: rid, text: txt(el).slice(0, 50) });
+  var items = ROUTES.map(function (label) {
+    // find leaf whose own text OR aria-label is exactly the label
+    var leaf = null;
+    for (var i = 0; i < ALL.length; i++) { var el = ALL[i]; if (ownText(el) === label || g(el, "aria-label") === label) { leaf = el; break; } }
+    if (!leaf) return { label: label, found: false };
+    var chain = [], node = leaf, firstAccepted = -1;
+    for (var h = 0; h < 8 && node; h++) {
+      var entry = { tag: tagOf(node), role: g(node, "role"), cls: g(node, "class").slice(0, 80), ariaLabel: g(node, "aria-label"), title: g(node, "title"), href: g(node, "href"), accepts: matcherAccepts(node), labelSeen: labelOf(node).slice(0, 40) };
+      if (entry.accepts && firstAccepted < 0 && ROUTES.indexOf(labelOf(node)) >= 0) firstAccepted = h;
+      chain.push(entry);
+      var p = node.parentElement; if (!p) { try { var rn = node.getRootNode(); p = rn && rn.host ? rn.host : null; } catch (e) { p = null; } }
+      node = p;
     }
+    return { label: label, found: true, matcherWouldMatchAtHop: firstAccepted, climb: chain };
   });
 
-  // grid component tags (so we see which component this list uses)
-  var gridTags = {};
-  ALL.forEach(function (el) { var t = tagOf(el); if (t.indexOf("-") >= 0 && /(datatable|list-view|listview|grid|data-table)/.test(t)) gridTags[t] = (gridTags[t] || 0) + 1; });
+  var matched = items.filter(function (x) { return x.found && x.matcherWouldMatchAtHop >= 0; }).length;
+  var foundCount = items.filter(function (x) { return x.found; }).length;
 
-  // VERDICT
-  var verdict = "UNKNOWN", why = "";
-  if (detailLinks.length > 0 && (!customInfo || customInfo.realLinks > 0 || customInfo.voidLinks === 0)) {
-    verdict = "ALREADY_WORKS"; why = "rows render as real /lightning/r/<id>/view links (standard list) — right-click new-tab works";
-  } else if (customInfo && customInfo.voidLinks > 0 && detailLinks.length === 0) {
-    verdict = "NEEDS_RULE"; why = "custom runtime_cdp-custom-datatable with javascript:void(0) rows; per-row key via data-row-key-value (keyField=" + (customInfo.keyField || "?") + ")";
-  } else if (customInfo) {
-    verdict = "NEEDS_RULE"; why = "custom datatable present; confirm key + open one row for the detail URL";
-  }
-
-  var out = {
-    _tool: "dom-probe", _version: 24, page: location.href, origin: location.origin,
-    verdict: verdict, why: why,
-    nextStep: verdict === "NEEDS_RULE" ? "Open ONE row normally and paste its address-bar URL so I can pin the detail URL template." : "Nothing to wire — this list already supports open-in-new-tab.",
-    customDatatable: customInfo,
-    standardDetailLinks: detailLinks,
-    gridTags: gridTags
-  };
+  var out = { _tool: "dom-probe", _version: 25, page: location.href, origin: location.origin, navTags: navTags, labelsFound: foundCount, matcherMatches: matched, items: items };
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
 
@@ -94,30 +75,28 @@
     else { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); cb(ok); } catch (e) { cb(false); } }
   }
   var kb = Math.round(json.length / 1024);
-  var vColor = verdict === "ALREADY_WORKS" ? "#059669" : verdict === "NEEDS_RULE" ? "#b45309" : "#64748b";
   var panel = document.createElement("div");
   panel.id = PANEL_ID;
-  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:350px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
+  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v24 · verdict</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v25 · nav matcher</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
     + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
-    + "<div style='font:800 15px system-ui;color:" + vColor + ";margin-bottom:4px'>" + verdict + "</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.5'>" + why + "</div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Nav labels found: <b>" + foundCount + "</b> / " + items.length + "<br>Current matcher would match: <b>" + matched + "</b><br>Nav component tags: <b>" + Object.keys(navTags).length + "</b></div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
-    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on each list (CI / Segments / DLO). If NEEDS_RULE, open one row &amp; send me its URL.</div>"
+    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on a page showing the NEW left nav. Expand it so all items render.</div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
   copyText(json, function (ok) { if (!ok) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
   panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v24-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
+  panel.querySelector("#dc-probe-dl").onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v25-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v24 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v25 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
