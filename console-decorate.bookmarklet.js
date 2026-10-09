@@ -17346,9 +17346,14 @@ processJSON();
     if (!lbl) { try { lbl = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
     return lbl;
   }
-  // From a hovered node, climb to a nav-item anchor whose label is a known DC nav item.
-  // Only matches real nav anchors (role=button/link OR slds-nav-vertical__action OR a
-  // context-bar label action) so random page text can't trigger it.
+  // From a hovered node, climb to a nav-item anchor and resolve its destination.
+  // Priority (proven via DOM Probe v25 — the page has BOTH navs):
+  //   1) the anchor's OWN non-empty href (TOP nav items carry a real /lightning/… href —
+  //      future-proof: works for any item/route without a hardcoded map), else
+  //   2) the label → DC_NAV_ROUTES map (LEFT vertical nav items have an EMPTY href, so the
+  //      map is the only way; captured from the top nav's real hrefs).
+  // Only matches real nav anchors (a / role=button|link / slds-nav-vertical__action /
+  // slds-context-bar__label-action / navItem) so stray page text can't trigger it.
   function dcNavItemFrom(node) {
     for (var h = 0; h < 6 && node && node.nodeType === 1; h++) {
       var tag = (node.tagName || "").toLowerCase();
@@ -17357,6 +17362,13 @@ processJSON();
       var looksNav = tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
       if (looksNav) {
         var lbl = dcNavLabelOf(node);
+        // 1) real href on the anchor itself (top nav / future items)
+        var href = "";
+        try { href = (node.getAttribute && node.getAttribute("href")) || ""; } catch (e) {}
+        if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
+          return { label: lbl || href, route: href, el: node, abs: /^https?:/i.test(href) };
+        }
+        // 2) known DC nav label → mapped route (left vertical nav, empty-href items)
         if (lbl && DC_NAV_ROUTES[lbl]) return { label: lbl, route: DC_NAV_ROUTES[lbl], el: node };
       }
       node = node.parentElement;
@@ -17382,7 +17394,7 @@ processJSON();
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
       if (!hit) return;
       cancelHide();
-      try { btn.href = location.origin + hit.route; } catch (er) { return; }
+      try { btn.href = hit.abs ? hit.route : (location.origin + hit.route); } catch (er) { return; }
       btn.title = "Open " + hit.label + " in a new tab";
       var r; try { r = hit.el.getBoundingClientRect(); } catch (er) { return; }
       if (!r || !r.height) return;
