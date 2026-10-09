@@ -237,13 +237,17 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   // inline <strong> broke onto its own line (we use <b>, and .acc-body has no block
   // rule). Every claim verified against console-decorate.extension.js.
   function acc(icon, name, pills, desc) {
+    // "NEW" renders as a green highlight pill (.pill.new); all others as normal blue pills.
+    const pillHtml = pills.map(p => p === "NEW"
+      ? '<span class="pill new">NEW</span>'
+      : '<span class="pill">' + p + '</span>').join("");
     return `<details class="acc">
-        <summary><span class="acc-ic">${icon}</span><span class="acc-nm">${name}</span><span class="acc-pills">${pills.map(p => '<span class="pill">' + p + '</span>').join("")}</span></summary>
+        <summary><span class="acc-ic">${icon}</span><span class="acc-nm">${name}</span><span class="acc-pills">${pillHtml}</span></summary>
         <div class="acc-body">${desc}</div>
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
-    .concat(includeDev ? ["Data Model (ERD)", "Data Explorer", "Segment", "Query Editor", "Data Transform"] : [])
+    .concat(includeDev ? ["Data Model (ERD + List)", "Nav &rarr; New Tab", "Data Explorer", "Segment", "Activation", "Query Editor", "Data Transform"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -256,8 +260,14 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   const devRows = !includeDev ? "" :
     acc("&#128506;&#65039;", "Data Model (ERD)", ["Diagram"],
       "On the Data Model graph page, generates a copyable <b>Mermaid ERD</b> of your entities &amp; relationships (paste into Lucidchart, draw.io, or GitHub) with a cardinality legend and searchable entity cards showing each object&rsquo;s connections.") +
-    acc("&#127937;", "Segment", ["Export Rules"],
-      "Reads all conditions (Include / Exclude / Rank &amp; Limit) from the builder &mdash; full AND/OR logic, nested segments, sub-filters. Copy to Sheets or download as HTML / Excel.") +
+    acc("&#128194;", "Data Model (List)", ["Open in New Tab", "NEW"],
+      "On the Data Model <b>list</b> view, hover any DMO row &mdash; a <b>&#10697;</b> appears by its name to <b>open that DMO in a new tab</b> (SF&rsquo;s list rows aren&rsquo;t links, so right-click normally can&rsquo;t). Reads the row&rsquo;s key directly &mdash; no guessing.") +
+    acc("&#129517;", "Left &amp; Top Nav", ["Open in New Tab", "NEW"],
+      "Hover any Data Cloud nav item (left vertical nav or top bar) &mdash; a <b>&#10697;</b> opens it in a <b>new tab</b>. Uses the item&rsquo;s real link when present, else <b>learns</b> the route the first time you visit it (remembered after), so it covers every item incl. future ones. No re-clicking across pages.") +
+    acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
+      "<b>Hover</b> any attribute/rule to see &amp; copy its object &amp; field API name (press <kbd>C</kbd> to copy). <b>Container Path</b> shown verbatim when a related container&rsquo;s edit panel is open. <b>Export</b> all conditions (Include / Exclude / Rank &amp; Limit) &mdash; full AND/OR logic, nested segments, sub-filters, API-name columns &mdash; to Sheets or HTML / Excel.") +
+    acc("&#127919;", "Activation", ["API Names", "Export"],
+      "Same hover <b>API names</b> on the activation wizard (main attribute table + Add Additional Attributes), plus <b>Export</b> the activation&rsquo;s included attributes with object &amp; field API names.") +
     acc("&#128202;", "Data Explorer", ["Columns", "Export CSV"],
       "See <b>all columns</b> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <b>Export All</b> to CSV up to 500K rows (paginated, cancelable).") +
     acc("&#128270;", "Query Editor", ["Run &amp; Export"],

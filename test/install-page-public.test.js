@@ -33,8 +33,10 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
 console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 {
   ok("devRows is gated by includeDev", /devRows\s*=\s*!includeDev\s*\?\s*""/.test(b));
-  ok("devRows carries Data Model (ERD) / Segment / Data Explorer / Query Editor / Data Transform",
-    /devRows[\s\S]{0,700}Data Model \(ERD\)[\s\S]{0,500}Segment[\s\S]{0,500}Data Explorer[\s\S]{0,500}Query Editor[\s\S]{0,500}Data Transform/.test(b));
+  ok("devRows carries Data Model (ERD) / Segment / Data Explorer / Query Editor / Data Transform (+ new-tab + Activation rows)",
+    /devRows[\s\S]{0,1200}Data Model \(ERD\)[\s\S]{0,2600}Segment[\s\S]{0,1600}Data Explorer[\s\S]{0,1600}Query Editor[\s\S]{0,1600}Data Transform/.test(b));
+  ok("devRows includes the new open-in-new-tab rows (Data Model List + Nav) + Activation",
+    /Data Model \(List\)/.test(b) && /Left &amp; Top Nav/.test(b) && /"Activation"/.test(b) && /Open in New Tab/.test(b));
   ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
