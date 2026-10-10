@@ -65,6 +65,43 @@
   // clear any prior toggle-OFF flag so the persistent ⧉ overlays resume.
   try { window.__dcOff = false; } catch (e) {}
 
+  // ── "Open in new tab" ⧉ enable flag — PERSISTED so a user can silence just the ⧉ (not the
+  // whole tool) from the FAB menu on a page that has one, and it carries to nav pages that
+  // don't. localStorage so it survives reloads. Default ON. Exposed as window.__dcNewTabEnabled
+  // + a toggle so the launcher row and the ⧉ handlers share one source of truth. */
+  var DC_NEWTAB_LS = "dc_newtab_enabled_v1";
+  function dcNewTabEnabled() {
+    try { if (window.__dcOff) return false; return localStorage.getItem(DC_NEWTAB_LS) !== "0"; } catch (e) { return !window.__dcOff; }
+  }
+  function dcSetNewTabEnabled(on) { try { localStorage.setItem(DC_NEWTAB_LS, on ? "1" : "0"); } catch (e) {} try { window.__dcNewTabEnabled = !!on; } catch (e) {} }
+  try { window.__dcNewTabEnabled = dcNewTabEnabled(); window.__dcToggleNewTab = function () { var on = !dcNewTabEnabled(); dcSetNewTabEnabled(on); return on; }; } catch (e) {}
+
+  // FULL off: a user who clicks "Remove" in the FAB (or re-clicks the bookmarklet) means
+  // "turn the whole thing off" — the launcher AND the always-on ⧉ overlays. teardown() alone
+  // only removes the FAB/decorations; the ⧉ listeners survive on document (by design, for
+  // cross-nav persistence), so we also set __dcOff so they go quiet. One meaning of "off".
+  function dcFullOff() { try { window.__dcOff = true; } catch (e) {} try { teardown(); } catch (e) {} }
+
+  // Build a FAB-menu row that toggles ONLY the open-in-new-tab ⧉ (independent of the full
+  // off). Persisted (localStorage) so disabling it on a page that HAS a launcher carries to
+  // nav pages that don't. Styled like the other dark menu rows. Returns the button element.
+  function dcMakeNewTabRow() {
+    var b = document.createElement("button");
+    b.id = "dc-newtab-row";
+    b.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;transition:background .12s;";
+    b.onmouseenter = function () { b.style.background = "rgba(255,255,255,.07)"; };
+    b.onmouseleave = function () { b.style.background = "#111827"; };
+    function render() {
+      var on = dcNewTabEnabled();
+      b.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#4338ca,#6d28d9);display:flex;align-items:center;justify-content:center;font-size:15px'>&#10697;</div>"
+        + "<div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>Open in new tab " + (on ? "· On" : "· Off") + "</span>"
+        + "<span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Hover nav / DMO rows for the ⧉" : "⧉ hidden — click to re-enable") + "</span></div>";
+    }
+    render();
+    b.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleNewTab(); } catch (er) {} render(); };
+    return b;
+  }
+
   const API_ATTR = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;      // attribute-name is an API name
   const API_VAL = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;       // a value that is a bare API name
   const HEADER = /\(\d+\)\s*$/;                          // "Is Mapped (15)" / "Unmapped (25)"
@@ -1954,7 +1991,7 @@
     dismissRow.style.cssText = "display:flex;align-items:center;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;transition:background .12s;";
     dismissRow.onmouseenter = () => (dismissRow.style.background = "rgba(239,68,68,.08)");
     dismissRow.onmouseleave = () => (dismissRow.style.background = "#111827");
-    dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
+    dismissRow.onclick = (e) => { e.stopPropagation(); dcFullOff(); };
 
     tog.onclick = (e) => { e.stopPropagation(); toggle(); };
     inl.onclick = (e) => { e.stopPropagation(); toggleInline(); };
@@ -1969,6 +2006,9 @@
     menu.appendChild(foc);
     /* @strip:end */
     menu.appendChild(exp);
+    /* @strip:start dev */
+    try { menu.appendChild(dcMakeNewTabRow()); } catch (e) {}   // ⧉ open-in-new-tab On/Off
+    /* @strip:end */
     menu.appendChild(separator);
     menu.appendChild(dismissRow);
 
@@ -14380,7 +14420,7 @@
     dismissRow.style.cssText = "display:flex;align-items:center;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;transition:background .12s;";
     dismissRow.onmouseenter = () => (dismissRow.style.background = "rgba(239,68,68,.08)");
     dismissRow.onmouseleave = () => (dismissRow.style.background = "#111827");
-    dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
+    dismissRow.onclick = (e) => { e.stopPropagation(); dcFullOff(); };
 
     colBtn.onclick    = (e) => { e.stopPropagation(); openExploreModal(); };
     exportBtn.onclick = (e) => {
@@ -14400,6 +14440,7 @@
     menu.appendChild(colBtn);
     menu.appendChild(exportBtn);
     menu.appendChild(reopenBtn);
+    try { if (typeof dcMakeNewTabRow === "function") menu.appendChild(dcMakeNewTabRow()); } catch (e) {}   // ⧉ On/Off
     menu.appendChild(separator);
     menu.appendChild(dismissRow);
 
@@ -15720,7 +15761,8 @@ processJSON();
     dismissRow.style.cssText = "display:flex;align-items:center;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;transition:background .12s;";
     dismissRow.onmouseenter = function () { dismissRow.style.background = "rgba(239,68,68,.08)"; };
     dismissRow.onmouseleave = function () { dismissRow.style.background = "#111827"; };
-    dismissRow.onclick = function (e) { e.stopPropagation(); wrap.remove(); };
+    dismissRow.onclick = function (e) { e.stopPropagation(); dcFullOff(); };
+    try { if (typeof dcMakeNewTabRow === "function") menu.appendChild(dcMakeNewTabRow()); } catch (e) {}   // ⧉ On/Off
     menu.appendChild(separator); menu.appendChild(dismissRow);
 
     var fab = document.createElement("button");
@@ -17318,7 +17360,7 @@ processJSON();
     if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
     window.__dcListNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
-      if (window.__dcOff) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // user toggled the tool off
+      if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
       var type = dcActiveListType();
       if (!type) { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; return; }
       var hit = dcRowKeyFrom(e.target, type);
@@ -17542,7 +17584,7 @@ processJSON();
     if (window.__dcNavNewTabInstalled) return;   // once-per-document: listeners survive teardown + re-runs
     window.__dcNavNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
-      if (window.__dcOff) { var bo = document.getElementById("dc-nav-newtab"); if (bo) bo.style.display = "none"; return; }   // user toggled the tool off
+      if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-nav-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
       var hit = dcNavItemFrom(e.target);
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
       if (!hit) return;
@@ -18083,10 +18125,11 @@ processJSON();
       dismissRow.style.cssText = "display:flex;align-items:center;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;transition:background .12s;";
       dismissRow.onmouseenter = () => (dismissRow.style.background = "rgba(239,68,68,.08)");
       dismissRow.onmouseleave = () => (dismissRow.style.background = "#111827");
-      dismissRow.onclick = (e) => { e.stopPropagation(); teardown(); };
+      dismissRow.onclick = (e) => { e.stopPropagation(); dcFullOff(); };
 
       menu.appendChild(dl);
       if (segApiRow) menu.appendChild(segApiRow);
+      try { if (typeof dcMakeNewTabRow === "function") menu.appendChild(dcMakeNewTabRow()); } catch (e) {}   // ⧉ On/Off
       menu.appendChild(separator);
       menu.appendChild(dismissRow);
 

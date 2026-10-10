@@ -529,7 +529,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
   ok("WELCOME toast announces page features + globals (positive, once per url, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShownFor/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
-  ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (window.__dcOff set on off, checked by both handlers, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(window\.__dcOff\)/g) || []).length >= 2);
+  ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
+  ok("FULL off helper (FAB Remove = bookmarklet toggle-off: __dcOff + teardown) + ⧉ On/Off FAB row (persisted)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src) && /function dcMakeNewTabRow\s*\(/.test(src) && /dc_newtab_enabled_v1/.test(src) && /window\.__dcToggleNewTab/.test(src));
+  ok("⧉ enable flag persisted + respects full-off", /function dcNewTabEnabled\s*\(/.test(src) && /localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src) && /if \(window\.__dcOff\) return false/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
