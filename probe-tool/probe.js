@@ -1,21 +1,20 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v26 — NESTED left-nav leaf items (Segments, Activations, Clean Rooms, …)
+ * DOM PROBE v27 — Segment "Shortcuts" panel: why hovering a shortcut shows a wrong API
  *
- * The ⧉ shows on GROUP HEADERS (Segment & Act, Analyze & Predict) but NOT on the LEAF
- * items under them (Segments, Activations, Activation Targets, Communication Capping,
- * Data Actions, Data Action Targets, Data Shares, Data Share Targets, Clean Rooms,
- * Secondary Indexes, Calculated Insights, AI Models, Semantic Layer). We must see WHY —
- * where each leaf's route lives (href on some ancestor? a data-* attr? only after click?)
- * — so we fix the matcher against the REAL DOM, no guessing.
+ * Hovering "Test Shortcut" (left Shortcuts tab) shows the chip for Account Multiline — a
+ * different attribute. We need to see WHAT a shortcut row is, so we can either exclude the
+ * Shortcuts panel from the API-name feature or decorate it correctly (no guessing).
+ * Captures:
+ *   (A) every element whose own text == a shortcut label (we try common ones + any element
+ *       inside a container whose text/class mentions "shortcut") → tag/class/props
+ *       (attributeNode / details / groupNode / data) that the feature would read.
+ *   (B) the Shortcuts panel container: its tag + the tab labels (Shortcuts/Attributes/Segments)
+ *   (C) for a given sample shortcut, the full composedPath-style ancestor chain with each
+ *       element's SEG-relevant props, so we see exactly which element the matcher latches onto.
  *
- * For each target label it finds the leaf, climbs ≤10 ancestors and records per hop:
- * tag, role, class, aria-label, title, href, data-* attrs, and whether the SHIPPED matcher
- * (a / role=button|link / slds-nav-vertical__action|slds-context-bar__label-action|navItem)
- * accepts it + whether it has a usable href. Flags leaf vs group (has children-list / chevron).
- *
- * RUN with the Segment & Act and Analyze & Predict groups EXPANDED. Read-only. Copies JSON.
+ * RUN on the Segment builder with the Shortcuts tab visible. Hover is not needed. Read-only.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe26() {
+(function DomProbe27() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
@@ -29,47 +28,59 @@
   }
   function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
   function ownText(el) { try { var s = ""; for (var i = 0; i < el.childNodes.length; i++) { var n = el.childNodes[i]; if (n.nodeType === 3) s += n.nodeValue; } return s.replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
-  function g(el, a) { try { return (el.getAttribute && el.getAttribute(a)) || ""; } catch (e) { return ""; } }
-  function dataAttrs(el) { var o = {}; try { for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; if (/^data-|href|aria-current|role/.test(a.name)) o[a.name] = String(a.value).slice(0, 120); } } catch (e) {} return o; }
-
-  function matcherAccepts(el) {
-    var tag = tagOf(el), cls = g(el, "class"), role = g(el, "role");
-    return tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
-  }
-  function usableHref(el) {
-    var h = g(el, "href");
-    return (h && h !== "#" && !/^javascript:/i.test(h) && /^(\/lightning\/|\/one\/|https?:)/i.test(h)) ? h : "";
+  function cls(el) { try { return (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) { return ""; } }
+  function g(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+  function sketch(v, d) { d = d || 0; if (v == null) return v; var t = typeof v; if (t === "function") return "ƒ"; if (t !== "object") return (t === "string" && v.length > 120) ? v.slice(0, 120) + "…" : v; if (d >= 3) return Array.isArray(v) ? "array[" + v.length + "]" : "obj"; if (Array.isArray(v)) return v.slice(0, 5).map(function (x) { return sketch(x, d + 1); }); var o = {}, kk; try { kk = Object.keys(v); } catch (e) { return "obj?"; } kk.slice(0, 25).forEach(function (key) { try { o[key] = sketch(v[key], d + 1); } catch (e) {} }); return o; }
+  // the SEG-relevant props the feature reads
+  function segProps(el) {
+    var o = {};
+    ["attributeNode", "groupNode", "details", "simpleCondition", "aggregationCondition", "data"].forEach(function (k) {
+      var v = g(el, k); if (v != null && typeof v !== "function") o[k] = sketch(v, 0);
+    });
+    return o;
   }
 
   var ALL = deepAll(document, []);
-  var LABELS = ["Segments", "Activations", "Activation Targets", "Communication Capping",
-    "Data Actions", "Data Action Targets", "Data Shares", "Data Share Targets", "Clean Rooms",
-    "Secondary Indexes", "Calculated Insights", "AI Models", "Semantic Layer",
-    "Segment & Act", "Analyze & Predict"];
 
-  var items = LABELS.map(function (label) {
+  // (B) Shortcuts panel container + tab labels
+  var tabLabels = [];
+  ALL.forEach(function (el) { var t = ownText(el); if (/^(Shortcuts|Attributes|Segments)$/.test(t) && tabLabels.indexOf(t) < 0 && ownText(el).length < 20) tabLabels.push(t); });
+  var shortcutContainers = [];
+  ALL.forEach(function (el) { var c = cls(el), tg = tagOf(el); if (/shortcut/i.test(c) || /shortcut/i.test(tg)) { if (shortcutContainers.length < 8) shortcutContainers.push({ tag: tg, cls: c.slice(0, 80) }); } });
+
+  // (A) elements whose own text looks like a shortcut row (short text, inside something
+  // shortcut-ish OR a list item in the left panel). Capture the ones carrying SEG props.
+  var rows = [];
+  ALL.forEach(function (el) {
+    if (rows.length >= 12) return;
+    var t = ownText(el);
+    if (!t || t.length > 40) return;
+    var sp = segProps(el);
+    var inShortcut = false;
+    try { var up = el; for (var k = 0; k < 8 && up; k++) { if (/shortcut/i.test(cls(up)) || /shortcut/i.test(tagOf(up))) { inShortcut = true; break; } up = up.parentElement || (up.getRootNode && up.getRootNode().host); } } catch (e) {}
+    if (inShortcut || Object.keys(sp).length) {
+      rows.push({ tag: tagOf(el), text: t, cls: cls(el).slice(0, 70), inShortcutPanel: inShortcut, segProps: sp });
+    }
+  });
+
+  // (C) for the sample label "Test Shortcut" (and any shortcut), climb ancestors recording
+  // which element carries a SEG prop that resolves to an API — the thing the matcher grabs.
+  function climbFor(label) {
     var leaf = null;
-    for (var i = 0; i < ALL.length; i++) { var el = ALL[i]; if (ownText(el) === label || g(el, "aria-label") === label) { leaf = el; break; } }
+    for (var i = 0; i < ALL.length; i++) { if (ownText(ALL[i]) === label) { leaf = ALL[i]; break; } }
     if (!leaf) return { label: label, found: false };
-    var chain = [], node = leaf, matchHop = -1, hrefHop = -1, hrefVal = "";
-    for (var h = 0; h < 10 && node; h++) {
-      var acc = matcherAccepts(node), uh = usableHref(node);
-      var entry = { tag: tagOf(node), role: g(node, "role"), cls: g(node, "class").slice(0, 70), ariaLabel: g(node, "aria-label"), title: g(node, "title"), href: g(node, "href").slice(0, 100), accepts: acc, usableHref: uh ? true : false, data: dataAttrs(node) };
-      if (acc && matchHop < 0) matchHop = h;
-      if (uh && hrefHop < 0) { hrefHop = h; hrefVal = uh; }
-      chain.push(entry);
+    var chain = [], node = leaf;
+    for (var h = 0; h < 8 && node; h++) {
+      var sp = segProps(node);
+      chain.push({ tag: tagOf(node), cls: cls(node).slice(0, 60), ownText: ownText(node).slice(0, 40), hasSegProp: Object.keys(sp).length ? sp : undefined });
       var p = node.parentElement; if (!p) { try { var rn = node.getRootNode(); p = rn && rn.host ? rn.host : null; } catch (e) { p = null; } }
       node = p;
     }
-    // is it a GROUP (expandable) or a LEAF? groups have a children-list / chevron nearby
-    var isGroup = false;
-    try { var up = leaf; for (var k = 0; k < 5 && up; k++) { if (/children-list|has-submenu|expandable/.test(g(up, "class"))) { isGroup = true; break; } up = up.parentElement; } } catch (e) {}
-    return { label: label, found: true, matcherMatchHop: matchHop, usableHrefHop: hrefHop, usableHref: hrefVal, isGroup: isGroup, climb: chain };
-  });
+    return { label: label, found: true, climb: chain };
+  }
+  var samples = ["Test Shortcut", "Segment Code"].map(climbFor);
 
-  var leafNoHref = items.filter(function (x) { return x.found && !x.isGroup && x.usableHrefHop < 0; }).map(function (x) { return x.label; });
-
-  var out = { _tool: "dom-probe", _version: 26, page: location.href, origin: location.origin, labelsChecked: LABELS.length, items: items, leafItemsWithNoUsableHref: leafNoHref };
+  var out = { _tool: "dom-probe", _version: 27, page: location.href, tabLabels: tabLabels, shortcutContainers: shortcutContainers, shortcutRowsWithProps: rows, sampleClimbs: samples };
   var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
   try { window.__DOM_PROBE = out; } catch (e) {}
 
@@ -78,29 +89,28 @@
     else { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); cb(ok); } catch (e) { cb(false); } }
   }
   var kb = Math.round(json.length / 1024);
-  var foundN = items.filter(function (x) { return x.found; }).length;
   var panel = document.createElement("div");
   panel.id = PANEL_ID;
-  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:350px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
+  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
   panel.innerHTML =
     "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v26 · nested nav</b>"
+    + "<b style='font:700 13px system-ui'>DOM Probe v27 · Shortcuts</b>"
     + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
     + "<div style='padding:13px 14px'>"
     + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Labels found: <b>" + foundN + "</b> / " + LABELS.length + "<br>Leaf items w/ NO usable href: <b>" + leafNoHref.length + "</b><br><i>(those need learn-on-click or a found route)</i></div>"
+    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Tabs: <b>" + tabLabels.join(", ") + "</b><br>Shortcut containers: <b>" + shortcutContainers.length + "</b><br>Rows w/ seg props: <b>" + rows.length + "</b></div>"
     + "<div style='display:flex;gap:7px;margin-top:12px'>"
     + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
     + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
-    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Expand Segment &amp; Act + Analyze &amp; Predict groups first, then run.</div>"
+    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on the Segment builder with the Shortcuts tab showing.</div>"
     + "</div>";
   document.body.appendChild(panel);
   var status = panel.querySelector("#dc-probe-status");
   copyText(json, function (ok) { if (!ok) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
   panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
   panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var bl = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(bl); a.download = "dom-probe-v26-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
+  panel.querySelector("#dc-probe-dl").onclick = function () { try { var bl = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(bl); a.download = "dom-probe-v27-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
 
-  console.log("%cDOM PROBE v26 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
+  console.log("%cDOM PROBE v27 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
   return out;
 })();
