@@ -17362,9 +17362,46 @@ processJSON();
     if (!label || !path) return;
     try { var m = dcLoadLearnedRoutes(); if (m[label] === path) return; m[label] = path; localStorage.setItem(DC_NAV_LS, JSON.stringify(m)); } catch (e) {}
   }
-  // The route for a label: learned (observed) first, then the seed map. "" if unknown.
+  // ── Live route HARVEST from the top nav bar (the big win) ────────────────────────────
+  // DOM Probe v26 proved: EVERY Data Cloud nav item (28+ and growing — Segments, Clean
+  // Rooms, Calculated Insights, AI Models, Semantic Layer, …) is ALSO rendered on the top
+  // nav bar as <a class="slds-context-bar__label-action" title="<label>" href="/lightning/…">
+  // — a REAL href, present in the DOM even when that bar is visually hidden. The LEFT nav's
+  // own anchors have empty hrefs, so we harvest label→href from the top-nav anchors instead.
+  // This is zero-maintenance (covers every current + future item, no hardcoding) and never
+  // guessed (we read SF's own href). Cached briefly; refreshed on demand.
+  var _dcHarvest = null, _dcHarvestAt = 0;
+  function dcHarvestNavRoutes() {
+    var now = 0; try { now = (performance && performance.now) ? performance.now() : 0; } catch (e) {}
+    if (_dcHarvest && (now - _dcHarvestAt) < 3000) return _dcHarvest;
+    var map = {};
+    try {
+      (function walk(root, d) {
+        if (d > 14) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length; i++) {
+          var el = q[i], tag = (el.tagName || "").toLowerCase();
+          if (tag === "a") {
+            var cls = ""; try { cls = el.getAttribute("class") || ""; } catch (e) {}
+            if (/slds-context-bar__label-action/.test(cls)) {
+              var href = ""; try { href = el.getAttribute("href") || ""; } catch (e) {}
+              var lbl = ""; try { lbl = (el.getAttribute("title") || el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+              if (lbl && href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/)/i.test(href) && !map[lbl]) map[lbl] = href;
+            }
+          }
+          if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+        }
+      })(document, 0);
+    } catch (e) {}
+    _dcHarvest = map; _dcHarvestAt = now;
+    return map;
+  }
+  // The route for a label, in order: harvested-from-top-nav (authoritative, live) → learned
+  // (observed on click) → seed map. "" if unknown (never fabricated).
   function dcRouteForLabel(label) {
     if (!label) return "";
+    var harvested = dcHarvestNavRoutes();
+    if (harvested[label]) return harvested[label];
     var learned = dcLoadLearnedRoutes();
     if (learned[label]) return learned[label];
     return DC_NAV_ROUTES[label] || "";
@@ -17383,7 +17420,7 @@ processJSON();
           var el = q[i], cls = "";
           try { cls = (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) {}
           var cur = ""; try { cur = (el.getAttribute && el.getAttribute("aria-current")) || ""; } catch (e) {}
-          var isNavAction = /slds-nav-vertical__action/.test(cls);
+          var isNavAction = /slds-nav-vertical__action/.test(cls) && !/category-header/.test(cls);   // skip group headers
           if (isNavAction && (cur === "page" || cur === "true" || (!/non-active/.test(cls) && /slds-is-active|active/.test(cls)))) {
             var lbl = dcNavLabelOf(el); if (lbl) { best = lbl; break; }
           }
@@ -17412,18 +17449,22 @@ processJSON();
     return lbl;
   }
   // From a hovered node, climb to a nav-item anchor and resolve its destination.
-  // Priority (proven via DOM Probe v25 — the page has BOTH navs):
-  //   1) the anchor's OWN non-empty href (TOP nav items carry a real /lightning/… href —
-  //      future-proof: works for any item/route without a hardcoded map), else
-  //   2) the label → DC_NAV_ROUTES map (LEFT vertical nav items have an EMPTY href, so the
-  //      map is the only way; captured from the top nav's real hrefs).
+  // Priority (proven via DOM Probe v25/v26 — the page has BOTH navs):
+  //   1) the anchor's OWN non-empty href (TOP nav items carry a real /lightning/… href), else
+  //   2) label → route via dcRouteForLabel = HARVESTED from the top nav bar's real hrefs
+  //      (every item incl. future ones, zero map) → learned-on-click → seed map. This is how
+  //      LEFT-nav items (empty href) resolve: we look their label up in the top nav's hrefs.
   // Only matches real nav anchors (a / role=button|link / slds-nav-vertical__action /
-  // slds-context-bar__label-action / navItem) so stray page text can't trigger it.
+  // slds-context-bar__label-action / navItem). CATEGORY HEADERS (e.g. "Segment & Act",
+  // "Analyze & Predict") are expandable GROUPS, not destinations — class category-header —
+  // so we skip them (they have no page to open).
   function dcNavItemFrom(node) {
     for (var h = 0; h < 6 && node && node.nodeType === 1; h++) {
       var tag = (node.tagName || "").toLowerCase();
       var cls = ""; try { cls = (node.getAttribute && node.getAttribute("class")) || ""; } catch (e) {}
       var role = ""; try { role = (node.getAttribute && node.getAttribute("role")) || ""; } catch (e) {}
+      // skip expandable group headers — they open a submenu, not a page
+      if (/category-header/.test(cls)) return null;
       var looksNav = tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
       if (looksNav) {
         var lbl = dcNavLabelOf(node);
@@ -17433,8 +17474,8 @@ processJSON();
         if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
           return { label: lbl || href, route: href, el: node, abs: /^https?:/i.test(href) };
         }
-        // 2) empty-href left-nav item → learned (observed-on-click) route, else seed map.
-        //    Zero-maintenance: once you've visited an item its route is remembered forever.
+        // 2) empty-href left-nav item → harvested top-nav href / learned / seed (dcRouteForLabel).
+        //    Zero-maintenance: covers every item (28+ and growing) with no hardcoding.
         var mapped = dcRouteForLabel(lbl);
         if (lbl && mapped) return { label: lbl, route: mapped, el: node };
       }
