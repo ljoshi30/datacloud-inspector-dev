@@ -532,6 +532,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
   ok("FULL off helper (FAB Remove = bookmarklet toggle-off: __dcOff + teardown) + ⧉ On/Off FAB row (persisted)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src) && /function dcMakeNewTabRow\s*\(/.test(src) && /dc_newtab_enabled_v1/.test(src) && /window\.__dcToggleNewTab/.test(src));
   ok("⧉ enable flag persisted + respects full-off", /function dcNewTabEnabled\s*\(/.test(src) && /localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src) && /if \(window\.__dcOff\) return false/.test(src));
+  ok("SEGMENT DOM-fallback gated to /cmp/ builder routes (stale wizard no longer misclassifies Home/list as Segment)", /looksLikeBuilderRoute = \/\\\/lightning\\\/cmp\\\//.test(src) && /\\\/lightning\\\/page\\\/\|\\\/lightning\\\/o\\\/\[A-Za-z\]\+\\\/home/.test(src) && /looksLikeBuilderRoute[\s\S]{0,160}runtime_cdp-segment-wizard/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

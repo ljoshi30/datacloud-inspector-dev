@@ -2094,12 +2094,18 @@
       if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
       if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
       /* @strip:start dev */
-      // Segment by URL always wins. The component-DOM fallback (for wizard routes that
-      // don't name Segment in the URL) is only trusted when the URL isn't clearly ANOTHER
-      // page — otherwise a stale segment-wizard component left mounted after in-tab nav
-      // would misclassify (same SPA stale-DOM trap fixed in isQueryEditorPage/Explorer).
+      // Segment by URL always wins. The component-DOM fallback (for wizard routes that don't
+      // name Segment in the URL) is only trusted when BOTH: (a) the URL isn't clearly ANOTHER
+      // detail page, AND (b) the URL is a plausible builder route — a /cmp/ lightning-component
+      // or /r/Segment route — NOT a known app/landing page like Home (/lightning/page/home) or
+      // an /o/<Entity>/home list. Without (b), a stale runtime_cdp-segment-wizard component
+      // left mounted after in-tab nav (SF doesn't unmount it) would misclassify Home as Segment
+      // and show the segment launcher there (reported bug). SPA stale-DOM trap — same class as
+      // the isQueryEditorPage/Explorer fixes.
       if (/standard-Segment|\/r\/Segment\/[a-zA-Z0-9]{15,18}|segmentWizard/i.test(h)) return "Segment";
-      if (!(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
+      var looksLikeBuilderRoute = /\/lightning\/cmp\//i.test(h) && !/\/lightning\/page\/|\/lightning\/o\/[A-Za-z]+\/home|\/lightning\/n\/standard-/i.test(h);
+      if (looksLikeBuilderRoute
+          && !(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
           && (findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0)) return "Segment";
       /* @strip:end */
     } catch (e) {}
