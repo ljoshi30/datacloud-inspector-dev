@@ -41,8 +41,13 @@
     // Reset the welcome guard so re-activating (off→on) on the same page confirms again.
     try { window.__dcWelcomeShownFor = null; } catch (e) {}
     if (_prevUrl === _curUrl) {
-      // same page → toggle OFF. Show a brief confirmation so it isn't a silent/confusing
-      // "nothing happened" — then stop (re-click again re-activates + re-shows the welcome).
+      // same page → toggle OFF. The ⧉ overlays install their listeners on `document` and
+      // deliberately SURVIVE teardown (so they persist across SPA navigation without a
+      // re-click). A user toggle-off must still stop them, so set a global OFF flag the ⧉
+      // handlers check (they bail + stay hidden). Cleared again on the next activation.
+      try { window.__dcOff = true; } catch (e) {}
+      // Show a brief confirmation so it isn't a silent/confusing "nothing happened" — then
+      // stop (re-click again re-activates + re-shows the welcome).
       try {
         var _offT = document.createElement("div");
         _offT.id = "dc-off-toast";
@@ -56,6 +61,9 @@
     }
     // else: navigated → teardown done, continue to re-initialize for the new page
   }
+  // Reaching here means we're ACTIVATING (fresh load, re-click after off, or new page) —
+  // clear any prior toggle-OFF flag so the persistent ⧉ overlays resume.
+  try { window.__dcOff = false; } catch (e) {}
 
   const API_ATTR = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;      // attribute-name is an API name
   const API_VAL = /^[A-Za-z0-9_]+__(c|dll|dlm)$/;       // a value that is a bare API name
@@ -17310,6 +17318,7 @@ processJSON();
     if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
     window.__dcListNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
+      if (window.__dcOff) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // user toggled the tool off
       var type = dcActiveListType();
       if (!type) { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; return; }
       var hit = dcRowKeyFrom(e.target, type);
@@ -17533,6 +17542,7 @@ processJSON();
     if (window.__dcNavNewTabInstalled) return;   // once-per-document: listeners survive teardown + re-runs
     window.__dcNavNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
+      if (window.__dcOff) { var bo = document.getElementById("dc-nav-newtab"); if (bo) bo.style.display = "none"; return; }   // user toggled the tool off
       var hit = dcNavItemFrom(e.target);
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
       if (!hit) return;
