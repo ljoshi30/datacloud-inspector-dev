@@ -18158,6 +18158,62 @@ processJSON();
     }
   }
 
+  /* @strip:start dev
+   * ── Welcome toast: positive "what's enabled here" on activation ───────────────────
+   * The launcher FAB visibly signals the tool is active on builder/detail pages, but the
+   * ⧉ "open in new tab" features (nav + DMO list) have NO launcher — so there was no sign
+   * they're on. This toast fixes that: a brief, page-aware, POSITIVE confirmation of what
+   * you just enabled on THIS page + the always-on globals. Replaces the old negative "not
+   * supported" toast as the primary activation feedback. Auto-dismisses; shown once per
+   * page (guarded) so SPA nav / bookmarklet re-click doesn't spam. */
+  function dcWelcomeToast() {
+    try {
+      if (document.getElementById("dc-welcome")) return;
+      // page-specific feature lines (only what's actually live on this page)
+      var pageTitle = "", pageFeats = [];
+      var t = detailPageType;
+      if (t === "Segment") { pageTitle = "Segment builder"; pageFeats = ["Hover attributes for API names (press C to copy)", "Export rules → Sheets / HTML / Excel"]; }
+      else if (t === "Activation") { pageTitle = "Activation"; pageFeats = ["Hover attributes for API names", "Export included attributes"]; }
+      else if (t === "DataModel") { pageTitle = "Data Model (ERD)"; pageFeats = ["Generate a copyable Mermaid ERD"]; }
+      else if (t === "DataExplore") { pageTitle = "Data Explorer"; pageFeats = ["See all columns, filter/sort, Export CSV (≤500K)"]; }
+      else if (t === "QueryEditor") { pageTitle = "Query Editor"; pageFeats = ["Run SQL + Export full result CSV (≤500K)"]; }
+      else if (t === "Transform") { pageTitle = "Data Transform"; pageFeats = ["Read the definition in plain English"]; }
+      else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
+      else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
+      else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Model (list)"; pageFeats = ["Hover a row → ⧉ opens that DMO in a new tab"]; }
+      // always-on globals (dev build)
+      var globals = [];
+      if (window.__dcNavNewTabInstalled) globals.push("Hover any nav item → ⧉ opens it in a new tab");
+      if (typeof dcActiveListType === "function" && dcActiveListType() && t !== "DataModel") { /* already covered as page feat */ }
+      if (!pageTitle && !globals.length) return;   // nothing to announce
+
+      function li(txt) { return "<div style='display:flex;gap:7px;align-items:flex-start;margin-top:3px'><span style='color:#34d399;flex-shrink:0'>✓</span><span>" + txt + "</span></div>"; }
+      var html = "<div style='display:flex;align-items:flex-start;gap:10px'>"
+        + "<span style='font-size:18px;line-height:1.1'>&#10697;</span>"
+        + "<div style='flex:1'><strong style='display:block;margin-bottom:5px;font-size:13px'>Data 360 Inspector — active</strong>";
+      if (pageTitle) { html += "<div style='color:#cbd5e1;font-size:11px;font-weight:600;margin-bottom:2px'>On this page · " + pageTitle + "</div><div style='color:#94a3b8;font-size:11.5px;line-height:1.45'>" + pageFeats.map(li).join("") + "</div>"; }
+      if (globals.length) { html += "<div style='color:#cbd5e1;font-size:11px;font-weight:600;margin:7px 0 2px'>Everywhere</div><div style='color:#94a3b8;font-size:11.5px;line-height:1.45'>" + globals.map(li).join("") + "</div>"; }
+      html += "</div><button id='dc-welcome-x' style='border:none;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0 2px'>&times;</button></div>";
+
+      var toast = document.createElement("div");
+      toast.id = "dc-welcome";
+      toast.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.45);max-width:330px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;";
+      toast.innerHTML = html;
+      document.body.appendChild(toast);
+      requestAnimationFrame(function () { toast.style.opacity = "1"; toast.style.transform = "translateY(0)"; });
+      var killer = setTimeout(function () { toast.style.opacity = "0"; toast.style.transform = "translateY(8px)"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 350); }, 6500);
+      var x = toast.querySelector("#dc-welcome-x");
+      if (x) x.onclick = function () { clearTimeout(killer); try { toast.remove(); } catch (e) {} };
+    } catch (e) {}
+  }
+  // Show once per URL (guard on window so SPA re-entry / bookmarklet re-click doesn't repeat
+  // for the same page). A short delay lets lazy LWC components settle so detection is right.
+  try {
+    var _wu = location.href;
+    if (window.__dcWelcomeShownFor !== _wu) { window.__dcWelcomeShownFor = _wu; setTimeout(dcWelcomeToast, 1200); }
+  } catch (e) {}
+  /* @strip:end */
+
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
   // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll
   // tears the FAB down the instant the URL changes, ending its scope. Idempotent — the
