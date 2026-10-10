@@ -490,7 +490,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("targets the real tags", /runtime_cdp-attribute-row/.test(src) && /runtime_cdp-segment-builder-simple-condition/.test(src));
   ok("OLD fragile label-matching annotation removed (no fetchDmo/labelToDevName)", !/function fetchDmo\s*\(/.test(src) && !/labelToDevName\s*[=\[]/.test(src));
   // ACTIVATION coverage
-  ok("ACTIVATION: runs on activation page too (not just Segment)", /detailPageType === "Segment" \|\| detailPageType === "Activation"/.test(src) || /onSegApiPage/.test(src));
+  ok("ACTIVATION: runs on the activation WIZARD too (not just Segment; /view detail excluded)", /detailPageType === "Segment" \|\| \(detailPageType === "Activation" && isActivationWizardPage\(\)\)/.test(src));
   ok("ACTIVATION: drag-item .details read for api name", /details[\s\S]{0,120}(targetFieldName|fieldApiName)/.test(src) && /runtime_cdp-drag-item/.test(src));
   ok("ACTIVATION: datatable cell resolved by uid-join", /rowUid/.test(src) && /includedAttributes/.test(src) && /buildUidResolver|segBuildUidResolver|_resolveUid/.test(src));
   ok("ACTIVATION: never fabricates a field api (related rows show object+output only)", /activationAttr/.test(src));
@@ -528,6 +528,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV harvests label→href LIVE from top nav (covers 28+ incl. future; left-nav empty-href items resolve via this)", /function dcHarvestNavRoutes\s*\(/.test(src) && /slds-context-bar__label-action/.test(src) && /dcRouteForLabel[\s\S]{0,400}dcHarvestNavRoutes\(\)/.test(src));
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
   ok("WELCOME toast announces page features + globals (positive, once per url, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShownFor/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
+  ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

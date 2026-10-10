@@ -38,7 +38,22 @@
     try { _prevUrl = window.__DC_DECOR__.loadUrl || ""; } catch (e) {}
     var _curUrl = ""; try { _curUrl = location.href; } catch (e) {}
     try { window.__DC_DECOR__.teardown(); } catch (e) {}
-    if (_prevUrl === _curUrl) return;   // same page → toggle off
+    // Reset the welcome guard so re-activating (off→on) on the same page confirms again.
+    try { window.__dcWelcomeShownFor = null; } catch (e) {}
+    if (_prevUrl === _curUrl) {
+      // same page → toggle OFF. Show a brief confirmation so it isn't a silent/confusing
+      // "nothing happened" — then stop (re-click again re-activates + re-shows the welcome).
+      try {
+        var _offT = document.createElement("div");
+        _offT.id = "dc-off-toast";
+        _offT.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
+        _offT.innerHTML = "<span style='color:#f87171;font-size:15px;line-height:1'>&#9711;</span>Data 360 Inspector turned off";
+        document.body.appendChild(_offT);
+        requestAnimationFrame(function () { _offT.style.opacity = "1"; });
+        setTimeout(function () { _offT.style.opacity = "0"; setTimeout(function () { try { _offT.remove(); } catch (e) {} }, 300); }, 2200);
+      } catch (e) {}
+      return;
+    }
     // else: navigated → teardown done, continue to re-initialize for the new page
   }
 
@@ -14435,6 +14450,14 @@
   function isActivationPage() {
     return /marketSegmentActivation/i.test(window.location.href) || /\/r\/MarketSegmentActivation\//i.test(window.location.href);
   }
+  // The activation WIZARD (builder) — the only place attribute rows render, so the only
+  // place the "API names" hover decorator is meaningful. The record /view detail page
+  // (/r/MarketSegmentActivation/<id>/view) has NO attribute DOM, so API names there would
+  // decorate nothing. (Export Activation still works on /view — it's API-based off the
+  // record id — so the launcher itself is NOT gated on this; only the API-names feature is.)
+  function isActivationWizardPage() {
+    return /marketSegmentActivationWizardLanding|marketSegmentActivationWizard/i.test(window.location.href);
+  }
 
   // Get the activation ID from URL (supports both wizard and record view)
   function getActivationIdFromUrl() {
@@ -15660,10 +15683,11 @@ processJSON();
     }
 
     /* @strip:start dev
-     * Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn,
-     * which only exists in the dev build → absent from public automatically. */
+     * Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn
+     * (dev build only) AND on the WIZARD page — the /view detail page has no attribute rows
+     * to decorate, so the toggle would do nothing there (keep Export, drop this). */
     var apiRow = null;
-    if (typeof window.__dcToggleSegApi === "function") {
+    if (typeof window.__dcToggleSegApi === "function" && isActivationWizardPage()) {
       var apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
       var onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
       apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
@@ -17576,8 +17600,10 @@ processJSON();
    * memory data360-segment-builder-dom): no API call, no label-matching, no guessing.
    *   • Hover (toggle): a floating chip with object · field [· PK] [type].
    *   • Click a row (while on): copies its API name. No modal/panel.
-   * Zero mutation of SF's shadow DOM → survives re-renders, can't break the page. */
-  if (detailPageType === "Segment" || detailPageType === "Activation") {
+   * Zero mutation of SF's shadow DOM → survives re-renders, can't break the page.
+   * NOTE: for Activation, only the WIZARD page has attribute rows — the /view detail page
+   * has nothing to decorate, so we skip it there (the toggle/decorator would be a no-op). */
+  if (detailPageType === "Segment" || (detailPageType === "Activation" && isActivationWizardPage())) {
     (function segApiNameFeature() {
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
@@ -18173,7 +18199,7 @@ processJSON();
       var pageTitle = "", pageFeats = [];
       var t = detailPageType;
       if (t === "Segment") { pageTitle = "Segment builder"; pageFeats = ["Hover attributes for API names (press C to copy)", "Export rules → Sheets / HTML / Excel"]; }
-      else if (t === "Activation") { pageTitle = "Activation"; pageFeats = ["Hover attributes for API names", "Export included attributes"]; }
+      else if (t === "Activation") { pageTitle = "Activation"; pageFeats = (typeof isActivationWizardPage === "function" && isActivationWizardPage()) ? ["Hover attributes for API names", "Export included attributes"] : ["Export this activation's attributes & mappings"]; }
       else if (t === "DataModel") { pageTitle = "Data Model (ERD)"; pageFeats = ["Generate a copyable Mermaid ERD"]; }
       else if (t === "DataExplore") { pageTitle = "Data Explorer"; pageFeats = ["See all columns, filter/sort, Export CSV (≤500K)"]; }
       else if (t === "QueryEditor") { pageTitle = "Query Editor"; pageFeats = ["Run SQL + Export full result CSV (≤500K)"]; }
