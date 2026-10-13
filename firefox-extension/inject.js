@@ -13131,6 +13131,50 @@
       });
     }
 
+    // DEBUG (dev-only — already inside the big @strip block that wraps this whole region):
+    // diagnose the "Fetch & Export stops at ~4k" bug using the tool's OWN live creds. The
+    // standalone probe couldn't read SF's CodeMirror SQL or sniff the aura token; the tool
+    // already has both (getHighlightedSql + runRawSql + _auraSniff, captured when you ran a
+    // query). window.__dcProbeOffset() runs 3 real batches — LIMIT 2000 OFFSET 0/2000/4000 —
+    // on the current editor's table and reports each batch's row count + first cell, so we
+    // SEE whether OFFSET paging returns NEW rows (fix valid) or repeats/empties. Read-only.
+    try {
+      window.__dcProbeOffset = function () {
+        return new Promise(function (resolve) {
+          var out = { creds: { context: !!_auraSniff.context, token: !!_auraSniff.token, dataSpace: _auraSniff.dataSpace || null }, batches: [] };
+          var sql = "";
+          try { sql = getHighlightedSql() || ""; } catch (e) {}
+          var fm = sql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+          var table = fm ? fm[1] : "";
+          out.table = table; out.sqlSeen = sql.slice(0, 160);
+          if (!table) { out.error = "No table — type SELECT * FROM \"YourTable\" in the editor first."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
+          if (!_auraSniff.context || !_auraSniff.token) { out.error = "No live session — click SF Run Query once, then re-run."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
+          var base = 'SELECT * FROM "' + table + '"';
+          function one(off) {
+            var s = base + " LIMIT 2000" + (off > 0 ? " OFFSET " + off : "");
+            return runRawSql(s, _auraSniff.dataSpace || "", 2000).then(function (res) {
+              var rows = (res && res.rows) || []; var cols = (res && res.columns) || [];
+              var firstKey = cols[0];
+              return { offset: off, returned: rows.length, firstCell: rows.length ? String(rows[0][firstKey]).slice(0, 24) : null, lastCell: rows.length ? String(rows[rows.length - 1][firstKey]).slice(0, 24) : null };
+            }).catch(function (err) { return { offset: off, error: String(err && err.message || err) }; });
+          }
+          one(0).then(function (b0) { out.batches.push(b0); return one(2000); })
+            .then(function (b1) { out.batches.push(b1); return one(4000); })
+            .then(function (b2) {
+              out.batches.push(b2);
+              // verdict: are the three first-cells distinct?
+              var fc = out.batches.map(function (b) { return b.firstCell; });
+              out.offsetPagingWorks = (fc[0] && fc[1] && fc[2] && fc[0] !== fc[1] && fc[1] !== fc[2]);
+              out.verdict = out.offsetPagingWorks ? "OFFSET PAGING WORKS → fix qeFetchExport to keep paging on short batches"
+                : "OFFSET DID NOT advance (repeat/empty/err) → endpoint can't deep-page via bookmarklet; cap honestly + use extension";
+              resolve(out);
+              try { console.log("%c__dcProbeOffset RESULT", "color:#4338ca;font-weight:700", out); } catch (e) {}
+              try { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(out, null, 2)); } catch (e) {}
+            });
+        });
+      };
+    } catch (e) {}
+
     // ── Helpful Queries: template SQL builders ──────────────────────────────────
     // Accepts EITHER a plain date (YYYY-MM-DD) or a full timestamp (YYYY-MM-DD HH:MM:SS,
     // optional fractional seconds; "T" from a datetime-local picker normalized to a
