@@ -1,116 +1,135 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v27 — Segment "Shortcuts" panel: why hovering a shortcut shows a wrong API
+ * DOM PROBE v28 — Query Editor Fetch&Export: why it stops at ~3-4k + does OFFSET page?
  *
- * Hovering "Test Shortcut" (left Shortcuts tab) shows the chip for Account Multiline — a
- * different attribute. We need to see WHAT a shortcut row is, so we can either exclude the
- * Shortcuts panel from the API-name feature or decorate it correctly (no guessing).
- * Captures:
- *   (A) every element whose own text == a shortcut label (we try common ones + any element
- *       inside a container whose text/class mentions "shortcut") → tag/class/props
- *       (attributeNode / details / groupNode / data) that the feature would read.
- *   (B) the Shortcuts panel container: its tag + the tab labels (Shortcuts/Attributes/Segments)
- *   (C) for a given sample shortcut, the full composedPath-style ancestor chain with each
- *       element's SEG-relevant props, so we see exactly which element the matcher latches onto.
+ * Confirmed in code: the bookmarklet /aura queryDCSql returns only ~4,000 rows per request
+ * (not the 49,999 we ask), and qeFetchExport quits when a batch is SHORTER than pageSize —
+ * so it stops after the first ~4k even on a 1.7M table. Fix = keep paging via OFFSET while
+ * rows keep coming. But that fix only works if deep OFFSET actually returns NEW rows on
+ * THIS endpoint/org. This probe tests exactly that, read-only, on YOUR table:
+ *   - edit TABLE below (or it auto-reads the FROM of the SQL in SF's editor)
+ *   - runs 3 real /aura queries: LIMIT 2000 OFFSET 0, OFFSET 2000, OFFSET 4000
+ *   - reports each batch's row count + the FIRST column's first value, so we can see if
+ *     OFFSET 2000/4000 return DIFFERENT rows (paging works) or the SAME/empty (paging broken)
  *
- * RUN on the Segment builder with the Shortcuts tab visible. Hover is not needed. Read-only.
+ * RUN on the Query Editor page AFTER clicking SF's "Run Query" once (so the session/aura
+ * token is live). Read-only (SELECT only). Copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe27() {
+(function DomProbe28() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
-  function deepAll(root, acc) {
-    acc = acc || [];
-    if (acc.length > 250000) return acc;
-    var all; try { all = root.querySelectorAll("*"); } catch (e) { return acc; }
-    for (var i = 0; i < all.length; i++) { var el = all[i]; acc.push(el); if (el.shadowRoot) deepAll(el.shadowRoot, acc); }
-    return acc;
+  // ── find the live aura context/token the page already uses (same source the tool sniffs) ──
+  function findAura() {
+    var ctx = "", tok = "", uri = location.pathname;
+    try {
+      // Aura framework global
+      if (window.$A && window.$A.getContext) {
+        try { ctx = JSON.stringify(window.$A.getContext().getStorage ? {} : {}); } catch (e) {}
+      }
+    } catch (e) {}
+    // Most reliable: scrape from any inline script / aura config on the page
+    try {
+      var html = document.documentElement.innerHTML;
+      var mT = html.match(/"token":"([^"]+)"/); if (mT) tok = mT[1];
+      var mC = html.match(/"fwuid":"[^"]+"[\s\S]*?\}/); // not reliable; leave ctx blank if unknown
+    } catch (e) {}
+    return { ctx: ctx, tok: tok, uri: uri };
   }
-  function tagOf(el) { try { return (el.tagName || "").toLowerCase(); } catch (e) { return ""; } }
-  function ownText(el) { try { var s = ""; for (var i = 0; i < el.childNodes.length; i++) { var n = el.childNodes[i]; if (n.nodeType === 3) s += n.nodeValue; } return s.replace(/\s+/g, " ").trim(); } catch (e) { return ""; } }
-  function cls(el) { try { return (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) { return ""; } }
-  function g(o, k) { try { return o[k]; } catch (e) { return undefined; } }
-  function sketch(v, d) { d = d || 0; if (v == null) return v; var t = typeof v; if (t === "function") return "ƒ"; if (t !== "object") return (t === "string" && v.length > 120) ? v.slice(0, 120) + "…" : v; if (d >= 3) return Array.isArray(v) ? "array[" + v.length + "]" : "obj"; if (Array.isArray(v)) return v.slice(0, 5).map(function (x) { return sketch(x, d + 1); }); var o = {}, kk; try { kk = Object.keys(v); } catch (e) { return "obj?"; } kk.slice(0, 25).forEach(function (key) { try { o[key] = sketch(v[key], d + 1); } catch (e) {} }); return o; }
-  // the SEG-relevant props the feature reads
-  function segProps(el) {
-    var o = {};
-    ["attributeNode", "groupNode", "details", "simpleCondition", "aggregationCondition", "data"].forEach(function (k) {
-      var v = g(el, k); if (v != null && typeof v !== "function") o[k] = sketch(v, 0);
+  // We can't easily rebuild aura.context here; instead REUSE the tool's sniffed creds if the
+  // bookmarklet/extension is loaded (window.__DC_DECOR__ exposes nothing, so fall back to a
+  // DOM scrape of aura.token + the context from a known inline). To stay robust and avoid
+  // guessing, we instead drive the query through the SAME /aura endpoint using the aura
+  // context that the page's own action framework exposes via a lightweight fetch of the
+  // page config. If we can't get a token, we report that clearly.
+
+  var TABLE = "";   // ← optionally hardcode "YourTable__dlm"; else auto-read from the editor
+  function readEditorSql() {
+    var best = "";
+    try {
+      var tas = document.querySelectorAll("textarea");
+      for (var i = 0; i < tas.length; i++) { var v = tas[i].value || ""; if (/select/i.test(v) && /from/i.test(v) && v.length > best.length) best = v; }
+      if (!best) { var ces = document.querySelectorAll("[contenteditable='true']"); for (var j = 0; j < ces.length; j++) { var t = ces[j].textContent || ""; if (/select/i.test(t) && /from/i.test(t) && t.length > best.length) best = t; } }
+    } catch (e) {}
+    return best;
+  }
+  var sqlInEditor = readEditorSql();
+  if (!TABLE) { var fm = sqlInEditor.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); if (fm) TABLE = fm[1]; }
+
+  // Grab aura token + context the way the page stores it (window.Aura / inline bootstrap).
+  var auraCtx = "", auraTok = "";
+  try {
+    // Lightning stores the action token on the aura config; the tool sniffs it from XHRs,
+    // but we can read the current one from the global config if present.
+    if (window.Aura && window.Aura.Initializer && window.Aura.Initializer.getConfig) {
+      var cfg = window.Aura.Initializer.getConfig();
+      if (cfg && cfg.context) { auraCtx = JSON.stringify({ mode: cfg.context.mode, fwuid: cfg.context.fwuid, app: cfg.context.app, loaded: cfg.context.loaded, apce: cfg.context.apce, apcp: cfg.context.apcp, globals: cfg.context.globalValueProviders ? undefined : undefined }); }
+      if (cfg && cfg.token) auraTok = cfg.token;
+    }
+  } catch (e) {}
+  try { if (!auraTok && window.$A && $A.clientService && $A.clientService._token) auraTok = $A.clientService._token; } catch (e) {}
+
+  var dataspace = "";
+  try { var fm2 = (sqlInEditor || "").match(/\bFROM\s+["]?([A-Za-z0-9]{2,6})_/i); if (fm2) dataspace = fm2[1]; } catch (e) {}
+
+  function runBatch(offset, limit) {
+    return new Promise(function (resolve) {
+      if (!auraTok || !auraCtx) { resolve({ offset: offset, error: "no aura token/context available on page — run SF Run Query first, or this probe can't reach /aura" }); return; }
+      var sql = "SELECT * FROM \"" + TABLE + "\" LIMIT " + limit + (offset > 0 ? " OFFSET " + offset : "");
+      var qid = Math.floor((window.performance && performance.now ? performance.now() : 1) * 1) + offset;
+      var act = { id: "dcprobe-" + qid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: sql, rowLimit: limit, dataspace: dataspace } };
+      var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + encodeURIComponent(auraCtx) + "&aura.pageURI=" + encodeURIComponent(location.pathname) + "&aura.token=" + encodeURIComponent(auraTok);
+      fetch("/aura?r=" + qid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+        .then(function (r) { return r.text(); }).then(function (txt) {
+          var j = null; try { j = JSON.parse(txt); } catch (e) { resolve({ offset: offset, error: "non-JSON (session?)", sample: txt.slice(0, 120) }); return; }
+          var a = j && j.actions && j.actions[0];
+          if (!a || a.state !== "SUCCESS") { resolve({ offset: offset, state: a && a.state, error: (a && a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || "action failed" }); return; }
+          var rv = a.returnValue || {}; var dr = rv.dataRows || rv.rows || rv.data || [];
+          var arr = dr.map(function (d) { return d && d.row ? d.row : d; });
+          var firstVal = arr.length && Array.isArray(arr[0]) ? arr[0][0] : (arr.length ? JSON.stringify(arr[0]).slice(0, 40) : null);
+          var lastVal = arr.length && Array.isArray(arr[arr.length - 1]) ? arr[arr.length - 1][0] : null;
+          var st = rv.status || {};
+          resolve({ offset: offset, requested: limit, returned: arr.length, firstCol0: firstVal, lastCol0: lastVal, completionStatus: st.completionStatus, progress: st.progress, rowsProcessed: st.rowsProcessed != null ? st.rowsProcessed : st.rowCount });
+        }).catch(function (err) { resolve({ offset: offset, error: String(err) }); });
     });
-    return o;
   }
 
-  var ALL = deepAll(document, []);
+  var out = { _tool: "dom-probe", _version: 28, page: location.href, table: TABLE, dataspace: dataspace, sqlInEditor: (sqlInEditor || "").slice(0, 160), auraTokenFound: !!auraTok, auraContextFound: !!auraCtx, batches: [] };
 
-  // (B) Shortcuts panel container + tab labels
-  var tabLabels = [];
-  ALL.forEach(function (el) { var t = ownText(el); if (/^(Shortcuts|Attributes|Segments)$/.test(t) && tabLabels.indexOf(t) < 0 && ownText(el).length < 20) tabLabels.push(t); });
-  var shortcutContainers = [];
-  ALL.forEach(function (el) { var c = cls(el), tg = tagOf(el); if (/shortcut/i.test(c) || /shortcut/i.test(tg)) { if (shortcutContainers.length < 8) shortcutContainers.push({ tag: tg, cls: c.slice(0, 80) }); } });
-
-  // (A) elements whose own text looks like a shortcut row (short text, inside something
-  // shortcut-ish OR a list item in the left panel). Capture the ones carrying SEG props.
-  var rows = [];
-  ALL.forEach(function (el) {
-    if (rows.length >= 12) return;
-    var t = ownText(el);
-    if (!t || t.length > 40) return;
-    var sp = segProps(el);
-    var inShortcut = false;
-    try { var up = el; for (var k = 0; k < 8 && up; k++) { if (/shortcut/i.test(cls(up)) || /shortcut/i.test(tagOf(up))) { inShortcut = true; break; } up = up.parentElement || (up.getRootNode && up.getRootNode().host); } } catch (e) {}
-    if (inShortcut || Object.keys(sp).length) {
-      rows.push({ tag: tagOf(el), text: t, cls: cls(el).slice(0, 70), inShortcutPanel: inShortcut, segProps: sp });
-    }
-  });
-
-  // (C) for the sample label "Test Shortcut" (and any shortcut), climb ancestors recording
-  // which element carries a SEG prop that resolves to an API — the thing the matcher grabs.
-  function climbFor(label) {
-    var leaf = null;
-    for (var i = 0; i < ALL.length; i++) { if (ownText(ALL[i]) === label) { leaf = ALL[i]; break; } }
-    if (!leaf) return { label: label, found: false };
-    var chain = [], node = leaf;
-    for (var h = 0; h < 8 && node; h++) {
-      var sp = segProps(node);
-      chain.push({ tag: tagOf(node), cls: cls(node).slice(0, 60), ownText: ownText(node).slice(0, 40), hasSegProp: Object.keys(sp).length ? sp : undefined });
-      var p = node.parentElement; if (!p) { try { var rn = node.getRootNode(); p = rn && rn.host ? rn.host : null; } catch (e) { p = null; } }
-      node = p;
-    }
-    return { label: label, found: true, climb: chain };
+  function render() {
+    var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"stringify"}'; }
+    try { window.__DOM_PROBE = out; } catch (e) {}
+    var kb = Math.round(json.length / 1024);
+    var panel = document.getElementById(PANEL_ID) || document.createElement("div");
+    panel.id = PANEL_ID;
+    panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:360px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
+    var rows = out.batches.map(function (b) { return "OFFSET " + b.offset + " → <b>" + (b.returned != null ? b.returned : ("ERR: " + (b.error || b.state))) + "</b>" + (b.firstCol0 != null ? " (first=" + String(b.firstCol0).slice(0, 14) + ")" : ""); }).join("<br>");
+    panel.innerHTML =
+      "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
+      + "<b style='font:700 13px system-ui'>DOM Probe v28 · OFFSET paging</b>"
+      + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
+      + "<div style='padding:13px 14px'>"
+      + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>" + (out.batches.length >= 3 ? "✓ Done — copied (" + kb + " KB)" : "Running…") + "</div>"
+      + "<div style='font-size:11px;color:#475569;line-height:1.7'>Table: <b>" + (TABLE || "?") + "</b> · ds: <b>" + (dataspace || "?") + "</b><br>Aura token: <b>" + (auraTok ? "yes" : "NO") + "</b> · ctx: <b>" + (auraCtx ? "yes" : "NO") + "</b><br>" + (rows || "(no batches yet)") + "</div>"
+      + "<div style='display:flex;gap:7px;margin-top:12px'>"
+      + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy</button>"
+      + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
+      + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>If OFFSET 0 / 2000 / 4000 return DIFFERENT first-values, paging works → the fix is valid. If they repeat or error, paging is broken on this endpoint.</div>"
+      + "</div>";
+    if (!panel.parentNode) document.body.appendChild(panel);
+    function copyText(t, cb) { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { cb(true); }, function () { cb(false); }); else { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); cb(true); } catch (e) { cb(false); } } }
+    var x = panel.querySelector("#dc-probe-x"); if (x) x.onclick = function () { panel.remove(); };
+    var c = panel.querySelector("#dc-probe-copy"); if (c) c.onclick = function () { copyText(json, function () {}); };
+    var d = panel.querySelector("#dc-probe-dl"); if (d) d.onclick = function () { try { var b = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "dom-probe-v28-" + out.batches.length + ".json"; a.click(); } catch (e) {} };
+    if (out.batches.length >= 3) copyText(json, function () {});
   }
-  var samples = ["Test Shortcut", "Segment Code"].map(climbFor);
 
-  var out = { _tool: "dom-probe", _version: 27, page: location.href, tabLabels: tabLabels, shortcutContainers: shortcutContainers, shortcutRowsWithProps: rows, sampleClimbs: samples };
-  var json = ""; try { json = JSON.stringify(out, null, 2); } catch (e) { json = '{"error":"' + String(e) + '"}'; }
-  try { window.__DOM_PROBE = out; } catch (e) {}
+  render();
+  if (!TABLE) { out.batches.push({ error: "no table — put a SELECT … FROM <table> in the editor or hardcode TABLE in the probe" }); render(); return; }
+  // run the 3 batches sequentially
+  runBatch(0, 2000).then(function (b0) { out.batches.push(b0); render(); return runBatch(2000, 2000); })
+    .then(function (b1) { out.batches.push(b1); render(); return runBatch(4000, 2000); })
+    .then(function (b2) { out.batches.push(b2); render(); });
 
-  function copyText(t, cb) {
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { cb(true); }, function () { cb(false); });
-    else { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); var ok = document.execCommand("copy"); ta.remove(); cb(ok); } catch (e) { cb(false); } }
-  }
-  var kb = Math.round(json.length / 1024);
-  var panel = document.createElement("div");
-  panel.id = PANEL_ID;
-  panel.style.cssText = "position:fixed;bottom:18px;right:18px;z-index:2147483647;width:340px;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:13px -apple-system,system-ui,sans-serif;color:#1e293b;overflow:hidden;border:1px solid #e2e8f0;";
-  panel.innerHTML =
-    "<div style='padding:11px 14px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between'>"
-    + "<b style='font:700 13px system-ui'>DOM Probe v27 · Shortcuts</b>"
-    + "<button id='dc-probe-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:16px'>&times;</button></div>"
-    + "<div style='padding:13px 14px'>"
-    + "<div id='dc-probe-status' style='font-weight:700;color:#059669;margin-bottom:8px'>✓ Copied (" + kb + " KB)</div>"
-    + "<div style='font-size:11px;color:#475569;line-height:1.7'>Tabs: <b>" + tabLabels.join(", ") + "</b><br>Shortcut containers: <b>" + shortcutContainers.length + "</b><br>Rows w/ seg props: <b>" + rows.length + "</b></div>"
-    + "<div style='display:flex;gap:7px;margin-top:12px'>"
-    + "<button id='dc-probe-copy' style='flex:1;border:none;border-radius:7px;padding:8px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9)'>Copy again</button>"
-    + "<button id='dc-probe-dl' style='border:1px solid #cbd5e1;background:#fff;border-radius:7px;padding:8px 10px;cursor:pointer;font:600 12px system-ui;color:#334155'>Download</button></div>"
-    + "<div style='font-size:11px;color:#94a3b8;margin-top:9px;line-height:1.5'>Run on the Segment builder with the Shortcuts tab showing.</div>"
-    + "</div>";
-  document.body.appendChild(panel);
-  var status = panel.querySelector("#dc-probe-status");
-  copyText(json, function (ok) { if (!ok) { status.textContent = "⚠ Auto-copy blocked — click Copy again"; status.style.color = "#b45309"; } });
-  panel.querySelector("#dc-probe-x").onclick = function () { panel.remove(); };
-  panel.querySelector("#dc-probe-copy").onclick = function () { copyText(json, function (ok) { status.textContent = ok ? "✓ Copied again" : "⚠ Use Download"; status.style.color = ok ? "#059669" : "#b45309"; }); };
-  panel.querySelector("#dc-probe-dl").onclick = function () { try { var bl = new Blob([json], { type: "application/json" }); var a = document.createElement("a"); a.href = URL.createObjectURL(bl); a.download = "dom-probe-v27-" + Date.now() + ".json"; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000); } catch (e) {} };
-
-  console.log("%cDOM PROBE v27 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
-  return out;
+  console.log("%cDOM PROBE v28 — window.__DOM_PROBE", "font:700 13px system-ui;color:#4338ca", out);
 })();
