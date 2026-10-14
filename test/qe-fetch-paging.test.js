@@ -166,6 +166,8 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("button labelled 'Export ALL' (no 'stream' jargon)", /streamBtn\.textContent = "⤓ Export ALL"/.test(src) && !/Export ALL \(stream\)/.test(src));
   ok("already-exported guard warns + saves credits (memo by normalized SQL)", /var _lastStreamExport = null/.test(src) && /_lastStreamExport && _lastStreamExport\.sqlKey === sqlKey/.test(src) && /Already exported/.test(src));
   ok("memo only set on real non-cancelled result (not on cancel/0 rows)", /!res\.cancelled && res\.totalRows > 0[\s\S]{0,80}_lastStreamExport = \{ sqlKey: sqlKey/.test(src));
+  ok("viewer-limit heads-up: warns when export exceeds Excel (1,048,576) / Sheets (10M cells/cols)", /var EXCEL_MAX = 1048576, SHEETS_CELLS = 10000000/.test(src) && /sheetsMax = nCols > 0 \? Math\.floor\(SHEETS_CELLS \/ nCols\)/.test(src) && /viewers truncate/.test(src));
+  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ return \{ totalRows: got, cancelled: false, columns: cols/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────

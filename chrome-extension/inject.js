@@ -13246,7 +13246,8 @@
         var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
         var cap = ul > 0 ? ul : HARD;
         function fail(err) { try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {} reject(err instanceof Error ? err : new Error(String(err))); }
-        function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve({ totalRows: got, cancelled: false }); }, function () { resolve({ totalRows: got, cancelled: false }); }); } else resolve({ totalRows: got, cancelled: false }); } catch (e) { resolve({ totalRows: got, cancelled: false }); } }
+        function result() { return { totalRows: got, cancelled: false, columns: cols || [] }; }
+        function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
           cols = (metadata || []).map(function (m) { return m && m.name; });
@@ -14352,9 +14353,28 @@
           // Remember this export so a repeat of the SAME query warns (save credits). Only
           // memo a real, non-cancelled result that actually wrote rows.
           if (res && !res.cancelled && res.totalRows > 0) { try { _lastStreamExport = { sqlKey: sqlKey, rows: res.totalRows, when: Date.now() }; } catch (e) {} }
+          // Viewer-limit heads-up: the CSV holds ALL rows, but Excel caps at 1,048,576 rows
+          // and Google Sheets at 10,000,000 CELLS (so ~10M/colCount rows). If this export
+          // exceeds either, warn the user so they don't open it in a viewer that silently
+          // truncates — and point them at tools that handle the full set.
+          var EXCEL_MAX = 1048576, SHEETS_CELLS = 10000000;
+          var nCols = (res.columns && res.columns.length) || 0;
+          var sheetsMax = nCols > 0 ? Math.floor(SHEETS_CELLS / nCols) : SHEETS_CELLS;
+          var overExcel = res.totalRows > EXCEL_MAX;
+          var overSheets = nCols > 0 && res.totalRows > sheetsMax;
+          var viewerNote = "";
+          if (!res.cancelled && (overExcel || overSheets)) {
+            viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
+              + "📄 The CSV has <b>all " + res.totalRows.toLocaleString() + "</b> rows, but viewers truncate:"
+              + "<br>• <b>Excel</b> shows max " + EXCEL_MAX.toLocaleString() + " rows" + (overExcel ? " — <b>this file is larger</b>" : "")
+              + "<br>• <b>Google Sheets</b> ~" + sheetsMax.toLocaleString() + " rows (10M cells ÷ " + nCols + " cols)" + (overSheets ? " — <b>this file is larger</b>" : "")
+              + "<br>For the full data use <b>Power Query</b>, a database, or split/filter the query."
+              + "</div>";
+          }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
+            + viewerNote
             + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
         }).catch(function (err) {
           streamBtn.disabled = false;
