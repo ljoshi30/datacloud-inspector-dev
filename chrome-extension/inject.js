@@ -17929,6 +17929,23 @@ processJSON();
   // slds-context-bar__label-action / navItem). CATEGORY HEADERS (e.g. "Segment & Act",
   // "Analyze & Predict") are expandable GROUPS, not destinations — class category-header —
   // so we skip them (they have no page to open).
+  // Is this element a genuine Data Cloud NAV item (left vertical nav or top nav bar) — as
+  // opposed to any random record/user/lookup link that also starts with /lightning/? The ⧉
+  // must ONLY decorate nav items; previously ANY <a href="/lightning/…"> matched, so a
+  // "Created By" user link, a lookup, or a table record link wrongly got the "open nav item
+  // in new tab" chip (confusing, and the wording was wrong for a record). We require the
+  // anchor itself OR a near ancestor to carry a nav marker class/container.
+  function dcIsNavAnchor(el) {
+    var n = el;
+    for (var i = 0; i < 4 && n && n.nodeType === 1; i++) {
+      var c = ""; try { c = (n.getAttribute && n.getAttribute("class")) || ""; } catch (e) {}
+      var tg = (n.tagName || "").toLowerCase();
+      if (/slds-nav-vertical__action|slds-context-bar__label-action|navItem|slds-context-bar__item/.test(c)) return true;
+      if (/one-app-nav-bar-item|desktop-vertical-navigation|lightning-vertical-navigation/.test(tg)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  }
   function dcNavItemFrom(node) {
     for (var h = 0; h < 6 && node && node.nodeType === 1; h++) {
       var tag = (node.tagName || "").toLowerCase();
@@ -17937,7 +17954,8 @@ processJSON();
       // skip expandable group headers — they open a submenu, not a page
       if (/category-header/.test(cls)) return null;
       var looksNav = tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
-      if (looksNav) {
+      // GATE: must be an actual nav item — not any /lightning/ record/user/lookup link.
+      if (looksNav && dcIsNavAnchor(node)) {
         var lbl = dcNavLabelOf(node);
         // 1) real href on the anchor itself (top nav / future items)
         var href = "";
@@ -18656,9 +18674,10 @@ processJSON();
       else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
       else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
       else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Model (list)"; pageFeats = ["Hover a row → ⧉ opens that DMO in a new tab"]; }
-      // always-on globals (dev build)
+      // always-on globals (dev build) — clearer wording: it's a button that appears when you
+      // hover a Data Cloud menu item.
       var globals = [];
-      if (window.__dcNavNewTabInstalled) globals.push("Hover any nav item → ⧉ opens it in a new tab");
+      if (window.__dcNavNewTabInstalled) globals.push("Hover a Data Cloud menu item to get a ⧉ “open in new tab” button");
       if (typeof dcActiveListType === "function" && dcActiveListType() && t !== "DataModel") { /* already covered as page feat */ }
       if (!pageTitle && !globals.length) return;   // nothing to announce
 
@@ -18676,16 +18695,18 @@ processJSON();
       toast.innerHTML = html;
       document.body.appendChild(toast);
       requestAnimationFrame(function () { toast.style.opacity = "1"; toast.style.transform = "translateY(0)"; });
-      var killer = setTimeout(function () { toast.style.opacity = "0"; toast.style.transform = "translateY(8px)"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 350); }, 6500);
+      // Auto-dismiss a bit quicker (4s) — it's a confirmation, not something to read twice.
+      var killer = setTimeout(function () { toast.style.opacity = "0"; toast.style.transform = "translateY(8px)"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 350); }, 4000);
       var x = toast.querySelector("#dc-welcome-x");
       if (x) x.onclick = function () { clearTimeout(killer); try { toast.remove(); } catch (e) {} };
     } catch (e) {}
   }
-  // Show once per URL (guard on window so SPA re-entry / bookmarklet re-click doesn't repeat
-  // for the same page). A short delay lets lazy LWC components settle so detection is right.
+  // Show ONCE PER SESSION (not per page). The welcome is an activation confirmation — seeing
+  // it on every navigation is annoying (user feedback). window.__dcWelcomeShown persists for
+  // the life of the tab's tool scope, so it fires on first activation only. Shorter 600ms
+  // delay so it feels responsive (was 1.2s → felt late) while LWC settles enough to detect.
   try {
-    var _wu = location.href;
-    if (window.__dcWelcomeShownFor !== _wu) { window.__dcWelcomeShownFor = _wu; setTimeout(dcWelcomeToast, 1200); }
+    if (!window.__dcWelcomeShown) { window.__dcWelcomeShown = true; setTimeout(dcWelcomeToast, 600); }
   } catch (e) {}
   /* @strip:end */
 

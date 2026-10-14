@@ -467,6 +467,35 @@ console.log("\n6d. Container Path captured into export (real HTML + Excel render
   }
 }
 
+// ── 6e. Nav ⧉ gate: real nav anchors only, NOT user/record/lookup links ──────────────
+// Bug: ANY <a href="/lightning/…"> got the ⧉ (so a "Created By" user link, a lookup, a
+// table record link wrongly showed "open nav item in new tab"). dcIsNavAnchor requires a
+// nav marker class/tag within a few ancestors. This mirrors it over fake elements.
+console.log("\n6e. nav ⧉ only decorates real nav items (not record/user links)");
+{
+  function mk(cls, tag, parent) { return { nodeType: 1, tagName: (tag || "A").toUpperCase(), _c: cls || "", getAttribute: function (n) { return n === "class" ? this._c : null; }, parentElement: parent || null }; }
+  function dcIsNavAnchor(el) {
+    var n = el;
+    for (var i = 0; i < 4 && n && n.nodeType === 1; i++) {
+      var c = ""; try { c = (n.getAttribute && n.getAttribute("class")) || ""; } catch (e) {}
+      var tg = (n.tagName || "").toLowerCase();
+      if (/slds-nav-vertical__action|slds-context-bar__label-action|navItem|slds-context-bar__item/.test(c)) return true;
+      if (/one-app-nav-bar-item|desktop-vertical-navigation|lightning-vertical-navigation/.test(tg)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  }
+  // real nav items → true
+  ok("left-nav action anchor → nav", dcIsNavAnchor(mk("slds-nav-vertical__action non-active")));
+  ok("top-nav label action anchor → nav", dcIsNavAnchor(mk("slds-context-bar__label-action dndItem")));
+  ok("nav item host tag → nav", dcIsNavAnchor(mk("", "one-app-nav-bar-item-root")));
+  ok("anchor inside nav item container (ancestor) → nav", dcIsNavAnchor(mk("", "a", mk("navItem slds-context-bar__item"))));
+  // NOT nav — the false-positive cases the user hit
+  ok("'Created By' USER link (/lightning/r/User/…) → NOT nav", !dcIsNavAnchor(mk("someLinkClass", "a")));
+  ok("plain record link in a table → NOT nav", !dcIsNavAnchor(mk("outputLookupLink", "a")));
+  ok("bare anchor, no nav ancestor → NOT nav", !dcIsNavAnchor(mk("", "a", mk("slds-grid", "div"))));
+}
+
 // ── 7. source presence ──────────────────────────────────────────────────────────────
 console.log("\n7. source presence (wired, dev-only, reads props directly)");
 {
@@ -527,7 +556,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV route resolve order href-first → learned → seed (zero-maintenance)", /function dcRouteForLabel\s*\(/.test(src) && /dc_nav_routes_learned_v1/.test(src) && /function dcCaptureCurrentNavRoute\s*\(/.test(src));
   ok("NAV harvests label→href LIVE from top nav (covers 28+ incl. future; left-nav empty-href items resolve via this)", /function dcHarvestNavRoutes\s*\(/.test(src) && /slds-context-bar__label-action/.test(src) && /dcRouteForLabel[\s\S]{0,400}dcHarvestNavRoutes\(\)/.test(src));
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
-  ok("WELCOME toast announces page features + globals (positive, once per url, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShownFor/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
+  ok("WELCOME toast announces page features + globals (once per SESSION, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShown\b/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
+  ok("WELCOME shows once per session (not per page) + faster delay", /if \(!window\.__dcWelcomeShown\) \{ window\.__dcWelcomeShown = true; setTimeout\(dcWelcomeToast, 600\)/.test(src));
+  ok("NAV ⧉ only matches REAL nav anchors (not user/record/lookup /lightning/ links)", /function dcIsNavAnchor\s*\(/.test(src) && /looksNav && dcIsNavAnchor\(node\)/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
   ok("FULL off helper (FAB Remove = bookmarklet toggle-off: __dcOff + teardown) + ⧉ On/Off FAB row (persisted)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src) && /function dcMakeNewTabRow\s*\(/.test(src) && /dc_newtab_enabled_v1/.test(src) && /window\.__dcToggleNewTab/.test(src));
