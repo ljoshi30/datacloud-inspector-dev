@@ -162,7 +162,10 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("QE 'Count anyway' uses qeFetchExport, not exportPaginatedCsv", /Use QE's OWN fetch path[\s\S]{0,400}qeFetchExport\(cleanSql/.test(src));
   // the fix is in SHARED code → bookmarklet source must have it too
   ok("bookmarklet source has the paging fix (synced)", /QE_ASK/.test(bm) && /arrData\.length === 0 \|\| totalFetched >= effectiveMax/.test(bm));
-  ok("UI warns when capped (points to stream export / LIMIT, no jargon)", /Stopped at <b>[\s\S]{0,160}Export ALL \(stream\)[\s\S]{0,40}LIMIT/.test(src));
+  ok("UI warns when capped (points to Export ALL / LIMIT, no jargon)", /Stopped at <b>[\s\S]{0,160}Export ALL<\/b>[\s\S]{0,40}LIMIT/.test(src));
+  ok("button labelled 'Export ALL' (no 'stream' jargon)", /streamBtn\.textContent = "⤓ Export ALL"/.test(src) && !/Export ALL \(stream\)/.test(src));
+  ok("already-exported guard warns + saves credits (memo by normalized SQL)", /var _lastStreamExport = null/.test(src) && /_lastStreamExport && _lastStreamExport\.sqlKey === sqlKey/.test(src) && /Already exported/.test(src));
+  ok("memo only set on real non-cancelled result (not on cancel/0 rows)", /!res\.cancelled && res\.totalRows > 0[\s\S]{0,80}_lastStreamExport = \{ sqlKey: sqlKey/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
@@ -186,6 +189,68 @@ console.log("\n8. streaming full export present + guarded");
   ok("progress UI appends the stream's own cancel button (not Fetch handler's)", /cardBody\.appendChild\(streamCancelBtn\)/.test(src));
   ok("no user-facing 'browser extension' wording in the capped warning", !/use the <b>browser extension<\/b>/.test(src));
   ok("streaming export present in bookmarklet build too (synced)", /function qeStreamFullExport\s*\(/.test(bm) && /createWritable/.test(bm));
+
+  // ── RUNTIME scope-leak guard ──────────────────────────────────────────────────────
+  // The 'cancelBtn is not defined' and 'startT is not defined' bugs were cross-.then scope
+  // leaks that source-presence regexes CAN'T catch. This actually RUNS the stream handler
+  // under a fake DOM with stubbed showSaveFilePicker + qeStreamFullExport, so any variable
+  // referenced out of scope throws a ReferenceError we catch here — before users do.
+  const vm = require("vm");
+  // extract the goBtn.onclick handler body
+  var gi = src.indexOf("if (goBtn) goBtn.onclick = function () {");
+  ok("found stream goBtn handler for runtime check", gi >= 0);
+  if (gi >= 0) {
+    // grab from the handler start to its matching close (balance braces)
+    var from = src.indexOf("{", gi);
+    var depth = 0, end = from;
+    for (var ci = from; ci < src.length; ci++) { var ch = src[ci]; if (ch === "{") depth++; else if (ch === "}") { depth--; if (depth === 0) { end = ci; break; } } }
+    var handlerBody = src.slice(from + 1, end);
+    // Build a sandbox providing EVERY free variable the handler legitimately closes over,
+    // plus a fake DOM. If the handler references something NOT provided and NOT declared
+    // inside it (the bug class), running it throws ReferenceError.
+    var threw = null, ranProgress = false, ranComplete = false;
+    var fakeEl = function () { return { style: {}, textContent: "", innerHTML: "", disabled: false, onclick: null, setAttribute: function () {}, getAttribute: function () { return ""; }, appendChild: function () {}, addEventListener: function () {} }; };
+    var sandbox = {
+      // free vars the real handler closes over (from ensureQueryEditorLauncher scope):
+      getHighlightedSql: function () { return 'SELECT * FROM "T__dll"'; },
+      normalizeSql: function (s) { return s; },
+      validateSql: function () { return { ok: true }; },
+      showGuide: function () {},
+      extractTableName: function () { return "T__dll"; },
+      readPageDataSpace: function () { return "DS"; },
+      dataSpaceCandidates: function () { return ["DS"]; },
+      todayStr: function () { return "2026-01-01"; },
+      normSqlKey: function (s) { return s; },
+      streamBtn: fakeEl(), cardBody: fakeEl(),
+      _savedSelection: "", _lastResult: null,
+      // vars the ENCLOSING streamBtn.onclick legitimately declares before goBtn (so the
+      // guard flags only TRUE cross-.then leaks, not these in-scope locals):
+      sql: 'SELECT * FROM "T__dll"', ds: "DS", tableName: "T__dll", hasLimit: false,
+      sqlKey: 'select * from "t__dll"', _lastStreamExport: null,
+      // stub the two async boundaries so the whole promise chain executes synchronously-ish
+      qeStreamFullExport: function (sql, ds, handle, onProgress) { try { onProgress(10); ranProgress = true; } catch (e) {} return Promise.resolve({ totalRows: 10, cancelled: false }); },
+      window: { showSaveFilePicker: function () { return Promise.resolve({ createWritable: function () { return Promise.resolve({ write: function () { return Promise.resolve(); }, close: function () { return Promise.resolve(); } }); } }); }, __dcStreamCancel: false },
+      document: { createElement: function () { return fakeEl(); }, getElementById: function () { return fakeEl(); }, body: { appendChild: function () {} } },
+      Date: Date, Promise: Promise, setTimeout: setTimeout, encodeURIComponent: encodeURIComponent, JSON: JSON,
+    };
+    sandbox.goBtn = { onclick: null };
+    try {
+      // define the handler, assign to goBtn.onclick, then CALL it — executes the full chain.
+      var code = "(function(){ if (goBtn) goBtn.onclick = function () {" + handlerBody + "}; return goBtn.onclick; })()";
+      var fn = vm.runInNewContext(code, sandbox, { timeout: 2000 });
+      Promise.resolve(fn && fn()).catch(function (e) { threw = e; });
+    } catch (e) { threw = e; }
+    // give the microtask chain a tick to surface any ReferenceError
+    var waited = 0;
+    (function spin() {
+      if (threw || waited > 50) {
+        ok("stream handler RUNS with no scope-leak ReferenceError (catches cancelBtn/startT class)", !threw, threw && String(threw.message || threw));
+        console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
+        process.exit(fail === 0 ? 0 : 1);
+      } else { waited++; setTimeout(spin, 10); }
+    })();
+    return; // defer final print to the spin loop above
+  }
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

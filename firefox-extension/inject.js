@@ -12690,7 +12690,7 @@
     // File System Access streaming (Chromium) so we can write to disk without buffering the
     // whole CSV in memory. Hidden otherwise (user falls back to the capped Fetch & Export).
     var streamBtn = document.createElement("button");
-    streamBtn.textContent = "⤓ Export ALL (stream)";
+    streamBtn.textContent = "⤓ Export ALL";
     streamBtn.title = "Export the entire table to a CSV file saved to your computer. Pick a location; rows write as they fetch. On a large table this is slow and uses Data Cloud credits. Add a LIMIT to fetch fewer, or Cancel anytime.";
     streamBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);box-shadow:0 2px 8px rgba(3,105,161,.3);transition:transform .1s;";
     streamBtn.onmouseenter = () => { streamBtn.style.transform = "scale(1.03)"; };
@@ -12754,6 +12754,10 @@
     };
 
     var _lastResult = null;
+    // Remember the last STREAM full-export so re-running the SAME query warns the user first
+    // (streaming re-scans the whole table → wasted credits if they already have the file).
+    // { sqlKey, rows, when } — rows/when just for the message; sqlKey is the match key.
+    var _lastStreamExport = null;
     // Memoized COUNT — mirrors how Fetch caches _lastResult. Keyed by normalized SQL so
     // re-clicking Count on the SAME query does NOT hit the API again (saves credits).
     // { key, count, rowsProcessed, tableName, ds }
@@ -14230,7 +14234,7 @@
             // available. Tell the user how to get more (add LIMIT / use extension) and WHY we
             // cap (deep OFFSET re-scans each batch → slow + billed rows processed).
             + (res.cappedAtDefault
-                ? "<div style='margin-bottom:10px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;line-height:1.5;'>⚠ Stopped at <b>" + (res.defaultCap || res.totalRows).toLocaleString() + "</b> rows. There are likely more. For the full table, use <b>⤓ Export ALL (stream)</b>, or add a <b>LIMIT</b> to your SQL.</div>"
+                ? "<div style='margin-bottom:10px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;line-height:1.5;'>⚠ Stopped at <b>" + (res.defaultCap || res.totalRows).toLocaleString() + "</b> rows. There are likely more. For the full table, use <b>⤓ Export ALL</b>, or add a <b>LIMIT</b> to your SQL.</div>"
                 : "")
             + ((res.rowsProcessed != null && res.rowsProcessed >= 0)
                 ? "<div style='margin-bottom:10px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + res.rowsProcessed.toLocaleString() + " <span style='color:#94a3b8;'>(≈ " + qeCreditStr(res.rowsProcessed) + " credits @ " + qeCreditRate() + "/1M, " + qeEnvLabel() + ")</span></div>"
@@ -14280,12 +14284,33 @@
       var ds = readPageDataSpace();
       if (!ds) { var fmm = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i); var tn = fmm ? fmm[1].replace(/"/g, "") : ""; var dc = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tn) : [""]; ds = dc[0] || ""; }
       var hasLimit = /\bLIMIT\s+\d+/i.test(sql);
-      // Confirmation + warning card first (this is a potentially slow/credit-heavy action).
       card.style.display = "block";
+      // ── Already-exported guard (save credits) ──────────────────────────────────────
+      // Streaming re-scans the whole table each run, so re-exporting the SAME query wastes
+      // credits. If we already streamed this exact SQL, warn first — the user may already
+      // have the file. "Export again" proceeds (clears the memo); "Cancel" does nothing.
+      var sqlKey = (typeof normSqlKey === "function") ? normSqlKey(sql) : sql;
+      if (_lastStreamExport && _lastStreamExport.sqlKey === sqlKey) {
+        var ago = "";
+        try { var mins = Math.round((Date.now() - _lastStreamExport.when) / 60000); ago = mins <= 0 ? "just now" : (mins === 1 ? "1 min ago" : mins + " min ago"); } catch (e) {}
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Already exported</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>You already exported <b>this exact query</b> (" + (_lastStreamExport.rows != null ? "<b>" + _lastStreamExport.rows.toLocaleString() + "</b> rows, " : "") + ago + "). Check your Downloads/chosen folder first — <b>re-exporting uses Data Cloud credits again</b> (it re-scans the whole table).</div>"
+          + "<div style='display:flex;gap:8px;'>"
+          + "<button id='dc-stream-again' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Export again (uses credits)</button>"
+          + "<button id='dc-stream-skip' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Don't re-export</button>"
+          + "</div>";
+        var skip = document.getElementById("dc-stream-skip");
+        if (skip) skip.onclick = function () { cardBody.innerHTML = "<div style='font-size:12px;color:#475569;'>No re-export — no credits used. You already have this file.</div>"; };
+        var again = document.getElementById("dc-stream-again");
+        if (again) again.onclick = function () { _lastStreamExport = null; streamBtn.onclick(); };
+        return;
+      }
+      // Confirmation + warning card (potentially slow/credit-heavy action).
       cardBody.innerHTML = ""
-        + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;'></div><span style='font:600 13px -apple-system,sans-serif;'>Stream full export</span></div>"
-        + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>Exports <b>" + tableName + "</b> to a CSV file, writing rows to disk as they fetch (no 500K cap, memory-safe)."
-        + (hasLimit ? "" : "<br><span style='color:#92400e;'>⚠ No LIMIT — this fetches the WHOLE table. On a large table it's <b>slow</b> and <b>uses Data Cloud credits</b> (each batch re-scans).</span>")
+        + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;'></div><span style='font:600 13px -apple-system,sans-serif;'>Export full table</span></div>"
+        + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>Exports <b>" + tableName + "</b> to a CSV file saved to your computer, written as rows fetch."
+        + (hasLimit ? "" : "<br><span style='color:#92400e;'>⚠ No LIMIT — this fetches the WHOLE table. On a large table it's <b>slow</b> and <b>uses Data Cloud credits</b>.</span>")
         + "</div>"
         + "<div style='display:flex;gap:8px;'>"
         + "<button id='dc-stream-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Choose file &amp; start</button>"
@@ -14296,11 +14321,14 @@
       var goBtn = document.getElementById("dc-stream-go");
       if (goBtn) goBtn.onclick = function () {
         var handle;
+        // Declared in the HANDLER scope (not inside a .then) so BOTH the progress .then and
+        // the completion .then can read it — a .then-local var is undefined in the next .then.
+        var startT = Date.now();
         var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
         Promise.resolve().then(function () { return window.showSaveFilePicker(opts); }).then(function (h) {
           handle = h;
           window.__dcStreamCancel = false;
-          var startT = Date.now();
+          startT = Date.now();   // reset to the moment the user actually picked the file
           streamBtn.disabled = true;
           // Own cancel button (self-contained — not the Fetch handler's, which is out of scope).
           var streamCancelBtn = document.createElement("button");
@@ -14320,6 +14348,9 @@
         }).then(function (res) {
           streamBtn.disabled = false;
           var secs = ((Date.now() - startT) / 1000).toFixed(1);
+          // Remember this export so a repeat of the SAME query warns (save credits). Only
+          // memo a real, non-cancelled result that actually wrote rows.
+          if (res && !res.cancelled && res.totalRows > 0) { try { _lastStreamExport = { sqlKey: sqlKey, rows: res.totalRows, when: Date.now() }; } catch (e) {} }
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
