@@ -4,6 +4,10 @@ A browser tool (Chrome extension + bookmarklet) for Salesforce Data Cloud / Data
 
 Read-only — nothing is sent anywhere. Everything runs in your browser using data the page already loaded.
 
+📖 **[How It Works — backend & API approach](HOW-IT-WORKS.md)** — plain-English guide to which
+API calls each feature makes (and which make none), the bookmarklet-vs-extension difference, and
+the full endpoint list. Read this if you need to explain how the tool is built or which APIs it uses.
+
 ---
 
 ## What it does
