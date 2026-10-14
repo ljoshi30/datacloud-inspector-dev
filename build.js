@@ -237,10 +237,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   // inline <strong> broke onto its own line (we use <b>, and .acc-body has no block
   // rule). Every claim verified against console-decorate.extension.js.
   function acc(icon, name, pills, desc) {
-    // "NEW" renders as a green highlight pill (.pill.new); all others as normal blue pills.
-    const pillHtml = pills.map(p => p === "NEW"
-      ? '<span class="pill new">NEW</span>'
-      : '<span class="pill">' + p + '</span>').join("");
+    const pillHtml = pills.map(p => '<span class="pill">' + p + '</span>').join("");
     return `<details class="acc">
         <summary><span class="acc-ic">${icon}</span><span class="acc-nm">${name}</span><span class="acc-pills">${pillHtml}</span></summary>
         <div class="acc-body">${desc}</div>
@@ -299,10 +296,10 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li>Includes a <b>cardinality legend</b> (one-to-many, etc.) so the relationships are easy to read.</li>" +
       "<li><b>Searchable entity cards</b> let you look up any object and see everything it&rsquo;s connected to.</li>" +
       "</ul>") +
-    acc("&#128194;", "Data Model (List)", ["Open in New Tab", "NEW"],
+    acc("&#128194;", "Data Model (List)", ["Open in New Tab"],
       "<p>On the Data Model <b>list</b> view, hover any DMO row &mdash; a <b>&#10697;</b> button appears next to its name to <b>open that object in a new tab</b>.</p>" +
       "<span class=\"gi\"><b>Why this helps:</b> Salesforce&rsquo;s list rows aren&rsquo;t real links, so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. This reads the row&rsquo;s own identifier and opens the exact object directly, no guessing.</span>") +
-    acc("&#129517;", "Left &amp; Top Nav", ["Open in New Tab", "NEW"],
+    acc("&#129517;", "Left &amp; Top Nav", ["Open in New Tab"],
       "<p>Hover any Data Cloud navigation item &mdash; in the left side menu or the top bar &mdash; and a <b>&#10697;</b> button lets you <b>open it in a new tab</b>.</p>" +
       "<ul>" +
       "<li>When the item has a real link, it uses it directly.</li>" +
@@ -397,7 +394,6 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .feat strong{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:var(--pill-bg);color:var(--blue);margin-right:4px}
-  .pill.new{background:var(--greenbg);color:var(--green)}
   /* page chips (at-a-glance list of supported pages) */
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}

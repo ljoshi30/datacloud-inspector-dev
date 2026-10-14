@@ -55,7 +55,6 @@
   .feat strong{display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
   .feat span{font-size:12px;color:var(--muted);line-height:1.5}
   .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;background:var(--pill-bg);color:var(--blue);margin-right:4px}
-  .pill.new{background:var(--greenbg);color:var(--green)}
   /* page chips (at-a-glance list of supported pages) */
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{font-size:12px;font-weight:600;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:3px 11px}
@@ -140,10 +139,10 @@
         <summary><span class="acc-ic">&#128506;&#65039;</span><span class="acc-nm">Data Model (ERD)</span><span class="acc-pills"><span class="pill">Diagram</span></span></summary>
         <div class="acc-body"><p>On the Data Model graph page, build a shareable <b>entity-relationship diagram</b> of your objects and how they connect &mdash; without drawing it by hand.</p><ul><li>Generates a copyable <b>Mermaid</b> diagram you can paste into Lucidchart, draw.io, GitHub, or any Markdown doc.</li><li>Includes a <b>cardinality legend</b> (one-to-many, etc.) so the relationships are easy to read.</li><li><b>Searchable entity cards</b> let you look up any object and see everything it&rsquo;s connected to.</li></ul></div>
       </details><details class="acc">
-        <summary><span class="acc-ic">&#128194;</span><span class="acc-nm">Data Model (List)</span><span class="acc-pills"><span class="pill">Open in New Tab</span><span class="pill new">NEW</span></span></summary>
+        <summary><span class="acc-ic">&#128194;</span><span class="acc-nm">Data Model (List)</span><span class="acc-pills"><span class="pill">Open in New Tab</span></span></summary>
         <div class="acc-body"><p>On the Data Model <b>list</b> view, hover any DMO row &mdash; a <b>&#10697;</b> button appears next to its name to <b>open that object in a new tab</b>.</p><span class="gi"><b>Why this helps:</b> Salesforce&rsquo;s list rows aren&rsquo;t real links, so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. This reads the row&rsquo;s own identifier and opens the exact object directly, no guessing.</span></div>
       </details><details class="acc">
-        <summary><span class="acc-ic">&#129517;</span><span class="acc-nm">Left &amp; Top Nav</span><span class="acc-pills"><span class="pill">Open in New Tab</span><span class="pill new">NEW</span></span></summary>
+        <summary><span class="acc-ic">&#129517;</span><span class="acc-nm">Left &amp; Top Nav</span><span class="acc-pills"><span class="pill">Open in New Tab</span></span></summary>
         <div class="acc-body"><p>Hover any Data Cloud navigation item &mdash; in the left side menu or the top bar &mdash; and a <b>&#10697;</b> button lets you <b>open it in a new tab</b>.</p><ul><li>When the item has a real link, it uses it directly.</li><li>When it doesn&rsquo;t, the tool <b>remembers</b> where that item goes the first time you visit it &mdash; so from then on it just works, including for menu items added in the future.</li></ul><span class="gi">Only real menu items get the button &mdash; ordinary record or user links on a page won&rsquo;t be mistaken for navigation. You don&rsquo;t need to re-click the bookmark as you move between pages.</span></div>
       </details><details class="acc">
         <summary><span class="acc-ic">&#127937;</span><span class="acc-nm">Segment</span><span class="acc-pills"><span class="pill">Export Rules</span><span class="pill">API Names</span><span class="pill">Container Path</span></span></summary>
