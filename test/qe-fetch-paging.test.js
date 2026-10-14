@@ -224,6 +224,18 @@ console.log("\n8. streaming full export present + guarded");
   ok("reset restores the exact default anchor (bottom:16px/left:16px)", /function resetWrapToDefaultAnchor\(\)[\s\S]{0,200}bottom = "16px";[\s\S]{0,40}left = "16px"/.test(src));
   ok("snap-back + drag-respect synced into the bookmarklet build too", /var _autoPositioned = false/.test(bm) && /if \(_autoPositioned && !_userDragged\) resetWrapToDefaultAnchor\(\)/.test(bm));
 
+  // ── View Results renders in non-blocking chunks (VDI-safe) ─────────────────────────
+  // Building up to 2,000 rows × many columns in ONE synchronous innerHTML froze VDI tabs.
+  // Initial load, sort, AND the empty-column toggle must all fill via the chunked filler
+  // with a generation token (so a newer render cancels an in-flight one). Lock it so a
+  // refactor can't reintroduce a synchronous full-table build.
+  ok("View Results has a chunked tbody filler with a cancel token", /function fillTbodyChunked\(data\)/.test(src) && /var _fillGen = 0;/.test(src) && /var myGen = \+\+_fillGen;/.test(src));
+  ok("filler yields between chunks (setTimeout) and bails on newer gen / closed modal", /if \(myGen !== _fillGen \|\| !document\.getElementById\("dc-qe-results-modal"\)\) return;/.test(src) && /if \(i < max\) setTimeout\(step, 16\)/.test(src));
+  ok("SORT uses the chunked filler (not a synchronous 2,000-row innerHTML)", /fillTbodyChunked\(rows\);\s*\/\/ chunked, not one synchronous/.test(src));
+  ok("empty-column TOGGLE uses the chunked filler too", /fillTbodyChunked\(rows\);\s*\/\/ fill rows in non-blocking chunks/.test(src));
+  ok("no leftover synchronous full-table renderTableBody in View Results", !/renderTableBody/.test(src));
+  ok("VDI-safe chunked View Results synced into the bookmarklet build too", /function fillTbodyChunked\(data\)/.test(bm) && /var _fillGen = 0;/.test(bm));
+
   // ── RUNTIME scope-leak guard ──────────────────────────────────────────────────────
   // The 'cancelBtn is not defined' and 'startT is not defined' bugs were cross-.then scope
   // leaks that source-presence regexes CAN'T catch. This actually RUNS the stream handler

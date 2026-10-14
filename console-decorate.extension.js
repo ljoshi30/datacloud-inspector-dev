@@ -14630,10 +14630,9 @@
         emptyToggle.textContent = showEmpty ? "Hide empty columns" : "Show all columns";
         var thHtml = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
         cols.forEach(function (c) { thHtml += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'></span></th>"; });
-        thHtml += "</tr></thead><tbody id='dc-qe-tbody'>";
-        thHtml += renderTableBody(rows, SORT_RENDER_MAX);
-        thHtml += "</tbody></table>";
+        thHtml += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
         tableWrap.innerHTML = thHtml;
+        fillTbodyChunked(rows);   // fill rows in non-blocking chunks (VDI-safe), not all at once
         tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
           th.onclick = function () { sortRows(th.getAttribute("data-col")); };
           th.onmouseenter = function () { th.style.background = "#334155"; };
@@ -14647,19 +14646,42 @@
 
       // Sort state
       var sortCol = null, sortAsc = true;
-      function renderTableBody(data, limit) {
-        var html = "";
-        var max = Math.min(data.length, limit);
-        for (var i = 0; i < max; i++) {
-          var r = data[i];
-          var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
-          html += "<tr style='background:" + bg + ";'>";
-          cols.forEach(function (c) { html += qeCellHtml(r[c]); });
-          html += "</tr>";
-        }
-        return html;
-      }
       var SORT_RENDER_MAX = 2000;
+      // ── Non-blocking tbody filler (VDI-safe) ──────────────────────────────────────────
+      // Building up to 2,000 rows × many columns in ONE synchronous innerHTML can freeze a
+      // VDI tab (DOM-cell count is what jams it, per our proven lesson). So every full re-render
+      // — initial load, sort, and the empty-column toggle — fills the tbody in small chunks
+      // yielded to the event loop. A generation token cancels an in-flight fill when a newer
+      // one starts (e.g. the user sorts again before the previous fill finished), so we never
+      // stack fillers or paint stale rows.
+      var _fillGen = 0;
+      var FILL_CHUNK = 100;
+      function fillTbodyChunked(data) {
+        var tbody = document.getElementById("dc-qe-tbody");
+        if (!tbody) return;
+        var myGen = ++_fillGen;
+        tbody.innerHTML = "";
+        var max = Math.min(data.length, SORT_RENDER_MAX);
+        var i = 0;
+        function step() {
+          // Abort if a newer fill started or the modal was closed — no wasted work, no stale paint.
+          if (myGen !== _fillGen || !document.getElementById("dc-qe-results-modal")) return;
+          var tb = document.getElementById("dc-qe-tbody");
+          if (!tb) return;
+          var end = Math.min(i + FILL_CHUNK, max);
+          var html = "";
+          for (; i < end; i++) {
+            var r = data[i];
+            var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+            html += "<tr style='background:" + bg + ";'>";
+            cols.forEach(function (c) { html += qeCellHtml(r[c]); });
+            html += "</tr>";
+          }
+          tb.insertAdjacentHTML("beforeend", html);
+          if (i < max) setTimeout(step, 16);
+        }
+        step();
+      }
       function sortRows(colName) {
         if (sortCol === colName) { sortAsc = !sortAsc; } else { sortCol = colName; sortAsc = true; }
         rows.sort(function (a, b) {
@@ -14671,8 +14693,7 @@
           if (!isNaN(na) && !isNaN(nb)) return sortAsc ? na - nb : nb - na;
           return sortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
         });
-        var tbody = document.getElementById("dc-qe-tbody");
-        if (tbody) tbody.innerHTML = renderTableBody(rows, SORT_RENDER_MAX);
+        fillTbodyChunked(rows);   // chunked, not one synchronous 2,000-row innerHTML
         // Update header arrows
         var ths = tableWrap.querySelectorAll("th[data-col]");
         ths.forEach(function (th) {
@@ -14682,43 +14703,15 @@
         });
       }
 
-      // Render header + first 100 rows immediately, then load rest in chunks
-      var CHUNK = 100;
+      // Render the header immediately (empty tbody), then fill rows in non-blocking chunks
+      // via the shared filler — so the modal appears instantly and a big result (2,000 rows ×
+      // many columns) never blocks the main thread on a single synchronous build. The same
+      // filler is reused by sort + the empty-column toggle, so there's ONE VDI-safe path.
       var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
       cols.forEach(function (c) { table += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'> ▲</span></th>"; });
-      table += "</tr></thead><tbody id='dc-qe-tbody'>";
-      var firstBatch = Math.min(showing, CHUNK);
-      for (var i = 0; i < firstBatch; i++) {
-        var row = rows[i];
-        var bg = i % 2 === 0 ? "#fff" : "#f9fafb";
-        table += "<tr style='background:" + bg + ";'>";
-        cols.forEach(function (c) { table += qeCellHtml(row[c]); });
-        table += "</tr>";
-      }
-      table += "</tbody></table>";
+      table += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
       tableWrap.innerHTML = table;
-
-      // Load remaining rows in chunks (non-blocking) so modal appears instantly
-      if (firstBatch < showing) {
-        var loadIdx = firstBatch;
-        function loadChunk() {
-          var tbody = document.getElementById("dc-qe-tbody");
-          if (!tbody || !document.getElementById("dc-qe-results-modal")) return;
-          var end = Math.min(loadIdx + CHUNK, showing);
-          var html = "";
-          for (var j = loadIdx; j < end; j++) {
-            var r = rows[j];
-            var rbg = j % 2 === 0 ? "#fff" : "#f9fafb";
-            html += "<tr style='background:" + rbg + ";'>";
-            cols.forEach(function (c) { html += qeCellHtml(r[c]); });
-            html += "</tr>";
-          }
-          tbody.insertAdjacentHTML("beforeend", html);
-          loadIdx = end;
-          if (loadIdx < showing) setTimeout(loadChunk, 16);
-        }
-        setTimeout(loadChunk, 50);
-      }
+      fillTbodyChunked(rows);
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
