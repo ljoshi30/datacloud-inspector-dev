@@ -12998,22 +12998,83 @@
     // exactly like the Count path does.
     function qeFetchExport(sql, ds, onProgress, isCancelled) {
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
-      // Extension path: reuse the documented streaming export (no rowsProcessed available).
+      // ── Extension path: QE-PRIVATE cursor paging (fully independent of Data Explorer) ──
+      // Previously this reused the SHARED exportPaginatedCsv, coupling Query Editor to Data
+      // Explorer (a change to one could break the other — the user wants them independent).
+      // This is QE's own copy of the documented cursor paging: initial queryId → GET /rows
+      // pages. Memory-safe (builds CSV string incrementally, keeps only ≤2000 preview rows),
+      // yields between pages so the tab stays responsive on large exports.
       if (typeof extBridgePresent === "function" && extBridgePresent()) {
-        return exportPaginatedCsv(sql, ds, onProgress, isCancelled).then(function (res) {
-          res.rowsProcessed = null; return res;
+        return new Promise(function (resolve, reject) {
+          var QE_PAGE = (typeof DC_PAGE_SIZE === "number") ? DC_PAGE_SIZE : 49999;
+          var QE_HARD = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
+          var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
+          var cap = ul > 0 ? Math.min(ul, QE_HARD) : QE_HARD;
+          var parts = [], cols = [], colTypes = {}, preview = [], got = 0;
+          var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          function append(data, metadata) {
+            if (!cols.length && metadata && metadata.length) {
+              cols = metadata.map(function (m) { return m && m.name; });
+              metadata.forEach(function (m) { if (m && m.name) colTypes[m.name] = (m.type || "").toLowerCase(); });
+              parts.push(cols.map(esc).join(",") + "\n");
+            }
+            (data || []).forEach(function (row) {
+              if (!Array.isArray(row)) return;
+              if (got >= cap) return;
+              parts.push(cols.map(function (c, i) { return esc(row[i]); }).join(",") + "\n");
+              if (preview.length < 2000) { var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = row[i]; preview.push(o); }
+              got++;
+            });
+          }
+          function done() { var blob = new Blob(parts, { type: "text/csv" }); resolve({ blobUrl: URL.createObjectURL(blob), totalRows: got, columns: cols, columnTypes: colTypes, rowData: preview, rowsProcessed: null, cappedAtDefault: false, defaultCap: cap }); }
+          // yield helper so a long export never freezes the tab (repaint between pages).
+          function soon(fn) { setTimeout(fn, 0); }
+          runDcSqlViaBridge(sql, Math.min(QE_PAGE, cap), ds).then(function (first) {
+            if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
+            append(first.data, first.metadata);
+            var total = first.rowCount || got;
+            if (onProgress) onProgress(got, total);
+            if (!first.queryId || got >= total || got >= cap || !first.data || first.data.length === 0) { done(); return; }
+            var queryId = first.queryId;
+            function page() {
+              if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
+              if (got >= total || got >= cap) { done(); return; }
+              fetchPageViaBridge(queryId, got, Math.min(QE_PAGE, cap - got), ds).then(function (pg) {
+                if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
+                append(pg.data, pg.metadata);
+                if (onProgress) onProgress(got, total);
+                if (!pg.data || pg.data.length === 0 || got >= cap) { done(); } else { soon(page); }
+              }).catch(reject);
+            }
+            soon(page);
+          }).catch(reject);
         });
       }
       return new Promise(function (resolve, reject) {
         if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
-        var BM_PAGE = 49999;
-        var BM_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
+        // ── QE-PRIVATE constants (NOT the shared DC_* used by Data Explorer) ───────────
+        // Query Editor and Data Explorer are kept fully independent (user requirement): this
+        // path owns its own page size + default cap so changing one feature can't affect the
+        // other. The /aura endpoint caps each RESPONSE by payload (~100k cells), so a page of
+        // "49999" actually returns ~rows=100000/columns (e.g. 3k at 35 cols) — paging via
+        // OFFSET is what gets the rest (proven working: __dcProbeOffset showed 5,993 distinct
+        // rows over 3 offset batches). We ASK for a big LIMIT but let the server decide the
+        // real page size, and keep paging on the ACTUAL rows returned.
+        var QE_ASK = 49999;              // LIMIT we request per batch (server returns fewer)
+        var QE_DEFAULT_CAP = 50000;      // default ceiling when the user's SQL has no LIMIT —
+                                         // deep OFFSET RE-SCANS each batch (billed rows processed),
+                                         // so we stop at a sane cap + warn, rather than grinding
+                                         // through 1.7M rows and a surprise credit bill.
+        var QE_HARD_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
         var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = [], cols2 = [], colTypes2 = {}, totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
+        var cappedAtDefault = false;     // did we stop at QE_DEFAULT_CAP with more available?
 
         var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
         var userLimit = userLimitMatch ? parseInt(userLimitMatch[1], 10) : 0;
-        var effectiveMax = userLimit > 0 ? Math.min(userLimit, BM_MAX) : BM_MAX;
+        // If the user gave an explicit LIMIT, honor it (up to the hard max). Otherwise cap at
+        // QE_DEFAULT_CAP so a no-LIMIT "SELECT *" on a huge table can't silently grind + bill.
+        var effectiveMax = userLimit > 0 ? Math.min(userLimit, QE_HARD_MAX) : QE_DEFAULT_CAP;
         var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
 
         // Dataspace candidates (most-likely first), same resolution the fetch path uses.
@@ -13034,19 +13095,22 @@
 
         function finish() {
           var blob = new Blob(csvOut, { type: "text/csv" });
-          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null });
+          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null,
+            cappedAtDefault: cappedAtDefault, defaultCap: QE_DEFAULT_CAP });
         }
 
         function fetchBatch(offset, pollAttempt) {
           pollAttempt = pollAttempt || 0;
           if (cancelled()) { reject(new Error("Export cancelled by user")); return; }
           var remaining = effectiveMax - offset;
-          if (remaining <= 0) { finish(); return; }
-          var pageSize = Math.min(BM_PAGE, remaining);
-          var batchSql = baseSql + " LIMIT " + pageSize + (offset > 0 ? " OFFSET " + offset : "");
+          if (remaining <= 0) { if (totalFetched >= effectiveMax && effectiveMax === QE_DEFAULT_CAP && !userLimit) cappedAtDefault = true; finish(); return; }
+          // Ask for as many as the endpoint will give (it decides the real page by payload),
+          // but never more than we still want. The SQL LIMIT is just an upper bound.
+          var askSize = Math.min(QE_ASK, remaining);
+          var batchSql = baseSql + " LIMIT " + askSize + (offset > 0 ? " OFFSET " + offset : "");
           var space = cands[dsi] || "";
           _auraQid = (_auraQid || 0) + 1;
-          var act = { id: "dcqefetch-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: batchSql, rowLimit: pageSize, dataspace: space } };
+          var act = { id: "dcqefetch-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: batchSql, rowLimit: askSize, dataspace: space } };
           var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
             .then(function (r) { return r.text(); }).then(function (txt) {
@@ -13113,18 +13177,34 @@
                 if (rowData.length < 2000) { var o = {}; for (var i = 0; i < cols2.length; i++) o[cols2[i]] = row[i]; rowData.push(o); }
                 totalFetched++;
               });
-              // Accumulate rows PROCESSED across batches (credit basis).
+              // Rows PROCESSED (credit basis). CAUTION: with OFFSET paging each batch RE-SCANS
+              // from the start, so a per-batch rowsProcessed is cumulative (offset+page). Summing
+              // them would massively over-count. We instead take the MAX seen (the deepest single
+              // scan ≈ the total rows the engine scanned) — the honest lower-bound estimate. (A
+              // precise figure isn't available for deep-OFFSET; the warning tells the user why.)
               var _rp = rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount);
               var rpNum = parseInt(_rp, 10);
-              if (!isNaN(rpNum)) { rowsProcessed += rpNum; sawRp = true; }
+              if (!isNaN(rpNum)) { if (rpNum > rowsProcessed) rowsProcessed = rpNum; sawRp = true; }
               if (onProgress) onProgress(totalFetched, userLimit || totalFetched);
-              // Terminate when this batch came back SHORT of a full page — that means it's
-              // the last page, so there's no need to fire another (credit-costing) batch that
-              // would only re-scan the source to return 0 rows. This both avoids a wasted
-              // query AND prevents double-counting rowsProcessed (the trailing empty batch
-              // reports the same scan count again). Only keep paginating on a FULL page.
-              if (arrData.length === 0 || arrData.length < pageSize || totalFetched >= effectiveMax) { finish(); }
-              else { fetchBatch(offset + arrData.length); }
+              // TERMINATION (fixed): the /aura endpoint caps each response by PAYLOAD, so a
+              // batch is almost ALWAYS "short" (e.g. 3k rows for a 35-col table) even when
+              // millions remain. The old code stopped on any short batch → quit after the
+              // first ~3k of a 1.7M table (the reported bug). Correct rule: keep paging via
+              // OFFSET as long as the batch returned ANY rows (proven to advance — see
+              // __dcProbeOffset: 5,993 distinct over 3 offset batches). Stop ONLY when:
+              //   • the batch was EMPTY (true end of data), or
+              //   • we've reached effectiveMax (the user's LIMIT or the default/ hard cap).
+              // If we stopped at the default cap with data still available, flag it so the UI
+              // can warn (deep OFFSET re-scans each batch → slow + billed rows processed).
+              if (arrData.length === 0 || totalFetched >= effectiveMax) {
+                if (totalFetched >= effectiveMax && !userLimit && effectiveMax === QE_DEFAULT_CAP && arrData.length > 0) cappedAtDefault = true;
+                finish();
+              } else {
+                // Yield to the event loop between batches so the tab stays responsive and the
+                // progress bar repaints (vs. a tight synchronous recursion that can jank the
+                // page on a large multi-batch export).
+                setTimeout(function () { fetchBatch(offset + arrData.length); }, 0);
+              }
             }).catch(function (err) { reject(new Error("Fetch request failed: " + err)); });
         }
         fetchBatch(0);
@@ -13828,7 +13908,10 @@
             if (runBtnEl) runBtnEl.onclick = function () {
               countBtn.disabled = true;
               cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
-              exportPaginatedCsv(cleanSql, ds, function (fetched) {
+              // Use QE's OWN fetch path (not the shared Data Explorer exportPaginatedCsv) so
+              // Query Editor stays fully independent. We only need the row count here, so we
+              // discard the CSV blob.
+              qeFetchExport(cleanSql, ds, function (fetched) {
                 if (countBtn) countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>" + fetched.toLocaleString() + "…";
               }, function () { return false; }).then(function (res) {
                 if (res.blobUrl) { try { URL.revokeObjectURL(res.blobUrl); } catch (e) {} }
@@ -14020,6 +14103,12 @@
             + "<div style='font-size:11px;color:#475569;line-height:1.6;margin-bottom:10px;'>"
             + "<b>Table:</b> " + tableName + " &nbsp;|&nbsp; <b>Space:</b> " + (_pageDataSpaceLabel || ds || "default") + " &nbsp;|&nbsp; <b>Time:</b> " + elapsed + "s"
             + "</div>"
+            // Capped-at-default warning: we stopped at the default cap with more rows likely
+            // available. Tell the user how to get more (add LIMIT / use extension) and WHY we
+            // cap (deep OFFSET re-scans each batch → slow + billed rows processed).
+            + (res.cappedAtDefault
+                ? "<div style='margin-bottom:10px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;line-height:1.5;'>⚠ Stopped at <b>" + (res.defaultCap || res.totalRows).toLocaleString() + "</b> rows (default cap). There are likely more. To get more: add an explicit <b>LIMIT</b> to your SQL (up to 500K), or use the <b>browser extension</b> (faster cursor paging). Why capped: paging a huge table re-scans each batch — slow and uses Data Cloud credits.</div>"
+                : "")
             + ((res.rowsProcessed != null && res.rowsProcessed >= 0)
                 ? "<div style='margin-bottom:10px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + res.rowsProcessed.toLocaleString() + " <span style='color:#94a3b8;'>(≈ " + qeCreditStr(res.rowsProcessed) + " credits @ " + qeCreditRate() + "/1M, " + qeEnvLabel() + ")</span></div>"
                 : "")

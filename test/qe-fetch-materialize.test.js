@@ -88,9 +88,12 @@ console.log("\n6. source presence (poll wired into qeFetchExport, not just teste
   const path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
-  // isolate the qeFetchExport body so we don't match the Count path's poll
+  // isolate the qeFetchExport body so we don't match the Count path's poll. Size to the
+  // whole function (it grew when the QE-private extension branch was added) by ending at the
+  // next top-level comment, not a fixed 9000 chars that no longer reaches the poll code.
   const feStart = src.indexOf("function qeFetchExport");
-  const feBody = src.slice(feStart, feStart + 9000);
+  const feEnd = src.indexOf("// ── Helpful Queries: template SQL builders", feStart);
+  const feBody = src.slice(feStart, feEnd > feStart ? feEnd : feStart + 20000);
   ok("qeFetchExport has a poll ceiling (FE_MAX_POLL)", /FE_MAX_POLL/.test(feBody));
   ok("qeFetchExport has a poll delay (FE_POLL_MS)", /FE_POLL_MS/.test(feBody));
   ok("fetchBatch carries a pollAttempt counter", /fetchBatch\(offset,\s*pollAttempt/.test(feBody) || /pollAttempt\s*=\s*pollAttempt/.test(feBody));
