@@ -12691,7 +12691,7 @@
     // whole CSV in memory. Hidden otherwise (user falls back to the capped Fetch & Export).
     var streamBtn = document.createElement("button");
     streamBtn.textContent = "⤓ Export ALL (stream)";
-    streamBtn.title = "Export the ENTIRE table to a CSV file, streamed to disk (no 500K cap). Pick a save location; rows write as they fetch. WARNING: on a huge table this is slow and uses Data Cloud credits (each batch re-scans). Add a LIMIT to bound it, or Cancel anytime.";
+    streamBtn.title = "Export the entire table to a CSV file saved to your computer. Pick a location; rows write as they fetch. On a large table this is slow and uses Data Cloud credits. Add a LIMIT to fetch fewer, or Cancel anytime.";
     streamBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);box-shadow:0 2px 8px rgba(3,105,161,.3);transition:transform .1s;";
     streamBtn.onmouseenter = () => { streamBtn.style.transform = "scale(1.03)"; };
     streamBtn.onmouseleave = () => { streamBtn.style.transform = "scale(1)"; };
@@ -14230,7 +14230,7 @@
             // available. Tell the user how to get more (add LIMIT / use extension) and WHY we
             // cap (deep OFFSET re-scans each batch → slow + billed rows processed).
             + (res.cappedAtDefault
-                ? "<div style='margin-bottom:10px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;line-height:1.5;'>⚠ Stopped at <b>" + (res.defaultCap || res.totalRows).toLocaleString() + "</b> rows (default cap). There are likely more. To get more: add an explicit <b>LIMIT</b> to your SQL (up to 500K), or use the <b>browser extension</b> (faster cursor paging). Why capped: paging a huge table re-scans each batch — slow and uses Data Cloud credits.</div>"
+                ? "<div style='margin-bottom:10px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 9px;line-height:1.5;'>⚠ Stopped at <b>" + (res.defaultCap || res.totalRows).toLocaleString() + "</b> rows. There are likely more. For the full table, use <b>⤓ Export ALL (stream)</b>, or add a <b>LIMIT</b> to your SQL.</div>"
                 : "")
             + ((res.rowsProcessed != null && res.rowsProcessed >= 0)
                 ? "<div style='margin-bottom:10px;font-size:11px;color:#64748b;'><b>Rows processed:</b> " + res.rowsProcessed.toLocaleString() + " <span style='color:#94a3b8;'>(≈ " + qeCreditStr(res.rowsProcessed) + " credits @ " + qeCreditRate() + "/1M, " + qeEnvLabel() + ")</span></div>"
@@ -14302,13 +14302,18 @@
           window.__dcStreamCancel = false;
           var startT = Date.now();
           streamBtn.disabled = true;
+          // Own cancel button (self-contained — not the Fetch handler's, which is out of scope).
+          var streamCancelBtn = document.createElement("button");
+          streamCancelBtn.textContent = "Cancel";
+          streamCancelBtn.style.cssText = "margin-top:8px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+          streamCancelBtn.onclick = function () { window.__dcStreamCancel = true; streamCancelBtn.textContent = "Cancelling…"; streamCancelBtn.disabled = true; };
           function renderProgress(n) {
             cardBody.innerHTML = ""
               + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Streaming to file…</span></div>"
               + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
               + "<div style='color:#64748b;font-size:11px;'><b>" + n.toLocaleString() + "</b> rows written…</div>"
               + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
-            cardBody.appendChild(cancelBtn);
+            cardBody.appendChild(streamCancelBtn);
           }
           renderProgress(0);
           return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });

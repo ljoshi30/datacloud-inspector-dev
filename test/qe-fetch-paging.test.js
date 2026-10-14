@@ -162,7 +162,7 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("QE 'Count anyway' uses qeFetchExport, not exportPaginatedCsv", /Use QE's OWN fetch path[\s\S]{0,400}qeFetchExport\(cleanSql/.test(src));
   // the fix is in SHARED code → bookmarklet source must have it too
   ok("bookmarklet source has the paging fix (synced)", /QE_ASK/.test(bm) && /arrData\.length === 0 \|\| totalFetched >= effectiveMax/.test(bm));
-  ok("UI warns when capped at default (how to get more)", /Stopped at <b>[\s\S]{0,120}default cap/.test(src));
+  ok("UI warns when capped (points to stream export / LIMIT, no jargon)", /Stopped at <b>[\s\S]{0,160}Export ALL \(stream\)[\s\S]{0,40}LIMIT/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
@@ -182,7 +182,9 @@ console.log("\n8. streaming full export present + guarded");
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
-  ok("shared Cancel also stops the stream (__dcStreamCancel)", /__dcQueryExportCancelled = true; window\.__dcStreamCancel = true/.test(src));
+  ok("stream has its OWN cancel button (no out-of-scope cancelBtn reference)", /var streamCancelBtn = document\.createElement/.test(src) && /streamCancelBtn\.onclick = function \(\) \{ window\.__dcStreamCancel = true/.test(src));
+  ok("progress UI appends the stream's own cancel button (not Fetch handler's)", /cardBody\.appendChild\(streamCancelBtn\)/.test(src));
+  ok("no user-facing 'browser extension' wording in the capped warning", !/use the <b>browser extension<\/b>/.test(src));
   ok("streaming export present in bookmarklet build too (synced)", /function qeStreamFullExport\s*\(/.test(bm) && /createWritable/.test(bm));
 }
 
