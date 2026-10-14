@@ -13150,23 +13150,42 @@
           if (!table) { out.error = "No table — type SELECT * FROM \"YourTable\" in the editor first."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
           if (!_auraSniff.context || !_auraSniff.token) { out.error = "No live session — click SF Run Query once, then re-run."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
           var base = 'SELECT * FROM "' + table + '"';
+          // Signature of a row = JSON of ALL its column values (null-proof — a null first
+          // column previously made every batch look identical). We keep a SET of signatures
+          // across batches to detect OVERLAP: if OFFSET truly advanced, batch N's rows won't
+          // already be in the set from batches < N.
+          function sig(row, cols) { try { return JSON.stringify(cols.map(function (c) { return row[c]; })); } catch (e) { return Math.random() + ""; } }
+          var seen = {};   // signature → first offset that produced it
           function one(off) {
             var s = base + " LIMIT 2000" + (off > 0 ? " OFFSET " + off : "");
             return runRawSql(s, _auraSniff.dataSpace || "", 2000).then(function (res) {
               var rows = (res && res.rows) || []; var cols = (res && res.columns) || [];
-              var firstKey = cols[0];
-              return { offset: off, returned: rows.length, firstCell: rows.length ? String(rows[0][firstKey]).slice(0, 24) : null, lastCell: rows.length ? String(rows[rows.length - 1][firstKey]).slice(0, 24) : null };
+              var dupWithEarlier = 0, newRows = 0, firstSig = null, lastSig = null;
+              for (var i = 0; i < rows.length; i++) {
+                var g = sig(rows[i], cols);
+                if (i === 0) firstSig = g.slice(0, 60);
+                if (i === rows.length - 1) lastSig = g.slice(0, 60);
+                if (seen[g] !== undefined && seen[g] < off) dupWithEarlier++;
+                else { if (seen[g] === undefined) seen[g] = off; newRows++; }
+              }
+              return { offset: off, returned: rows.length, newVsEarlierBatches: newRows, duplicatesOfEarlierBatches: dupWithEarlier, firstRowSig: firstSig, lastRowSig: lastSig };
             }).catch(function (err) { return { offset: off, error: String(err && err.message || err) }; });
           }
           one(0).then(function (b0) { out.batches.push(b0); return one(2000); })
             .then(function (b1) { out.batches.push(b1); return one(4000); })
             .then(function (b2) {
               out.batches.push(b2);
-              // verdict: are the three first-cells distinct?
-              var fc = out.batches.map(function (b) { return b.firstCell; });
-              out.offsetPagingWorks = (fc[0] && fc[1] && fc[2] && fc[0] !== fc[1] && fc[1] !== fc[2]);
-              out.verdict = out.offsetPagingWorks ? "OFFSET PAGING WORKS → fix qeFetchExport to keep paging on short batches"
-                : "OFFSET DID NOT advance (repeat/empty/err) → endpoint can't deep-page via bookmarklet; cap honestly + use extension";
+              out.totalDistinctRowsAcross3Batches = Object.keys(seen).length;
+              // AUTHORITATIVE verdict: with 3 batches of 2000, if OFFSET advanced we should
+              // have ~6000 DISTINCT rows and ZERO duplicates between batches. If batches 2/3
+              // just repeat batch 1, distinct≈2000 and duplicates are high.
+              var b1dup = (out.batches[1] && out.batches[1].duplicatesOfEarlierBatches) || 0;
+              var b2dup = (out.batches[2] && out.batches[2].duplicatesOfEarlierBatches) || 0;
+              var distinct = out.totalDistinctRowsAcross3Batches;
+              out.offsetPagingWorks = (distinct >= 5500 && b1dup < 100 && b2dup < 100);
+              out.verdict = out.offsetPagingWorks
+                ? "OFFSET PAGING WORKS (" + distinct + " distinct rows, no overlap) → fix qeFetchExport to keep paging on short batches, up to the cap"
+                : "OFFSET did NOT advance (distinct=" + distinct + ", dups b2=" + b1dup + " b3=" + b2dup + ") → bookmarklet can't deep-page; cap honestly + use extension";
               resolve(out);
               try { console.log("%c__dcProbeOffset RESULT", "color:#4338ca;font-weight:700", out); } catch (e) {}
               try { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(out, null, 2)); } catch (e) {}
