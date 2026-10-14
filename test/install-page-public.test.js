@@ -34,7 +34,9 @@ console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 {
   ok("devRows is gated by includeDev", /devRows\s*=\s*!includeDev\s*\?\s*""/.test(b));
   ok("devRows carries Data Model (ERD) / Segment / Data Explorer / Query Editor / Data Transform (+ new-tab + Activation rows)",
-    /devRows[\s\S]{0,1200}Data Model \(ERD\)[\s\S]{0,2600}Segment[\s\S]{0,1600}Data Explorer[\s\S]{0,1600}Query Editor[\s\S]{0,1600}Data Transform/.test(b));
+    /devRows[\s\S]{0,2000}Data Model \(ERD\)[\s\S]{0,4000}Segment[\s\S]{0,3000}Data Explorer[\s\S]{0,2000}qeAccordion[\s\S]{0,2000}Data Transform/.test(b));
+  ok("Query Editor is its OWN detailed accordion (qeAccordion) spliced into devRows",
+    /const qeAccordion = acc\("[^"]*", "Query Editor"/.test(b) && /Data Explorer[\s\S]{0,2000}\n\s*qeAccordion \+\n/.test(b));
   ok("devRows includes the new open-in-new-tab rows (Data Model List + Nav) + Activation",
     /Data Model \(List\)/.test(b) && /Left &amp; Top Nav/.test(b) && /"Activation"/.test(b) && /Open in New Tab/.test(b));
   ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
@@ -64,7 +66,7 @@ console.log("\n5. Row-limit claims match the code (no false/guessed numbers)");
   // (DC_MAX_RENDER_ROWS), not an SF UI limit. Must never return.
   ok("no false 'SF 2,000-row UI limit' claim", !/2,?000-row UI limit/.test(b));
   // Verified facts that SHOULD be present in the dev feature copy.
-  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /1,000 rows<\/b> the Query Editor grid/.test(b));
+  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /only about <b>1,000 rows<\/b>/.test(b) && /past the 1,000 on-screen rows/.test(b));
   ok("Explorer's 100-row own-view is stated", /own view loads 100 rows|loads only 100 rows|100 rows/.test(b));
   ok("CSV export cap stated as 500K (matches DC_MAX_TOTAL_EXPORT=500000)", /500K rows/.test(b));
 }

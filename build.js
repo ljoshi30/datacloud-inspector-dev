@@ -252,28 +252,91 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 
   const sharedRows =
     acc("&#128257;", "DLO &rarr; DMO Mapping Canvas", ["API Tooltip", "Pin API names", "Export"],
-      "Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <b>Export</b> the full mapping table (filter by DMO) to Sheets or CSV.") +
+      "<p>The mapping canvas normally shows only field <b>labels</b> &mdash; not the API names you actually need when building queries, transforms, or integrations. This fills that gap.</p>" +
+      "<ul>" +
+      "<li><b>Hover a field</b> &mdash; a small tooltip shows its API name on both the source (DLO) and target (DMO) side. Press <kbd>C</kbd> to copy it.</li>" +
+      "<li><b>Pin API names</b> &mdash; show every API name on the canvas at once, so you can read the whole mapping without hovering field by field.</li>" +
+      "<li><b>Export</b> &mdash; download the full mapping table (source field &rarr; target field, with both API names) to Google Sheets or CSV. You can filter to a single DMO first.</li>" +
+      "</ul>" +
+      "<span class=\"gi\"><b>Good to know:</b> if the same label is used on both a DLO and a DMO, the tooltip marks which side it read so you&rsquo;re never shown the wrong API name.</span>") +
     acc("&#127760;", "Data Stream &amp; DLO", ["Export Fields"],
-      "Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.") +
+      "<p>On a Data Stream or Data Lake Object page, export the complete field list in one click &mdash; no copy-pasting row by row.</p>" +
+      "<p>Each row includes the <b>API name</b>, <b>label</b>, <b>data type</b>, <b>status</b>, and <b>key qualifier</b> (primary key / event time / etc.). Copy it straight into Google Sheets, or download as a CSV.</p>") +
     acc("&#128450;", "DMO Detail", ["Export Fields"],
-      "<b>Fields</b> tab (API name, type, mapped status, key qualifier) plus <b>Relationships</b> tab (related objects, join fields). Copy for Sheets or Download XLS.");
+      "<p>On a Data Model Object detail page, grab both tabs of information:</p>" +
+      "<ul>" +
+      "<li><b>Fields</b> &mdash; API name, data type, whether the field is mapped, and its key qualifier.</li>" +
+      "<li><b>Relationships</b> &mdash; the objects this DMO is related to and the fields that join them.</li>" +
+      "</ul>" +
+      "<p>Copy it into Google Sheets, or download as an Excel (XLS) file.</p>");
+  // Query Editor gets a fuller, per-button write-up (it's the most capable + the one with
+  // real nuances users must understand: credits, caps, viewer limits, big-table caution).
+  // Every number here is taken straight from console-decorate.extension.js:
+  //   • grid-on-screen limit 1,000 rows (SF product UI)
+  //   • Fetch & Export default stop 50,000 rows, hard max 500,000 (QE_DEFAULT_CAP / QE_HARD_MAX)
+  //   • View Results up to 2,000 rows (viewBtn title)
+  //   • Export ALL backstop 100,000,000 rows (HARD in qeStreamFullExport)
+  const qeAccordion = acc("&#128270;", "Query Editor", ["Count", "Fetch &amp; Export", "Export ALL", "Helpful Queries", "View", "Download"],
+    "<p>The Query Editor shows query results on screen, but only about <b>1,000 rows</b>, and getting the full result out as a file is awkward. This adds a small toolbar (a round button, bottom-left) that does the rest. Highlight a query first to run just that one; otherwise it uses the whole editor.</p>" +
+    "<p><b>What each button does:</b></p>" +
+    "<ul class=\"btnlist\">" +
+    "<li><span class=\"bl-nm\"># Count</span> Gives you the exact number of rows a query returns &mdash; without downloading any data. One quick call. Works for plain queries as well as GROUP BY and JOINs.</li>" +
+    "<li><span class=\"bl-nm\">&#9654; Fetch &amp; Export</span> Fetches the rows and saves them as a CSV file. It pulls in batches behind the scenes, so it keeps going past the 1,000 on-screen rows. If your query has no <code>LIMIT</code>, it stops at <b>50,000 rows</b> by default (and tells you there were more) &mdash; add your own <code>LIMIT</code> to go higher, up to <b>500,000</b>. For bigger than that, use Export ALL.</li>" +
+    "<li><span class=\"bl-nm\">&#10515; Export ALL</span> Exports the <b>entire</b> result to a CSV, with no row cap. You pick where to save first, then the rows write straight to that file as they&rsquo;re fetched &mdash; so even a very large table won&rsquo;t run your browser out of memory. You can <b>Cancel</b> anytime, and a progress count keeps you posted. If you close the little panel while it runs, it keeps going; re-open it (or click the button again) and your progress comes right back.</li>" +
+    "<li><span class=\"bl-nm\">&#128295; Helpful Queries</span> Builds common checks for you &mdash; find duplicates, empty (null) values, stale records, orphaned keys, records in a date range, and more &mdash; just by picking an object and a column. No SQL to write. It runs through the same Count / Fetch buttons.</li>" +
+    "<li><span class=\"bl-nm\">&#128065; View Results</span> Shows the fetched rows in a table right on the page (up to <b>2,000 rows</b>) so you can glance at them without opening a file. Click any cell to copy it. No extra query.</li>" +
+    "<li><span class=\"bl-nm\">&#11015; Download CSV</span> Saves rows you&rsquo;ve already fetched to a CSV. No new query, so no extra credits.</li>" +
+    "</ul>" +
+    "<span class=\"gi\"><b>About Data Cloud credits:</b> Count and Fetch each run a real query, and Data Cloud bills by rows <b>processed</b> (scanned), not rows returned &mdash; so a heavy JOIN or GROUP BY can cost more than its row count suggests. The toolbar shows your org&rsquo;s rate and an estimate, and it <b>remembers results</b> &mdash; re-running the same query or re-downloading an already-fetched file is free. If you re-run an Export ALL you already did, it warns you first so you don&rsquo;t pay twice.</span>" +
+    "<span class=\"gi\"><b>Opening very large files:</b> a CSV can hold any number of rows, but Excel stops showing rows after about <b>1,048,576</b> and Google Sheets after about <b>10&nbsp;million cells</b> (so fewer rows the more columns you have). If an export is bigger, the tool tells you, and suggests Power Query or a database so you don&rsquo;t silently lose data.</span>" +
+    "<span class=\"gi\"><b>A note on huge tables (tens of millions of rows):</b> a browser isn&rsquo;t the right tool for a full dump at that scale &mdash; it&rsquo;s slow, uses a lot of credits, and the file is hard to open. For those, export in slices (for example by date range) or use a server-side option like the Data Cloud Query API or a data share. This toolbar is ideal for counts, exploring, and exports up to a few hundred thousand (and into the low millions with Export ALL).</span>");
+
   const devRows = !includeDev ? "" :
     acc("&#128506;&#65039;", "Data Model (ERD)", ["Diagram"],
-      "On the Data Model graph page, generates a copyable <b>Mermaid ERD</b> of your entities &amp; relationships (paste into Lucidchart, draw.io, or GitHub) with a cardinality legend and searchable entity cards showing each object&rsquo;s connections.") +
+      "<p>On the Data Model graph page, build a shareable <b>entity-relationship diagram</b> of your objects and how they connect &mdash; without drawing it by hand.</p>" +
+      "<ul>" +
+      "<li>Generates a copyable <b>Mermaid</b> diagram you can paste into Lucidchart, draw.io, GitHub, or any Markdown doc.</li>" +
+      "<li>Includes a <b>cardinality legend</b> (one-to-many, etc.) so the relationships are easy to read.</li>" +
+      "<li><b>Searchable entity cards</b> let you look up any object and see everything it&rsquo;s connected to.</li>" +
+      "</ul>") +
     acc("&#128194;", "Data Model (List)", ["Open in New Tab", "NEW"],
-      "On the Data Model <b>list</b> view, hover any DMO row &mdash; a <b>&#10697;</b> appears by its name to <b>open that DMO in a new tab</b> (SF&rsquo;s list rows aren&rsquo;t links, so right-click normally can&rsquo;t). Reads the row&rsquo;s key directly &mdash; no guessing.") +
+      "<p>On the Data Model <b>list</b> view, hover any DMO row &mdash; a <b>&#10697;</b> button appears next to its name to <b>open that object in a new tab</b>.</p>" +
+      "<span class=\"gi\"><b>Why this helps:</b> Salesforce&rsquo;s list rows aren&rsquo;t real links, so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. This reads the row&rsquo;s own identifier and opens the exact object directly, no guessing.</span>") +
     acc("&#129517;", "Left &amp; Top Nav", ["Open in New Tab", "NEW"],
-      "Hover any Data Cloud nav item (left vertical nav or top bar) &mdash; a <b>&#10697;</b> opens it in a <b>new tab</b>. Uses the item&rsquo;s real link when present, else <b>learns</b> the route the first time you visit it (remembered after), so it covers every item incl. future ones. No re-clicking across pages.") +
+      "<p>Hover any Data Cloud navigation item &mdash; in the left side menu or the top bar &mdash; and a <b>&#10697;</b> button lets you <b>open it in a new tab</b>.</p>" +
+      "<ul>" +
+      "<li>When the item has a real link, it uses it directly.</li>" +
+      "<li>When it doesn&rsquo;t, the tool <b>remembers</b> where that item goes the first time you visit it &mdash; so from then on it just works, including for menu items added in the future.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">Only real menu items get the button &mdash; ordinary record or user links on a page won&rsquo;t be mistaken for navigation. You don&rsquo;t need to re-click the bookmark as you move between pages.</span>") +
     acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
-      "<b>Hover</b> any attribute/rule to see &amp; copy its object &amp; field API name (press <kbd>C</kbd> to copy). <b>Container Path</b> shown verbatim when a related container&rsquo;s edit panel is open. <b>Export</b> all conditions (Include / Exclude / Rank &amp; Limit) &mdash; full AND/OR logic, nested segments, sub-filters, API-name columns &mdash; to Sheets or HTML / Excel.") +
+      "<p>Read and export the real logic behind a segment &mdash; API names and all &mdash; which the builder normally hides behind friendly labels.</p>" +
+      "<ul>" +
+      "<li><b>Hover any attribute or rule</b> to see its object and field API name. Press <kbd>C</kbd> to copy it.</li>" +
+      "<li><b>Container Path</b> is shown exactly as it appears when a related object&rsquo;s edit panel is open &mdash; so you can see which related record a rule actually points at.</li>" +
+      "<li><b>Export</b> every condition &mdash; Include, Exclude, and Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters preserved, plus columns for the object and field API names. Save to Google Sheets, or as HTML / Excel.</li>" +
+      "</ul>" +
+      "<span class=\"gi\"><b>Reads only what&rsquo;s on screen:</b> the Container Path is copied straight from the open panel, never reconstructed or guessed &mdash; if it isn&rsquo;t shown in Data Cloud, the tool won&rsquo;t invent it.</span>") +
     acc("&#127919;", "Activation", ["API Names", "Export"],
-      "Same hover <b>API names</b> on the activation wizard (main attribute table + Add Additional Attributes), plus <b>Export</b> the activation&rsquo;s included attributes with object &amp; field API names.") +
+      "<p>The same help as Segment, for the <b>activation wizard</b>.</p>" +
+      "<ul>" +
+      "<li><b>Hover</b> any attribute in the main table or in &ldquo;Add Additional Attributes&rdquo; to see its object and field API name.</li>" +
+      "<li><b>Export</b> the activation&rsquo;s included attributes, with their object and field API names, in one click.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">API-name help appears on the <b>wizard</b> (where you&rsquo;re choosing attributes). On a finished activation&rsquo;s read-only detail page there are no attributes to label, so only Export is offered there.</span>") +
     acc("&#128202;", "Data Explorer", ["Columns", "Export CSV"],
-      "See <b>all columns</b> (past SF&rsquo;s 10-column view; the object&rsquo;s own view loads 100 rows). Pick / reorder / save columns, sort, multi-filter, live count, inline Edit SQL. <b>Export All</b> to CSV up to 500K rows (paginated, cancelable).") +
-    acc("&#128270;", "Query Editor", ["Run &amp; Export"],
-      "Run any SQL and export the <b>full</b> result as CSV up to 500K rows (paginated, progress + cancel) &mdash; beyond the <b>1,000 rows</b> the Query Editor grid shows on screen.") +
+      "<p>Salesforce&rsquo;s Data Explorer only shows about 10 columns at a time and a limited set of rows. This lets you see and take the whole picture.</p>" +
+      "<ul>" +
+      "<li><b>Columns</b> &mdash; pick exactly which fields to show (well past the 10-column limit), reorder them, and save the set so it&rsquo;s there next time. Then view all their data together in one table.</li>" +
+      "<li><b>Sort, multi-filter, and a live row count</b> on the results, plus an <b>Edit SQL</b> option if you want to tweak the query behind the view.</li>" +
+      "<li><b>Export CSV</b> &mdash; download the rows. Large exports fetch in batches automatically, up to <b>500,000 rows</b>, and you can cancel partway.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">Column choices are saved only in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>") +
+    qeAccordion +
     acc("&#9881;&#65039;", "Data Transform", ["View Definition"],
-      "<b>Auto-reads</b> the definition into a plain-English, branch-by-branch summary: sources, filters, formulas, joins, outputs, fields kept / dropped / renamed. Download as HTML (printable to PDF). Optional AI explanation.");
+      "<p>Understand what a Data Transform actually does without reading its raw definition.</p>" +
+      "<p>The tool <b>reads the transform automatically</b> and writes a plain-English, step-by-step summary: the <b>sources</b> it reads, the <b>filters</b> it applies, any <b>formulas</b> and <b>joins</b>, the <b>outputs</b> it writes, and which fields are <b>kept, dropped, or renamed</b> along the way.</p>" +
+      "<p>Download the summary as an HTML file (which you can print to PDF). An optional AI explanation is available if you want it rewritten in even simpler terms.</p>");
   const roadmapNote = includeDev ? "" : `
     <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>`;
 
@@ -351,6 +414,15 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   .acc-pills{display:flex;flex-wrap:wrap;gap:3px}
   .acc-body{padding:2px 15px 14px 40px;font-size:13px;color:var(--muted);line-height:1.55}
   .acc-body b{color:var(--ink);font-weight:600}
+  .acc-body p{margin:4px 0 8px}
+  .acc-body ul{margin:4px 0 8px;padding-left:18px}
+  .acc-body li{margin:3px 0}
+  /* "Good to know" callout inside an accordion body — a soft note users should read */
+  .acc-body .gi{display:block;margin-top:8px;font-size:12px;background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:6px;padding:8px 11px;color:var(--muted);line-height:1.5}
+  .acc-body .gi b{color:var(--ink)}
+  .acc-body .btnlist{margin:4px 0 6px;padding-left:0;list-style:none}
+  .acc-body .btnlist li{margin:5px 0;padding-left:0}
+  .acc-body .btnlist .bl-nm{display:inline-block;font-weight:700;color:var(--ink);background:var(--pill-bg);border-radius:6px;padding:1px 7px;margin-right:5px;font-size:12px}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -539,7 +611,8 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
     [/chip">Segment</, "Segment chip (stripped from public)"],
     [/Export Rules/, "Export Rules launcher (Segment)"],
-    [/Run &amp; Export/, "Run & Export launcher (Query Editor)"],
+    [/Export ALL/, "Export ALL launcher (Query Editor)"],
+    [/Helpful Queries/, "Helpful Queries launcher (Query Editor)"],
     [/View Definition/, "View Definition launcher (Data Transform)"],
     [/birth\s*date|birthdt|ssot__birthdate/i, "internal 'Birth Date' example"],
     [/account number|customer_account_number/i, "internal 'Account Number' example"],

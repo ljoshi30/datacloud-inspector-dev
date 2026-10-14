@@ -72,6 +72,15 @@
   .acc-pills{display:flex;flex-wrap:wrap;gap:3px}
   .acc-body{padding:2px 15px 14px 40px;font-size:13px;color:var(--muted);line-height:1.55}
   .acc-body b{color:var(--ink);font-weight:600}
+  .acc-body p{margin:4px 0 8px}
+  .acc-body ul{margin:4px 0 8px;padding-left:18px}
+  .acc-body li{margin:3px 0}
+  /* "Good to know" callout inside an accordion body — a soft note users should read */
+  .acc-body .gi{display:block;margin-top:8px;font-size:12px;background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:6px;padding:8px 11px;color:var(--muted);line-height:1.5}
+  .acc-body .gi b{color:var(--ink)}
+  .acc-body .btnlist{margin:4px 0 6px;padding-left:0;list-style:none}
+  .acc-body .btnlist li{margin:5px 0;padding-left:0}
+  .acc-body .btnlist .bl-nm{display:inline-block;font-weight:700;color:var(--ink);background:var(--pill-bg);border-radius:6px;padding:1px 7px;margin-right:5px;font-size:12px}
   table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
   th{text-align:left;padding:7px 10px;background:var(--bg);color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
   td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
@@ -120,13 +129,13 @@
     <div class="chips" style="margin-bottom:10px"><span class="chip">DLO &rarr; DMO Mapping Canvas</span><span class="chip">Data Stream</span><span class="chip">DLO</span><span class="chip">DMO</span></div>
     <details class="acc">
         <summary><span class="acc-ic">&#128257;</span><span class="acc-nm">DLO &rarr; DMO Mapping Canvas</span><span class="acc-pills"><span class="pill">API Tooltip</span><span class="pill">Pin API names</span><span class="pill">Export</span></span></summary>
-        <div class="acc-body">Hover any DLO&rarr;DMO field to see &amp; copy its API name, or pin all names on the canvas at once. <b>Export</b> the full mapping table (filter by DMO) to Sheets or CSV.</div>
+        <div class="acc-body"><p>The mapping canvas normally shows only field <b>labels</b> &mdash; not the API names you actually need when building queries, transforms, or integrations. This fills that gap.</p><ul><li><b>Hover a field</b> &mdash; a small tooltip shows its API name on both the source (DLO) and target (DMO) side. Press <kbd>C</kbd> to copy it.</li><li><b>Pin API names</b> &mdash; show every API name on the canvas at once, so you can read the whole mapping without hovering field by field.</li><li><b>Export</b> &mdash; download the full mapping table (source field &rarr; target field, with both API names) to Google Sheets or CSV. You can filter to a single DMO first.</li></ul><span class="gi"><b>Good to know:</b> if the same label is used on both a DLO and a DMO, the tooltip marks which side it read so you&rsquo;re never shown the wrong API name.</span></div>
       </details><details class="acc">
         <summary><span class="acc-ic">&#127760;</span><span class="acc-nm">Data Stream &amp; DLO</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
-        <div class="acc-body">Export every field &mdash; API name, label, data type, status, key qualifier &mdash; to Sheets or CSV.</div>
+        <div class="acc-body"><p>On a Data Stream or Data Lake Object page, export the complete field list in one click &mdash; no copy-pasting row by row.</p><p>Each row includes the <b>API name</b>, <b>label</b>, <b>data type</b>, <b>status</b>, and <b>key qualifier</b> (primary key / event time / etc.). Copy it straight into Google Sheets, or download as a CSV.</p></div>
       </details><details class="acc">
         <summary><span class="acc-ic">&#128450;</span><span class="acc-nm">DMO Detail</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
-        <div class="acc-body"><b>Fields</b> tab (API name, type, mapped status, key qualifier) plus <b>Relationships</b> tab (related objects, join fields). Copy for Sheets or Download XLS.</div>
+        <div class="acc-body"><p>On a Data Model Object detail page, grab both tabs of information:</p><ul><li><b>Fields</b> &mdash; API name, data type, whether the field is mapped, and its key qualifier.</li><li><b>Relationships</b> &mdash; the objects this DMO is related to and the fields that join them.</li></ul><p>Copy it into Google Sheets, or download as an Excel (XLS) file.</p></div>
       </details>
     <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Modals are draggable &amp; resizable. Click <strong>Remove</strong> in the menu to take the tool off the page.</p>
     <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>
