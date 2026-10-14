@@ -12686,8 +12686,20 @@
     templatesBtn.onmouseleave = () => { templatesBtn.style.transform = "scale(1)"; templatesBtn.style.boxShadow = "0 3px 12px rgba(217,119,6,.3)"; };
     templatesBtn.onclick = function () { openTemplatesPanel(); };
 
+    // Streaming full-table export (no 500K cap) — only offered when the browser supports
+    // File System Access streaming (Chromium) so we can write to disk without buffering the
+    // whole CSV in memory. Hidden otherwise (user falls back to the capped Fetch & Export).
+    var streamBtn = document.createElement("button");
+    streamBtn.textContent = "⤓ Export ALL (stream)";
+    streamBtn.title = "Export the ENTIRE table to a CSV file, streamed to disk (no 500K cap). Pick a save location; rows write as they fetch. WARNING: on a huge table this is slow and uses Data Cloud credits (each batch re-scans). Add a LIMIT to bound it, or Cancel anytime.";
+    streamBtn.style.cssText = "display:none;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);box-shadow:0 2px 8px rgba(3,105,161,.3);transition:transform .1s;";
+    streamBtn.onmouseenter = () => { streamBtn.style.transform = "scale(1.03)"; };
+    streamBtn.onmouseleave = () => { streamBtn.style.transform = "scale(1)"; };
+    try { if (typeof qeCanStream === "function" && qeCanStream()) streamBtn.style.display = "block"; } catch (e) {}
+
     btnRow.appendChild(countBtn);
     btnRow.appendChild(runBtn);
+    btnRow.appendChild(streamBtn);
     btnRow.appendChild(templatesBtn);
     btnRow.appendChild(downloadBtn);
     btnRow.appendChild(viewBtn);
@@ -13208,6 +13220,117 @@
             }).catch(function (err) { reject(new Error("Fetch request failed: " + err)); });
         }
         fetchBatch(0);
+      });
+    }
+
+    // ── STREAMING full export (no row cap, memory-flat) ──────────────────────────────
+    // qeFetchExport builds the WHOLE CSV in memory then downloads → safe only up to ~500K
+    // (a 1.7M×35 CSV is ~1GB in a tab → crash). This streams each batch straight to a file
+    // on disk via the File System Access API (showSaveFilePicker → createWritable), so RAM
+    // stays flat no matter how many rows — enabling a true full-table export from the
+    // bookmarklet. Still bound by the realities we warn about: deep OFFSET re-scans each
+    // batch (slow + billed rows processed) and the cursor's 1-hour life (extension path).
+    // onProgress(fetched). isCancelled() lets the user stop. Resolves { totalRows, cancelled }.
+    // Requires showSaveFilePicker (Chromium). Caller checks qeCanStream() first.
+    function qeCanStream() { try { return typeof window.showSaveFilePicker === "function"; } catch (e) { return false; } }
+    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled) {
+      var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
+      return new Promise(function (resolve, reject) {
+        var writer = null, cols = null, got = 0, closed = false;
+        var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var HARD = 100000000;   // 100M absolute backstop (still bounded — never truly infinite)
+        var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
+        var cap = ul > 0 ? ul : HARD;
+        function fail(err) { try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {} reject(err instanceof Error ? err : new Error(String(err))); }
+        function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve({ totalRows: got, cancelled: false }); }, function () { resolve({ totalRows: got, cancelled: false }); }); } else resolve({ totalRows: got, cancelled: false }); } catch (e) { resolve({ totalRows: got, cancelled: false }); } }
+        function writeHeader(metadata) {
+          if (cols) return;
+          cols = (metadata || []).map(function (m) { return m && m.name; });
+          if (cols.length) return writer.write(cols.map(esc).join(",") + "\n");
+        }
+        function writeRows(data) {
+          // Build ONE string for the whole batch, write once (fewer awaits), then release it.
+          var buf = "";
+          for (var i = 0; i < data.length; i++) {
+            var row = data[i]; if (!Array.isArray(row)) continue;
+            if (got >= cap) break;
+            buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
+            got++;
+          }
+          return buf ? writer.write(buf) : Promise.resolve();
+        }
+
+        // open the file stream (user already picked the file → fileHandle)
+        var ready;
+        try { ready = fileHandle.createWritable(); } catch (e) { fail(new Error("Could not open the file for writing: " + e)); return; }
+        Promise.resolve(ready).then(function (w) {
+          writer = w;
+          // ── EXTENSION cursor path (efficient — no re-scan) ──
+          if (typeof extBridgePresent === "function" && extBridgePresent()) {
+            runDcSqlViaBridge(sql, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (first) {
+              if (cancelled()) { finishOk(); return; }
+              Promise.resolve(writeHeader(first.metadata)).then(function () {
+                return writeRows(first.data || []);
+              }).then(function () {
+                if (onProgress) onProgress(got);
+                var total = first.rowCount || got;
+                if (!first.queryId || !first.data || first.data.length === 0 || got >= cap || got >= total) { finishOk(); return; }
+                var queryId = first.queryId;
+                function page() {
+                  if (cancelled() || got >= cap) { finishOk(); return; }
+                  fetchPageViaBridge(queryId, got, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (pg) {
+                    if (!pg.data || pg.data.length === 0) { finishOk(); return; }
+                    writeRows(pg.data).then(function () { if (onProgress) onProgress(got); setTimeout(page, 0); }, fail);
+                  }).catch(fail);
+                }
+                setTimeout(page, 0);
+              }, fail);
+            }).catch(fail);
+            return;
+          }
+          // ── BOOKMARKLET OFFSET path (works same-origin; slow deep-OFFSET) ──
+          if (!_auraSniff.context || !_auraSniff.token) { fail(new Error("No active session — run any query using SF's Run Query button first.")); return; }
+          var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
+          var ASK = 49999;
+          var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
+          var dsi = 0, POLL_MS = 1500, MAX_POLL = 20;
+          function batch(offset, pollAttempt) {
+            pollAttempt = pollAttempt || 0;
+            if (cancelled() || got >= cap) { finishOk(); return; }
+            var want = Math.min(ASK, cap - offset);
+            if (want <= 0) { finishOk(); return; }
+            var bsql = baseSql + " LIMIT " + want + (offset > 0 ? " OFFSET " + offset : "");
+            var space = cands[dsi] || "";
+            _auraQid = (_auraQid || 0) + 1;
+            var act = { id: "dcqestream-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: bsql, rowLimit: want, dataspace: space } };
+            var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+            fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+              .then(function (r) { return r.text(); }).then(function (txt) {
+                var j; try { j = JSON.parse(txt); } catch (e) { fail(new Error("Session lost — click SF Run Query, then retry.")); return; }
+                var a = j && j.actions && j.actions[0];
+                if (!a || a.state !== "SUCCESS") {
+                  var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+                  if (/denied authorization|not authorized/i.test(String(em)) && offset === 0 && dsi + 1 < cands.length) { dsi++; batch(0); return; }
+                  fail(new Error(String(em))); return;
+                }
+                if (space) _auraSniff.dataSpace = space;
+                var rv = a.returnValue || {};
+                var dr = rv.dataRows || rv.rows || rv.data || []; var meta = rv.metadata || [];
+                var arr = dr.map(function (d) { return d && d.row ? d.row : d; });
+                var st = rv.status || {}; var cs = st.completionStatus;
+                var running = (cs === "Unspecified" || cs === "Running" || cs === "Processing" || cs === "InProgress" || (typeof st.progress === "number" && st.progress < 100));
+                var haveSchema = !!cols || (meta && meta.length);
+                var noTerminal = (cs == null && !(typeof st.progress === "number" && st.progress >= 100));
+                if (arr.length === 0 && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
+                Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
+                  if (onProgress) onProgress(got);
+                  if (arr.length === 0 || got >= cap) { finishOk(); }
+                  else { setTimeout(function () { batch(offset + arr.length); }, 0); }
+                }, fail);
+              }).catch(function (err) { fail(new Error("Fetch failed: " + err)); });
+          }
+          batch(0);
+        }, function (e) { fail(new Error("Could not create the file writer: " + e)); });
       });
     }
 
@@ -14033,7 +14156,7 @@
       cancelBtn.textContent = "Cancel";
       cancelBtn.title = "Stop the fetch/export in progress";
       cancelBtn.style.cssText = "border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;margin-left:8px;";
-      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
+      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; window.__dcStreamCancel = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
       card.style.display = "block";
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
@@ -14145,6 +14268,64 @@
           downloadBtn.style.display = "none";
         });
       });
+    };
+
+    // ── Streaming full export handler ────────────────────────────────────────────────
+    streamBtn.onclick = function () {
+      var highlighted = getHighlightedSql(); _savedSelection = "";
+      var sql = (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) ? normalizeSql(highlighted) : "";
+      if (!sql) { showGuide(); return; }
+      var chk = validateSql(sql); if (!chk.ok) { card.style.display = "block"; cardBody.innerHTML = "<div style='font:600 13px -apple-system,sans-serif;color:#92400e;margin-bottom:6px;'>Check your selection</div><div style='font-size:12px;color:#475569;line-height:1.6;'>" + chk.msg + "</div>"; return; }
+      var tableName = extractTableName(sql);
+      var ds = readPageDataSpace();
+      if (!ds) { var fmm = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i); var tn = fmm ? fmm[1].replace(/"/g, "") : ""; var dc = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tn) : [""]; ds = dc[0] || ""; }
+      var hasLimit = /\bLIMIT\s+\d+/i.test(sql);
+      // Confirmation + warning card first (this is a potentially slow/credit-heavy action).
+      card.style.display = "block";
+      cardBody.innerHTML = ""
+        + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;'></div><span style='font:600 13px -apple-system,sans-serif;'>Stream full export</span></div>"
+        + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>Exports <b>" + tableName + "</b> to a CSV file, writing rows to disk as they fetch (no 500K cap, memory-safe)."
+        + (hasLimit ? "" : "<br><span style='color:#92400e;'>⚠ No LIMIT — this fetches the WHOLE table. On a large table it's <b>slow</b> and <b>uses Data Cloud credits</b> (each batch re-scans).</span>")
+        + "</div>"
+        + "<div style='display:flex;gap:8px;'>"
+        + "<button id='dc-stream-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Choose file &amp; start</button>"
+        + "<button id='dc-stream-no' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Cancel</button>"
+        + "</div>";
+      var noBtn = document.getElementById("dc-stream-no");
+      if (noBtn) noBtn.onclick = function () { cardBody.innerHTML = "<div style='font-size:12px;color:#475569;'>Export cancelled — no credits used.</div>"; };
+      var goBtn = document.getElementById("dc-stream-go");
+      if (goBtn) goBtn.onclick = function () {
+        var handle;
+        var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
+        Promise.resolve().then(function () { return window.showSaveFilePicker(opts); }).then(function (h) {
+          handle = h;
+          window.__dcStreamCancel = false;
+          var startT = Date.now();
+          streamBtn.disabled = true;
+          function renderProgress(n) {
+            cardBody.innerHTML = ""
+              + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Streaming to file…</span></div>"
+              + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
+              + "<div style='color:#64748b;font-size:11px;'><b>" + n.toLocaleString() + "</b> rows written…</div>"
+              + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
+            cardBody.appendChild(cancelBtn);
+          }
+          renderProgress(0);
+          return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });
+        }).then(function (res) {
+          streamBtn.disabled = false;
+          var secs = ((Date.now() - startT) / 1000).toFixed(1);
+          cardBody.innerHTML = ""
+            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
+            + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
+        }).catch(function (err) {
+          streamBtn.disabled = false;
+          var m = String(err && err.message || err);
+          if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) { cardBody.innerHTML = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>"; return; }
+          cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
+        });
+      };
     };
 
     downloadBtn.onclick = () => {

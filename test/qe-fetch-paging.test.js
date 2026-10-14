@@ -165,5 +165,26 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("UI warns when capped at default (how to get more)", /Stopped at <b>[\s\S]{0,120}default cap/.test(src));
 }
 
+// ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
+console.log("\n8. streaming full export present + guarded");
+{
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+
+  ok("qeStreamFullExport defined", /function qeStreamFullExport\s*\(/.test(src));
+  ok("gated behind File System Access support (qeCanStream → showSaveFilePicker)", /function qeCanStream\s*\(/.test(src) && /window\.showSaveFilePicker/.test(src));
+  ok("writes to disk via createWritable (streaming, not in-memory Blob)", /fileHandle\.createWritable\(\)/.test(src));
+  ok("streams per-batch writes (writer.write) — memory stays flat", /writer\.write\(/.test(src));
+  ok("supports BOTH extension cursor path AND bookmarklet OFFSET path", /runDcSqlViaBridge\(sql[\s\S]{0,2500}baseSql \+ " LIMIT "/.test(src));
+  ok("honors explicit LIMIT as a cap; else 100M backstop (bounded, never infinite)", /var HARD = 100000000/.test(src) && /cap = ul > 0 \? ul : HARD/.test(src));
+  ok("cancellable mid-stream (isCancelled checked)", /if \(cancelled\(\)[\s\S]{0,40}finishOk\(\)/.test(src));
+  ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
+  ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
+  ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
+  ok("shared Cancel also stops the stream (__dcStreamCancel)", /__dcQueryExportCancelled = true; window\.__dcStreamCancel = true/.test(src));
+  ok("streaming export present in bookmarklet build too (synced)", /function qeStreamFullExport\s*\(/.test(bm) && /createWritable/.test(bm));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);
