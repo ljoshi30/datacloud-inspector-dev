@@ -29,8 +29,12 @@ function eq(name, got, want) { ok(name, got === want, "got " + JSON.stringify(go
 //   FE_MAX_POLL  — ceiling
 // Returns true iff we should re-issue the SAME offset after a delay.
 const FE_MAX_POLL = 20;
-function shouldPoll(arrData, status, haveSchema, pollAttempt) {
+// totalFetched = rows already fetched before THIS batch. The poll is a COLD-START guard only:
+// an empty offset-0 batch can mean "query still materializing". Once ANY row has been fetched,
+// an empty batch is the genuine end of data — never poll (that was the "2 rows took 30s" bug).
+function shouldPoll(arrData, status, haveSchema, pollAttempt, totalFetched) {
   if (arrData.length !== 0) return false;             // any rows → progressing, never poll
+  if ((totalFetched || 0) > 0) return false;          // rows already in → empty batch = end, stop
   if (pollAttempt >= FE_MAX_POLL) return false;       // ceiling reached → give up, finish
   var st = status || {};
   var cs = st.completionStatus;
@@ -81,6 +85,24 @@ console.log("\n5. reported scenario: SF grid shows the row ~2.5s later; we quit 
   ok("t=2.5s row arrives → stop + keep the row", !shouldPoll([["D", "1sgbc0000001yer"]], { completionStatus: "Completed" }, true, 2));
 }
 
+// ── 5b. REGRESSION: small result must NOT poll at the END ("2 rows took 30s") ─────
+// After a small result is fetched, the loop asks for the next OFFSET page to check for
+// more. That page comes back EMPTY (true end of data). WITHOUT the totalFetched>0 gate it
+// looked "unfinished" and polled 20×1.5s = 30s before finishing. This locks the fix.
+console.log("\n5b. regression: empty end-of-data batch AFTER rows → stop instantly (no 30s)");
+{
+  // 2 rows already fetched, next OFFSET batch empty + no terminal signal (looks unfinished):
+  ok("empty batch, 2 rows already in, running-ish status → STOP (was: polled 30s)",
+    !shouldPoll([], { completionStatus: "Unspecified" }, true, 0, 2));
+  ok("empty batch, 2 rows in, no schema/no status → STOP", !shouldPoll([], {}, false, 0, 2));
+  ok("empty batch, 1 row in, progress<100 → STOP", !shouldPoll([], { progress: 50 }, true, 0, 1));
+  // cold start (0 fetched) still polls — the original fix is preserved:
+  ok("cold start (0 fetched) + running → STILL polls (original 0-rows fix intact)",
+    shouldPoll([], { completionStatus: "Running" }, false, 0, 0));
+  ok("default totalFetched (undefined) behaves as cold start → polls",
+    shouldPoll([], { completionStatus: "Running" }, false, 0));
+}
+
 // ── 6. Source presence — the guard is actually wired into qeFetchExport ───────────
 console.log("\n6. source presence (poll wired into qeFetchExport, not just tested here)");
 {
@@ -100,8 +122,15 @@ console.log("\n6. source presence (poll wired into qeFetchExport, not just teste
   ok("re-polls the SAME offset on unfinished empty batch", /setTimeout\([\s\S]{0,120}fetchBatch\(offset,\s*pollAttempt\s*\+\s*1\)/.test(feBody));
   ok("checks completionStatus Running/Unspecified", /completionStatus[\s\S]{0,80}(Running|Unspecified)/.test(feBody));
   ok("distinguishes completed-empty via schema (no false 30s hang)", /_haveSchema|haveSchema/.test(feBody));
+  // REGRESSION GUARD: poll ONLY on cold start (totalFetched===0) so a small result doesn't
+  // poll 30s at the end. Must be ANDed into the Fetch-path poll condition.
+  ok("Fetch poll gated on cold start (totalFetched === 0 → no 30s tail on small results)",
+    /arrData\.length === 0 && totalFetched === 0 && _looksUnfinished/.test(feBody));
   // the fix lives in SHARED code → must be present in the bookmarklet source too
   ok("bookmarklet source got the same poll (shared fix synced)", /FE_MAX_POLL/.test(bm) && /pollAttempt/.test(bm));
+  ok("bookmarklet Fetch poll also cold-start gated", /arrData\.length === 0 && totalFetched === 0 && _looksUnfinished/.test(bm));
+  // the STREAMING path has the same guard (got === 0)
+  ok("stream poll gated on cold start (got === 0)", /arr\.length === 0 && got === 0 &&/.test(src) && /arr\.length === 0 && got === 0 &&/.test(bm));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

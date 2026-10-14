@@ -12604,10 +12604,36 @@
     // every resize/zoom, so it's fully responsive.
     function clampQeButtonRow() {
       try {
-        var fabH = 44, gap = 8, bottom = 16, topMargin = 12;
-        var avail = window.innerHeight - fabH - gap - bottom - topMargin;
-        btnRow.style.maxHeight = Math.max(140, avail) + "px";
+        var margin = 10;
+        var vh = window.innerHeight;
+        // 1) Cap the button row so the whole stack (FAB + card + buttons + gaps) can fit on
+        //    screen; anything taller scrolls inside the row rather than pushing off the edge.
+        var fabH = 44, cardH = 0;
+        try { if (card && card.style.display !== "none") cardH = card.getBoundingClientRect().height || 0; } catch (e) {}
+        var budget = vh - fabH - cardH - 4 * margin;   // space left for the button row
+        btnRow.style.maxHeight = Math.max(140, budget) + "px";
         btnRow.style.overflowY = "auto";
+        // 2) Pull the WHOLE launcher back on-screen if any edge is off. This is the real fix
+        //    for "launcher hidden below / had to drag up": once the FAB has been dragged it
+        //    switches from bottom-anchored to top-anchored, and opening the panel then grows
+        //    the stack DOWNWARD — pushing the FAB past the bottom fold. Measure after the new
+        //    max-height applies (next frame), and if the stack overflows top or bottom, clamp
+        //    its position into view. If it already fits, nothing moves (bottom anchor kept).
+        var raf = window.requestAnimationFrame || function (f) { return setTimeout(f, 16); };
+        raf(function () {
+          try {
+            var r = wrap.getBoundingClientRect();
+            var top = r.top, h = r.height;
+            if (top + h > vh - margin) top = vh - margin - h;   // overflows bottom → lift up
+            if (top < margin) top = margin;                     // overflows top → push down
+            if (Math.abs(top - r.top) > 1) {                    // only reposition if needed
+              wrap.style.top = top + "px";
+              wrap.style.left = r.left + "px";
+              wrap.style.bottom = "auto";
+              wrap.style.right = "auto";
+            }
+          } catch (e) {}
+        });
       } catch (e) {}
     }
     window.addEventListener("resize", clampQeButtonRow);
@@ -12628,7 +12654,15 @@
     // "block"). A MutationObserver catches every current AND future call site with zero
     // risk of missing one, instead of editing 12+ individual show-the-card call sites.
     try {
-      var _qeCardObs = new MutationObserver(function () { if (card.style.display !== "none") clampQeCardHeight(); });
+      var _qeCardObs = new MutationObserver(function () {
+        if (card.style.display !== "none") {
+          clampQeCardHeight();
+          // Card content changing (results, stream progress, errors) changes the stack height
+          // too — re-run the whole-launcher clamp so a taller card can never push the FAB or
+          // buttons off-screen (the "launcher hidden below" report).
+          if (_panelOpen) { try { clampQeButtonRow(); } catch (e) {} }
+        }
+      });
       _qeCardObs.observe(cardBody, { childList: true, subtree: true, characterData: true });
     } catch (e) {}
 
@@ -13223,7 +13257,17 @@
               var _haveSchema = (cols2.length > 0) || (meta && meta.length > 0);
               var _noTerminalSignal = (_cs == null && !(typeof _st.progress === "number" && _st.progress >= 100));
               var _looksUnfinished = _runningStatus || (!_haveSchema && _noTerminalSignal);
-              if (arrData.length === 0 && _looksUnfinished && pollAttempt < FE_MAX_POLL) {
+              // CRITICAL: only poll BEFORE any row has been fetched (totalFetched === 0). The
+              // materialization race is a COLD-START problem — the very first offset-0 batch can
+              // come back empty while the query is still cooking. But once rows HAVE arrived, the
+              // query has materialized, so a later empty batch (e.g. the OFFSET page just past a
+              // small result) is the genuine END of data — finishing instantly. Without this
+              // gate, a tiny result (say 2 rows) fetched the rows, then issued one more OFFSET
+              // page that returned empty, which looked "unfinished" and polled 20×1.5s = 30s
+              // before finishing — the "2 rows took forever" regression. (It also made every
+              // large export sit ~30s at the end.) Gating on totalFetched===0 keeps the original
+              // 0-rows cold-start fix while restoring instant finish for every non-empty result.
+              if (arrData.length === 0 && totalFetched === 0 && _looksUnfinished && pollAttempt < FE_MAX_POLL) {
                 if (onProgress) onProgress(totalFetched, userLimit || 0);
                 setTimeout(function () { fetchBatch(offset, pollAttempt + 1); }, FE_POLL_MS);
                 return;
@@ -13376,7 +13420,10 @@
                 var running = (cs === "Unspecified" || cs === "Running" || cs === "Processing" || cs === "InProgress" || (typeof st.progress === "number" && st.progress < 100));
                 var haveSchema = !!cols || (meta && meta.length);
                 var noTerminal = (cs == null && !(typeof st.progress === "number" && st.progress >= 100));
-                if (arr.length === 0 && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
+                // Only poll on a COLD START (got === 0). Once rows have been written, an empty
+                // batch is the true end of data → finish now. (Same regression as the Fetch path:
+                // without the got===0 gate, a small result polled ~30s at the end.)
+                if (arr.length === 0 && got === 0 && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
                   if (onProgress) onProgress(got);
                   if (arr.length === 0 || got >= cap) { finishOk(); }
