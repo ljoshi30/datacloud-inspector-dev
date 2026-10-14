@@ -13218,7 +13218,14 @@
 
         function finish() {
           var blob = new Blob(csvOut, { type: "text/csv" });
-          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null,
+          var url = URL.createObjectURL(blob);
+          // MEMORY: the Blob is an independent snapshot of the CSV, so the big line array is
+          // now redundant — drop it immediately so a large export (e.g. 285k rows) doesn't hold
+          // the same data TWICE in RAM. This is the main thing that kept the tab (esp. on VDI,
+          // which is RAM/render-constrained) smooth during/after a big Fetch & Export. The
+          // 2,000-row `rowData` preview is intentionally kept (View Results needs it; it's tiny).
+          csvOut = null;
+          resolve({ blobUrl: url, totalRows: totalFetched, columns: cols2, columnTypes: colTypes2, rowData: rowData, rowsProcessed: sawRp ? rowsProcessed : null,
             cappedAtDefault: cappedAtDefault, defaultCap: QE_DEFAULT_CAP });
         }
 
@@ -14535,7 +14542,10 @@
       a.href = _lastResult.blobUrl;
       a.download = filename;
       a.click();
-      setTimeout(function () { URL.revokeObjectURL(_lastResult.blobUrl); }, 10000);
+      // Revoke the Blob URL shortly after the download starts to free its memory. 1.5s is
+      // ample for the browser to hand the file to the OS; holding it 10s needlessly pinned a
+      // large export in RAM. Guarded so a repeat click (already revoked) can't throw.
+      (function (url) { setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 1500); })(_lastResult.blobUrl);
       downloadBtn.textContent = "✓ Downloaded!";
       downloadBtn.style.background = "linear-gradient(135deg,#059669,#047857)";
       setTimeout(function () { downloadBtn.textContent = "⬇ Download CSV"; downloadBtn.style.background = "linear-gradient(135deg,#3b82f6,#2563eb)"; }, 2500);

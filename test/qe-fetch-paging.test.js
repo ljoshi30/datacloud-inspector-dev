@@ -153,6 +153,12 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("termination stops ONLY on empty batch or effectiveMax", /arrData\.length === 0 \|\| totalFetched >= effectiveMax/.test(feBody));
   ok("advances OFFSET by actual rows returned", /fetchBatch\(offset \+ arrData\.length\)/.test(feBody));
   ok("yields between batches (responsive page, no freeze)", /setTimeout\(function \(\) \{ fetchBatch\(offset \+ arrData\.length\)/.test(feBody));
+  // MEMORY: after building the Blob, the big line array must be released so a large export
+  // doesn't hold the same data twice in RAM (the VDI-smoothness fix). Locked here so a
+  // refactor can't quietly reintroduce the double-hold.
+  ok("releases the big CSV array after Blob is built (csvOut = null in finish)", /var url = URL\.createObjectURL\(blob\);[\s\S]{0,700}csvOut = null;/.test(feBody));
+  ok("download revokes the Blob URL promptly \(~1.5s, not pinned 10s\)", /setTimeout\(function \(\) \{ try \{ URL\.revokeObjectURL\(url\); \} catch \(e\) \{\} \}, 1500\)/.test(src));
+  ok("memory-release synced into the bookmarklet build too", /csvOut = null;/.test(bm) && /URL\.revokeObjectURL\(url\); \} catch \(e\) \{\} \}, 1500\)/.test(bm));
   ok("default cap flagged for the UI warning (cappedAtDefault)", /cappedAtDefault/.test(feBody));
   ok("explicit user LIMIT honored (min with hard max)", /userLimit > 0 \? Math\.min\(userLimit, QE_HARD_MAX\)/.test(feBody));
   ok("extension branch is QE-PRIVATE (does NOT call shared exportPaginatedCsv)", !/exportPaginatedCsv\(sql, ds, onProgress/.test(feBody));
