@@ -187,10 +187,29 @@ console.log("\n8. streaming full export present + guarded");
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
-  ok("stream has its OWN cancel button (no out-of-scope cancelBtn reference)", /var streamCancelBtn = document\.createElement/.test(src) && /streamCancelBtn\.onclick = function \(\) \{ window\.__dcStreamCancel = true/.test(src));
+  ok("stream has its OWN cancel button (no out-of-scope cancelBtn reference)", /function makeStreamCancelBtn\(\)/.test(src) && /window\.__dcStreamCancel = true;/.test(src));
   ok("progress UI appends the stream's own cancel button (not Fetch handler's)", /cardBody\.appendChild\(streamCancelBtn\)/.test(src));
   ok("no user-facing 'browser extension' wording in the capped warning", !/use the <b>browser extension<\/b>/.test(src));
   ok("streaming export present in bookmarklet build too (synced)", /function qeStreamFullExport\s*\(/.test(bm) && /createWritable/.test(bm));
+
+  // ── Export ALL state SURVIVES closing the card (new feature) ───────────────────────
+  // Closing the info card (×) or the panel must NOT lose a running/finished export; re-
+  // opening (panel toggle / ℹ / re-click Export ALL) re-shows live progress or the result,
+  // and never starts a duplicate export. These lock that wiring into the real source.
+  ok("persistent stream state object (_streamState with status/rows/finalHtml)", /var _streamState = null/.test(src) && /_streamState = \{ status: "running"/.test(src));
+  ok("renderStreamCard re-paints progress OR final result from _streamState", /function renderStreamCard\(\)/.test(src) && /_streamState\.status === "running"/.test(src));
+  ok("re-clicking Export ALL while running re-shows progress (no duplicate export)", /_streamState && _streamState\.status === "running"\) \{ renderStreamCard\(\); return;/.test(src));
+  ok("re-opening the panel brings a live/finished export back", /if \(_panelOpen\)[\s\S]{0,400}renderStreamCard\(\)/.test(src));
+  ok("ℹ button re-shows the live/finished export instead of a stale card", /if \(!\(typeof renderStreamCard === "function" && renderStreamCard\(\)\)\) card\.style\.display = "block"/.test(src));
+  ok("final result persisted to _streamState (done/cancelled/error) for re-open", /_streamState = \{ status: res\.cancelled \? "cancelled" : "done"/.test(src) && /status: "error"/.test(src));
+  ok("Count/Fetch supersede a FINISHED stream card but never a running one", (src.match(/if \(_streamState && _streamState\.status !== "running"\) _streamState = null/g) || []).length >= 2);
+  ok("progress only repaints the card when it's visible (silent update when closed)", /if \(card\.style\.display !== "none"\) renderStreamCard\(\)/.test(src));
+  ok("stream state fix synced into the bookmarklet build too", /var _streamState = null/.test(bm) && /function renderStreamCard\(\)/.test(bm));
+
+  // ── Launcher stays on-screen when all buttons show (responsive) ────────────────────
+  ok("button row is height-capped + scrollable so the FAB never goes off-screen", /function clampQeButtonRow\(\)/.test(src) && /btnRow\.style\.maxHeight =/.test(src) && /btnRow\.style\.overflowY = "auto"/.test(src));
+  ok("button row re-clamped when the panel opens and on resize", /if \(_panelOpen\) \{\s*try \{ clampQeButtonRow\(\); \} catch/.test(src) && /window\.addEventListener\("resize", clampQeButtonRow\)/.test(src));
+  ok("button-row clamp synced into the bookmarklet build too", /function clampQeButtonRow\(\)/.test(bm));
 
   // ── RUNTIME scope-leak guard ──────────────────────────────────────────────────────
   // The 'cancelBtn is not defined' and 'startT is not defined' bugs were cross-.then scope
@@ -223,8 +242,12 @@ console.log("\n8. streaming full export present + guarded");
       dataSpaceCandidates: function () { return ["DS"]; },
       todayStr: function () { return "2026-01-01"; },
       normSqlKey: function (s) { return s; },
-      streamBtn: fakeEl(), cardBody: fakeEl(),
+      streamBtn: fakeEl(), cardBody: fakeEl(), card: fakeEl(),
       _savedSelection: "", _lastResult: null,
+      // Export-ALL live-state closures the handler now reads (persist-across-close feature):
+      _streamState: null, streamCancelBtn: null,
+      renderStreamCard: function () { return true; },
+      makeStreamCancelBtn: function () { return fakeEl(); },
       // vars the ENCLOSING streamBtn.onclick legitimately declares before goBtn (so the
       // guard flags only TRUE cross-.then leaks, not these in-scope locals):
       sql: 'SELECT * FROM "T__dll"', ds: "DS", tableName: "T__dll", hasLimit: false,

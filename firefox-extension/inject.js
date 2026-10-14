@@ -12612,6 +12612,23 @@
     // shared reference — see the pointermove handler).
     window.addEventListener("resize", clampQeCardHeight);
 
+    // Keep the WHOLE launcher inside the viewport. When every button is showing (Count,
+    // Fetch & Export, Export ALL, Helpful Queries, Download, View, ℹ), the stack grows
+    // UPWARD from the fixed bottom anchor and — on a short or zoomed viewport — its top can
+    // run off the screen and push the FAB out of reach ("launcher not visible"). Cap the
+    // button row's height to the space above the FAB and let it scroll, so the FAB and the
+    // buttons always stay on-screen and clickable. Recomputed when the panel opens and on
+    // every resize/zoom, so it's fully responsive.
+    function clampQeButtonRow() {
+      try {
+        var fabH = 44, gap = 8, bottom = 16, topMargin = 12;
+        var avail = window.innerHeight - fabH - gap - bottom - topMargin;
+        btnRow.style.maxHeight = Math.max(140, avail) + "px";
+        btnRow.style.overflowY = "auto";
+      } catch (e) {}
+    }
+    window.addEventListener("resize", clampQeButtonRow);
+
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "×";
     closeBtn.title = "Hide this info card (results stay available)";
@@ -12669,8 +12686,11 @@
     infoBtn.title = "Show/hide query info card";
     infoBtn.style.cssText = "display:none;border:1px solid #e2e8f0;background:#fff;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:14px;color:#64748b;align-items:center;justify-content:center;";
     infoBtn.onclick = function () {
-      if (card.style.display === "none") { card.style.display = "block"; }
-      else { card.style.display = "none"; }
+      if (card.style.display === "none") {
+        // If an Export ALL is live/finished, re-show its progress/result instead of
+        // whatever stale content was last in the card.
+        if (!(typeof renderStreamCard === "function" && renderStreamCard())) card.style.display = "block";
+      } else { card.style.display = "none"; }
     };
 
     // Helpful Queries — generates SQL for common data-quality/relational/date checks
@@ -12743,10 +12763,19 @@
     fab.onclick = function () {
       _panelOpen = !_panelOpen;
       btnRow.style.display = _panelOpen ? "flex" : "none";
-      if (_panelOpen && _lastResult) {
-        card.style.display = "block";
-        downloadBtn.style.display = "inline-block";
-        viewBtn.style.display = "inline-block";
+      if (_panelOpen) {
+        try { clampQeButtonRow(); } catch (e) {}
+        // If an Export ALL is running (or just finished) and the user re-opens the panel,
+        // bring its live progress / result straight back — don't leave them wondering.
+        if (typeof renderStreamCard === "function" && renderStreamCard()) {
+          // stream card painted; nothing else to show
+        } else if (_lastResult) {
+          card.style.display = "block";
+          downloadBtn.style.display = "inline-block";
+          viewBtn.style.display = "inline-block";
+        } else {
+          card.style.display = "none";
+        }
       } else {
         card.style.display = "none";
       }
@@ -12758,6 +12787,44 @@
     // (streaming re-scans the whole table → wasted credits if they already have the file).
     // { sqlKey, rows, when } — rows/when just for the message; sqlKey is the match key.
     var _lastStreamExport = null;
+
+    // ── Export ALL live state (survives closing the card / panel) ───────────────────────
+    // The streaming export keeps writing to disk even if the user closes the info card (×)
+    // or the whole panel. We persist its state here so re-opening the panel, clicking ℹ, or
+    // clicking Export ALL again INSTANTLY re-shows the current progress (or the final
+    // result) — no blank card, no "did it stop?" confusion, and never a duplicate export.
+    // { status:'running'|'done'|'cancelled'|'error', rows, finalHtml }
+    var _streamState = null;
+    // One reusable cancel button for the active stream, hoisted so renderStreamCard() can
+    // re-attach it after the card was closed and re-opened mid-stream.
+    var streamCancelBtn = null;
+    function makeStreamCancelBtn() {
+      var b = document.createElement("button");
+      b.textContent = "Cancel";
+      b.style.cssText = "margin-top:8px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+      b.onclick = function () { window.__dcStreamCancel = true; b.textContent = "Cancelling…"; b.disabled = true; };
+      return b;
+    }
+    // Paint the Export-ALL card from _streamState. Safe to call whenever the user re-opens
+    // the panel / clicks ℹ / clicks Export ALL again — it only RENDERS, never starts work.
+    // Returns true if it painted a stream card (so callers can skip their default content).
+    function renderStreamCard() {
+      if (!_streamState) return false;
+      card.style.display = "block";
+      var s = _streamState;
+      if (s.status === "running") {
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Exporting to your file…</span></div>"
+          + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
+          + "<div style='color:#64748b;font-size:11px;'><b>" + (s.rows || 0).toLocaleString() + "</b> rows written so far… <span style='color:#94a3b8;'>(keeps running if you close this)</span></div>"
+          + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
+        if (!streamCancelBtn) streamCancelBtn = makeStreamCancelBtn();
+        cardBody.appendChild(streamCancelBtn);
+      } else {
+        cardBody.innerHTML = s.finalHtml || "";
+      }
+      return true;
+    }
     // Memoized COUNT — mirrors how Fetch caches _lastResult. Keyed by normalized SQL so
     // re-clicking Count on the SAME query does NOT hit the API again (saves credits).
     // { key, count, rowsProcessed, tableName, ds }
@@ -13938,6 +14005,9 @@
     }
 
     countBtn.onclick = () => {
+      // A newer action supersedes a FINISHED stream card (so re-opening shows this result),
+      // but never clobbers a still-running export.
+      if (_streamState && _streamState.status !== "running") _streamState = null;
       var highlighted = getHighlightedSql();
       var sql;
       if (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) {
@@ -14093,6 +14163,9 @@
     };
 
     runBtn.onclick = () => {
+      // A newer action supersedes a FINISHED stream card (so re-opening shows this result),
+      // but never clobbers a still-running export.
+      if (_streamState && _streamState.status !== "running") _streamState = null;
       // Read the CURRENT query first so the "already fetched" guard can compare it to the
       // stored one — only warn when the SAME query is being re-run (re-fetching identical
       // data wastes credits). A DIFFERENT query should run normally, no prompt.
@@ -14277,6 +14350,10 @@
 
     // ── Streaming full export handler ────────────────────────────────────────────────
     streamBtn.onclick = function () {
+      // If an export is already running, don't start another — just bring its live
+      // progress back (handles: user closed the card with ×, then clicked Export ALL again
+      // wondering if anything is happening). Re-shows instantly, no duplicate fetch/credits.
+      if (_streamState && _streamState.status === "running") { renderStreamCard(); return; }
       var highlighted = getHighlightedSql(); _savedSelection = "";
       var sql = (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) ? normalizeSql(highlighted) : "";
       if (!sql) { showGuide(); return; }
@@ -14307,6 +14384,9 @@
         if (again) again.onclick = function () { _lastStreamExport = null; streamBtn.onclick(); };
         return;
       }
+      // Fresh flow starting → drop any prior terminal stream state so a stale "complete"
+      // card can't resurface while this confirm dialog is open.
+      _streamState = null;
       // Confirmation + warning card (potentially slow/credit-heavy action).
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;'></div><span style='font:600 13px -apple-system,sans-serif;'>Export full table</span></div>"
@@ -14332,20 +14412,19 @@
           window.__dcStreamCancel = false;
           startT = Date.now();   // reset to the moment the user actually picked the file
           streamBtn.disabled = true;
-          // Own cancel button (self-contained — not the Fetch handler's, which is out of scope).
-          var streamCancelBtn = document.createElement("button");
-          streamCancelBtn.textContent = "Cancel";
-          streamCancelBtn.style.cssText = "margin-top:8px;border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
-          streamCancelBtn.onclick = function () { window.__dcStreamCancel = true; streamCancelBtn.textContent = "Cancelling…"; streamCancelBtn.disabled = true; };
+          // Fresh cancel button on the hoisted ref so renderStreamCard() can re-attach the
+          // SAME button if the card is closed and re-opened mid-stream.
+          streamCancelBtn = makeStreamCancelBtn();
+          // Mark the export as running so closing the card (×) / panel and re-opening — or
+          // re-clicking Export ALL — re-shows this progress instead of a blank/stale card.
+          _streamState = { status: "running", rows: 0, finalHtml: "" };
           function renderProgress(n) {
-            cardBody.innerHTML = ""
-              + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Streaming to file…</span></div>"
-              + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
-              + "<div style='color:#64748b;font-size:11px;'><b>" + n.toLocaleString() + "</b> rows written…</div>"
-              + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
-            cardBody.appendChild(streamCancelBtn);
+            if (_streamState) { _streamState.rows = n; }
+            // Only repaint if the card is actually visible — if the user closed it, we keep
+            // the state updated silently and re-render on demand (renderStreamCard).
+            if (card.style.display !== "none") renderStreamCard();
           }
-          renderProgress(0);
+          renderStreamCard();
           return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });
         }).then(function (res) {
           streamBtn.disabled = false;
@@ -14371,16 +14450,25 @@
               + "<br>For the full data use <b>Power Query</b>, a database, or split/filter the query."
               + "</div>";
           }
-          cardBody.innerHTML = ""
+          var finalHtml = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
             + viewerNote
             + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
+          // Persist the final result so re-opening the panel / ℹ shows it (not a stale card).
+          _streamState = { status: res.cancelled ? "cancelled" : "done", rows: res.totalRows, finalHtml: finalHtml };
+          if (card.style.display !== "none") renderStreamCard();
         }).catch(function (err) {
           streamBtn.disabled = false;
           var m = String(err && err.message || err);
-          if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) { cardBody.innerHTML = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>"; return; }
-          cardBody.innerHTML = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
+          var finalHtml;
+          if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
+            finalHtml = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>";
+          } else {
+            finalHtml = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
+          }
+          _streamState = { status: "error", rows: (_streamState && _streamState.rows) || 0, finalHtml: finalHtml };
+          if (card.style.display !== "none") renderStreamCard();
         });
       };
     };
