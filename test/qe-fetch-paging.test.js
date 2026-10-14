@@ -157,8 +157,13 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   // doesn't hold the same data twice in RAM (the VDI-smoothness fix). Locked here so a
   // refactor can't quietly reintroduce the double-hold.
   ok("releases the big CSV array after Blob is built (csvOut = null in finish)", /var url = URL\.createObjectURL\(blob\);[\s\S]{0,700}csvOut = null;/.test(feBody));
-  ok("download revokes the Blob URL promptly \(~1.5s, not pinned 10s\)", /setTimeout\(function \(\) \{ try \{ URL\.revokeObjectURL\(url\); \} catch \(e\) \{\} \}, 1500\)/.test(src));
-  ok("memory-release synced into the bookmarklet build too", /csvOut = null;/.test(bm) && /URL\.revokeObjectURL\(url\); \} catch \(e\) \{\} \}, 1500\)/.test(bm));
+  // Memory stays bounded by revoking the PREVIOUS result's Blob when a new one replaces it
+  // (setLastResult) — NOT by a timer after download, which broke a 2nd Download click
+  // (revoked URL → downloads nothing). Download must NOT revoke the current blob.
+  ok("setLastResult revokes the previous Blob when a new result replaces it", /function setLastResult\(next\)[\s\S]{0,260}URL\.revokeObjectURL\(_lastResult\.blobUrl\)/.test(src));
+  ok("all QE result assignments route through setLastResult (none raw after decl)", (src.match(/setLastResult\(/g) || []).length >= 5);
+  ok("download does NOT revoke the current result's Blob (re-download stays valid)", /do NOT revoke the Blob URL here/.test(src) && !/\}, 1500\)/.test(src.slice(src.indexOf("downloadBtn.onclick"), src.indexOf("downloadBtn.onclick") + 1200)));
+  ok("memory-release (csvOut=null after Blob) synced into the bookmarklet build too", /csvOut = null;/.test(bm) && /function setLastResult\(next\)/.test(bm));
   ok("default cap flagged for the UI warning (cappedAtDefault)", /cappedAtDefault/.test(feBody));
   ok("explicit user LIMIT honored (min with hard max)", /userLimit > 0 \? Math\.min\(userLimit, QE_HARD_MAX\)/.test(feBody));
   ok("extension branch is QE-PRIVATE (does NOT call shared exportPaginatedCsv)", !/exportPaginatedCsv\(sql, ds, onProgress/.test(feBody));
@@ -173,7 +178,7 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("already-exported guard warns + saves credits (memo by normalized SQL)", /var _lastStreamExport = null/.test(src) && /_lastStreamExport && _lastStreamExport\.sqlKey === sqlKey/.test(src) && /Already exported/.test(src));
   ok("memo only set on real non-cancelled result (not on cancel/0 rows)", /!res\.cancelled && res\.totalRows > 0[\s\S]{0,80}_lastStreamExport = \{ sqlKey: sqlKey/.test(src));
   ok("viewer-limit heads-up: warns when export exceeds Excel (1,048,576) / Sheets (10M cells/cols)", /var EXCEL_MAX = 1048576, SHEETS_CELLS = 10000000/.test(src) && /sheetsMax = nCols > 0 \? Math\.floor\(SHEETS_CELLS \/ nCols\)/.test(src) && /viewers truncate/.test(src));
-  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ return \{ totalRows: got, cancelled: false, columns: cols/.test(src));
+  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ return \{ totalRows: got, cancelled: cancelled\(\), columns: cols/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
@@ -190,6 +195,12 @@ console.log("\n8. streaming full export present + guarded");
   ok("supports BOTH extension cursor path AND bookmarklet OFFSET path", /runDcSqlViaBridge\(sql[\s\S]{0,2500}baseSql \+ " LIMIT "/.test(src));
   ok("honors explicit LIMIT as a cap; else 100M backstop (bounded, never infinite)", /var HARD = 100000000/.test(src) && /cap = ul > 0 \? ul : HARD/.test(src));
   ok("cancellable mid-stream (isCancelled checked)", /if \(cancelled\(\)[\s\S]{0,40}finishOk\(\)/.test(src));
+  // BUG FIX: result() must report the REAL cancel state (was hardcoded false → a cancelled
+  // partial export looked "complete" and got memoized as a full export, then wrongly warned
+  // "already exported, don't re-run"). finishOk runs on both end-of-data AND cancel.
+  ok("stream result() reports the real cancel flag (not hardcoded false)", /function result\(\) \{ return \{ totalRows: got, cancelled: cancelled\(\), columns: cols/.test(src));
+  ok("no leftover hardcoded cancelled:false in the stream result", !/cancelled: false, columns: cols/.test(src));
+  ok("cancel-state fix synced into the bookmarklet build too", /cancelled: cancelled\(\), columns: cols/.test(bm));
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
@@ -211,6 +222,11 @@ console.log("\n8. streaming full export present + guarded");
   ok("Count/Fetch supersede a FINISHED stream card but never a running one", (src.match(/if \(_streamState && _streamState\.status !== "running"\) _streamState = null/g) || []).length >= 2);
   ok("progress only repaints the card when it's visible (silent update when closed)", /if \(card\.style\.display !== "none"\) renderStreamCard\(\)/.test(src));
   ok("stream state fix synced into the bookmarklet build too", /var _streamState = null/.test(bm) && /function renderStreamCard\(\)/.test(bm));
+  // BUG FIX: Count/Fetch must be PAUSED during a stream, else they fight over the shared card.
+  ok("setExportBusy disables Count + Fetch during a stream", /function setExportBusy\(on\)[\s\S]{0,200}\[countBtn, runBtn\]\.forEach/.test(src));
+  ok("stream START pauses Count/Fetch (setExportBusy(true))", /streamBtn\.disabled = true;\s*\n\s*setExportBusy\(true\);/.test(src));
+  ok("stream DONE + ERROR re-enable Count/Fetch (setExportBusy(false) on both terminal paths)", (src.match(/setExportBusy\(false\);/g) || []).length >= 2);
+  ok("busy-pause fix synced into the bookmarklet build too", /function setExportBusy\(on\)/.test(bm) && /setExportBusy\(true\);/.test(bm));
 
   // ── Launcher stays on-screen when all buttons show (responsive) ────────────────────
   ok("button row is height-capped + scrollable so the FAB never goes off-screen", /function clampQeButtonRow\(\)/.test(src) && /btnRow\.style\.maxHeight =/.test(src) && /btnRow\.style\.overflowY = "auto"/.test(src));
@@ -235,6 +251,13 @@ console.log("\n8. streaming full export present + guarded");
   ok("empty-column TOGGLE uses the chunked filler too", /fillTbodyChunked\(rows\);\s*\/\/ fill rows in non-blocking chunks/.test(src));
   ok("no leftover synchronous full-table renderTableBody in View Results", !/renderTableBody/.test(src));
   ok("VDI-safe chunked View Results synced into the bookmarklet build too", /function fillTbodyChunked\(data\)/.test(bm) && /var _fillGen = 0;/.test(bm));
+  // REGRESSION: the initial fill must run AFTER the modal is in the DOM (the filler guards on
+  // the modal existing). Filling before document.body.appendChild(modal) rendered ZERO rows
+  // until the user toggled columns — the "empty View Results" bug. Lock the ordering.
+  ok("initial View Results fill runs AFTER the modal is appended to the DOM", /document\.body\.appendChild\(modal\);[\s\S]{0,220}fillTbodyChunked\(rows\);/.test(src));
+  // The header-build block builds an EMPTY tbody and comments that the fill is deferred to
+  // after the append — proving the regression fix (fill-before-append rendered nothing).
+  ok("header build uses an empty tbody + defers the fill to after append", /The ROWS are filled AFTER the modal is\s*\n\s*\/\/ added to the document/.test(src));
 
   // ── RUNTIME scope-leak guard ──────────────────────────────────────────────────────
   // The 'cancelBtn is not defined' and 'startT is not defined' bugs were cross-.then scope
@@ -273,6 +296,7 @@ console.log("\n8. streaming full export present + guarded");
       _streamState: null, streamCancelBtn: null,
       renderStreamCard: function () { return true; },
       makeStreamCancelBtn: function () { return fakeEl(); },
+      setExportBusy: function () {},   // closure helper the handler now calls (pause Count/Fetch)
       // vars the ENCLOSING streamBtn.onclick legitimately declares before goBtn (so the
       // guard flags only TRUE cross-.then leaks, not these in-scope locals):
       sql: 'SELECT * FROM "T__dll"', ds: "DS", tableName: "T__dll", hasLimit: false,

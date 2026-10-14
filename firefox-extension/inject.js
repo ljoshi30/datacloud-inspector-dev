@@ -12823,6 +12823,18 @@
     };
 
     var _lastResult = null;
+    // Replace the current fetched result, revoking the PREVIOUS result's Blob URL first so we
+    // never leak object URLs (each Fetch creates one). Keeps memory bounded to a SINGLE export
+    // Blob while still letting the user re-click Download on the current result as many times
+    // as they like. Pass null to just clear + revoke (e.g. a new query starting).
+    function setLastResult(next) {
+      try {
+        if (_lastResult && _lastResult.blobUrl && (!next || next.blobUrl !== _lastResult.blobUrl)) {
+          URL.revokeObjectURL(_lastResult.blobUrl);
+        }
+      } catch (e) {}
+      _lastResult = next;
+    }
     // Remember the last STREAM full-export so re-running the SAME query warns the user first
     // (streaming re-scans the whole table → wasted credits if they already have the file).
     // { sqlKey, rows, when } — rows/when just for the message; sqlKey is the match key.
@@ -12835,6 +12847,21 @@
     // result) — no blank card, no "did it stop?" confusion, and never a duplicate export.
     // { status:'running'|'done'|'cancelled'|'error', rows, finalHtml }
     var _streamState = null;
+    // While an Export ALL is streaming, disable Count + Fetch & Export (not just the stream
+    // button). Otherwise clicking them mid-stream writes into the SAME shared card that the
+    // stream's progress callback repaints every batch → the two cards flicker and clobber each
+    // other, and the Count/Fetch result is unreadable until the stream ends. Dim them too so
+    // it's visually clear they're paused. Re-enabled on every terminal path (done/cancel/error).
+    function setExportBusy(on) {
+      try {
+        [countBtn, runBtn].forEach(function (b) {
+          if (!b) return;
+          b.disabled = !!on;
+          b.style.opacity = on ? "0.45" : "1";
+          b.style.pointerEvents = on ? "none" : "";
+        });
+      } catch (e) {}
+    }
     // One reusable cancel button for the active stream, hoisted so renderStreamCard() can
     // re-attach it after the card was closed and re-opened mid-stream.
     var streamCancelBtn = null;
@@ -13370,7 +13397,11 @@
         var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
         var cap = ul > 0 ? ul : HARD;
         function fail(err) { try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {} reject(err instanceof Error ? err : new Error(String(err))); }
-        function result() { return { totalRows: got, cancelled: false, columns: cols || [] }; }
+        // Report the REAL cancel state. finishOk() is called on BOTH normal end-of-data AND on
+        // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
+        // partial export look "complete" and get memoized as if the whole table was exported
+        // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
+        function result() { return { totalRows: got, cancelled: cancelled(), columns: cols || [] }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
@@ -14015,7 +14046,7 @@
               btn.textContent = "Fetching " + fetched.toLocaleString() + "…";
             }, function () { return false; }).then(function (r) {
               btn.disabled = false; btn.textContent = origText;
-              _lastResult = { blobUrl: r.blobUrl, filename: "helpful_query_sample.csv", rowCount: r.totalRows, cols: r.columns.length, columns: r.columns, tableName: objInput.value.trim(), data: r.rowData || [], sql: sampleSql };
+              setLastResult({ blobUrl: r.blobUrl, filename: "helpful_query_sample.csv", rowCount: r.totalRows, cols: r.columns.length, columns: r.columns, tableName: objInput.value.trim(), data: r.rowData || [], sql: sampleSql });
               downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block";
               var cappedNote = r.totalRows >= SAMPLE_ROWS ? " (capped at " + SAMPLE_ROWS.toLocaleString() + " — there may be more; download the CSV for everything fetched, or narrow the check first)" : "";
               resultArea.innerHTML = "<b>" + r.totalRows.toLocaleString() + "</b> row" + (r.totalRows === 1 ? "" : "s") + " fetched" + cappedNote + ". Use <b>👁 View Results</b> or <b>⬇ Download CSV</b> above.";
@@ -14257,7 +14288,7 @@
             + "<span style='font:600 14px -apple-system,sans-serif;'>Previous results ready</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'><b>" + _lastResult.rowCount.toLocaleString() + " rows</b>, <b>" + _lastResult.cols + " columns</b> — use Download CSV or View Results.</div>";
         };
-        document.getElementById("dc-refetch-yes").onclick = function () { _lastResult = null; runBtn.click(); };
+        document.getElementById("dc-refetch-yes").onclick = function () { setLastResult(null); runBtn.click(); };
         return;
       }
       var check = validateSql(sql);
@@ -14287,7 +14318,7 @@
 
       runBtn.disabled = true; runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
-      downloadBtn.style.display = "none"; viewBtn.style.display = "none"; _lastResult = null;
+      downloadBtn.style.display = "none"; viewBtn.style.display = "none"; setLastResult(null);
       // Cancel button for long-running exports
       window.__dcQueryExportCancelled = false;
       var cancelBtn = document.createElement("button");
@@ -14341,7 +14372,7 @@
           runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           if (res.totalRows === 0) {
-            _lastResult = null;
+            setLastResult(null);
             cardBody.innerHTML = ""
               + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
               + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
@@ -14351,7 +14382,7 @@
             downloadBtn.style.display = "none";
             return;
           }
-          _lastResult = { blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rowCount: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName, data: res.rowData || [], sql: sql };
+          setLastResult({ blobUrl: res.blobUrl, filename: tableName + "_" + todayStr() + ".csv", rowCount: res.totalRows, cols: res.columns.length, columns: res.columns, tableName: tableName, data: res.rowData || [], sql: sql });
           var defaultFilename = tableName + "_" + todayStr() + ".csv";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'>"
@@ -14472,6 +14503,7 @@
           window.__dcStreamCancel = false;
           startT = Date.now();   // reset to the moment the user actually picked the file
           streamBtn.disabled = true;
+          setExportBusy(true);   // pause Count/Fetch so they can't fight over the shared card
           // Fresh cancel button on the hoisted ref so renderStreamCard() can re-attach the
           // SAME button if the card is closed and re-opened mid-stream.
           streamCancelBtn = makeStreamCancelBtn();
@@ -14488,6 +14520,7 @@
           return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });
         }).then(function (res) {
           streamBtn.disabled = false;
+          setExportBusy(false);
           var secs = ((Date.now() - startT) / 1000).toFixed(1);
           // Remember this export so a repeat of the SAME query warns (save credits). Only
           // memo a real, non-cancelled result that actually wrote rows.
@@ -14520,6 +14553,7 @@
           if (card.style.display !== "none") renderStreamCard();
         }).catch(function (err) {
           streamBtn.disabled = false;
+          setExportBusy(false);
           var m = String(err && err.message || err);
           var finalHtml;
           if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
@@ -14542,10 +14576,11 @@
       a.href = _lastResult.blobUrl;
       a.download = filename;
       a.click();
-      // Revoke the Blob URL shortly after the download starts to free its memory. 1.5s is
-      // ample for the browser to hand the file to the OS; holding it 10s needlessly pinned a
-      // large export in RAM. Guarded so a repeat click (already revoked) can't throw.
-      (function (url) { setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 1500); })(_lastResult.blobUrl);
+      // NOTE: we deliberately do NOT revoke the Blob URL here. The user can click Download
+      // again (same result), and revoking would make the 2nd click download nothing — that
+      // was a real bug when a short revoke timer was used. Memory stays bounded because the
+      // PREVIOUS result's Blob is revoked when a new result replaces it (see setLastResult)
+      // and when the tool tears down. So at most one export Blob is ever held.
       downloadBtn.textContent = "✓ Downloaded!";
       downloadBtn.style.background = "linear-gradient(135deg,#059669,#047857)";
       setTimeout(function () { downloadBtn.textContent = "⬇ Download CSV"; downloadBtn.style.background = "linear-gradient(135deg,#3b82f6,#2563eb)"; }, 2500);
@@ -14703,15 +14738,16 @@
         });
       }
 
-      // Render the header immediately (empty tbody), then fill rows in non-blocking chunks
-      // via the shared filler — so the modal appears instantly and a big result (2,000 rows ×
-      // many columns) never blocks the main thread on a single synchronous build. The same
-      // filler is reused by sort + the empty-column toggle, so there's ONE VDI-safe path.
+      // Render the header immediately (empty tbody). The ROWS are filled AFTER the modal is
+      // added to the document (see fillTbodyChunked call below the appendChild) — the filler
+      // guards on the modal being in the DOM, so filling before append would render nothing
+      // (that was the "empty rows until I toggle columns" bug). The chunked fill keeps a big
+      // result (2,000 rows × many cols) from blocking the main thread; the same filler is
+      // reused by sort + the empty-column toggle, so there's ONE VDI-safe path.
       var table = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='position:sticky;top:0;z-index:1;background:#1e293b;color:#fff;'>";
       cols.forEach(function (c) { table += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'> ▲</span></th>"; });
       table += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
       tableWrap.innerHTML = table;
-      fillTbodyChunked(rows);
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
@@ -14836,6 +14872,9 @@
       modal.appendChild(box);
       modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
       document.body.appendChild(modal);
+      // NOW fill the rows — the modal is in the DOM, so the filler's guards pass. (Filling
+      // before this appendChild rendered nothing → the "empty rows until I toggle" bug.)
+      fillTbodyChunked(rows);
       // Draggable by the header, resizable from the corner grip — same helpers used by
       // every other floating panel in the tool (Helpful Queries, Data Explorer results).
       try { makeDraggable(box, hdr); } catch (e) {}
