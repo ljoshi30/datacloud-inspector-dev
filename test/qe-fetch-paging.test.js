@@ -204,6 +204,11 @@ console.log("\n8. streaming full export present + guarded");
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
+  // Locked-file (replacing a CSV still open in Excel): retry once, then a clear actionable msg.
+  ok("createWritable retries once on a lock error (transient lock)", /function openWritable\(attempt\)/.test(src) && /attempt < 1 && \/truncate\|create\|locked/.test(src) && /openWritable\(attempt \+ 1\)/.test(src));
+  ok("locked-file error is tagged (err.fileLocked) for a friendly message", /err\.fileLocked = \/truncate\|create\|locked\|NoModificationAllowed\|InvalidState\/i\.test\(em\)/.test(src));
+  ok("locked-file shows 'still open in Excel' guidance, not the raw browser error", /Couldn’t save over that file[\s\S]{0,200}still <b>open in Excel<\/b>/.test(src));
+  ok("locked-file handling synced into the bookmarklet build too", /function openWritable\(attempt\)/.test(bm) && /still <b>open in Excel<\/b>/.test(bm));
   ok("stream has its OWN cancel button (no out-of-scope cancelBtn reference)", /function makeStreamCancelBtn\(\)/.test(src) && /window\.__dcStreamCancel = true;/.test(src));
   ok("progress UI appends the stream's own cancel button (not Fetch handler's)", /cardBody\.appendChild\(streamCancelBtn\)/.test(src));
   ok("no user-facing 'browser extension' wording in the capped warning", !/use the <b>browser extension<\/b>/.test(src));

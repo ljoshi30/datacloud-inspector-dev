@@ -13420,10 +13420,25 @@
           return buf ? writer.write(buf) : Promise.resolve();
         }
 
-        // open the file stream (user already picked the file → fileHandle)
-        var ready;
-        try { ready = fileHandle.createWritable(); } catch (e) { fail(new Error("Could not open the file for writing: " + e)); return; }
-        Promise.resolve(ready).then(function (w) {
+        // open the file stream (user already picked the file → fileHandle).
+        // createWritable() can throw/reject "Failed to create or truncate file" when the file
+        // the user chose to REPLACE is locked by another program (most often it's still open
+        // in Excel) or a transient OS lock. Retry ONCE after a short delay to ride out a
+        // transient lock; if it still fails, surface a clear, actionable message (handled in
+        // the .catch below, which recognizes this error and tells the user to close the file).
+        function openWritable(attempt) {
+          return Promise.resolve().then(function () { return fileHandle.createWritable(); })
+            .catch(function (e) {
+              var em = String(e && e.message || e);
+              if (attempt < 1 && /truncate|create|locked|NoModificationAllowed|InvalidState/i.test(em)) {
+                return new Promise(function (res) { setTimeout(res, 400); }).then(function () { return openWritable(attempt + 1); });
+              }
+              var err = new Error(em);
+              err.fileLocked = /truncate|create|locked|NoModificationAllowed|InvalidState/i.test(em);
+              throw err;
+            });
+        }
+        openWritable(0).then(function (w) {
           writer = w;
           // ── EXTENSION cursor path (efficient — no re-scan) ──
           if (typeof extBridgePresent === "function" && extBridgePresent()) {
@@ -13493,7 +13508,7 @@
               }).catch(function (err) { fail(new Error("Fetch failed: " + err)); });
           }
           batch(0);
-        }, function (e) { fail(new Error("Could not create the file writer: " + e)); });
+        }, function (e) { fail(e instanceof Error ? e : new Error(String(e))); });   // preserve e.fileLocked
       });
     }
 
@@ -14558,6 +14573,13 @@
           var finalHtml;
           if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
             finalHtml = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>";
+          } else if ((err && err.fileLocked) || /create or truncate|truncate file|NoModificationAllowed/i.test(m)) {
+            // The chosen file couldn't be overwritten — almost always because it's still OPEN
+            // in Excel/another program (which locks it), or you don't have write permission
+            // there. Give the actual fix, not the raw browser error.
+            finalHtml = "<div style='color:#92400e;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Couldn’t save over that file</div>"
+              + "<div style='font-size:12px;color:#475569;line-height:1.6;'>The file you chose to replace is <b>locked</b> — it’s most likely still <b>open in Excel</b> or another program.<br><br>"
+              + "<b>Fix:</b> close the file in Excel (or pick a <b>new file name</b>), then click <b>Export ALL</b> again. No credits were used.</div>";
           } else {
             finalHtml = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
           }
