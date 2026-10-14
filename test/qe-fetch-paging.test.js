@@ -210,6 +210,13 @@ console.log("\n8. streaming full export present + guarded");
   ok("button row is height-capped + scrollable so the FAB never goes off-screen", /function clampQeButtonRow\(\)/.test(src) && /btnRow\.style\.maxHeight =/.test(src) && /btnRow\.style\.overflowY = "auto"/.test(src));
   ok("button row re-clamped when the panel opens and on resize", /if \(_panelOpen\) \{\s*try \{ clampQeButtonRow\(\); \} catch/.test(src) && /window\.addEventListener\("resize", clampQeButtonRow\)/.test(src));
   ok("button-row clamp synced into the bookmarklet build too", /function clampQeButtonRow\(\)/.test(bm));
+  // Auto-reposition must SNAP BACK on close (FAB not left stranded), but respect a user drag.
+  ok("tracks auto-move vs user-drag (two separate flags)", /var _autoPositioned = false/.test(src) && /var _userDragged = false/.test(src));
+  ok("clamp marks its repositioning as AUTOMATIC (_autoPositioned = true)", /_autoPositioned = true;\s*\/\/ remember THIS was an automatic move/.test(src));
+  ok("a real drag marks _userDragged + clears auto flag", /_dragMoved = true; _userDragged = true; _autoPositioned = false;/.test(src));
+  ok("closing the panel snaps an AUTO-moved launcher back to its home corner", /if \(_autoPositioned && !_userDragged\) resetWrapToDefaultAnchor\(\)/.test(src));
+  ok("reset restores the exact default anchor (bottom:16px/left:16px)", /function resetWrapToDefaultAnchor\(\)[\s\S]{0,200}bottom = "16px";[\s\S]{0,40}left = "16px"/.test(src));
+  ok("snap-back + drag-respect synced into the bookmarklet build too", /var _autoPositioned = false/.test(bm) && /if \(_autoPositioned && !_userDragged\) resetWrapToDefaultAnchor\(\)/.test(bm));
 
   // ── RUNTIME scope-leak guard ──────────────────────────────────────────────────────
   // The 'cancelBtn is not defined' and 'startT is not defined' bugs were cross-.then scope

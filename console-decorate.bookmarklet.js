@@ -12631,12 +12631,31 @@
               wrap.style.left = r.left + "px";
               wrap.style.bottom = "auto";
               wrap.style.right = "auto";
+              _autoPositioned = true;   // remember THIS was an automatic move (not a user drag)
             }
           } catch (e) {}
         });
       } catch (e) {}
     }
     window.addEventListener("resize", clampQeButtonRow);
+
+    // Did the clamp AUTO-move the launcher to keep it on-screen? vs. did the USER drag it?
+    // We must tell these apart: an automatic move is temporary (only to keep a tall open panel
+    // visible) and MUST snap back to the default bottom-left corner when the panel closes —
+    // otherwise the FAB is left stranded mid-screen after close (the reported bug). A real user
+    // drag is intentional and must be respected (never auto-reset).
+    var _autoPositioned = false;   // set by the clamp above when it repositions
+    var _userDragged = false;      // set by the drag handler below on a real drag
+    // Restore the original anchor (bottom-left corner) and clear any inline position overrides.
+    function resetWrapToDefaultAnchor() {
+      try {
+        wrap.style.top = "auto";
+        wrap.style.right = "auto";
+        wrap.style.bottom = "16px";
+        wrap.style.left = "16px";
+        _autoPositioned = false;
+      } catch (e) {}
+    }
 
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "×";
@@ -12795,6 +12814,10 @@
         }
       } else {
         card.style.display = "none";
+        // Panel closed. If the launcher was ONLY auto-moved (to stay visible while the tall
+        // panel was open) and the user never dragged it, snap it back to its home corner so
+        // the FAB doesn't stay stranded mid-screen. A user-dragged position is left untouched.
+        if (_autoPositioned && !_userDragged) resetWrapToDefaultAnchor();
       }
       fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
     };
@@ -14867,7 +14890,7 @@
       wrap.style.right = "auto"; wrap.style.bottom = "auto";
       var mv = function (ev) {
         var dx = ev.clientX - startX, dy = ev.clientY - startY;
-        if (!_dragMoved && Math.sqrt(dx*dx + dy*dy) > 4) _dragMoved = true;
+        if (!_dragMoved && Math.sqrt(dx*dx + dy*dy) > 4) { _dragMoved = true; _userDragged = true; _autoPositioned = false; }
         if (!_dragMoved) return;
         wrap.style.left = Math.max(0, Math.min(ox + dx, window.innerWidth - 60)) + "px";
         wrap.style.top = Math.max(0, Math.min(oy + dy, window.innerHeight - 60)) + "px";
