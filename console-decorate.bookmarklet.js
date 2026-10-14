@@ -14309,11 +14309,12 @@
       // Confirmation + warning card (potentially slow/credit-heavy action).
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;'></div><span style='font:600 13px -apple-system,sans-serif;'>Export full table</span></div>"
-        + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>Exports <b>" + tableName + "</b> to a CSV file saved to your computer, written as rows fetch."
+        + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;'>Exports <b>" + tableName + "</b> to a CSV file on your computer."
         + (hasLimit ? "" : "<br><span style='color:#92400e;'>⚠ No LIMIT — this fetches the WHOLE table. On a large table it's <b>slow</b> and <b>uses Data Cloud credits</b>.</span>")
         + "</div>"
+        + "<div style='font-size:11px;color:#64748b;background:#f8fafc;border-radius:6px;padding:7px 9px;margin-bottom:10px;line-height:1.5;'>When you click <b>Save CSV…</b>, your browser asks where to save the file. Pick a location — the download then fills in automatically as rows are fetched.</div>"
         + "<div style='display:flex;gap:8px;'>"
-        + "<button id='dc-stream-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Choose file &amp; start</button>"
+        + "<button id='dc-stream-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Save CSV…</button>"
         + "<button id='dc-stream-no' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>Cancel</button>"
         + "</div>";
       var noBtn = document.getElementById("dc-stream-no");
