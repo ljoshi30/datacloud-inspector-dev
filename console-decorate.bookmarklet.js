@@ -18921,6 +18921,7 @@ processJSON();
   function dcWelcomeToast() {
     try {
       if (document.getElementById("dc-welcome")) return;
+      if (window.__dcWelcomeShown) return;   // already shown this tab session (set only on real render below)
       // page-specific feature lines (only what's actually live on this page)
       var pageTitle = "", pageFeats = [];
       var t = detailPageType;
@@ -18966,6 +18967,12 @@ processJSON();
       toast.style.cssText = "position:fixed;bottom:24px;" + side + ":24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.45);max-width:330px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;";
       toast.innerHTML = html;
       document.body.appendChild(toast);
+      // Mark "shown" ONLY now that it actually rendered — NOT eagerly at schedule time. The old
+      // code set the flag before the 600ms timer fired, so if this function bailed early
+      // ("nothing to announce" on some page), the flag stuck true and the popup never appeared
+      // again for the whole tab session. Setting it here means a page with nothing to say leaves
+      // the flag false, so the NEXT page that does have something still gets its one popup.
+      try { window.__dcWelcomeShown = true; } catch (e) {}
       requestAnimationFrame(function () { toast.style.opacity = "1"; toast.style.transform = "translateY(0)"; });
       // Auto-dismiss a bit quicker (4s) — it's a confirmation, not something to read twice.
       var killer = setTimeout(function () { toast.style.opacity = "0"; toast.style.transform = "translateY(8px)"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 350); }, 4000);
@@ -18974,11 +18981,12 @@ processJSON();
     } catch (e) {}
   }
   // Show ONCE PER SESSION (not per page). The welcome is an activation confirmation — seeing
-  // it on every navigation is annoying (user feedback). window.__dcWelcomeShown persists for
-  // the life of the tab's tool scope, so it fires on first activation only. Shorter 600ms
-  // delay so it feels responsive (was 1.2s → felt late) while LWC settles enough to detect.
+  // it on every navigation is annoying (user feedback). dcWelcomeToast() self-guards on
+  // window.__dcWelcomeShown, and sets that flag ONLY when it actually renders — so a page with
+  // nothing to announce no longer "burns" the one-shot (the bug: popup never came back). 600ms
+  // delay so it feels responsive while LWC settles enough to detect the page type.
   try {
-    if (!window.__dcWelcomeShown) { window.__dcWelcomeShown = true; setTimeout(dcWelcomeToast, 600); }
+    if (!window.__dcWelcomeShown) setTimeout(dcWelcomeToast, 600);
   } catch (e) {}
   /* @strip:end */
 

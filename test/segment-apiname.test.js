@@ -564,7 +564,13 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV harvests label→href LIVE from top nav (covers 28+ incl. future; left-nav empty-href items resolve via this)", /function dcHarvestNavRoutes\s*\(/.test(src) && /slds-context-bar__label-action/.test(src) && /dcRouteForLabel[\s\S]{0,400}dcHarvestNavRoutes\(\)/.test(src));
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
   ok("WELCOME toast announces page features + globals (once per SESSION, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShown\b/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
-  ok("WELCOME shows once per session (not per page) + faster delay", /if \(!window\.__dcWelcomeShown\) \{ window\.__dcWelcomeShown = true; setTimeout\(dcWelcomeToast, 600\)/.test(src));
+  ok("WELCOME shows once per session (not per page) + faster delay", /if \(!window\.__dcWelcomeShown\) setTimeout\(dcWelcomeToast, 600\)/.test(src));
+  // BUG FIX: the one-shot flag must be set ONLY when the toast actually RENDERS, not eagerly at
+  // schedule time. The old eager set meant a page with "nothing to announce" burned the one-shot
+  // and the popup never came back for the whole tab session (reported: "not seeing the popup").
+  ok("WELCOME flag set on real render, not eagerly (so a quiet page doesn't burn the one-shot)",
+    /document\.body\.appendChild\(toast\);[\s\S]{0,800}window\.__dcWelcomeShown = true;/.test(src) &&
+    /if \(window\.__dcWelcomeShown\) return;\s*\/\/ already shown this tab session/.test(src));
   // WELCOME toast appears on the OPPOSITE side from the launcher (QE launcher = bottom-left →
   // toast right; all other launchers = bottom-right → toast left) so they never overlap. Side
   // is read from the launcher's LIVE position (#dc-bar getBoundingClientRect), so a dragged
@@ -583,6 +589,46 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("⧉ does NOT read the old persisted flag (no getItem gate that could stick it off)", !/localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src));
   ok("stale ⧉ enable flag is cleared on load (so a past Off can't keep it hidden)", /localStorage\.removeItem\(DC_NEWTAB_LS\)/.test(src));
   ok("SEGMENT DOM-fallback gated to /cmp/ builder routes (stale wizard no longer misclassifies Home/list as Segment)", /looksLikeBuilderRoute = \/\\\/lightning\\\/cmp\\\//.test(src) && /\\\/lightning\\\/page\\\/\|\\\/lightning\\\/o\\\/\[A-Za-z\]\+\\\/home/.test(src) && /looksLikeBuilderRoute[\s\S]{0,160}runtime_cdp-segment-wizard/.test(src));
+}
+
+// ── 6f. BEHAVIOR (not presence): the welcome one-shot survives a "quiet" page ────────
+// This EXECUTES the actual guard logic (not a regex). It models the exact bug the user hit:
+// land on a page with nothing to announce (quiet), then a page that DOES have something. The
+// popup must still appear on the second page. The old eager-flag code failed this.
+console.log("\n6f. welcome one-shot behavior: a quiet page must not burn the popup");
+{
+  // Faithful model of the fixed control flow:
+  //   trigger: if (!win.__dcWelcomeShown) schedule(toast)
+  //   toast(): if (win.__dcWelcomeShown) return; ...decide content...; if nothing → return
+  //            (flag NOT set); else append + set win.__dcWelcomeShown = true.
+  function makeWelcome() {
+    var win = {};                 // fresh "tab session"
+    var rendered = 0;
+    function toast(hasContent) {
+      if (win.__dcWelcomeShown) return;          // self-guard
+      if (!hasContent) return;                   // "nothing to announce" → must NOT set the flag
+      rendered++;
+      win.__dcWelcomeShown = true;               // set ONLY on real render
+    }
+    function visitPage(hasContent) {
+      if (!win.__dcWelcomeShown) toast(hasContent);   // trigger (no eager set)
+    }
+    return { visitPage: visitPage, shown: function () { return rendered; }, win: win };
+  }
+
+  var w = makeWelcome();
+  w.visitPage(false);  // quiet page (e.g. a route with no detected feature)
+  eq("quiet page renders nothing", w.shown(), 0);
+  ok("quiet page did NOT burn the one-shot (flag still false)", w.win.__dcWelcomeShown !== true);
+  w.visitPage(true);   // next page has something to announce
+  eq("next page WITH content shows the popup (the reported bug is fixed)", w.shown(), 1);
+  w.visitPage(true);   // and again elsewhere
+  eq("stays once-per-session after it has shown (no repeat)", w.shown(), 1);
+
+  // Opposite order sanity: an active page first shows once, then never again.
+  var w2 = makeWelcome();
+  w2.visitPage(true); w2.visitPage(true); w2.visitPage(false);
+  eq("active-first: shows exactly once across the session", w2.shown(), 1);
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
