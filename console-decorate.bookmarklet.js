@@ -17902,41 +17902,94 @@ processJSON();
    * confirmed via probe (never guessed). We overlay ONE shared ⧉ button (appended to body,
    * never mutating SF's datatable) next to the hovered row's name cell.
    *
-   * CONFIRMED entries: DMO (c__objectApiName — the same param the tool already reads off
-   * live DMO pages). PENDING (need a probe-confirmed detail URL before enabling): DLO, CI,
-   * Segment, DataStream — stubs commented out below. */
-  var DC_LIST_TYPES = [
-    {
-      id: "dmo",
-      // page: Data Model list (not the ERD graph, not a single DMO detail page)
-      match: function (h) { return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); },
-      // the row key is a DMO api token (Foo__dlm / __dll / __c), never "HEADER"
-      keyOk: function (k) { return !!k && k !== "HEADER" && /__(?:dlm|dll|c)$/i.test(k); },
-      // proven detail URL (same c__objectApiName param the tool reads off live DMO pages)
-      url: function (key) { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(key); }
-    }
-    // , { id:"dlo", match:h=>…, keyOk:k=>…, url:key=>… }   // PENDING probe (v21) → fill URL
-    // , { id:"ci",  match:h=>…, keyOk:k=>…, url:key=>… }   // PENDING probe (v21) → fill URL
-    // , { id:"segment", … }                               // PENDING probe (v21) → fill URL
-  ];
+   * COVERS ALL DATA CLOUD LISTS — without guessing any URL. KEY INSIGHT: on every DC list
+   * EXCEPT the Data Model list, each row's name cell renders a REAL Salesforce link
+   * (<a href="/lightning/r/<Object>/<id>/view"> or an /lightning/n/... link). So for those we
+   * read the row's OWN href straight from the DOM — correct by construction, never fabricated.
+   * The Data Model list is the one exception (SF renders NO link there — that's the whole
+   * reason it needed this feature), so it keeps the PROVEN c__objectApiName template.
+   *
+   * So the active-list check is now generic: a page is a "DC list" if it's a standard DC list
+   * route and currently shows the shared datatable. Per row we resolve the destination by:
+   *   1) the row's own real <a href> (works for DLO, Data Stream, CI, Segment, Activation, …)
+   *   2) else, if it's the Data Model list, the proven DMO template from the row key.
+   * If neither yields a URL, no ⧉ is shown (we never guess). */
+  // Detail-URL template for the Data Model list ONLY (the one list with no per-row link).
+  function dcDmoListUrl(key) { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(key); }
+  function dcIsDmoListPage(h) { return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); }
+  // A page qualifies as a "DC list" for the ⧉ if it's a Data Cloud route AND the shared
+  // datatable is on screen. This covers DLO / Data Stream / CI / Segment / Activation / DMO
+  // list routes under both the new /lightning/n/standard-* nav and classic object-home routes.
+  // CHEAP, URL-ONLY check (runs on every mouseover — must not scan the DOM). Returns a type
+  // object if the current page is a Data Cloud route where a list COULD be shown, else null.
+  // Whether a datatable is actually present is decided implicitly + cheaply by the per-row
+  // climb (dcRowKeyFrom): if the hovered element isn't inside a keyed <tr>, nothing shows.
+  // That keeps the hover path O(ancestors), never a full-document scan (VDI-safe).
   function dcActiveListType() {
     var h = ""; try { h = location.href; } catch (e) { return null; }
-    for (var i = 0; i < DC_LIST_TYPES.length; i++) { try { if (DC_LIST_TYPES[i].match(h)) return DC_LIST_TYPES[i]; } catch (e) {} }
-    return null;
+    if (!/\/lightning\//i.test(h)) return null;
+    // Exclude non-list pages: a single record detail, the ERD graph, and the Query Editor /
+    // Data Explorer workspaces (which have their own launchers and their own tables).
+    if (/\/lightning\/r\/[^/]+\/[^/]+\/view/i.test(h)) return null;
+    if (/displayType=graph|c__displayType=graph/i.test(h)) return null;
+    if (/DataQueryWorkspace|DataExplore|CdpDataView/i.test(h)) return null;
+    return { id: dcIsDmoListPage(h) ? "dmo" : "generic", isDmoList: dcIsDmoListPage(h) };
   }
-  // From a hovered node, climb to the <tr> and return {key,row} if its data-row-key-value
-  // passes the active list type's keyOk. Null otherwise.
+  // From a hovered node, climb to the <tr> and resolve BOTH the row key and a destination
+  // href. Returns {key,row,href} or null. href comes from the row's OWN real link when present
+  // (any list), else the proven DMO template on the Data Model list. keyOk filters header rows.
   function dcRowKeyFrom(node, type) {
     for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
       try {
         if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
           var k = node.getAttribute("data-row-key-value");
-          if (type.keyOk(k)) return { key: k, row: node };
+          if (k && k !== "HEADER") {
+            var href = dcRowRealHref(node);
+            if (!href && type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) href = dcDmoListUrl(k);
+            if (href) return { key: k, row: node, href: href };
+          }
         }
       } catch (e) {}
       node = node.parentElement;
     }
     return null;
+  }
+  // Read a row's OWN rendered record link (never fabricated). The record's primary link lives
+  // in the row's NAME cell (the rowheader / first cell), so we scan THAT first and only fall
+  // back to "first Lightning link anywhere in the row" if the name cell has none. This avoids
+  // grabbing an unrelated link in a later column (e.g. an owner/related-object link). Crosses
+  // shadow DOM. Returns an absolute URL or "".
+  function dcRowRealHref(tr) {
+    function firstLightningHref(root) {
+      var found = "";
+      function scan(node) {
+        if (found || !node) return;
+        var as = null; try { as = node.querySelectorAll ? node.querySelectorAll("a[href]") : null; } catch (e) {}
+        if (as) {
+          for (var i = 0; i < as.length; i++) {
+            var hv = as[i].getAttribute("href") || "";
+            // real Lightning record (/r/) or nav (/n/) or app route — NOT "#", "javascript:", mailto, etc.
+            if (/\/lightning\/(r|n|o)\//i.test(hv) || /^\/lightning\//i.test(hv)) {
+              try { found = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
+              catch (e) { found = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
+              break;
+            }
+          }
+        }
+        if (found) return;
+        var all = null; try { all = node.querySelectorAll ? node.querySelectorAll("*") : null; } catch (e) {}
+        if (all) { for (var j = 0; j < all.length && !found; j++) { var sr = null; try { sr = all[j].shadowRoot; } catch (e) {} if (sr) scan(sr); } }
+      }
+      try { scan(root); } catch (e) {}
+      return found;
+    }
+    // 1) prefer the NAME cell (rowheader / th / first td)
+    var nameCell = null;
+    try { nameCell = tr.querySelector('[role="rowheader"]') || tr.querySelector('th') || tr.querySelector('td'); } catch (e) {}
+    var href = nameCell ? firstLightningHref(nameCell) : "";
+    // 2) else, any Lightning link in the whole row
+    if (!href) href = firstLightningHref(tr);
+    return href;
   }
   // ONE shared floating ⧉ for whatever list is active. Body-overlay; never mutates SF's
   // datatable (virtual scroll undisturbed). Anchored to the row's NAME cell. Listeners live
@@ -17970,7 +18023,7 @@ processJSON();
       if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) hit = dcRowKeyFrom(p[i], type); }
       if (!hit) return;
       if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; }
-      var href = ""; try { href = type.url(hit.key); } catch (er) {}
+      var href = hit.href || "";
       if (!href) return;
       var btn = dcGetListBtn();
       btn.href = href;
@@ -18879,7 +18932,7 @@ processJSON();
       else if (t === "Transform") { pageTitle = "Data Transform"; pageFeats = ["Read the definition in plain English"]; }
       else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
       else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
-      else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Model (list)"; pageFeats = ["Hover a row → ⧉ opens that DMO in a new tab"]; }
+      else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Cloud list"; pageFeats = ["Hover a row → ⧉ opens that record in a new tab"]; }
       // always-on globals (dev build) — clearer wording: it's a button that appears when you
       // hover a Data Cloud menu item.
       var globals = [];

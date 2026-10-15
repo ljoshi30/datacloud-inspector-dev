@@ -552,6 +552,13 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   // teardown's [id^='dc-'] sweep. Capture poll is also once-per-document.
   ok("NAV ⧉ installs once-per-document + button self-heals (survives nav, no re-click)", /window\.__dcNavNewTabInstalled/.test(src) && /function dcGetNavBtn\s*\(/.test(src));
   ok("LIST ⧉ installs once-per-document + button self-heals", /window\.__dcListNewTabInstalled/.test(src) && /function dcGetListBtn\s*\(/.test(src));
+  // LIST ⧉ now covers ALL Data Cloud lists (DLO, Data Stream, CI, Segment, …), not just DMO —
+  // WITHOUT guessing: per row it reads the row's OWN real <a href> (dcRowRealHref), falling
+  // back to the proven DMO template only on the Data Model list (the one list with no link).
+  ok("LIST ⧉ reads each row's OWN real href (covers all lists, never fabricated)", /function dcRowRealHref\s*\(/.test(src) && /var href = dcRowRealHref\(node\)/.test(src));
+  ok("LIST ⧉ DMO template is the FALLBACK only when the row has no link", /if \(!href && type && type\.isDmoList[\s\S]{0,60}href = dcDmoListUrl\(k\)/.test(src));
+  ok("LIST active-type check is cheap/URL-only (no per-mouseover DOM scan — VDI-safe)", /CHEAP, URL-ONLY check/.test(src) && !/dcHasKeyedRow/.test(src));
+  ok("LIST ⧉ handler uses the row's resolved href (hit.href), not a per-type url()", /var href = hit\.href \|\| "";/.test(src) && !/type\.url\(/.test(src));
   ok("nav capture poll is once-per-document (no stacked pollers on re-run)", /window\.__dcNavCapturePoll/.test(src));
   ok("NAV route resolve order href-first → learned → seed (zero-maintenance)", /function dcRouteForLabel\s*\(/.test(src) && /dc_nav_routes_learned_v1/.test(src) && /function dcCaptureCurrentNavRoute\s*\(/.test(src));
   ok("NAV harvests label→href LIVE from top nav (covers 28+ incl. future; left-nav empty-href items resolve via this)", /function dcHarvestNavRoutes\s*\(/.test(src) && /slds-context-bar__label-action/.test(src) && /dcRouteForLabel[\s\S]{0,400}dcHarvestNavRoutes\(\)/.test(src));
