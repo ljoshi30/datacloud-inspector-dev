@@ -631,5 +631,54 @@ console.log("\n6f. welcome one-shot behavior: a quiet page must not burn the pop
   eq("active-first: shows exactly once across the session", w2.shown(), 1);
 }
 
+// ── 6g. BEHAVIOR: list ⧉ activates on real list pages, NOT a DMO detail Fields tab ───
+// Runs the ACTUAL shipped dcActiveListType + dcIsDmoListPage (extracted from source via vm),
+// against real URLs. Reproduces the reported bug: on a DMO DETAIL page (…?c__objectApiName=X)
+// the Fields tab is a sub-table of field rows — the ⧉ must NOT activate there.
+console.log("\n6g. list ⧉ page-gate behavior (DMO detail Fields tab must NOT activate)");
+{
+  const vm = require("vm");
+  const fs = require("fs"), path = require("path");
+  const srcG = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  // pull the two functions verbatim from source and evaluate them in a sandbox
+  function extract(fnName) {
+    var m = srcG.match(new RegExp("function " + fnName + "\\s*\\([^)]*\\)\\s*\\{"));
+    if (!m) return null;
+    var start = srcG.indexOf(m[0]);
+    var i = srcG.indexOf("{", start), depth = 0, end = i;
+    for (; i < srcG.length; i++) { var c = srcG[i]; if (c === "{") depth++; else if (c === "}") { depth--; if (depth === 0) { end = i; break; } } }
+    return srcG.slice(start, end + 1);
+  }
+  var code = extract("dcIsDmoListPage") + "\n" + extract("dcActiveListType");
+  ok("extracted dcActiveListType + dcIsDmoListPage from source", /function dcActiveListType/.test(code) && /function dcIsDmoListPage/.test(code));
+  // sandbox with a settable location.href
+  var sb = { location: { href: "", origin: "https://x.my.salesforce.com" }, window: {} };
+  vm.runInNewContext(code + "\nthis.dcActiveListType = dcActiveListType;", sb);
+  function typeAt(href) { sb.location.href = href; try { return sb.dcActiveListType(); } catch (e) { return { error: String(e) }; } }
+
+  var O = "https://x.lightning.force.com";
+  // THE BUG: DMO detail page (Fields tab lives here) — must be null (no ⧉ on fields)
+  ok("DMO DETAIL (?c__objectApiName=…) → NOT a list (the reported field-row ⧉ bug)",
+    typeAt(O + "/lightning/n/standard-DataModel?c__objectApiName=ssot__EmailEngagement__dlm") === null);
+  // DMO LIST (no param) → the one case that NEEDS our ⧉
+  var dmo = typeAt(O + "/lightning/n/standard-DataModel");
+  ok("DMO LIST (no param) → activates as the DMO list", dmo && dmo.id === "dmo" && dmo.isDmoList === true);
+  // a real record detail page → null
+  ok("record detail (/r/<Obj>/<id>/view) → not a list", typeAt(O + "/lightning/r/DataStream/1dsHQ0000000A2b/view") === null);
+  // the ERD graph → null (handled by its own launcher)
+  ok("ERD graph (displayType=graph) → not a list", typeAt(O + "/lightning/n/standard-DataModel?displayType=graph") === null);
+  // a genuine object list route → generic list (⧉ convenience; rows have real links)
+  var gen = typeAt(O + "/lightning/o/DataStream/home");
+  ok("object list route (/o/<Obj>/home) → generic list", gen && gen.id === "generic" && gen.isDmoList === false);
+  // Query Editor / Data Explorer workspaces → null (own launchers)
+  ok("Query Editor workspace → not a generic list", typeAt(O + "/lightning/r/DataQueryWorkspace/20mDQ0/view") === null);
+
+  // dcRowRealHref must accept ONLY a real /r/<Obj>/<id>/view record link — a field row (no such
+  // link) yields "" → no ⧉. Verify the matcher the shipped code uses.
+  var hrefRe = /\/lightning\/r\/[A-Za-z0-9_]+\/[A-Za-z0-9]+\/view/i;
+  ok("row-link matcher accepts a real record link", hrefRe.test("/lightning/r/DataStream/1dsHQ0000000A2b/view"));
+  ok("row-link matcher REJECTS a field/app link (no bogus ⧉ on fields)", !hrefRe.test("/lightning/n/standard-DataModel?c__objectApiName=ssot__Subject__c"));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

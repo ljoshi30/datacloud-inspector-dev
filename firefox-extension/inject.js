@@ -17916,7 +17916,11 @@ processJSON();
    * If neither yields a URL, no ⧉ is shown (we never guess). */
   // Detail-URL template for the Data Model list ONLY (the one list with no per-row link).
   function dcDmoListUrl(key) { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(key); }
-  function dcIsDmoListPage(h) { return /standard-DataModel/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); }
+  // The DMO LIST is /lightning/n/standard-DataModel with NO c__objectApiName. A URL WITH
+  // c__objectApiName is a single DMO's DETAIL page — whose Fields tab is a sub-table of FIELD
+  // rows (ssot__X__c), NOT records to open. Treating it as the list stamped a bogus ⧉ on every
+  // field (the reported bug). So the list check requires the param to be ABSENT.
+  function dcIsDmoListPage(h) { return /standard-DataModel/i.test(h) && !/c__objectApiName=/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); }
   // A page qualifies as a "DC list" for the ⧉ if it's a Data Cloud route AND the shared
   // datatable is on screen. This covers DLO / Data Stream / CI / Segment / Activation / DMO
   // list routes under both the new /lightning/n/standard-* nav and classic object-home routes.
@@ -17928,12 +17932,22 @@ processJSON();
   function dcActiveListType() {
     var h = ""; try { h = location.href; } catch (e) { return null; }
     if (!/\/lightning\//i.test(h)) return null;
-    // Exclude non-list pages: a single record detail, the ERD graph, and the Query Editor /
-    // Data Explorer workspaces (which have their own launchers and their own tables).
-    if (/\/lightning\/r\/[^/]+\/[^/]+\/view/i.test(h)) return null;
-    if (/displayType=graph|c__displayType=graph/i.test(h)) return null;
-    if (/DataQueryWorkspace|DataExplore|CdpDataView/i.test(h)) return null;
-    return { id: dcIsDmoListPage(h) ? "dmo" : "generic", isDmoList: dcIsDmoListPage(h) };
+    // The DMO LIST is the one case SF renders with NO per-row link → it NEEDS our ⧉.
+    if (dcIsDmoListPage(h)) return { id: "dmo", isDmoList: true };
+    // Otherwise ONLY treat genuine LIST routes as lists — NOT record/detail pages (whose
+    // tabs are sub-tables of fields, e.g. a DMO detail Fields tab = the reported bug). SF
+    // list routes are object home / list-view routes:  /lightning/o/<Obj>/home ,
+    // /lightning/o/<Obj>/list , or /lightning/n/<...>  (nav item landing on a list). A single
+    // record is /lightning/r/<Obj>/<id>/view — explicitly excluded. These other lists already
+    // have REAL <a href> rows (right-click→new-tab works natively), so our ⧉ is a convenience
+    // only and must never appear on a detail page's field/related sub-tables.
+    if (/\/lightning\/r\//i.test(h)) return null;                                  // any record detail page
+    if (/displayType=graph|c__displayType=graph/i.test(h)) return null;            // ERD graph
+    if (/DataQueryWorkspace|DataExplore|CdpDataView/i.test(h)) return null;         // own-launcher workspaces
+    if (/c__objectApiName=/i.test(h)) return null;                                 // a specific object's detail
+    var isListRoute = /\/lightning\/o\/[A-Za-z0-9_]+\/(home|list)/i.test(h) || /\/lightning\/n\/[A-Za-z0-9_]+/i.test(h);
+    if (!isListRoute) return null;
+    return { id: "generic", isDmoList: false };
   }
   // From a hovered node, climb to the <tr> and resolve BOTH the row key and a destination
   // href. Returns {key,row,href} or null. href comes from the row's OWN real link when present
@@ -17968,8 +17982,12 @@ processJSON();
         if (as) {
           for (var i = 0; i < as.length; i++) {
             var hv = as[i].getAttribute("href") || "";
-            // real Lightning record (/r/) or nav (/n/) or app route — NOT "#", "javascript:", mailto, etc.
-            if (/\/lightning\/(r|n|o)\//i.test(hv) || /^\/lightning\//i.test(hv)) {
+            // Accept ONLY a real Salesforce RECORD link: /lightning/r/<Object>/<id>/view. That's
+            // what a list row's name cell renders. Deliberately NOT any /lightning/ link — a DMO
+            // detail page's Fields tab has no record links, so a field row correctly yields none
+            // and gets NO ⧉ (the reported "⧉ on fields" bug). /n/ and /o/ app routes are not
+            // per-record targets and are excluded here.
+            if (/\/lightning\/r\/[A-Za-z0-9_]+\/[A-Za-z0-9]+\/view/i.test(hv)) {
               try { found = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
               catch (e) { found = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
               break;
