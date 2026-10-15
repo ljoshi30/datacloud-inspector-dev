@@ -18948,9 +18948,22 @@ processJSON();
       if (globals.length) { html += "<div style='color:#cbd5e1;font-size:11px;font-weight:600;margin:7px 0 2px'>Everywhere</div><div style='color:#94a3b8;font-size:11.5px;line-height:1.45'>" + globals.map(li).join("") + "</div>"; }
       html += "</div><button id='dc-welcome-x' style='border:none;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0 2px'>&times;</button></div>";
 
+      // Show the toast on the OPPOSITE side from the launcher so they never overlap. The
+      // Query Editor launcher sits bottom-LEFT; all others sit bottom-RIGHT. Read the launcher's
+      // actual on-screen side (#dc-bar) and put the toast on the other side. Default to the
+      // right if no launcher is present (e.g. the nav/list ⧉ pages have no FAB).
+      var side = "right";
+      try {
+        var bar = document.getElementById("dc-bar");
+        if (bar) {
+          var br = bar.getBoundingClientRect();
+          // launcher on the left half of the viewport → toast goes right, and vice-versa.
+          side = (br.left + br.width / 2) < (window.innerWidth / 2) ? "right" : "left";
+        }
+      } catch (e) {}
       var toast = document.createElement("div");
       toast.id = "dc-welcome";
-      toast.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.45);max-width:330px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;";
+      toast.style.cssText = "position:fixed;bottom:24px;" + side + ":24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.45);max-width:330px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;";
       toast.innerHTML = html;
       document.body.appendChild(toast);
       requestAnimationFrame(function () { toast.style.opacity = "1"; toast.style.transform = "translateY(0)"; });

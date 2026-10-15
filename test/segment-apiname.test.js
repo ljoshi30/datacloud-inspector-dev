@@ -565,6 +565,12 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
   ok("WELCOME toast announces page features + globals (once per SESSION, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShown\b/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
   ok("WELCOME shows once per session (not per page) + faster delay", /if \(!window\.__dcWelcomeShown\) \{ window\.__dcWelcomeShown = true; setTimeout\(dcWelcomeToast, 600\)/.test(src));
+  // WELCOME toast appears on the OPPOSITE side from the launcher (QE launcher = bottom-left →
+  // toast right; all other launchers = bottom-right → toast left) so they never overlap. Side
+  // is read from the launcher's LIVE position (#dc-bar getBoundingClientRect), so a dragged
+  // launcher still flips the toast correctly. Defaults to right when no launcher is present.
+  ok("WELCOME toast positions on the opposite side from the launcher (no overlap)", /var side = "right";/.test(src) && /document\.getElementById\("dc-bar"\)[\s\S]{0,220}side = \(br\.left \+ br\.width \/ 2\) < \(window\.innerWidth \/ 2\) \? "right" : "left"/.test(src));
+  ok("WELCOME toast CSS uses the dynamic side (not a hardcoded right)", /"position:fixed;bottom:24px;" \+ side \+ ":24px;/.test(src));
   ok("NAV ⧉ only matches REAL nav anchors (not user/record/lookup /lightning/ links)", /function dcIsNavAnchor\s*\(/.test(src) && /looksNav && dcIsNavAnchor\(node\)/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
