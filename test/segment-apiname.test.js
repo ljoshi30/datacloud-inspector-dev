@@ -561,9 +561,14 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV ⧉ only matches REAL nav anchors (not user/record/lookup /lightning/ links)", /function dcIsNavAnchor\s*\(/.test(src) && /looksNav && dcIsNavAnchor\(node\)/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
-  ok("FULL off helper (FAB Remove = __dcOff + teardown); ⧉ feature flag retained (persisted)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src) && /dc_newtab_enabled_v1/.test(src) && /window\.__dcToggleNewTab/.test(src));
+  ok("FULL off helper (FAB Remove = __dcOff + teardown)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src));
   ok("⧉ menu On/Off ROW removed from ALL launchers (was clutter; ⧉ is hover-only, Remove still silences it)", !/dcMakeNewTabRow/.test(src));
-  ok("⧉ enable flag persisted + respects full-off", /function dcNewTabEnabled\s*\(/.test(src) && /localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src) && /if \(window\.__dcOff\) return false/.test(src));
+  // The ⧉ no longer PERSISTS an enable flag: reading an old saved "0" (from the long-gone Off
+  // toggle) would hide the ⧉ forever with no way to re-enable it — the "⧉ gone everywhere" bug.
+  // Now dcNewTabEnabled is purely !__dcOff, and any stale saved flag is cleared on load.
+  ok("⧉ gate is simply !__dcOff (no stale-localStorage suppression)", /function dcNewTabEnabled\(\) \{ return !window\.__dcOff; \}/.test(src));
+  ok("⧉ does NOT read the old persisted flag (no getItem gate that could stick it off)", !/localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src));
+  ok("stale ⧉ enable flag is cleared on load (so a past Off can't keep it hidden)", /localStorage\.removeItem\(DC_NEWTAB_LS\)/.test(src));
   ok("SEGMENT DOM-fallback gated to /cmp/ builder routes (stale wizard no longer misclassifies Home/list as Segment)", /looksLikeBuilderRoute = \/\\\/lightning\\\/cmp\\\//.test(src) && /\\\/lightning\\\/page\\\/\|\\\/lightning\\\/o\\\/\[A-Za-z\]\+\\\/home/.test(src) && /looksLikeBuilderRoute[\s\S]{0,160}runtime_cdp-segment-wizard/.test(src));
 }
 
