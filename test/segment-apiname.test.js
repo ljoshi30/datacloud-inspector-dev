@@ -672,17 +672,28 @@ console.log("\n6g. list ⧉ page-gate behavior (DMO detail Fields tab must NOT a
   ok("record detail (/r/<Obj>/<id>/view) → not a list", typeAt(O + "/lightning/r/DataStream/1dsHQ0000000A2b/view") === null);
   // the ERD graph → null (handled by its own launcher)
   ok("ERD graph (displayType=graph) → not a list", typeAt(O + "/lightning/n/standard-DataModel?displayType=graph") === null);
-  // a genuine object list route → generic list (⧉ convenience; rows have real links)
+  // Object list routes → generic candidate (the PER-ROW link check gates the actual ⧉). Covers
+  // ALL object lists, not just /o/*/home, since DC lists live under assorted routes.
   var gen = typeAt(O + "/lightning/o/DataStream/home");
-  ok("object list route (/o/<Obj>/home) → generic list", gen && gen.id === "generic" && gen.isDmoList === false);
-  // Query Editor / Data Explorer workspaces → null (own launchers)
+  ok("object list route (/o/<Obj>/home) → generic candidate", gen && gen.id === "generic" && gen.isDmoList === false);
+  var genN = typeAt(O + "/lightning/n/Segment");
+  ok("nav list route (/n/<...>) → generic candidate", genN && genN.id === "generic");
+  // Record detail + workspaces are still explicitly excluded (never a list)
+  ok("record detail (/r/<id>/view) → not a list", typeAt(O + "/lightning/r/1dsHQ0000000A2b/view") === null);
   ok("Query Editor workspace → not a generic list", typeAt(O + "/lightning/r/DataQueryWorkspace/20mDQ0/view") === null);
 
-  // dcRowRealHref must accept ONLY a real /r/<Obj>/<id>/view record link — a field row (no such
-  // link) yields "" → no ⧉. Verify the matcher the shipped code uses.
-  var hrefRe = /\/lightning\/r\/[A-Za-z0-9_]+\/[A-Za-z0-9]+\/view/i;
-  ok("row-link matcher accepts a real record link", hrefRe.test("/lightning/r/DataStream/1dsHQ0000000A2b/view"));
-  ok("row-link matcher REJECTS a field/app link (no bogus ⧉ on fields)", !hrefRe.test("/lightning/n/standard-DataModel?c__objectApiName=ssot__Subject__c"));
+  // THE FIX: extract the SHIPPED record-link regex and verify it accepts BOTH link forms —
+  // including the Data Cloud form WITHOUT an <Object> segment (/lightning/r/<id>/view), which
+  // was the reason the ⧉ never appeared on any DC object list.
+  var reM = srcG.match(/var DC_RECORD_LINK_RE = (\/[^\n]+\/i);/);
+  ok("extracted DC_RECORD_LINK_RE from source", !!reM);
+  if (reM) {
+    var DC_RECORD_LINK_RE = eval(reM[1]);   // the real shipped regex
+    ok("accepts DC link WITHOUT object segment (/r/<id>/view) — the reported bug", DC_RECORD_LINK_RE.test("/lightning/r/1dsKh000000TOcwIAG/view"));
+    ok("accepts classic link WITH object segment (/r/<Obj>/<id>/view)", DC_RECORD_LINK_RE.test("/lightning/r/DataStream/1dsHQ0000000A2bQAE/view"));
+    ok("REJECTS a field/app link (no bogus ⧉ on fields)", !DC_RECORD_LINK_RE.test("/lightning/n/standard-DataModel?c__objectApiName=ssot__Subject__c"));
+    ok("REJECTS /o/ and /n/ app routes (not per-record)", !DC_RECORD_LINK_RE.test("/lightning/o/DataStream/home") && !DC_RECORD_LINK_RE.test("/lightning/n/Segment"));
+  }
 }
 
 // ── 6h. BEHAVIOR: dcRowKeyFrom resolves BOTH row shapes (standard list + custom DMO) ──
@@ -702,8 +713,10 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
     for (; i < srcH.length; i++) { var c = srcH[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } }
     return srcH.slice(s, e + 1);
   }
-  var code = extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
-  ok("extracted dcRowKeyFrom + dcRowRealHref from source", /function dcRowKeyFrom/.test(code) && /function dcRowRealHref/.test(code));
+  // dcRowRealHref references the module-level DC_RECORD_LINK_RE — pull it in too.
+  var reLine = (srcH.match(/var DC_RECORD_LINK_RE = \/[^\n]+\/i;/) || [""])[0];
+  var code = reLine + "\n" + extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
+  ok("extracted dcRowKeyFrom + dcRowRealHref + DC_RECORD_LINK_RE from source", /function dcRowKeyFrom/.test(code) && /function dcRowRealHref/.test(code) && /DC_RECORD_LINK_RE/.test(code));
 
   // Minimal fake DOM: an element has tagName, getAttribute, parentElement, querySelectorAll,
   // shadowRoot, href. We model the hovered cell → its <tr>.
@@ -737,7 +750,14 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var nameCell = el("th", {}, [link]);
   var stdRow = el("tr", {}, [nameCell]);
   var hitStd = sb.dcRowKeyFrom(nameCell, { id: "generic", isDmoList: false });
-  ok("STANDARD list row (Data Stream/DLO) now resolves via its own /r/ link", !!hitStd && /\/lightning\/r\/DataStream\/1dsHQ0000000A2bQAE\/view$/.test(hitStd.href));
+  ok("STANDARD list row (classic /r/<Obj>/<id>/view) resolves", !!hitStd && /\/lightning\/r\/DataStream\/1dsHQ0000000A2bQAE\/view$/.test(hitStd.href));
+
+  // THE REPORTED BUG: Data Cloud list rows use /lightning/r/<id>/view (NO object segment).
+  var linkDC = el("a", { href: "/lightning/r/1dsKh000000TOcwIAG/view" }, []);
+  var nameCellDC = el("th", {}, [linkDC]);
+  var stdRowDC = el("tr", {}, [nameCellDC]);
+  var hitDC = sb.dcRowKeyFrom(nameCellDC, { id: "generic", isDmoList: false });
+  ok("DC list row (/r/<id>/view, NO object segment) now resolves (was the bug)", !!hitDC && /\/lightning\/r\/1dsKh000000TOcwIAG\/view$/.test(hitDC.href));
 
   // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
   var dmoCell = el("th", {}, []);

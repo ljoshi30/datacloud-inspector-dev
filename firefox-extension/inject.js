@@ -17980,8 +17980,12 @@ processJSON();
     if (/displayType=graph|c__displayType=graph/i.test(h)) return null;            // ERD graph
     if (/DataQueryWorkspace|DataExplore|CdpDataView/i.test(h)) return null;         // own-launcher workspaces
     if (/c__objectApiName=/i.test(h)) return null;                                 // a specific object's detail
-    var isListRoute = /\/lightning\/o\/[A-Za-z0-9_]+\/(home|list)/i.test(h) || /\/lightning\/n\/[A-Za-z0-9_]+/i.test(h);
-    if (!isListRoute) return null;
+    // Any OTHER Lightning page is a CANDIDATE list. We do NOT require a narrow /o/<Obj>/home URL
+    // anymore — Data Cloud object lists (Data Streams, IDR, Segment, Activation, DLO, DSO, BDT, …)
+    // live under assorted routes (/lightning/o/*/home, /lightning/n/*, app/SPA routes). What
+    // actually decides whether the ⧉ shows is the PER-ROW check: a ⧉ appears only when the
+    // hovered row contains a real record link (dcRowRealHref). So a non-list page simply yields
+    // no matching row → no ⧉, with no false positives, and every object list is covered.
     return { id: "generic", isDmoList: false };
   }
   // From a hovered node, climb to the <tr> and resolve BOTH a row key and a destination href.
@@ -17995,7 +17999,7 @@ processJSON();
   // Either way the destination is REAL (read from the DOM or the proven DMO template) — never
   // fabricated. keyOk filters the "HEADER" row.
   function dcRowKeyFrom(node, type) {
-    for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
+    for (var h = 0; h < 12 && node && node.nodeType === 1; h++) {
       try {
         if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
           var k = node.getAttribute("data-row-key-value");
@@ -18014,7 +18018,13 @@ processJSON();
           }
         }
       } catch (e) {}
-      node = node.parentElement;
+      // Climb, crossing shadow boundaries: at a shadow root parentElement is null, so hop to
+      // the root's host. Standard Lightning list rows live inside lightning-datatable shadow
+      // roots, so a parentElement-only climb never reaches the <tr> (that was part of why the
+      // ⧉ didn't appear on those lists).
+      var next = node.parentElement;
+      if (!next) { var rt = null; try { rt = node.getRootNode && node.getRootNode(); } catch (e) {} next = (rt && rt.host) ? rt.host : null; }
+      node = next;
     }
     return null;
   }
@@ -18023,6 +18033,14 @@ processJSON();
   // back to "first Lightning link anywhere in the row" if the name cell has none. This avoids
   // grabbing an unrelated link in a later column (e.g. an owner/related-object link). Crosses
   // shadow DOM. Returns an absolute URL or "".
+  // A real Salesforce RECORD link, in EITHER of the two forms SF renders:
+  //   /lightning/r/<Object>/<id>/view   (classic object lists)
+  //   /lightning/r/<id>/view            (Data Cloud lists — NO object segment; proven from the
+  //                                       live Data Streams list: …/lightning/r/1dsKh…/view)
+  // Requiring the <Object> segment (the old regex) was why the ⧉ never appeared on ANY Data
+  // Cloud object list (Data Streams, IDR, Segment, Activation, DLO, DSO, BDT, …) — their links
+  // omit it. We still exclude field/app routes (/n/, /o/) so a DMO Fields tab gets no ⧉.
+  var DC_RECORD_LINK_RE = /\/lightning\/r\/(?:[A-Za-z0-9_]+\/)?[A-Za-z0-9]{15,18}\/view/i;
   function dcRowRealHref(tr) {
     function firstLightningHref(root) {
       var found = "";
@@ -18032,12 +18050,7 @@ processJSON();
         if (as) {
           for (var i = 0; i < as.length; i++) {
             var hv = as[i].getAttribute("href") || "";
-            // Accept ONLY a real Salesforce RECORD link: /lightning/r/<Object>/<id>/view. That's
-            // what a list row's name cell renders. Deliberately NOT any /lightning/ link — a DMO
-            // detail page's Fields tab has no record links, so a field row correctly yields none
-            // and gets NO ⧉ (the reported "⧉ on fields" bug). /n/ and /o/ app routes are not
-            // per-record targets and are excluded here.
-            if (/\/lightning\/r\/[A-Za-z0-9_]+\/[A-Za-z0-9]+\/view/i.test(hv)) {
+            if (DC_RECORD_LINK_RE.test(hv)) {
               try { found = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
               catch (e) { found = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
               break;
