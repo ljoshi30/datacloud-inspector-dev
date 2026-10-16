@@ -18287,29 +18287,43 @@ processJSON();
     }
     return false;
   }
+  // Is THIS element (no climbing) a real Data Cloud nav ANCHOR, and if so what does it open?
+  // Proven by DOM Probe v30 on the new Data Cloud nav: every nav destination is an <a> whose
+  // class is `slds-context-bar__label-action` (carries a REAL href) or `slds-nav-vertical__action`
+  // (left vertical nav; usually empty href → resolve by label via the harvested top-bar hrefs).
+  // We match the anchor DIRECTLY (no parentElement climb) because the left nav is nested several
+  // shadow roots deep — a parentElement climb dies at each boundary, which is why left-nav items
+  // were hit-or-miss. The caller scans composedPath() (already flattened across shadow) so the
+  // anchor is always reachable. Returns {label,route,el,abs} or null.
+  function dcNavAnchorToItem(el) {
+    if (!el || el.nodeType !== 1) return null;
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag !== "a") return null;
+    var cls = ""; try { cls = (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) {}
+    if (/category-header/.test(cls)) return null;                       // expandable group, not a page
+    if (!/slds-context-bar__label-action|slds-nav-vertical__action/.test(cls)) return null;
+    var lbl = dcNavLabelOf(el);
+    if (!lbl || /show more navigation|more$/i.test(lbl)) return null;   // the "More" overflow toggle
+    // 1) the anchor's OWN real href (top-bar / label-action items carry it directly)
+    var href = ""; try { href = (el.getAttribute && el.getAttribute("href")) || ""; } catch (e) {}
+    if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
+      return { label: lbl, route: href, el: el, abs: /^https?:/i.test(href) };
+    }
+    // 2) empty-href left-nav item → label → harvested top-bar href / learned / seed. Covers
+    //    every item (incl. future ones) with no hardcoding; never fabricated.
+    var mapped = dcRouteForLabel(lbl);
+    if (mapped) return { label: lbl, route: mapped, el: el };
+    return null;
+  }
+  // Fallback for the e.target path (when composedPath isn't available): climb a few hops,
+  // crossing shadow boundaries (parentElement is null at a shadow root → hop to its host).
   function dcNavItemFrom(node) {
-    for (var h = 0; h < 6 && node && node.nodeType === 1; h++) {
-      var tag = (node.tagName || "").toLowerCase();
-      var cls = ""; try { cls = (node.getAttribute && node.getAttribute("class")) || ""; } catch (e) {}
-      var role = ""; try { role = (node.getAttribute && node.getAttribute("role")) || ""; } catch (e) {}
-      // skip expandable group headers — they open a submenu, not a page
-      if (/category-header/.test(cls)) return null;
-      var looksNav = tag === "a" || role === "button" || role === "link" || /slds-nav-vertical__action|slds-context-bar__label-action|navItem/.test(cls);
-      // GATE: must be an actual nav item — not any /lightning/ record/user/lookup link.
-      if (looksNav && dcIsNavAnchor(node)) {
-        var lbl = dcNavLabelOf(node);
-        // 1) real href on the anchor itself (top nav / future items)
-        var href = "";
-        try { href = (node.getAttribute && node.getAttribute("href")) || ""; } catch (e) {}
-        if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
-          return { label: lbl || href, route: href, el: node, abs: /^https?:/i.test(href) };
-        }
-        // 2) empty-href left-nav item → harvested top-nav href / learned / seed (dcRouteForLabel).
-        //    Zero-maintenance: covers every item (28+ and growing) with no hardcoding.
-        var mapped = dcRouteForLabel(lbl);
-        if (lbl && mapped) return { label: lbl, route: mapped, el: node };
-      }
-      node = node.parentElement;
+    for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
+      var hit = dcNavAnchorToItem(node);
+      if (hit) return hit;
+      var next = node.parentElement;
+      if (!next) { var rt = null; try { rt = node.getRootNode && node.getRootNode(); } catch (e) {} next = (rt && rt.host) ? rt.host : null; }
+      node = next;
     }
     return null;
   }
@@ -18340,8 +18354,11 @@ processJSON();
     window.__dcNavNewTabInstalled = true;
     document.addEventListener("mouseover", function (e) {
       if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-nav-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
-      var hit = dcNavItemFrom(e.target);
-      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 10 && !hit; i++) hit = dcNavItemFrom(p[i]); }
+      // PREFER composedPath: it's flattened across ALL shadow roots, so the deeply-nested
+      // left-nav <a> is always in it. Match the anchor DIRECTLY (dcNavAnchorToItem, no climb).
+      var hit = null;
+      if (e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 20 && !hit; i++) hit = dcNavAnchorToItem(p[i]); }
+      if (!hit) hit = dcNavItemFrom(e.target);   // fallback (no composedPath / older browsers)
       if (!hit) return;
       if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; }
       var btn = dcGetNavBtn();

@@ -467,33 +467,43 @@ console.log("\n6d. Container Path captured into export (real HTML + Excel render
   }
 }
 
-// ── 6e. Nav ⧉ gate: real nav anchors only, NOT user/record/lookup links ──────────────
-// Bug: ANY <a href="/lightning/…"> got the ⧉ (so a "Created By" user link, a lookup, a
-// table record link wrongly showed "open nav item in new tab"). dcIsNavAnchor requires a
-// nav marker class/tag within a few ancestors. This mirrors it over fake elements.
-console.log("\n6e. nav ⧉ only decorates real nav items (not record/user links)");
+// ── 6e. Nav ⧉ gate (NEW DC nav): dcNavAnchorToItem matches real nav anchors only ──────
+// Driven by DOM Probe v30 on the live new Data Cloud nav: every nav destination is an <a> with
+// class slds-context-bar__label-action (real href) or slds-nav-vertical__action (left nav; href
+// resolved by label). Non-nav links (a "Created By" user link, a lookup) must get NOTHING.
+// We run the ACTUAL shipped dcNavAnchorToItem (extracted) against fake anchors — behavior, not
+// a re-implementation. dcRouteForLabel/dcNavLabelOf are stubbed so the test is self-contained.
+console.log("\n6e. nav ⧉ gate: dcNavAnchorToItem (new DC nav markup from probe v30)");
 {
-  function mk(cls, tag, parent) { return { nodeType: 1, tagName: (tag || "A").toUpperCase(), _c: cls || "", getAttribute: function (n) { return n === "class" ? this._c : null; }, parentElement: parent || null }; }
-  function dcIsNavAnchor(el) {
-    var n = el;
-    for (var i = 0; i < 4 && n && n.nodeType === 1; i++) {
-      var c = ""; try { c = (n.getAttribute && n.getAttribute("class")) || ""; } catch (e) {}
-      var tg = (n.tagName || "").toLowerCase();
-      if (/slds-nav-vertical__action|slds-context-bar__label-action|navItem|slds-context-bar__item/.test(c)) return true;
-      if (/one-app-nav-bar-item|desktop-vertical-navigation|lightning-vertical-navigation/.test(tg)) return true;
-      n = n.parentElement;
-    }
-    return false;
-  }
-  // real nav items → true
-  ok("left-nav action anchor → nav", dcIsNavAnchor(mk("slds-nav-vertical__action non-active")));
-  ok("top-nav label action anchor → nav", dcIsNavAnchor(mk("slds-context-bar__label-action dndItem")));
-  ok("nav item host tag → nav", dcIsNavAnchor(mk("", "one-app-nav-bar-item-root")));
-  ok("anchor inside nav item container (ancestor) → nav", dcIsNavAnchor(mk("", "a", mk("navItem slds-context-bar__item"))));
-  // NOT nav — the false-positive cases the user hit
-  ok("'Created By' USER link (/lightning/r/User/…) → NOT nav", !dcIsNavAnchor(mk("someLinkClass", "a")));
-  ok("plain record link in a table → NOT nav", !dcIsNavAnchor(mk("outputLookupLink", "a")));
-  ok("bare anchor, no nav ancestor → NOT nav", !dcIsNavAnchor(mk("", "a", mk("slds-grid", "div"))));
+  const fs6e = require("fs"), path6e = require("path");
+  const src6e = fs6e.readFileSync(path6e.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  function grab(name) { var m = src6e.match(new RegExp("function " + name + "\\s*\\([^)]*\\)\\s*\\{")); if (!m) return ""; var s = src6e.indexOf(m[0]), i = src6e.indexOf("{", s), d = 0, e = i; for (; i < src6e.length; i++) { var c = src6e[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } } return src6e.slice(s, e + 1); }
+  const vm6e = require("vm");
+  var sb = {
+    // stubs the gate depends on:
+    dcNavLabelOf: function (el) { return (el._attrs["aria-label"] || el._attrs.title || el._text || ""); },
+    dcRouteForLabel: function (lbl) { return ({ "Segments": "/lightning/o/MarketSegment/home", "Data Streams": "/lightning/o/DataStream/home" })[lbl] || ""; },
+    location: { origin: "https://x.my.salesforce.com" }
+  };
+  vm6e.runInNewContext(grab("dcNavAnchorToItem") + "\nthis.dcNavAnchorToItem = dcNavAnchorToItem;", sb);
+  ok("extracted dcNavAnchorToItem from source", typeof sb.dcNavAnchorToItem === "function");
+  function a(cls, attrs, text) { return { nodeType: 1, tagName: "A", _attrs: Object.assign({ class: cls || "" }, attrs || {}), _text: text || "", getAttribute: function (n) { return n === "class" ? this._attrs.class : (n in this._attrs ? this._attrs[n] : null); } }; }
+
+  // top-bar label-action with a REAL href (Segments — one of the "new" items) → resolves
+  var seg = sb.dcNavAnchorToItem(a("slds-context-bar__label-action dndItem", { href: "/lightning/o/MarketSegment/home", title: "Segments" }));
+  ok("Segments top-bar anchor → route /o/MarketSegment/home", seg && seg.route === "/lightning/o/MarketSegment/home");
+  // left-nav action anchor with EMPTY href → resolved by label via dcRouteForLabel
+  var ds = sb.dcNavAnchorToItem(a("slds-nav-vertical__action", { href: "", "aria-label": "Data Streams" }));
+  ok("left-nav empty-href anchor → resolved by label", ds && ds.route === "/lightning/o/DataStream/home");
+  // the "More / Show more navigation items" overflow toggle → NOT a destination
+  ok("'More' overflow toggle → null", sb.dcNavAnchorToItem(a("slds-button slds-context-bar__label-action", { href: "" }, "MoreShow more navigation items")) === null);
+  // category/group header → null (expandable, not a page)
+  ok("category-header group → null", sb.dcNavAnchorToItem(a("slds-context-bar__label-action category-header", { href: "/x", title: "Segment & Act" })) === null);
+  // a NON-nav link (user record link, table lookup) → null (no nav class → ignored)
+  ok("'Created By' user link (no nav class) → null", sb.dcNavAnchorToItem(a("someLinkClass", { href: "/lightning/r/User/005.../view", title: "Jane" })) === null);
+  ok("table lookup link (no nav class) → null", sb.dcNavAnchorToItem(a("outputLookupLink", { href: "/lightning/r/Account/001.../view", title: "Acme" })) === null);
+  // a non-anchor element → null
+  ok("non-anchor element → null", sb.dcNavAnchorToItem({ nodeType: 1, tagName: "DIV", _attrs: {}, getAttribute: function () { return null; } }) === null);
 }
 
 // ── 7. source presence ──────────────────────────────────────────────────────────────
@@ -577,7 +587,12 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   // launcher still flips the toast correctly. Defaults to right when no launcher is present.
   ok("WELCOME toast positions on the opposite side from the launcher (no overlap)", /var side = "right";/.test(src) && /document\.getElementById\("dc-bar"\)[\s\S]{0,220}side = \(br\.left \+ br\.width \/ 2\) < \(window\.innerWidth \/ 2\) \? "right" : "left"/.test(src));
   ok("WELCOME toast CSS uses the dynamic side (not a hardcoded right)", /"position:fixed;bottom:24px;" \+ side \+ ":24px;/.test(src));
-  ok("NAV ⧉ only matches REAL nav anchors (not user/record/lookup /lightning/ links)", /function dcIsNavAnchor\s*\(/.test(src) && /looksNav && dcIsNavAnchor\(node\)/.test(src));
+  // New DC nav (probe v30): match the anchor DIRECTLY by its nav class — no parentElement climb
+  // (left nav is nested several shadow roots deep; a climb dies at each boundary → hit-or-miss).
+  ok("NAV ⧉ matches the anchor directly by nav class (dcNavAnchorToItem)", /function dcNavAnchorToItem\s*\(/.test(src) && /slds-context-bar__label-action\|slds-nav-vertical__action/.test(src));
+  ok("NAV hover PREFERS composedPath (flattened across shadow) then falls back to climb", /if \(e\.composedPath\) \{ var p = e\.composedPath\(\);[\s\S]{0,140}dcNavAnchorToItem\(p\[i\]\)/.test(src) && /if \(!hit\) hit = dcNavItemFrom\(e\.target\)/.test(src));
+  ok("NAV climb fallback crosses shadow boundaries (getRootNode().host hop)", /function dcNavItemFrom\(node\)[\s\S]{0,400}getRootNode && node\.getRootNode\(\)[\s\S]{0,60}rt\.host\) \? rt\.host : null/.test(src));
+  ok("NAV skips the 'More' overflow toggle + category headers", /show more navigation\|more\$/i.test(src) && /category-header/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
   // The per-launcher "Remove" rows were replaced by a non-destructive menu-close ×; the tool is
