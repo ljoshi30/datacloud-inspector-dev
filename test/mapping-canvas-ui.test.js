@@ -29,13 +29,15 @@ console.log("\n1. buttons carry .dc-lbl/.dc-sub so the ON state can actually ren
   ok("pin button subtitle confirms click-to-copy when on", /Pinned — click any name to copy it/.test(src));
 }
 
-console.log("\n2. Remove row replaced by a top-right × that closes the menu (not uninstall)");
+console.log("\n2. Remove row replaced by a top-right × that closes the menu — on EVERY launcher");
 {
-  // The MAPPING launcher's menu no longer appends a dismissRow (other launchers keep theirs).
-  ok("mapping launcher no longer appends a Remove dismissRow", !/menu\.appendChild\(dismissRow\);/.test(src.slice(src.indexOf("function ensureLauncher"), src.indexOf("function detectDetailPageType"))));
-  ok("a close-× button exists", /var closeX = document\.createElement\("button"\)|const closeX = document\.createElement\("button"\)/.test(src));
-  ok("× calls closeMenu (closes menu), NOT dcFullOff (uninstall)", /closeX\.onclick = \(e\) => \{ e\.stopPropagation\(\); try \{ closeMenu\(\); \}/.test(src));
-  ok("× is appended to the menu", /menu\.appendChild\(closeX\)/.test(src));
+  // The destructive "Remove" dismissRow is gone from ALL launchers (re-click the bookmark to
+  // uninstall; its guard sets __dcOff directly). Every launcher now gets the shared close-×.
+  ok("no dismissRow 'Remove' rows remain in any launcher", !/dismissRow/.test(src));
+  ok("shared dcMakeMenuCloseX helper defined (× that calls closeMenu, not uninstall)", /function dcMakeMenuCloseX\(closeMenu\)/.test(src) && /try \{ closeMenu\(\); \} catch/.test(src));
+  ok("× is NOT destructive (never calls dcFullOff)", !/dcMakeMenuCloseX[\s\S]{0,400}dcFullOff/.test(src));
+  // used by all 4 launchers: mapping, explore, activation, detail (1 def + 4 call sites = 5)
+  ok("close-× wired into every launcher (>=4 call sites)", (src.match(/dcMakeMenuCloseX\(/g) || []).length >= 5);
 }
 
 console.log("\n3. pinned API names are click-to-copy (both render paths), copy the CLEAN api");
@@ -75,12 +77,28 @@ console.log("\n5. BEHAVIOR: copy uses the CLEAN api, never the '(?)' display mar
   eq("trailing spaces around marker handled", cleanApi(undefined, "Baz__c  (?)  "), "Baz__c");
 }
 
+console.log("\n5b. export modals close ONLY via × / Escape — NOT on click-outside");
+{
+  // Reported: clicking anywhere on the page closed the export modal (together with the menu).
+  // The click-outside closers were removed from the mapping export AND the detail-page export
+  // modals (DMO / DLO / Data Stream). They keep × and Escape. (Data Explorer's column modal is
+  // a separate feature and intentionally still closes on outside-click — not touched here.)
+  ok("mapping export has NO click-outside closer (onDocDown removed)", !/onDocDown = \(e\) =>/.test(src));
+  ok("mapping export still closes on Escape", /onKey = \(e\) => \{ if \(e\.key === "Escape"\) closeExport\(\); \}/.test(src));
+  ok("mapping export still has an × close button", /#dc-x-close"\)\.onclick = closeExport/.test(src));
+  // detail-page export modals: the onOut pointerdown closers are gone; onEsc stays.
+  ok("detail export modals have NO onOut click-outside closers", !/onOut\s*=\s*\(e\)\s*=>\s*\{\s*if\s*\(detailExportEl/.test(src));
+  ok("detail export modals still close on Escape (onEsc kept)", /onEsc\s*=\s*\(e\)\s*=>\s*\{\s*if\s*\(e\.key\s*===\s*"Escape"\)\s*\{\s*closeDetail\(\)/.test(src));
+  ok("detail export modals still have an × close (dc-d-close)", /#dc-d-close"\)\.onclick = closeDetail/.test(src));
+}
+
 console.log("\n6. synced into the bookmarklet build too");
 {
   ok("dc-lbl label + ON state synced", /<span class='dc-lbl'/.test(bm) && /● ON/.test(bm));
-  ok("close-× synced (and no dcFullOff Remove-row)", /menu\.appendChild\(closeX\)/.test(bm));
+  ok("shared close-× synced + no dismissRow", /function dcMakeMenuCloseX\(closeMenu\)/.test(bm) && !/dismissRow/.test(bm));
   ok("click-to-copy pinned names synced", /span\.dataset\.api = apiName;/.test(bm) && /sp\.dataset\.api = text;/.test(bm));
   ok("enable toast synced", /function dcMapToast\(msg\)/.test(bm));
+  ok("export modals no-click-outside synced", !/onDocDown = \(e\) =>/.test(bm) && !/onOut\s*=\s*\(e\)\s*=>\s*\{\s*if\s*\(detailExportEl/.test(bm));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

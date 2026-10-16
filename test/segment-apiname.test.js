@@ -580,7 +580,12 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV ⧉ only matches REAL nav anchors (not user/record/lookup /lightning/ links)", /function dcIsNavAnchor\s*\(/.test(src) && /looksNav && dcIsNavAnchor\(node\)/.test(src));
   ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
-  ok("FULL off helper (FAB Remove = __dcOff + teardown)", /function dcFullOff\s*\(/.test(src) && /dcFullOff\(\);/.test(src));
+  // The per-launcher "Remove" rows were replaced by a non-destructive menu-close ×; the tool is
+  // removed by re-clicking the bookmark, whose guard sets window.__dcOff = true directly. The
+  // dcFullOff helper is retained as the canonical teardown+__dcOff, and the ⧉ overlays still bail
+  // on __dcOff.
+  ok("FULL off: re-click guard sets __dcOff directly; dcFullOff retained", /function dcFullOff\s*\(/.test(src) && /window\.__dcOff = true/.test(src));
+  ok("no destructive 'Remove' dismissRow remains in any launcher", !/dismissRow/.test(src));
   ok("⧉ menu On/Off ROW removed from ALL launchers (was clutter; ⧉ is hover-only, Remove still silences it)", !/dcMakeNewTabRow/.test(src));
   // The ⧉ no longer PERSISTS an enable flag: reading an old saved "0" (from the long-gone Off
   // toggle) would hide the ⧉ forever with no way to re-enable it — the "⧉ gone everywhere" bug.
