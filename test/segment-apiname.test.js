@@ -680,5 +680,77 @@ console.log("\n6g. list ⧉ page-gate behavior (DMO detail Fields tab must NOT a
   ok("row-link matcher REJECTS a field/app link (no bogus ⧉ on fields)", !hrefRe.test("/lightning/n/standard-DataModel?c__objectApiName=ssot__Subject__c"));
 }
 
+// ── 6h. BEHAVIOR: dcRowKeyFrom resolves BOTH row shapes (standard list + custom DMO) ──
+// Runs the ACTUAL shipped dcRowKeyFrom + dcRowRealHref + dcDmoListUrl against fake rows. Proves
+// the new coverage: a STANDARD Lightning list row (Data Stream/DLO — no data-row-key-value but a
+// real /r/ link) now resolves, a DMO custom row (keyed, no link) resolves via the template, and a
+// FIELD row (no key, no /r/ link) still resolves to NOTHING (no bogus ⧉).
+console.log("\n6h. list ⧉ row resolution behavior (standard list rows now covered)");
+{
+  const vm = require("vm");
+  const fs2 = require("fs"), path2 = require("path");
+  const srcH = fs2.readFileSync(path2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  function extractFn(name) {
+    var m = srcH.match(new RegExp("function " + name + "\\s*\\([^)]*\\)\\s*\\{"));
+    if (!m) return "";
+    var s = srcH.indexOf(m[0]), i = srcH.indexOf("{", s), d = 0, e = i;
+    for (; i < srcH.length; i++) { var c = srcH[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } }
+    return srcH.slice(s, e + 1);
+  }
+  var code = extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
+  ok("extracted dcRowKeyFrom + dcRowRealHref from source", /function dcRowKeyFrom/.test(code) && /function dcRowRealHref/.test(code));
+
+  // Minimal fake DOM: an element has tagName, getAttribute, parentElement, querySelectorAll,
+  // shadowRoot, href. We model the hovered cell → its <tr>.
+  function el(tag, attrs, kids) {
+    var e = {
+      tagName: tag, nodeType: 1, _attrs: attrs || {}, children: kids || [], parentElement: null, shadowRoot: null,
+      href: (attrs && attrs.href != null) ? ("https://x.lightning.force.com" + attrs.href) : undefined,
+      getAttribute: function (k) { return (k in this._attrs) ? this._attrs[k] : null; },
+      matches: function (sel) {
+        if (sel === "a[href]") return this.tagName === "a" && this._attrs.href != null;
+        if (sel === "th") return this.tagName === "th";
+        if (sel === "td") return this.tagName === "td";
+        if (sel === '[role="rowheader"]') return this._attrs.role === "rowheader";
+        return false;
+      },
+      querySelector: function (sel) { var all = this.querySelectorAll(sel); return all.length ? all[0] : null; },
+      querySelectorAll: function (sel) {
+        var self = this, out = [];
+        (function walk(n) { for (var i = 0; i < n.children.length; i++) { var c = n.children[i]; if (sel === "*" || c.matches(sel)) out.push(c); walk(c); } })(self);
+        return out;
+      }
+    };
+    for (var i = 0; i < e.children.length; i++) e.children[i].parentElement = e;
+    return e;
+  }
+  var sb = { location: { origin: "https://x.my.salesforce.com", href: "https://x.lightning.force.com/lightning/o/DataStream/home" }, window: {} };
+  vm.runInNewContext(code + "\nthis.dcRowKeyFrom = dcRowKeyFrom;", sb);
+
+  // (B) STANDARD list row: no data-row-key-value, name cell has a real /r/ link.
+  var link = el("a", { href: "/lightning/r/DataStream/1dsHQ0000000A2bQAE/view" }, []);
+  var nameCell = el("th", {}, [link]);
+  var stdRow = el("tr", {}, [nameCell]);
+  var hitStd = sb.dcRowKeyFrom(nameCell, { id: "generic", isDmoList: false });
+  ok("STANDARD list row (Data Stream/DLO) now resolves via its own /r/ link", !!hitStd && /\/lightning\/r\/DataStream\/1dsHQ0000000A2bQAE\/view$/.test(hitStd.href));
+
+  // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
+  var dmoCell = el("th", {}, []);
+  var dmoRow = el("tr", { "data-row-key-value": "ssot__EmailEngagement__dlm" }, [dmoCell]);
+  var hitDmo = sb.dcRowKeyFrom(dmoCell, { id: "dmo", isDmoList: true });
+  ok("DMO custom row resolves via the proven c__objectApiName template", !!hitDmo && /c__objectApiName=ssot__EmailEngagement__dlm$/.test(hitDmo.href));
+
+  // FIELD row (DMO detail Fields tab): no key, NO /r/ link → must resolve to nothing.
+  var fieldCell = el("th", {}, [el("span", {}, [])]);   // just text, no anchor
+  var fieldRow = el("tr", {}, [fieldCell]);
+  var hitField = sb.dcRowKeyFrom(fieldCell, { id: "generic", isDmoList: false });
+  ok("FIELD row (no key, no record link) → NO ⧉ (resolves to null)", hitField === null);
+
+  // HEADER row of a custom datatable must be skipped.
+  var hdrRow = el("tr", { "data-row-key-value": "HEADER" }, [el("th", {}, [])]);
+  var hitHdr = sb.dcRowKeyFrom(hdrRow.children[0], { id: "dmo", isDmoList: true });
+  ok("HEADER row skipped (no ⧉ on the column header)", hitHdr === null);
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

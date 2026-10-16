@@ -17949,18 +17949,33 @@ processJSON();
     if (!isListRoute) return null;
     return { id: "generic", isDmoList: false };
   }
-  // From a hovered node, climb to the <tr> and resolve BOTH the row key and a destination
-  // href. Returns {key,row,href} or null. href comes from the row's OWN real link when present
-  // (any list), else the proven DMO template on the Data Model list. keyOk filters header rows.
+  // From a hovered node, climb to the <tr> and resolve BOTH a row key and a destination href.
+  // Returns {key,row,href} or null. Handles BOTH DC row shapes:
+  //  (A) CUSTOM datatable (DMO/Data Model list): rows carry data-row-key-value=<api> and have
+  //      NO <a> link → we build the proven DMO detail URL from the key.
+  //  (B) STANDARD Lightning list (Data Stream, DLO, CI, Segment, …): rows have NO
+  //      data-row-key-value but DO contain a real <a href="/lightning/r/<Obj>/<id>/view"> in the
+  //      name cell → we read that link directly. (Right-click→new-tab already works on these; the
+  //      ⧉ is a one-click convenience the user asked for.)
+  // Either way the destination is REAL (read from the DOM or the proven DMO template) — never
+  // fabricated. keyOk filters the "HEADER" row.
   function dcRowKeyFrom(node, type) {
     for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
       try {
         if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
           var k = node.getAttribute("data-row-key-value");
+          // (A) custom datatable row (keyed). Skip the HEADER row.
           if (k && k !== "HEADER") {
             var href = dcRowRealHref(node);
             if (!href && type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) href = dcDmoListUrl(k);
             if (href) return { key: k, row: node, href: href };
+          } else if (!k) {
+            // (B) standard Lightning list row (no key) — use its own record link if present.
+            var href2 = dcRowRealHref(node);
+            if (href2) {
+              var key2 = ""; try { key2 = (node.getAttribute("data-row-key-value") || node.getAttribute("data-recordid") || ""); } catch (e) {}
+              return { key: key2, row: node, href: href2 };
+            }
           }
         }
       } catch (e) {}
@@ -18045,7 +18060,7 @@ processJSON();
       if (!href) return;
       var btn = dcGetListBtn();
       btn.href = href;
-      btn.title = "Open " + hit.key + " in a new tab";
+      btn.title = hit.key ? ("Open " + hit.key + " in a new tab") : "Open this record in a new tab";
       var cell = null;
       try { cell = hit.row.querySelector('[role="rowheader"]') || hit.row.querySelector('th') || hit.row.querySelector('td'); } catch (er) {}
       var anchor = cell || hit.row;
