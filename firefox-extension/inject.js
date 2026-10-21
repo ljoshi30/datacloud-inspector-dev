@@ -18220,8 +18220,12 @@ processJSON();
     return (document.body || document.documentElement).appendChild(btn), btn;
   }
   // Diagnostic: enumerate the row's record links with everything that determines the pick.
+  // `tr` passed in, or (if null) the row under the mouse (set by the global key handler).
   function dcDumpRowLinks(tr) {
-    var out = { listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, rowKey: "", rowRecordId: "", rowTag: "", rowAttrs: {}, links: [], chosen: "" };
+    if (!tr && window.__dcHoverRow) tr = window.__dcHoverRow;
+    // BUILD STAMP so we can confirm you're running the NEW code (a bookmarklet never auto-updates
+    // — if this doesn't match the latest release, the bookmark wasn't re-dragged).
+    var out = { BUILD: "dc-newtab-fix-7", listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, rowKey: "", rowRecordId: "", rowTag: "", rowAttrs: {}, links: [], chosen: "" };
     try { out.chosen = (typeof dcRowRealHref === "function") ? dcRowRealHref(tr) : ""; } catch (e) { out.chosen = "ERR:" + e; }
     // Capture the ROW's own identity attributes — Lightning list rows carry the record id in
     // data-row-key-value / data-recordid, which is how we open the record when the NAME cell
@@ -18312,6 +18316,22 @@ processJSON();
   function dcInstallListNewTabButton() {
     if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
     window.__dcListNewTabInstalled = true;
+    // GLOBAL diagnostic: track the <tr> under the mouse, and let the user press Shift+D to dump
+    // it — works even where NO ⧉ shows (e.g. the CI list, where there's no openable link). This
+    // is how we capture the CI row's JS-property id without needing the ⧉ button.
+    try {
+      document.addEventListener("mousemove", function (e) {
+        var n = e.target, g = 0;
+        while (n && g++ < 12) { if ((n.tagName || "").toLowerCase() === "tr") { window.__dcHoverRow = n; break; } var p = n.parentElement; if (!p) { var rt = null; try { rt = n.getRootNode && n.getRootNode(); } catch (er) {} p = rt && rt.host ? rt.host : null; } n = p; }
+      }, true);
+      document.addEventListener("keydown", function (e) {
+        if (e.shiftKey && (e.key === "D" || e.key === "d") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          var ae = document.activeElement; var inField = ae && (/input|textarea|select/i.test(ae.tagName) || ae.isContentEditable);
+          if (inField) return;   // don't hijack typing
+          e.preventDefault(); try { dcDumpRowLinks(window.__dcHoverRow || window.__dcLastRow); } catch (er) {}
+        }
+      }, true);
+    } catch (e) {}
     document.addEventListener("mouseover", function (e) {
       if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
       var type = dcActiveListType();
