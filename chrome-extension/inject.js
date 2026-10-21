@@ -18185,8 +18185,40 @@ processJSON();
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
     btn.addEventListener("mouseleave", function () { dcListHideSoon(); });
-    (document.body || document.documentElement).appendChild(btn);
-    return btn;
+    // RIGHT-CLICK the ⧉ = diagnostic: dump EVERY record link in the hovered row (href, object,
+    // on-screen rect, cell text) into a copyable panel. This reads the LIVE row — no separate
+    // probe to re-drag — so we can see exactly why the wrong link is picked. Read-only.
+    btn.addEventListener("contextmenu", function (ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      try { dcDumpRowLinks(window.__dcLastRow); } catch (e) {}
+    }, true);
+    return (document.body || document.documentElement).appendChild(btn), btn;
+  }
+  // Diagnostic: enumerate the row's record links with everything that determines the pick.
+  function dcDumpRowLinks(tr) {
+    var out = { listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, links: [], chosen: "" };
+    try { out.chosen = (typeof dcRowRealHref === "function") ? dcRowRealHref(tr) : ""; } catch (e) { out.chosen = "ERR:" + e; }
+    function eachEl(root, d, fn) { if (!root || d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
+    if (tr) {
+      var order = 0;
+      eachEl(tr, 0, function (a) {
+        if ((a.tagName || "").toLowerCase() !== "a") return;
+        var hv = ""; try { hv = a.getAttribute("href") || ""; } catch (e) {}
+        if (!/\/lightning\/r\//i.test(hv)) return;
+        var om = hv.match(/\/lightning\/r\/([A-Za-z0-9_]+)\/[A-Za-z0-9]{15,18}\/view/i);
+        var rect = null; try { var r = a.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height) }; } catch (e) {}
+        out.links.push({ domOrder: order++, href: hv, object: om ? om[1] : "(short-form,no-object)", rect: rect, text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) });
+      });
+    } else { out.links = "(no row captured — hover a row first, then right-click the ⧉)"; }
+    var panel = document.getElementById("dc-rowdump"); if (panel) panel.remove();
+    panel = document.createElement("div");
+    panel.id = "dc-rowdump";
+    panel.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(640px,94vw);max-height:80vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:12px 14px;font:11.5px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
+    var json = JSON.stringify(out, null, 2);
+    panel.textContent = "⧉ ROW DIAGNOSTIC (copied to clipboard — paste it back)\n\n" + json;
+    var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:6px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { panel.remove(); }; panel.appendChild(x);
+    document.body.appendChild(panel);
+    try { navigator.clipboard.writeText(json); } catch (e) {}
   }
   function dcInstallListNewTabButton() {
     if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
@@ -18202,6 +18234,7 @@ processJSON();
       var href = hit.href || "";
       if (!href) return;
       var btn = dcGetListBtn();
+      window.__dcLastRow = hit.row;   // remember the row for the right-click diagnostic
       btn.href = href;
       btn.title = hit.key ? ("Open " + hit.key + " in a new tab") : "Open this record in a new tab";
       var cell = null;
