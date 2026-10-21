@@ -37,8 +37,11 @@ console.log("\n2. Dev-only accordion rows are gated behind includeDev");
     /devRows[\s\S]{0,2000}Data Model \(ERD\)[\s\S]{0,4000}Segment[\s\S]{0,3000}Data Explorer[\s\S]{0,2000}qeAccordion[\s\S]{0,2000}Data Transform/.test(b));
   ok("Query Editor is its OWN detailed accordion (qeAccordion) spliced into devRows",
     /const qeAccordion = acc\("[^"]*", "Query Editor"/.test(b) && /Data Explorer[\s\S]{0,2000}\n\s*qeAccordion \+\n/.test(b));
-  ok("devRows includes the new open-in-new-tab rows (Data Model List + Nav) + Activation",
-    /Data Model \(List\)/.test(b) && /Left &amp; Top Nav/.test(b) && /"Activation"/.test(b) && /Open in New Tab/.test(b));
+  ok("devRows includes the open-in-new-tab rows (Object lists + Nav) + Activation",
+    /"Object lists \(records\)"/.test(b) && /Left &amp; Top Nav/.test(b) && /"Activation"/.test(b) && /Open in New Tab/.test(b));
+  // The object-list ⧉ row now reflects ALL object lists (not just DMO) and the lookup-column fix.
+  ok("object-list row describes ALL lists + the lookup-column safeguard",
+    /On <b>any<\/b> Data Cloud object list/.test(b) && /ignores lookup columns/.test(b));
   ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
