@@ -811,6 +811,20 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var hitOnlyDs = ciEnv.dcRowKeyFrom(onlyDs.children[0], { id: "generic", isDmoList: false });
   ok("CI row with ONLY a Data Space lookup → opens nothing (never the wrong object)", !hitOnlyDs);
 
+  // DATA GRAPH (proven live): the row CARRIES its own record id in data-row-key-value
+  // (0g7Kh000000sXuFIAU — the DataGraph id, NOT the Data Space 0vh…), the name is void(0), and
+  // the only <a> is a Data Space lookup (class 'slds-truncate', no outputLookup marker → link
+  // scraping grabbed it). The KEY is authoritative: build /lightning/r/DataGraph/<key>/view and
+  // IGNORE the row's links. This is the still-opening-Data-Space-on-Data-Graph fix.
+  var dgEnv = { location: { origin: "https://x.my.salesforce.com", href: "https://x.lightning.force.com/lightning/o/DataGraph/home" }, window: {} };
+  vm.runInNewContext(code + "\nthis.dcRowKeyFrom = dcRowKeyFrom; this.dcListObject = dcListObject;", dgEnv);
+  var dgName = el("a", { href: "javascript:void(0);", _x: 117 }, []);
+  var dgLookup = el("a", { href: "/lightning/r/0vhKh000000TOjwIAG/view", "class": "slds-truncate", _x: 779 }, []);
+  var dgRow = el("tr", { "data-row-key-value": "0g7Kh000000sXuFIAU", "role": "row" }, [ el("th", {}, [dgName]), el("td", {}, [dgLookup]) ]);
+  var hitDg = dgEnv.dcRowKeyFrom(dgRow.children[0], { id: "generic", isDmoList: false });
+  ok("Data Graph keyed row → opens /r/DataGraph/<key>/view from the KEY, NOT the Data Space lookup",
+    !!hitDg && /\/lightning\/r\/DataGraph\/0g7Kh000000sXuFIAU\/view$/.test(hitDg.href) && !/0vhKh000000TOjwIAG/.test(hitDg.href));
+
   // THE ACTUAL LIVE CI ROW (from the in-tool ⧉ diagnostic): name = <a href='javascript:void(0)'
   // class='text-wrapper'> (NOT a /r/ link), and the ONLY /lightning/r/ link is the Data Space
   // LOOKUP rendered as <a class='...outputLookupLink...' href='/lightning/r/<id>/view'> (SHORT-

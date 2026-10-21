@@ -18048,7 +18048,19 @@ processJSON();
               var tHref = dcDmoListUrl(k);
               if (tHref) return { key: k, row: node, href: tHref };
             }
-            // Any other keyed custom list: use the row's own real record link if present.
+            // KEY IS THE RECORD ID (authoritative): on newer datatables the row's
+            // data-row-key-value IS the record's own 15/18-char Salesforce id (proven: Data Graph
+            // row key = 0g7Kh000000sXuFIAU, the DataGraph's id — NOT the Data Space 0vh… lookup).
+            // The name cell is javascript:void(0), and the only <a> is a Data Space LOOKUP (which
+            // on some lists has no outputLookup class, so link-scraping grabbed it). So when the
+            // key is a real record id, BUILD the URL from it and IGNORE the row's links entirely:
+            //   /lightning/r/<listObject>/<key>/view  (Lightning also resolves /r/<key>/view).
+            if (/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(k)) {
+              var lo = (typeof dcListObject === "function") ? dcListObject() : "";
+              var keyHref = location.origin + "/lightning/r/" + (lo ? lo + "/" : "") + encodeURIComponent(k) + "/view";
+              return { key: k, row: node, href: keyHref };
+            }
+            // Any other keyed custom list with no id-key: use the row's own real record link.
             var href = dcRowRealHref(node);
             if (href) return { key: k, row: node, href: href };
           } else if (!k) {
