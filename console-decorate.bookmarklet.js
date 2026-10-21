@@ -18196,8 +18196,25 @@ processJSON();
   }
   // Diagnostic: enumerate the row's record links with everything that determines the pick.
   function dcDumpRowLinks(tr) {
-    var out = { listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, links: [], chosen: "" };
+    var out = { listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, rowKey: "", rowRecordId: "", rowTag: "", rowAttrs: {}, links: [], chosen: "" };
     try { out.chosen = (typeof dcRowRealHref === "function") ? dcRowRealHref(tr) : ""; } catch (e) { out.chosen = "ERR:" + e; }
+    // Capture the ROW's own identity attributes — Lightning list rows carry the record id in
+    // data-row-key-value / data-recordid, which is how we open the record when the NAME cell
+    // has no link (the Calculated Insights case: only the Data Space lookup is a link).
+    try {
+      if (tr && tr.getAttribute) {
+        out.rowTag = (tr.tagName || "").toLowerCase();
+        out.rowKey = tr.getAttribute("data-row-key-value") || "";
+        out.rowRecordId = tr.getAttribute("data-recordid") || "";
+        ["data-row-key-value", "data-recordid", "data-rowid", "data-id", "data-target-selection-name", "role"].forEach(function (an) { var v = tr.getAttribute(an); if (v != null) out.rowAttrs[an] = v; });
+        // also scan ancestors/descendants for ANY data-* that looks like an 18/15-char SF id
+        var found = [];
+        var scan = function (el) { try { if (!el.attributes) return; for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; if (/^data-/.test(a.name) && /^[A-Za-z0-9]{15,18}$/.test(a.value)) found.push(a.name + "=" + a.value); } } catch (e) {} };
+        var n = tr; for (var h = 0; h < 4 && n; h++) { scan(n); n = n.parentElement; }
+        (function walk(root, d) { if (!root || d > 3) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length && found.length < 12; i++) { scan(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) walk(sr, d + 1); } })(tr, 0);
+        out.idAttrs = found.slice(0, 12);
+      }
+    } catch (e) {}
     function eachEl(root, d, fn) { if (!root || d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
     if (tr) {
       var order = 0;
