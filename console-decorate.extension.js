@@ -18218,13 +18218,23 @@ processJSON();
     function eachEl(root, d, fn) { if (!root || d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
     if (tr) {
       var order = 0;
+      // EVERY anchor in the row (not just /lightning/r/ ones) — so we can see the CI NAME cell's
+      // anchor and what it points at (href, onclick-only javascript:void(0), data-recordid, etc.).
       eachEl(tr, 0, function (a) {
         if ((a.tagName || "").toLowerCase() !== "a") return;
         var hv = ""; try { hv = a.getAttribute("href") || ""; } catch (e) {}
-        if (!/\/lightning\/r\//i.test(hv)) return;
-        var om = hv.match(/\/lightning\/r\/([A-Za-z0-9_]+)\/[A-Za-z0-9]{15,18}\/view/i);
-        var rect = null; try { var r = a.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height) }; } catch (e) {}
-        out.links.push({ domOrder: order++, href: hv, object: om ? om[1] : "(short-form,no-object)", rect: rect, text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) });
+        var rect = null; try { var r = a.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width) }; } catch (e) {}
+        var recId = ""; try { recId = a.getAttribute("data-recordid") || a.getAttribute("data-record-id") || ""; } catch (e) {}
+        out.links.push({ domOrder: order++, href: hv.slice(0, 80), recordId: recId, hasOnclick: !!(a.onclick) || a.hasAttribute("data-navigate-to") , rect: rect, text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40), cls: ((a.getAttribute && a.getAttribute("class")) || "").slice(0, 50) });
+      });
+      // Also: every element carrying a data-recordid (Aura cells often put it on <span>/<td>),
+      // with its text + rect, so we can map the CI NAME column to its record id.
+      out.recordIdCells = [];
+      eachEl(tr, 0, function (el) {
+        var rid = ""; try { rid = el.getAttribute && (el.getAttribute("data-recordid") || el.getAttribute("data-record-id")); } catch (e) {}
+        if (!rid) return;
+        var rect = null; try { var r = el.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width) }; } catch (e) {}
+        out.recordIdCells.push({ tag: (el.tagName || "").toLowerCase(), recordId: rid, rect: rect, text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) });
       });
     } else { out.links = "(no row captured — hover a row first, then right-click the ⧉)"; }
     var panel = document.getElementById("dc-rowdump"); if (panel) panel.remove();
