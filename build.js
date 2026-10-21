@@ -301,8 +301,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<span class=\"gi\"><b>Why this helps:</b> many of these list rows aren&rsquo;t real links (the name runs a script instead of a URL), so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. The tool reads the row&rsquo;s own record id and opens the exact record directly &mdash; and deliberately ignores lookup columns (e.g. a &ldquo;Data Space&rdquo; cell), so it always opens the row&rsquo;s record, never a related one.</span>") +
     acc("&#129517;", "Left &amp; Top Nav", ["Open in New Tab"],
       "<p>Hover any Data Cloud navigation item &mdash; in the left side menu or the top bar &mdash; and a <b>&#10697;</b> button lets you <b>open it in a new tab</b>. Covers every item, including newer ones (Segments, Activations, Calculated Insights, AI Models, Clean Rooms, Data Shares, Semantic Layer, &hellip;).</p>" +
-      "<span class=\"gi\">Only real menu items get the button &mdash; ordinary record or user links on a page won&rsquo;t be mistaken for navigation. You don&rsquo;t need to re-click the bookmark as you move between pages.</span>" +
-      "<span class=\"gi\"><b>New tabs:</b> with the <b>extension</b>, a page opened in a new tab loads the tool automatically. With the <b>bookmarklet</b>, a new tab is a fresh page &mdash; click the bookmark once in that tab to use the tool there (a bookmarklet can&rsquo;t auto-run on a new page).</span>") +
+      "<span class=\"gi\">Only real menu items get the button &mdash; ordinary record or user links on a page won&rsquo;t be mistaken for navigation. You don&rsquo;t need to re-click the bookmark as you move between pages.</span>") +
     acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
       "<p>Read and export the real logic behind a segment &mdash; API names and all &mdash; which the builder normally hides behind friendly labels.</p>" +
       "<ul>" +
@@ -463,7 +462,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Works on these pages (the launcher shows only that page&rsquo;s buttons) &mdash; click a row to see what you can do. All read-only.</p>
     <div class="chips" style="margin-bottom:10px">${chips}</div>
     ${sharedRows}${devRows}
-    <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Modals are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; to remove the tool entirely, click the bookmark again (or the extension&rsquo;s toolbar icon).</p>${roadmapNote}
+    <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Modals are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; to remove the tool entirely, click the bookmark again.</p>${roadmapNote}
   </div>
   <details class="acc" style="margin-top:16px">
     <summary><span class="acc-ic">&#128274;</span><span class="acc-nm">Privacy &amp; safety</span></summary>
