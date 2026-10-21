@@ -18250,6 +18250,43 @@ processJSON();
         out.recordIdCells.push({ tag: (el.tagName || "").toLowerCase(), recordId: rid, rect: rect, text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) });
       });
     } else { out.links = "(no row captured — hover a row first, then right-click the ⧉)"; }
+    // ── JS-PROPERTY scan: Aura uiVirtualDataTable rows hold the record in a JS PROPERTY (not a
+    // DOM attribute). Hunt the row + its cells for any property path holding an 18/15-char SF id
+    // that is NOT the Data Space id we already saw — that's almost certainly the CI's own id.
+    // We also report the id PREFIXES present (first 3 chars) so we can tell CI (e.g. 0ci/1ci…)
+    // from the Data Space (0vh…). Read-only; bounded depth; skips DOM/▸circular refs.
+    try {
+      out.jsIds = [];
+      var seen = [];
+      var SFID = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
+      function looksId(v) { return typeof v === "string" && (v.length === 15 || v.length === 18) && SFID.test(v); }
+      function walkProps(obj, path, depth) {
+        if (!obj || depth > 6 || out.jsIds.length > 40) return;
+        if (seen.indexOf(obj) >= 0) return; if (typeof obj === "object") { if (seen.length < 500) seen.push(obj); else return; }
+        for (var k in obj) {
+          if (out.jsIds.length > 40) break;
+          var v; try { v = obj[k]; } catch (e) { continue; }
+          if (v == null) continue;
+          var t = typeof v;
+          if (t === "string") { if (looksId(v)) out.jsIds.push({ path: (path + "." + k).slice(0, 80), value: v }); }
+          else if (t === "object") {
+            // skip DOM nodes / window / large framework blobs by name heuristic
+            if (v.nodeType || v === window || k === "ownerDocument" || k === "parentNode" || k === "__proto__") continue;
+            walkProps(v, path + "." + k, depth + 1);
+          }
+        }
+      }
+      if (tr) {
+        // scan the row element's JS props, and the name cell's / its anchor's props
+        walkProps(tr, "tr", 0);
+        try { var nameA = null; (function eh(root, d) { if (!root || d > 6 || nameA) return; var q = root.querySelectorAll ? root.querySelectorAll("a") : []; for (var i = 0; i < q.length; i++) { var cl = (q[i].getAttribute && q[i].getAttribute("class")) || ""; if (/text-wrapper/.test(cl) || (q[i].getAttribute && (q[i].getAttribute("href") || "") === "javascript:void(0);")) { nameA = q[i]; break; } } })(tr, 0); if (nameA) walkProps(nameA, "nameAnchor", 0); } catch (e) {}
+      }
+      // de-dup + summarize prefixes
+      var uniq = {}, prefixes = {};
+      out.jsIds.forEach(function (o) { uniq[o.value] = o.path; var p = o.value.slice(0, 3); prefixes[p] = (prefixes[p] || 0) + 1; });
+      out.jsIdSummary = Object.keys(uniq).map(function (v) { return v + "  @  " + uniq[v]; }).slice(0, 20);
+      out.jsIdPrefixes = prefixes;
+    } catch (e) { out.jsIdsError = String(e); }
     var panel = document.getElementById("dc-rowdump"); if (panel) panel.remove();
     panel = document.createElement("div");
     panel.id = "dc-rowdump";
