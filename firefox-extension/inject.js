@@ -13064,6 +13064,23 @@
       if (!stripped || stripped.length < 6) return { ok: false, msg: "Editor contains only comments — write a query." };
       if (!/SELECT/i.test(stripped)) return { ok: false, msg: "No SELECT found. Write or highlight a query first." };
       if (!/FROM/i.test(stripped)) return { ok: false, msg: "No FROM found. Make sure your query has a FROM clause." };
+      // MULTIPLE STATEMENTS: the editor often holds several queries. Sending them all gives a raw
+      // server error ("syntax error: got SELECT, expected ... end of input" — a 2nd SELECT where
+      // the parser wanted the end). Data Cloud runs ONE statement. Detect >1 top-level SELECT
+      // (a semicolon separating statements, OR a 2nd standalone SELECT not inside parens/subquery)
+      // and ask the user to HIGHLIGHT the one they want. Crude but safe: only blocks the clear
+      // multi-statement case; a single query (incl. subqueries/UNION) passes.
+      var semiParts = stripped.replace(/;\s*$/, "").split(";").map(function (s) { return s.trim(); }).filter(function (s) { return /SELECT/i.test(s); });
+      if (semiParts.length > 1) return { ok: false, msg: "The editor has multiple queries (separated by ';'). Highlight the ONE query you want to export, then click again." };
+      // 2nd top-level SELECT with no separator (e.g. two stacked queries). Count SELECTs that are
+      // NOT preceded by '(' or UNION/INTERSECT/EXCEPT (those are legitimate sub-selects / set ops).
+      var topSelects = 0;
+      stripped.replace(/\bSELECT\b/gi, function (m, idx) {
+        var before = stripped.slice(Math.max(0, idx - 40), idx);
+        if (!/[(,]\s*$/.test(before) && !/\b(UNION|INTERSECT|EXCEPT)\s+(ALL\s+)?$/i.test(before)) topSelects++;
+        return m;
+      });
+      if (topSelects > 1) return { ok: false, msg: "The editor looks like it has more than one query. Highlight the ONE query you want to export, then click again." };
       return { ok: true };
     }
 
@@ -14523,6 +14540,23 @@
       var sql = (highlighted && highlighted.length > 10 && /select|from/i.test(highlighted)) ? normalizeSql(highlighted) : "";
       if (!sql) { showGuide(); return; }
       var chk = validateSql(sql); if (!chk.ok) { card.style.display = "block"; cardBody.innerHTML = "<div style='font:600 13px -apple-system,sans-serif;color:#92400e;margin-bottom:6px;'>Check your selection</div><div style='font-size:12px;color:#475569;line-height:1.6;'>" + chk.msg + "</div>"; return; }
+      // ── Session pre-flight (bookmarklet mode) ───────────────────────────────────────────
+      // Export ALL needs a live Data Cloud session. The EXTENSION reads the sid cookie, so it's
+      // always ready. The BOOKMARKLET has no cookie access — it must first SNIFF the page's own
+      // aura session token, which only appears after you run a query with SF's "Run Query"
+      // button. If that token isn't captured yet, the server would reject the request with a raw
+      // syntax/invalid-argument error (confusing). So in bookmarklet mode, if we have no session
+      // yet, show a clear "run a query first" message instead of firing a doomed request.
+      var _extMode = (typeof extBridgePresent === "function") && extBridgePresent();
+      var _haveSession = (typeof haveCredsOnly === "function") ? haveCredsOnly() : !!(_auraSniff && _auraSniff.context && _auraSniff.token);
+      if (!_extMode && !_haveSession) {
+        card.style.display = "block";
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Run a query first</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Export ALL needs an active Data Cloud session. In the bookmarklet, the tool connects by watching a query you run with Salesforce's own <b>Run Query</b> button.<br><br>"
+          + "<b>Fix:</b> run any query with <b>Run Query</b> once, wait for results, then click <b>Export ALL</b> again. <span style='color:#64748b;'>(The browser extension doesn't need this.)</span></div>";
+        return;
+      }
       var tableName = extractTableName(sql);
       var ds = readPageDataSpace();
       if (!ds) { var fmm = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i); var tn = fmm ? fmm[1].replace(/"/g, "") : ""; var dc = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tn) : [""]; ds = dc[0] || ""; }
@@ -18005,8 +18039,17 @@ processJSON();
           var k = node.getAttribute("data-row-key-value");
           // (A) custom datatable row (keyed). Skip the HEADER row.
           if (k && k !== "HEADER") {
+            // On the DMO (Data Model) list, the KEY is authoritative: build the DMO detail URL
+            // from it, and do NOT read the row's <a> links — those are RELATED-object columns
+            // (Data Streams / Data Lake Objects) that link to OTHER records. Reading them opened
+            // a Data Stream when the user clicked a DMO (reported). The DMO name cell itself is
+            // javascript:void(0) (not a real link), which is exactly why this list needs the ⧉.
+            if (type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) {
+              var tHref = dcDmoListUrl(k);
+              if (tHref) return { key: k, row: node, href: tHref };
+            }
+            // Any other keyed custom list: use the row's own real record link if present.
             var href = dcRowRealHref(node);
-            if (!href && type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) href = dcDmoListUrl(k);
             if (href) return { key: k, row: node, href: href };
           } else if (!k) {
             // (B) standard Lightning list row (no key) — use its own record link if present.

@@ -204,6 +204,31 @@ console.log("\n8. streaming full export present + guarded");
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));
+  // Export ALL pre-flight: in BOOKMARKLET mode (no extension bridge), require a live session
+  // FIRST — else the server rejects the request with a raw error (reported). Guard before firing.
+  ok("Export ALL checks session before firing in bookmarklet mode", /var _extMode = \(typeof extBridgePresent === "function"\) && extBridgePresent\(\);/.test(src) && /var _haveSession = [\s\S]{0,120}haveCredsOnly\(\)/.test(src) && /if \(!_extMode && !_haveSession\)/.test(src));
+  ok("Export ALL session guard shows a clear 'Run a query first' message (not a raw server error)", /Run a query first[\s\S]{0,260}Run Query<\/b>/.test(src));
+  // validateSql (shared by Count/Fetch/Export ALL) now BLOCKS multiple statements — the exact
+  // cause of the reported "syntax error: got SELECT, expected ... end of input".
+  ok("validateSql rejects multiple ';'-separated queries", /multiple queries \(separated by/.test(src));
+  ok("validateSql rejects >1 top-level SELECT (stacked, no separator)", /more than one query\. Highlight the ONE query/.test(src) && /var topSelects = 0;/.test(src));
+  // BEHAVIOR: run the REAL validateSql (extracted from source) against concrete queries.
+  (function () {
+    var m = src.match(/function validateSql\(raw\)\s*\{/);
+    if (!m) { ok("extracted validateSql", false); return; }
+    var s = src.indexOf(m[0]), i = src.indexOf("{", s), d = 0, e = i;
+    for (; i < src.length; i++) { var c = src[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } }
+    var fn; try { fn = eval("(" + src.slice(s, e + 1).replace(/^function validateSql/, "function") + ")"); } catch (er) { ok("compiled validateSql", false, String(er)); return; }
+    var okCase = function (label, q) { ok("ALLOWS " + label, fn(q).ok === true); };
+    var noCase = function (label, q) { ok("BLOCKS " + label, fn(q).ok === false); };
+    okCase("single query", 'SELECT a,b FROM T__dlm LIMIT 10');
+    okCase("single + trailing ;", 'SELECT a FROM T__dlm;');
+    okCase("subquery", 'SELECT a FROM (SELECT x FROM T__dlm) z');
+    okCase("UNION", 'SELECT a FROM T1__dlm UNION SELECT a FROM T2__dlm');
+    okCase("IN (subselect)", 'SELECT a FROM T__dlm WHERE id IN (SELECT id FROM U__dlm)');
+    noCase("two ';'-separated queries", 'SELECT a FROM T1__dlm; SELECT b FROM T2__dlm');
+    noCase("two stacked queries (no ;)", 'SELECT a FROM T1__dlm SELECT b FROM T2__dlm');
+  })();
   // Locked-file (replacing a CSV still open in Excel): retry once, then a clear actionable msg.
   ok("createWritable retries once on a lock error (transient lock)", /function openWritable\(attempt\)/.test(src) && /attempt < 1 && \/truncate\|create\|locked/.test(src) && /openWritable\(attempt \+ 1\)/.test(src));
   ok("locked-file error is tagged (err.fileLocked) for a friendly message", /err\.fileLocked = \/truncate\|create\|locked\|NoModificationAllowed\|InvalidState\/i\.test\(em\)/.test(src));

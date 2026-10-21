@@ -566,7 +566,10 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   // WITHOUT guessing: per row it reads the row's OWN real <a href> (dcRowRealHref), falling
   // back to the proven DMO template only on the Data Model list (the one list with no link).
   ok("LIST ⧉ reads each row's OWN real href (covers all lists, never fabricated)", /function dcRowRealHref\s*\(/.test(src) && /var href = dcRowRealHref\(node\)/.test(src));
-  ok("LIST ⧉ DMO template is the FALLBACK only when the row has no link", /if \(!href && type && type\.isDmoList[\s\S]{0,60}href = dcDmoListUrl\(k\)/.test(src));
+  // DMO list: the KEY→template is AUTHORITATIVE (checked FIRST), and the row's own <a> links are
+  // IGNORED for DMO rows — those are related-object columns (Data Streams / DLOs) that link to
+  // OTHER records. Reading them opened a Data Stream when the user clicked a DMO (reported).
+  ok("LIST ⧉ DMO row uses the key→template FIRST and ignores related-object links", /if \(type && type\.isDmoList && \/__\(\?:dlm\|dll\|c\)\$\/i\.test\(k\)\) \{\s*var tHref = dcDmoListUrl\(k\);/.test(src));
   ok("LIST active-type check is cheap/URL-only (no per-mouseover DOM scan — VDI-safe)", /CHEAP, URL-ONLY check/.test(src) && !/dcHasKeyedRow/.test(src));
   ok("LIST ⧉ handler uses the row's resolved href (hit.href), not a per-type url()", /var href = hit\.href \|\| "";/.test(src) && !/type\.url\(/.test(src));
   ok("nav capture poll is once-per-document (no stacked pollers on re-run)", /window\.__dcNavCapturePoll/.test(src));
@@ -793,6 +796,16 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var dmoRow = el("tr", { "data-row-key-value": "ssot__EmailEngagement__dlm" }, [dmoCell]);
   var hitDmo = sb.dcRowKeyFrom(dmoCell, { id: "dmo", isDmoList: true });
   ok("DMO custom row resolves via the proven c__objectApiName template", !!hitDmo && /c__objectApiName=ssot__EmailEngagement__dlm$/.test(hitDmo.href));
+
+  // THE REPORTED BUG: a DMO row ALSO has RELATED-object links (Data Streams / Data Lake Objects
+  // columns → /r/<DataStream id>/view). The DMO template MUST win — we must NOT open the related
+  // Data Stream record. Here the row has a Data Stream link but the key is a DMO.
+  var dsRelLink = el("a", { href: "/lightning/r/1dsKh0000010xVZIAY/view", _x: 900 }, []);   // related Data Stream col
+  var dmoNameCell = el("th", {}, []);                                                         // DMO name = javascript:void(0), no real link
+  var dmoRow2 = el("tr", { "data-row-key-value": "ssot__BulkEmailMessage__dlm" }, [dmoNameCell, el("td", {}, [dsRelLink])]);
+  var hitDmo2 = sb.dcRowKeyFrom(dmoNameCell, { id: "dmo", isDmoList: true });
+  ok("DMO row with a related Data Stream link → opens the DMO (template), NOT the Data Stream",
+    !!hitDmo2 && /c__objectApiName=ssot__BulkEmailMessage__dlm$/.test(hitDmo2.href) && !/1dsKh0000010xVZIAY/.test(hitDmo2.href));
 
   // FIELD row (DMO detail Fields tab): no key, NO /r/ link → must resolve to nothing.
   var fieldCell = el("th", {}, [el("span", {}, [])]);   // just text, no anchor
