@@ -731,9 +731,10 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
     for (; i < srcH.length; i++) { var c = srcH[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } }
     return srcH.slice(s, e + 1);
   }
-  // dcRowRealHref references the module-level DC_RECORD_LINK_RE — pull it in too.
+  // dcRowRealHref references module-level DC_RECORD_LINK_RE + DC_RECORD_LINK_OBJ_RE + dcListObject.
   var reLine = (srcH.match(/var DC_RECORD_LINK_RE = \/[^\n]+\/i;/) || [""])[0];
-  var code = reLine + "\n" + extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
+  var reObjLine = (srcH.match(/var DC_RECORD_LINK_OBJ_RE = \/[^\n]+\/i;/) || [""])[0];
+  var code = reLine + "\n" + reObjLine + "\n" + extractFn("dcListObject") + "\n" + extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
   ok("extracted dcRowKeyFrom + dcRowRealHref + DC_RECORD_LINK_RE from source", /function dcRowKeyFrom/.test(code) && /function dcRowRealHref/.test(code) && /DC_RECORD_LINK_RE/.test(code));
 
   // Minimal fake DOM: an element has tagName, getAttribute, parentElement, querySelectorAll,
@@ -779,17 +780,20 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var hitDC = sb.dcRowKeyFrom(nameCellDC, { id: "generic", isDmoList: false });
   ok("DC list row (/r/<id>/view, NO object segment) now resolves (was the bug)", !!hitDC && /\/lightning\/r\/1dsKh000000TOcwIAG\/view$/.test(hitDC.href));
 
-  // THE REPORTED BUG (Calculated Insights): a row has TWO record links — the NAME (left, the CI)
-  // and a secondary "Data Space" column (right, a DataSpace). The ⧉ must open the NAME (left-most
-  // by X), not the first-in-DOM. Here the DataSpace anchor comes FIRST in DOM but sits further
-  // RIGHT (bigger _x); the name anchor is further LEFT. Must pick the name.
-  var dsLink  = el("a", { href: "/lightning/r/0vhKh000000TOjwIAG/view", _x: 760 }, []);   // Data Space col (DOM-first, but right)
-  var ciLink  = el("a", { href: "/lightning/r/1ciKh000000TOjwIAG/view", _x: 480 }, []);  // Name col (left, valid 18-char id)
-  // put the Data Space cell BEFORE the name cell in DOM to reproduce the first-in-DOM trap
+  // THE REPORTED BUG (Calculated Insights), fixed by OBJECT-MATCHING (proven from the live DOM):
+  // list route = /lightning/o/MktCalculatedInsight/list; the row has a "Data Space" lookup column
+  // → /r/DataSpace/<id>/view AND the row's own CI → /r/MktCalculatedInsight/<id>/view. The ⧉ must
+  // open the CI (object matches the list), NOT the DataSpace. We make the DataSpace link the
+  // LEFT-MOST (smaller x) to prove object-matching WINS over geometry (the hardest case).
+  var ciEnv = { location: { origin: "https://x.my.salesforce.com", href: "https://x.lightning.force.com/lightning/o/MktCalculatedInsight/list?filterName=__Recent" }, window: {} };
+  vm.runInNewContext(code + "\nthis.dcRowKeyFrom = dcRowKeyFrom; this.dcListObject = dcListObject;", ciEnv);
+  eq("dcListObject reads MktCalculatedInsight from the list URL", ciEnv.dcListObject(), "MktCalculatedInsight");
+  var dsLink  = el("a", { href: "/lightning/r/DataSpace/0vhKh000000TOjwIAG/view", _x: 300 }, []);        // lookup col, LEFT
+  var ciLink  = el("a", { href: "/lightning/r/MktCalculatedInsight/1ciKh000000TOjwIAG/view", _x: 760 }, []); // own record, RIGHT
   var multiRow = el("tr", {}, [ el("td", {}, [dsLink]), el("th", {}, [ciLink]) ]);
-  var hitMulti = sb.dcRowKeyFrom(multiRow.children[0], { id: "generic", isDmoList: false });
-  ok("multi-link row opens the LEFT-MOST (name) record, NOT the Data Space (the reported bug)",
-    !!hitMulti && /1ciKh000000TOjwIAG/.test(hitMulti.href) && !/0vhKh000000TOjwIAG/.test(hitMulti.href));
+  var hitMulti = ciEnv.dcRowKeyFrom(multiRow.children[0], { id: "generic", isDmoList: false });
+  ok("CI row opens the Calculated Insight (object match), NOT the Data Space lookup — even though DS is left-most",
+    !!hitMulti && /\/r\/MktCalculatedInsight\/1ciKh000000TOjwIAG\/view$/.test(hitMulti.href) && !/DataSpace/.test(hitMulti.href));
 
   // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
   var dmoCell = el("th", {}, []);

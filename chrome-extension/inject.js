@@ -18083,15 +18083,25 @@ processJSON();
   // Requiring the <Object> segment (the old regex) was why the ⧉ never appeared on ANY Data
   // Cloud object list (Data Streams, IDR, Segment, Activation, DLO, DSO, BDT, …) — their links
   // omit it. We still exclude field/app routes (/n/, /o/) so a DMO Fields tab gets no ⧉.
+  // Record link with its OBJECT captured: /lightning/r/<Object>/<id>/view. The object segment is
+  // the reliable discriminator (proven via DOM Probe on the live org): on the Calculated Insights
+  // list the row's own link is .../r/MktCalculatedInsight/<id>/view, while the "Data Space" column
+  // is a LOOKUP to a DIFFERENT object .../r/DataSpace/<id>/view. So we pick by OBJECT, not by
+  // geometry (which was fragile). Group 1 = object (may be absent on the Data-Cloud short form
+  // /lightning/r/<id>/view, which has no lookup-column ambiguity anyway).
   var DC_RECORD_LINK_RE = /\/lightning\/r\/(?:[A-Za-z0-9_]+\/)?[A-Za-z0-9]{15,18}\/view/i;
+  var DC_RECORD_LINK_OBJ_RE = /\/lightning\/r\/([A-Za-z0-9_]+)\/[A-Za-z0-9]{15,18}\/view/i;
+  // The object the CURRENT list is OF, from the list route /lightning/o/<Object>/(home|list).
+  // "" if not an object-list route (then we can't object-match and fall back to left-most).
+  function dcListObject() {
+    var h = ""; try { h = location.href; } catch (e) { return ""; }
+    var m = h.match(/\/lightning\/o\/([A-Za-z0-9_]+)\/(?:home|list)/i);
+    return m ? m[1] : "";
+  }
   function dcRowRealHref(tr) {
-    // Collect EVERY record-link anchor in the row (crossing shadow DOM), each with its
-    // on-screen X position. A row can have MORE THAN ONE record link — e.g. a Calculated
-    // Insights / Segment / DLO row links both the NAME (col 1) and a secondary column like
-    // "Data Space" (→ a DataSpace record). The NAME is what the ⧉ must open. The old code took
-    // the FIRST link in DOM order, which could be the Data Space column → opened the wrong
-    // record (reported). The NAME column is ALWAYS the left-most record link, so we pick the
-    // anchor with the smallest left X — robust across every list type, no markup assumptions.
+    // Collect EVERY record-link anchor in the row (crossing shadow DOM), each with its OBJECT
+    // type and on-screen X. A row can have MORE THAN ONE record link — the row's own record AND
+    // lookup columns to OTHER objects (e.g. Calculated Insights row → a "Data Space" lookup).
     function collectRecordLinks(root) {
       var out = [];
       function scan(node) {
@@ -18103,8 +18113,9 @@ processJSON();
             if (!DC_RECORD_LINK_RE.test(hv)) continue;
             var abs; try { abs = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
             catch (e) { abs = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
+            var om = hv.match(DC_RECORD_LINK_OBJ_RE); var obj = om ? om[1] : "";
             var x = Infinity; try { var r = as[i].getBoundingClientRect(); if (r && (r.width || r.height)) x = r.left; } catch (e) {}
-            out.push({ href: abs, x: x });
+            out.push({ href: abs, obj: obj, x: x });
           }
         }
         var all = null; try { all = node.querySelectorAll ? node.querySelectorAll("*") : null; } catch (e) {}
@@ -18115,7 +18126,19 @@ processJSON();
     }
     var links = collectRecordLinks(tr);
     if (!links.length) return "";
-    // pick the LEFT-MOST (the name column). Ties / unmeasurable (x=Infinity) keep DOM order.
+    // 1) OBJECT MATCH (authoritative): if this is an object-list and a link targets that SAME
+    //    object, use it — ignoring lookup-column links to OTHER objects (the Data Space bug).
+    var listObj = dcListObject();
+    if (listObj) {
+      var sameObj = links.filter(function (l) { return l.obj && l.obj.toLowerCase() === listObj.toLowerCase(); });
+      if (sameObj.length) { var b1 = sameObj[0]; for (var a = 1; a < sameObj.length; a++) if (sameObj[a].x < b1.x) b1 = sameObj[a]; return b1.href; }
+      // No same-object link, but there ARE links to OTHER objects → those are all lookups; the
+      // row's own record isn't a link here (rare). Don't open a lookup → return nothing.
+      var anyObj = links.filter(function (l) { return l.obj; });
+      if (anyObj.length && anyObj.length === links.length) return "";
+    }
+    // 2) Fallback (short-form /r/<id>/view links with no object segment, or non-object routes):
+    //    pick the LEFT-MOST (the name column).
     var best = links[0];
     for (var k = 1; k < links.length; k++) { if (links[k].x < best.x) best = links[k]; }
     return best.href;

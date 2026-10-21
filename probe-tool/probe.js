@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v31 — the ⧉ opens the WRONG record on a standard DC list (e.g. Calculated
+ * DOM PROBE v32 — the ⧉ opens the WRONG record on a standard DC list (e.g. Calculated
  * Insights row → opens the Data Space, because the row has MULTIPLE /r/<id>/view links
  * and we grab the first one instead of the NAME-cell one).
  *
@@ -54,6 +54,10 @@
         try { if (!inside && cells[ci].contains && cells[ci].contains(a)) inside = true; } catch (e) {}
         if (inside) { cellIdx = ci; cellLabel = attr(cells[ci], "data-label") || attr(cells[ci], "aria-label"); cellRole = attr(cells[ci], "role"); break; }
       }
+      // geometry: the ⧉ fix picks the LEFT-MOST link by getBoundingClientRect().left — report it
+      // AND the anchor's own rect, so we can see whether left/width are 0 (hidden/display:contents)
+      // which would break the left-most logic.
+      var rect = null; try { var r = a.getBoundingClientRect(); rect = { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; } catch (e) {}
       out.firstRowLinks.push({
         domOrder: order++,
         href: hv,
@@ -61,6 +65,7 @@
         cellIndex: cellIdx,
         cellLabel: cellLabel,
         cellRole: cellRole,
+        rect: rect,
         anchorClass: attr(a, "class").slice(0, 60)
       });
     });
@@ -74,7 +79,7 @@
   p.id = PANEL_ID;
   p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(720px,95vw);max-height:86vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11.5px/1.5 'SF Mono',Menlo,monospace;box-shadow:0 20px 60px rgba(0,0,0,.6);white-space:pre-wrap;";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v31 — ⧉ wrong-record on standard list\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v32 — ⧉ wrong-record on standard list\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
