@@ -792,5 +792,36 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   ok("HEADER row skipped (no ⧉ on the column header)", hitHdr === null);
 }
 
+// ── 6i. BEHAVIOR: new-tab hint shows ONCE in bookmarklet mode, NEVER in extension mode ──
+// A bookmarklet can't auto-run in a new tab, so clicking a ⧉ shows a one-time heads-up. In
+// EXTENSION mode the new tab auto-loads (background injects), so the hint must NOT appear.
+console.log("\n6i. new-tab hint: once in bookmarklet mode, never in extension mode");
+{
+  const vm6i = require("vm");
+  const fs6i = require("fs"), path6i = require("path");
+  const src6i = fs6i.readFileSync(path6i.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  function grab6i(name) { var m = src6i.match(new RegExp("function " + name + "\\s*\\([^)]*\\)\\s*\\{")); if (!m) return ""; var s = src6i.indexOf(m[0]), i = src6i.indexOf("{", s), d = 0, e = i; for (; i < src6i.length; i++) { var c = src6i[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } } return src6i.slice(s, e + 1); }
+  function run(extMode) {
+    var created = 0;
+    var fakeEl = { style: {}, innerHTML: "", remove: function () {}, };
+    var win = { __dcNewTabHintShown: false, requestAnimationFrame: function (f) {} };
+    var sb = {
+      extBridgePresent: function () { return extMode; },
+      window: win,
+      document: { createElement: function () { created++; return fakeEl; }, body: { appendChild: function () {} } },
+      requestAnimationFrame: function (f) {}, setTimeout: function () {},
+    };
+    vm6i.runInNewContext(grab6i("dcNewTabHint") + "\nthis.dcNewTabHint = dcNewTabHint;", sb);
+    sb.dcNewTabHint(); sb.dcNewTabHint(); sb.dcNewTabHint();   // 3 clicks
+    return created;
+  }
+  eq("bookmarklet mode: hint shows exactly ONCE across 3 clicks", run(false), 1);
+  eq("extension mode: hint NEVER shows (new tab auto-loads)", run(true), 0);
+  // wired into BOTH ⧉ click handlers + synced to bookmarklet build
+  ok("both ⧉ click handlers call dcNewTabHint()", (src6i.match(/ev\.stopPropagation\(\); dcNewTabHint\(\);/g) || []).length >= 2);
+  var bm6i = fs6i.readFileSync(path6i.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+  ok("new-tab hint synced into bookmarklet build", /function dcNewTabHint\(\)/.test(bm6i));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

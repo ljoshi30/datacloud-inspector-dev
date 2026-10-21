@@ -18077,6 +18077,25 @@ processJSON();
   // on `document` (survives SPA nav) and install ONCE per document; the button self-heals via
   // dcGetListBtn() after teardown's "[id^='dc-']" sweep. One bookmarklet click → works across
   // navigation without re-clicking.
+  // One-time heads-up shown when a ⧉ opens a NEW TAB in BOOKMARKLET mode. A bookmarklet can't
+  // auto-run in the new tab (no background/content-script — browser only runs it on click), so
+  // the new tab won't have the tool until the user clicks the bookmark there. We can't change
+  // that, but we can make it non-confusing: a brief, ONCE-PER-SESSION note. In EXTENSION mode
+  // the new tab auto-loads, so we show nothing. Not a nag — fires at most once per tab session.
+  function dcNewTabHint() {
+    try {
+      if (typeof extBridgePresent === "function" && extBridgePresent()) return;   // extension auto-loads → no hint
+      if (window.__dcNewTabHintShown) return;
+      window.__dcNewTabHintShown = true;
+      var t = document.createElement("div");
+      t.id = "dc-newtab-hint";
+      t.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483647;max-width:300px;background:#111827;color:#fff;font:500 12.5px/1.5 -apple-system,sans-serif;padding:11px 14px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;";
+      t.innerHTML = "Opened in a new tab. <b>Tip:</b> click the <b>Data 360 Inspector</b> bookmark in that tab to use the tool there too. <span style='color:#94a3b8;'>(The browser extension does this automatically.)</span>";
+      document.body.appendChild(t);
+      requestAnimationFrame(function () { t.style.opacity = "1"; t.style.transform = "translateY(0)"; });
+      setTimeout(function () { t.style.opacity = "0"; t.style.transform = "translateY(8px)"; setTimeout(function () { try { t.remove(); } catch (e) {} }, 350); }, 5000);
+    } catch (e) {}
+  }
   var dcListHideT = null;
   function dcListHideSoon() { if (dcListHideT) return; dcListHideT = setTimeout(function () { dcListHideT = null; var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, 250); }
   function dcGetListBtn() {
@@ -18087,7 +18106,7 @@ processJSON();
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
-    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
     btn.addEventListener("mouseleave", function () { dcListHideSoon(); });
     (document.body || document.documentElement).appendChild(btn);
@@ -18341,7 +18360,7 @@ processJSON();
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
-    btn.addEventListener("click", function (ev) { ev.stopPropagation(); }, true);
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; } });
     btn.addEventListener("mouseleave", function () { dcNavHideSoon(); });
     (document.body || document.documentElement).appendChild(btn);
