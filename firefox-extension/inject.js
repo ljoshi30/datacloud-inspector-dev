@@ -18032,44 +18032,45 @@ processJSON();
   //      ⧉ is a one-click convenience the user asked for.)
   // Either way the destination is REAL (read from the DOM or the proven DMO template) — never
   // fabricated. keyOk filters the "HEADER" row.
+  // The record id for a <tr>, in PRIORITY order (proven from live diagnostics across list types):
+  //   1) data-row-key-value attribute        — Data Graph etc.: key = 0g7Kh… (the record's id)
+  //   2) tr._data.record.Id                   — old Aura uiVirtualDataTable (CI): the CI's own id
+  //   3) tr._data.record.id / tr.recordId     — other shapes
+  // The row's <a> links are NOT used for the id — they're often a Data Space LOOKUP to a DIFFERENT
+  // record (that was the whole "opens Data Space" bug). Returns "" if no id found.
+  function dcRowRecordId(tr) {
+    if (!tr) return "";
+    function isId(v) { return typeof v === "string" && (v.length === 15 || v.length === 18) && /^[A-Za-z0-9]+$/.test(v); }
+    try { var k = tr.getAttribute && tr.getAttribute("data-row-key-value"); if (k && k !== "HEADER" && isId(k)) return k; } catch (e) {}
+    try { if (tr._data && tr._data.record) { var r = tr._data.record; if (isId(r.Id)) return r.Id; if (isId(r.id)) return r.id; } } catch (e) {}
+    try { if (isId(tr.recordId)) return tr.recordId; } catch (e) {}
+    return "";
+  }
   function dcRowKeyFrom(node, type) {
     for (var h = 0; h < 12 && node && node.nodeType === 1; h++) {
       try {
-        if ((node.tagName || "").toLowerCase() === "tr" && node.getAttribute) {
-          var k = node.getAttribute("data-row-key-value");
-          // (A) custom datatable row (keyed). Skip the HEADER row.
-          if (k && k !== "HEADER") {
-            // On the DMO (Data Model) list, the KEY is authoritative: build the DMO detail URL
-            // from it, and do NOT read the row's <a> links — those are RELATED-object columns
-            // (Data Streams / Data Lake Objects) that link to OTHER records. Reading them opened
-            // a Data Stream when the user clicked a DMO (reported). The DMO name cell itself is
-            // javascript:void(0) (not a real link), which is exactly why this list needs the ⧉.
+        if ((node.tagName || "").toLowerCase() === "tr") {
+          var k = (node.getAttribute && node.getAttribute("data-row-key-value")) || "";
+          if (k === "HEADER") { /* skip header row */ }
+          else {
+            // (A) DMO (Data Model) list: key ends __dlm/__dll/__c → c__objectApiName template.
             if (type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) {
               var tHref = dcDmoListUrl(k);
               if (tHref) return { key: k, row: node, href: tHref };
             }
-            // KEY IS THE RECORD ID (authoritative): on newer datatables the row's
-            // data-row-key-value IS the record's own 15/18-char Salesforce id (proven: Data Graph
-            // row key = 0g7Kh000000sXuFIAU, the DataGraph's id — NOT the Data Space 0vh… lookup).
-            // The name cell is javascript:void(0), and the only <a> is a Data Space LOOKUP (which
-            // on some lists has no outputLookup class, so link-scraping grabbed it). So when the
-            // key is a real record id, BUILD the URL from it and IGNORE the row's links entirely:
-            //   /lightning/r/<listObject>/<key>/view  (Lightning also resolves /r/<key>/view).
-            if (/^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/.test(k)) {
+            // (B) KEY/JS-DATA RECORD ID is authoritative — build the URL from the row's OWN id and
+            // IGNORE its <a> links (which may be a Data Space lookup to another record). Covers
+            // Data Graph (data-row-key-value) AND Calculated Insights (tr._data.record.Id).
+            var rid = dcRowRecordId(node);
+            if (rid) {
               var lo = (typeof dcListObject === "function") ? dcListObject() : "";
-              var keyHref = location.origin + "/lightning/r/" + (lo ? lo + "/" : "") + encodeURIComponent(k) + "/view";
-              return { key: k, row: node, href: keyHref };
+              var keyHref = location.origin + "/lightning/r/" + (lo ? lo + "/" : "") + encodeURIComponent(rid) + "/view";
+              return { key: rid, row: node, href: keyHref };
             }
-            // Any other keyed custom list with no id-key: use the row's own real record link.
+            // (C) No id on the row → fall back to the row's own real record link (standard lists
+            // like Data Streams whose NAME cell IS a real link; lookups are excluded in dcRowRealHref).
             var href = dcRowRealHref(node);
-            if (href) return { key: k, row: node, href: href };
-          } else if (!k) {
-            // (B) standard Lightning list row (no key) — use its own record link if present.
-            var href2 = dcRowRealHref(node);
-            if (href2) {
-              var key2 = ""; try { key2 = (node.getAttribute("data-row-key-value") || node.getAttribute("data-recordid") || ""); } catch (e) {}
-              return { key: key2, row: node, href: href2 };
-            }
+            if (href) { var key2 = ""; try { key2 = node.getAttribute("data-row-key-value") || node.getAttribute("data-recordid") || ""; } catch (e) {} return { key: key2, row: node, href: href }; }
           }
         }
       } catch (e) {}
@@ -18226,7 +18227,9 @@ processJSON();
     // BUILD STAMP so we can confirm you're running the NEW code (a bookmarklet never auto-updates
     // — if this doesn't match the latest release, the bookmark wasn't re-dragged).
     var out = { BUILD: "dc-newtab-fix-7", listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, rowKey: "", rowRecordId: "", rowTag: "", rowAttrs: {}, links: [], chosen: "" };
-    try { out.chosen = (typeof dcRowRealHref === "function") ? dcRowRealHref(tr) : ""; } catch (e) { out.chosen = "ERR:" + e; }
+    // chosen = what the ⧉ ACTUALLY resolves (dcRowKeyFrom = the real path), not dcRowRealHref.
+    try { var hitC = (typeof dcRowKeyFrom === "function") ? dcRowKeyFrom(tr, (typeof dcActiveListType === "function" ? dcActiveListType() : null)) : null; out.chosen = hitC ? hitC.href : ""; out.chosenKey = hitC ? hitC.key : ""; } catch (e) { out.chosen = "ERR:" + e; }
+    try { out.rowRecordIdResolved = (typeof dcRowRecordId === "function") ? dcRowRecordId(tr) : ""; } catch (e) {}
     // Capture the ROW's own identity attributes — Lightning list rows carry the record id in
     // data-row-key-value / data-recordid, which is how we open the record when the NAME cell
     // has no link (the Calculated Insights case: only the Data Space lookup is a link).

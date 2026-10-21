@@ -734,7 +734,7 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   // dcRowRealHref references module-level DC_RECORD_LINK_RE + DC_RECORD_LINK_OBJ_RE + dcListObject.
   var reLine = (srcH.match(/var DC_RECORD_LINK_RE = \/[^\n]+\/i;/) || [""])[0];
   var reObjLine = (srcH.match(/var DC_RECORD_LINK_OBJ_RE = \/[^\n]+\/i;/) || [""])[0];
-  var code = reLine + "\n" + reObjLine + "\n" + extractFn("dcListObject") + "\n" + extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
+  var code = reLine + "\n" + reObjLine + "\n" + extractFn("dcListObject") + "\n" + extractFn("dcDmoListUrl") + "\n" + extractFn("dcRowRecordId") + "\n" + extractFn("dcRowRealHref") + "\n" + extractFn("dcRowKeyFrom");
   ok("extracted dcRowKeyFrom + dcRowRealHref + DC_RECORD_LINK_RE from source", /function dcRowKeyFrom/.test(code) && /function dcRowRealHref/.test(code) && /DC_RECORD_LINK_RE/.test(code));
 
   // Minimal fake DOM: an element has tagName, getAttribute, parentElement, querySelectorAll,
@@ -831,12 +831,16 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   // form, so object-exclusion can't catch it). The lookup must be EXCLUDED by its class → no
   // openable link remains → the ⧉ opens NOTHING (correct: the CI name has no URL in this old
   // Aura list; opening the Data Space was the bug).
+  // CI row's own id lives in the Aura JS DATA (tr._data.record.Id = 0kXKh… — a Calculated
+  // Insight, prefix 0kX), NOT in the DOM. DataSpaceId (0vh…) is a separate field. The ⧉ must
+  // open the CI from _data.record.Id and IGNORE the Data Space lookup <a>.
   var ciName = el("a", { href: "javascript:void(0);", "class": "text-wrapper", _x: 125 }, []);
   var dsLookup = el("a", { href: "/lightning/r/0vhKh000000TOjwIAG/view", "class": "slds-truncate outputLookupLink", _x: 413 }, []);
   var ciRealRow = el("tr", {}, [ el("th", {}, [ciName]), el("td", {}, [dsLookup]) ]);
+  ciRealRow._data = { record: { Id: "0kXKh000000sYHrMAM", DataSpaceId: "0vhKh000000TOjwIAG" } };   // the live Aura JS shape
   var hitCiReal = ciEnv.dcRowKeyFrom(ciRealRow.children[0], { id: "generic", isDmoList: false });
-  ok("LIVE CI row (name=void(0), only link=outputLookupLink Data Space) → ⧉ opens nothing, NOT the Data Space",
-    !hitCiReal || !/0vhKh000000TOjwIAG/.test(hitCiReal.href || ""));
+  ok("LIVE CI row → opens the CI from tr._data.record.Id (0kX…), NOT the Data Space lookup",
+    !!hitCiReal && /\/lightning\/r\/MktCalculatedInsight\/0kXKh000000sYHrMAM\/view$/.test(hitCiReal.href) && !/0vhKh/.test(hitCiReal.href));
 
   // A GENUINE name link (NOT a lookup class) must STILL resolve (don't over-exclude). Data
   // Streams list: name cell has a real record link with no outputLookup class → opens it.
