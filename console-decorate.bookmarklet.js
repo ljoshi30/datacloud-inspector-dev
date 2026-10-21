@@ -18211,130 +18211,11 @@ processJSON();
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
     btn.addEventListener("mouseleave", function () { dcListHideSoon(); });
-    // RIGHT-CLICK the ⧉ = diagnostic: dump EVERY record link in the hovered row (href, object,
-    // on-screen rect, cell text) into a copyable panel. This reads the LIVE row — no separate
-    // probe to re-drag — so we can see exactly why the wrong link is picked. Read-only.
-    btn.addEventListener("contextmenu", function (ev) {
-      ev.preventDefault(); ev.stopPropagation();
-      try { dcDumpRowLinks(window.__dcLastRow); } catch (e) {}
-    }, true);
     return (document.body || document.documentElement).appendChild(btn), btn;
-  }
-  // Diagnostic: enumerate the row's record links with everything that determines the pick.
-  // `tr` passed in, or (if null) the row under the mouse (set by the global key handler).
-  function dcDumpRowLinks(tr) {
-    if (!tr && window.__dcHoverRow) tr = window.__dcHoverRow;
-    // BUILD STAMP so we can confirm you're running the NEW code (a bookmarklet never auto-updates
-    // — if this doesn't match the latest release, the bookmark wasn't re-dragged).
-    var out = { BUILD: "dc-newtab-fix-7", listObject: (typeof dcListObject === "function" ? dcListObject() : ""), href: location.href, rowKey: "", rowRecordId: "", rowTag: "", rowAttrs: {}, links: [], chosen: "" };
-    // chosen = what the ⧉ ACTUALLY resolves (dcRowKeyFrom = the real path), not dcRowRealHref.
-    try { var hitC = (typeof dcRowKeyFrom === "function") ? dcRowKeyFrom(tr, (typeof dcActiveListType === "function" ? dcActiveListType() : null)) : null; out.chosen = hitC ? hitC.href : ""; out.chosenKey = hitC ? hitC.key : ""; } catch (e) { out.chosen = "ERR:" + e; }
-    try { out.rowRecordIdResolved = (typeof dcRowRecordId === "function") ? dcRowRecordId(tr) : ""; } catch (e) {}
-    // Capture the ROW's own identity attributes — Lightning list rows carry the record id in
-    // data-row-key-value / data-recordid, which is how we open the record when the NAME cell
-    // has no link (the Calculated Insights case: only the Data Space lookup is a link).
-    try {
-      if (tr && tr.getAttribute) {
-        out.rowTag = (tr.tagName || "").toLowerCase();
-        out.rowKey = tr.getAttribute("data-row-key-value") || "";
-        out.rowRecordId = tr.getAttribute("data-recordid") || "";
-        ["data-row-key-value", "data-recordid", "data-rowid", "data-id", "data-target-selection-name", "role"].forEach(function (an) { var v = tr.getAttribute(an); if (v != null) out.rowAttrs[an] = v; });
-        // also scan ancestors/descendants for ANY data-* that looks like an 18/15-char SF id
-        var found = [];
-        var scan = function (el) { try { if (!el.attributes) return; for (var i = 0; i < el.attributes.length; i++) { var a = el.attributes[i]; if (/^data-/.test(a.name) && /^[A-Za-z0-9]{15,18}$/.test(a.value)) found.push(a.name + "=" + a.value); } } catch (e) {} };
-        var n = tr; for (var h = 0; h < 4 && n; h++) { scan(n); n = n.parentElement; }
-        (function walk(root, d) { if (!root || d > 3) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length && found.length < 12; i++) { scan(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) walk(sr, d + 1); } })(tr, 0);
-        out.idAttrs = found.slice(0, 12);
-      }
-    } catch (e) {}
-    function eachEl(root, d, fn) { if (!root || d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
-    if (tr) {
-      var order = 0;
-      // EVERY anchor in the row (not just /lightning/r/ ones) — so we can see the CI NAME cell's
-      // anchor and what it points at (href, onclick-only javascript:void(0), data-recordid, etc.).
-      eachEl(tr, 0, function (a) {
-        if ((a.tagName || "").toLowerCase() !== "a") return;
-        var hv = ""; try { hv = a.getAttribute("href") || ""; } catch (e) {}
-        var rect = null; try { var r = a.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width) }; } catch (e) {}
-        var recId = ""; try { recId = a.getAttribute("data-recordid") || a.getAttribute("data-record-id") || ""; } catch (e) {}
-        out.links.push({ domOrder: order++, href: hv.slice(0, 80), recordId: recId, hasOnclick: !!(a.onclick) || a.hasAttribute("data-navigate-to") , rect: rect, text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40), cls: ((a.getAttribute && a.getAttribute("class")) || "").slice(0, 50) });
-      });
-      // Also: every element carrying a data-recordid (Aura cells often put it on <span>/<td>),
-      // with its text + rect, so we can map the CI NAME column to its record id.
-      out.recordIdCells = [];
-      eachEl(tr, 0, function (el) {
-        var rid = ""; try { rid = el.getAttribute && (el.getAttribute("data-recordid") || el.getAttribute("data-record-id")); } catch (e) {}
-        if (!rid) return;
-        var rect = null; try { var r = el.getBoundingClientRect(); rect = { left: Math.round(r.left), w: Math.round(r.width) }; } catch (e) {}
-        out.recordIdCells.push({ tag: (el.tagName || "").toLowerCase(), recordId: rid, rect: rect, text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) });
-      });
-    } else { out.links = "(no row captured — hover a row first, then right-click the ⧉)"; }
-    // ── JS-PROPERTY scan: Aura uiVirtualDataTable rows hold the record in a JS PROPERTY (not a
-    // DOM attribute). Hunt the row + its cells for any property path holding an 18/15-char SF id
-    // that is NOT the Data Space id we already saw — that's almost certainly the CI's own id.
-    // We also report the id PREFIXES present (first 3 chars) so we can tell CI (e.g. 0ci/1ci…)
-    // from the Data Space (0vh…). Read-only; bounded depth; skips DOM/▸circular refs.
-    try {
-      out.jsIds = [];
-      var seen = [];
-      var SFID = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
-      function looksId(v) { return typeof v === "string" && (v.length === 15 || v.length === 18) && SFID.test(v); }
-      function walkProps(obj, path, depth) {
-        if (!obj || depth > 6 || out.jsIds.length > 40) return;
-        if (seen.indexOf(obj) >= 0) return; if (typeof obj === "object") { if (seen.length < 500) seen.push(obj); else return; }
-        for (var k in obj) {
-          if (out.jsIds.length > 40) break;
-          var v; try { v = obj[k]; } catch (e) { continue; }
-          if (v == null) continue;
-          var t = typeof v;
-          if (t === "string") { if (looksId(v)) out.jsIds.push({ path: (path + "." + k).slice(0, 80), value: v }); }
-          else if (t === "object") {
-            // skip DOM nodes / window / large framework blobs by name heuristic
-            if (v.nodeType || v === window || k === "ownerDocument" || k === "parentNode" || k === "__proto__") continue;
-            walkProps(v, path + "." + k, depth + 1);
-          }
-        }
-      }
-      if (tr) {
-        // scan the row element's JS props, and the name cell's / its anchor's props
-        walkProps(tr, "tr", 0);
-        try { var nameA = null; (function eh(root, d) { if (!root || d > 6 || nameA) return; var q = root.querySelectorAll ? root.querySelectorAll("a") : []; for (var i = 0; i < q.length; i++) { var cl = (q[i].getAttribute && q[i].getAttribute("class")) || ""; if (/text-wrapper/.test(cl) || (q[i].getAttribute && (q[i].getAttribute("href") || "") === "javascript:void(0);")) { nameA = q[i]; break; } } })(tr, 0); if (nameA) walkProps(nameA, "nameAnchor", 0); } catch (e) {}
-      }
-      // de-dup + summarize prefixes
-      var uniq = {}, prefixes = {};
-      out.jsIds.forEach(function (o) { uniq[o.value] = o.path; var p = o.value.slice(0, 3); prefixes[p] = (prefixes[p] || 0) + 1; });
-      out.jsIdSummary = Object.keys(uniq).map(function (v) { return v + "  @  " + uniq[v]; }).slice(0, 20);
-      out.jsIdPrefixes = prefixes;
-    } catch (e) { out.jsIdsError = String(e); }
-    var panel = document.getElementById("dc-rowdump"); if (panel) panel.remove();
-    panel = document.createElement("div");
-    panel.id = "dc-rowdump";
-    panel.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(640px,94vw);max-height:80vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:12px 14px;font:11.5px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
-    var json = JSON.stringify(out, null, 2);
-    panel.textContent = "⧉ ROW DIAGNOSTIC (copied to clipboard — paste it back)\n\n" + json;
-    var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:6px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { panel.remove(); }; panel.appendChild(x);
-    document.body.appendChild(panel);
-    try { navigator.clipboard.writeText(json); } catch (e) {}
   }
   function dcInstallListNewTabButton() {
     if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
     window.__dcListNewTabInstalled = true;
-    // GLOBAL diagnostic: track the <tr> under the mouse, and let the user press Shift+D to dump
-    // it — works even where NO ⧉ shows (e.g. the CI list, where there's no openable link). This
-    // is how we capture the CI row's JS-property id without needing the ⧉ button.
-    try {
-      document.addEventListener("mousemove", function (e) {
-        var n = e.target, g = 0;
-        while (n && g++ < 12) { if ((n.tagName || "").toLowerCase() === "tr") { window.__dcHoverRow = n; break; } var p = n.parentElement; if (!p) { var rt = null; try { rt = n.getRootNode && n.getRootNode(); } catch (er) {} p = rt && rt.host ? rt.host : null; } n = p; }
-      }, true);
-      document.addEventListener("keydown", function (e) {
-        if (e.shiftKey && (e.key === "D" || e.key === "d") && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          var ae = document.activeElement; var inField = ae && (/input|textarea|select/i.test(ae.tagName) || ae.isContentEditable);
-          if (inField) return;   // don't hijack typing
-          e.preventDefault(); try { dcDumpRowLinks(window.__dcHoverRow || window.__dcLastRow); } catch (er) {}
-        }
-      }, true);
-    } catch (e) {}
     document.addEventListener("mouseover", function (e) {
       if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
       var type = dcActiveListType();
@@ -18346,7 +18227,6 @@ processJSON();
       var href = hit.href || "";
       if (!href) return;
       var btn = dcGetListBtn();
-      window.__dcLastRow = hit.row;   // remember the row for the right-click diagnostic
       btn.href = href;
       btn.title = hit.key ? ("Open " + hit.key + " in a new tab") : "Open this record in a new tab";
       var cell = null;
