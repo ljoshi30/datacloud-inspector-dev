@@ -18126,22 +18126,27 @@ processJSON();
     }
     var links = collectRecordLinks(tr);
     if (!links.length) return "";
-    // 1) OBJECT MATCH (authoritative): if this is an object-list and a link targets that SAME
-    //    object, use it — ignoring lookup-column links to OTHER objects (the Data Space bug).
     var listObj = dcListObject();
+    function leftMost(arr) { var b = arr[0]; for (var a = 1; a < arr.length; a++) if (arr[a].x < b.x) b = arr[a]; return b.href; }
     if (listObj) {
-      var sameObj = links.filter(function (l) { return l.obj && l.obj.toLowerCase() === listObj.toLowerCase(); });
-      if (sameObj.length) { var b1 = sameObj[0]; for (var a = 1; a < sameObj.length; a++) if (sameObj[a].x < b1.x) b1 = sameObj[a]; return b1.href; }
-      // No same-object link, but there ARE links to OTHER objects → those are all lookups; the
-      // row's own record isn't a link here (rare). Don't open a lookup → return nothing.
-      var anyObj = links.filter(function (l) { return l.obj; });
-      if (anyObj.length && anyObj.length === links.length) return "";
+      var lo = listObj.toLowerCase();
+      // 1) EXACT object match wins (the row's own record, full-form link).
+      var sameObj = links.filter(function (l) { return l.obj && l.obj.toLowerCase() === lo; });
+      if (sameObj.length) return leftMost(sameObj);
+      // 2) No exact match (the row's own record is a SHORT-FORM /r/<id>/view link with no object
+      //    segment — common on Data Cloud). The bug: a lookup column (e.g. Data Space →
+      //    /r/DataSpace/<id>/view) is a DIFFERENT, KNOWN object and must be EXCLUDED. Drop every
+      //    link that names a different object; from the rest (short-form + any same-object) take
+      //    the left-most. This fixes "CI/Data-Graph row opened the Data Space" for all link-form
+      //    combinations — we never open a link that explicitly names another object.
+      var notOtherObj = links.filter(function (l) { return !l.obj || l.obj.toLowerCase() === lo; });
+      if (notOtherObj.length) return leftMost(notOtherObj);
+      // 3) ONLY other-object (lookup) links exist → the row's own record isn't linked here.
+      //    Don't open a lookup to the wrong object.
+      return "";
     }
-    // 2) Fallback (short-form /r/<id>/view links with no object segment, or non-object routes):
-    //    pick the LEFT-MOST (the name column).
-    var best = links[0];
-    for (var k = 1; k < links.length; k++) { if (links[k].x < best.x) best = links[k]; }
-    return best.href;
+    // Non-object route (e.g. nav landing): no list object to match against → left-most.
+    return leftMost(links);
   }
   // ONE shared floating ⧉ for whatever list is active. Body-overlay; never mutates SF's
   // datatable (virtual scroll undisturbed). Anchored to the row's NAME cell. Listeners live

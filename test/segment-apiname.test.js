@@ -795,6 +795,22 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   ok("CI row opens the Calculated Insight (object match), NOT the Data Space lookup — even though DS is left-most",
     !!hitMulti && /\/r\/MktCalculatedInsight\/1ciKh000000TOjwIAG\/view$/.test(hitMulti.href) && !/DataSpace/.test(hitMulti.href));
 
+  // THE HARDER / ACTUAL case: the CI's OWN link is SHORT-FORM (/r/<id>/view, NO object segment —
+  // Data Cloud does this), so there's no exact object match. The ONLY object-named link is the
+  // Data Space LOOKUP. Must EXCLUDE the other-object lookup and open the short-form CI link —
+  // NOT fall back to left-most and grab the Data Space (the still-reported bug).
+  var dsLink2 = el("a", { href: "/lightning/r/DataSpace/0vhKh000000TOjwIAG/view", _x: 300 }, []);  // lookup, LEFT, named object
+  var ciShort = el("a", { href: "/lightning/r/1ciKh000000TOjwIAG/view", _x: 760 }, []);            // CI own record, short-form, RIGHT
+  var multiRow2 = el("tr", {}, [ el("td", {}, [dsLink2]), el("th", {}, [ciShort]) ]);
+  var hitMulti2 = ciEnv.dcRowKeyFrom(multiRow2.children[0], { id: "generic", isDmoList: false });
+  ok("CI row with SHORT-FORM own link + Data Space lookup → opens the CI, excludes the lookup",
+    !!hitMulti2 && /\/lightning\/r\/1ciKh000000TOjwIAG\/view$/.test(hitMulti2.href) && !/DataSpace/.test(hitMulti2.href));
+
+  // And if ONLY a wrong-object lookup exists (row's own record not linked) → open NOTHING.
+  var onlyDs = el("tr", {}, [ el("td", {}, [ el("a", { href: "/lightning/r/DataSpace/0vhKh000000TOjwIAG/view", _x: 300 }, []) ]) ]);
+  var hitOnlyDs = ciEnv.dcRowKeyFrom(onlyDs.children[0], { id: "generic", isDmoList: false });
+  ok("CI row with ONLY a Data Space lookup → opens nothing (never the wrong object)", !hitOnlyDs);
+
   // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
   var dmoCell = el("th", {}, []);
   var dmoRow = el("tr", { "data-row-key-value": "ssot__EmailEngagement__dlm" }, [dmoCell]);
