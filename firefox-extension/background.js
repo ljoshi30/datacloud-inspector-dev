@@ -31,17 +31,73 @@
  */
 var api = (typeof browser !== "undefined") ? browser : chrome;
 
+// ── AUTO-LOAD across tabs (dev build) ─────────────────────────────────────────────────
+// Problem it solves: when you open a Data Cloud page in a NEW tab (e.g. via the ⧉
+// open-in-new-tab, or Cmd-click, or a fresh tab), that tab is a FRESH page load — the tool
+// (inject.js) only ran in the tab where you clicked the toolbar icon, so the new tab had no
+// FAB / no ⧉ until you clicked the icon again there.
+//
+// Fix: a persisted preference `dc_autoload_enabled` (default ON). When ON, the auto-loaded
+// content script (bridge.js) asks the background on every Data Cloud page load to inject the
+// tool — so new tabs get it automatically, no re-click. The toolbar icon TOGGLES this
+// preference (and reflects it in the current tab immediately), so turning it off once keeps
+// it off across all tabs + reloads until you turn it back on. One global switch, not per-tab.
+//
+// inject.js self-guards: first run on a fresh page ACTIVATES; a 2nd run on the SAME url
+// toggles OFF. We use that contract: auto-inject on a fresh tab = activate; a toolbar click
+// on an already-active tab = toggle off (and we flip the stored preference to match).
+var AUTOLOAD_KEY = "dc_autoload_enabled";
+function getAutoload() {
+  return new Promise(function (res) {
+    try {
+      var r = api.storage.local.get([AUTOLOAD_KEY], function (d) { res(d && d[AUTOLOAD_KEY] !== false); });
+      if (r && r.then) r.then(function (d) { res(d && d[AUTOLOAD_KEY] !== false); }, function () { res(true); });
+    } catch (e) { res(true); }   // default ON
+  });
+}
+function setAutoload(on) {
+  try { var r = api.storage.local.set({ [AUTOLOAD_KEY]: !!on }); if (r && r.then) r.then(function () {}, function () {}); } catch (e) {}
+}
+function injectTool(tabId) {
+  return api.scripting.executeScript({ target: { tabId: tabId, allFrames: false }, world: "MAIN", files: ["inject.js"] });
+}
+
+// Per-tab injected state. inject.js's self-guard toggles on each run (run → on; run again on
+// the same url → off), so the background must know whether THIS tab currently has the tool to
+// keep the global preference in sync with what the user sees. Tracked in memory; a tab reload
+// clears it (fresh page → not injected until auto-load/click).
+var injectedTabs = {};
+try {
+  api.tabs.onRemoved.addListener(function (id) { delete injectedTabs[id]; });
+  api.tabs.onUpdated.addListener(function (id, info) { if (info && info.status === "loading") delete injectedTabs[id]; });
+} catch (e) {}
+
+// Toolbar click = TOGGLE the tool in THIS tab, and set the GLOBAL preference to match the
+// result — so the choice carries to new tabs. We inject either way (self-guard flips the tab);
+// the resulting on/off is the OPPOSITE of this tab's prior injected state, and that becomes the
+// new global preference. Net: click here turns it on⇄off AND sets what new tabs will do.
 api.action.onClicked.addListener(async (tab) => {
   if (!tab || !tab.id) return;
   try {
-    await api.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: false },
-      world: "MAIN",
-      files: ["inject.js"],
-    });
-  } catch (e) {
-  }
+    var wasInjected = !!injectedTabs[tab.id];
+    await injectTool(tab.id);          // first run → ON; same-url re-run → OFF (self-guard)
+    var nowOn = !wasInjected;
+    injectedTabs[tab.id] = nowOn;
+    setAutoload(nowOn);                // global preference follows the user's explicit action
+  } catch (e) {}
 });
+
+// Auto-inject on a freshly-loaded Data Cloud page when the preference is ON. bridge.js
+// (content script, runs on every matching page at document_start) pings us; we inject the
+// tool into that tab's MAIN world. A new tab from the ⧉ therefore shows the tool immediately.
+function handleAutoInject(tabId) {
+  if (!tabId) return;
+  if (injectedTabs[tabId]) return;   // already injected in this tab (don't re-run → would toggle OFF)
+  getAutoload().then(function (on) {
+    if (!on) return;
+    try { injectTool(tabId).then(function () { injectedTabs[tabId] = true; }, function () {}); } catch (e) {}
+  });
+}
 
 // ── Data Cloud SQL query relay (the documented, extension-only path) ──────────
 // The tool (MAIN world) can't read the HttpOnly sid or make cross-origin calls, so
@@ -412,6 +468,13 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!sender || sender.id !== api.runtime.id) return;
 
   const tabHost = (sender && sender.tab && sender.tab.url) ? (function () { try { return new URL(sender.tab.url).host; } catch (e) { return null; } })() : null;
+
+  // Auto-load ping from bridge.js on a freshly-loaded Data Cloud page → inject the tool if the
+  // preference is ON. Uses the VERIFIED sender tab id (not a page-supplied value).
+  if (msg && msg.type === "dcAutoInject") {
+    if (sender && sender.tab && sender.tab.id) handleAutoInject(sender.tab.id);
+    return;   // no response needed
+  }
 
   // For Salesforce API calls, prefer the verified tab URL host over any host
   // value supplied in the message payload (defense-in-depth against spoofing).

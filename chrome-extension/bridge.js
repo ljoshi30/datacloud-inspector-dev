@@ -24,6 +24,29 @@
   // 1) advertise extension presence to the MAIN-world tool (shared DOM attribute)
   try { document.documentElement.setAttribute("data-dc-ext", "1"); } catch (e) {}
 
+  // 1b) AUTO-LOAD: ask the background to inject the tool on this freshly-loaded page IF the
+  // user's auto-load preference is ON (default). This is what makes a NEW tab (e.g. opened via
+  // the ⧉ open-in-new-tab) show the tool automatically, with no re-click. The background owns
+  // the preference + does the MAIN-world inject (this ISOLATED content script can't).
+  //
+  // TIMING: bridge.js runs at document_start, but inject.js needs the page's Lightning
+  // components present to detect the page type. So we ping AFTER the page is ready (load event,
+  // or immediately if already complete), with a short extra delay for LWC to settle — mirroring
+  // the delay the one-shot detection + Query-Editor retry already tolerate. Fire ONCE.
+  (function () {
+    var pinged = false;
+    function ping() {
+      if (pinged) return; pinged = true;
+      setTimeout(function () {
+        try { api.runtime.sendMessage({ type: "dcAutoInject" }, function () { var _ = api.runtime.lastError; }); } catch (e) {}
+      }, 800);   // let LWC settle (inject.js also has its own retries for late SPA routes)
+    }
+    try {
+      if (document.readyState === "complete") ping();
+      else window.addEventListener("load", ping, { once: true });
+    } catch (e) { ping(); }
+  })();
+
   // Allowlist of recognized request types — only these are forwarded to the
   // background service worker. Prevents a malicious page from abusing the bridge.
   var ALLOWED_REQ_TYPES = {
