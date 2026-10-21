@@ -739,6 +739,8 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
     var e = {
       tagName: tag, nodeType: 1, _attrs: attrs || {}, children: kids || [], parentElement: null, shadowRoot: null,
       href: (attrs && attrs.href != null) ? ("https://x.lightning.force.com" + attrs.href) : undefined,
+      // geometry: an anchor can carry _x (its left X) so the left-most-link picker can be tested.
+      getBoundingClientRect: function () { var x = (this._attrs && this._attrs._x != null) ? this._attrs._x : 0; return { left: x, width: 10, height: 10, top: 0, right: x + 10, bottom: 10 }; },
       getAttribute: function (k) { return (k in this._attrs) ? this._attrs[k] : null; },
       matches: function (sel) {
         if (sel === "a[href]") return this.tagName === "a" && this._attrs.href != null;
@@ -773,6 +775,18 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var stdRowDC = el("tr", {}, [nameCellDC]);
   var hitDC = sb.dcRowKeyFrom(nameCellDC, { id: "generic", isDmoList: false });
   ok("DC list row (/r/<id>/view, NO object segment) now resolves (was the bug)", !!hitDC && /\/lightning\/r\/1dsKh000000TOcwIAG\/view$/.test(hitDC.href));
+
+  // THE REPORTED BUG (Calculated Insights): a row has TWO record links — the NAME (left, the CI)
+  // and a secondary "Data Space" column (right, a DataSpace). The ⧉ must open the NAME (left-most
+  // by X), not the first-in-DOM. Here the DataSpace anchor comes FIRST in DOM but sits further
+  // RIGHT (bigger _x); the name anchor is further LEFT. Must pick the name.
+  var dsLink  = el("a", { href: "/lightning/r/0vhKh000000TOjwIAG/view", _x: 760 }, []);   // Data Space col (DOM-first, but right)
+  var ciLink  = el("a", { href: "/lightning/r/1ciKh000000TOjwIAG/view", _x: 480 }, []);  // Name col (left, valid 18-char id)
+  // put the Data Space cell BEFORE the name cell in DOM to reproduce the first-in-DOM trap
+  var multiRow = el("tr", {}, [ el("td", {}, [dsLink]), el("th", {}, [ciLink]) ]);
+  var hitMulti = sb.dcRowKeyFrom(multiRow.children[0], { id: "generic", isDmoList: false });
+  ok("multi-link row opens the LEFT-MOST (name) record, NOT the Data Space (the reported bug)",
+    !!hitMulti && /1ciKh000000TOjwIAG/.test(hitMulti.href) && !/0vhKh000000TOjwIAG/.test(hitMulti.href));
 
   // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
   var dmoCell = el("th", {}, []);

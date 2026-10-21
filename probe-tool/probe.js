@@ -1,95 +1,81 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v30 — the NEW Salesforce Data Cloud LEFT NAV: why the ⧉ "open in new
- * tab" doesn't appear on its items, and how to match/route them correctly.
+ * DOM PROBE v31 — the ⧉ opens the WRONG record on a standard DC list (e.g. Calculated
+ * Insights row → opens the Data Space, because the row has MULTIPLE /r/<id>/view links
+ * and we grab the first one instead of the NAME-cell one).
  *
- * RUN on any Data Cloud page that shows the new left nav. Read-only. Copies JSON + shows panel.
- * Reports, crossing shadow DOM:
- *   - every element that LOOKS like a nav item (anchors + role=link/button/treeitem/menuitem
- *     + known nav classes/tags), with: tag, role, class, aria-label/title/text, href
- *   - whether a top context-bar exists to harvest hrefs from (slds-context-bar__label-action)
- *   - the ancestor chain of the FIRST left-nav item (so we see the container tags/classes our
- *     dcIsNavAnchor gate should recognize)
- *   - whether the current matcher markers appear anywhere
+ * RUN on a Data Cloud LIST that has a secondary record link in a column (Calculated Insights:
+ * the "Data Space / TDI" column links to a DataSpace). Read-only. Copies JSON + shows panel.
+ * For the FIRST data row it reports, IN DOM ORDER (crossing shadow), EVERY /r/<id>/view anchor
+ * with: the href, the anchor text, and which CELL (column index / data-label / role) it sits in.
+ * This tells us how to pick the NAME-cell link (col 0) vs the Data Space link reliably.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe30() {
+(function DomProbe31() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
-
-  var out = { href: "", navItems: [], topBarAnchors: 0, currentMarkersSeen: {}, firstItemChain: [], notes: [] };
-  try { out.href = location.href; } catch (e) {}
+  var REC = /\/lightning\/r\/(?:[A-Za-z0-9_]+\/)?[A-Za-z0-9]{15,18}\/view/i;
+  var out = { href: location.href, firstRowLinks: [], notes: [] };
 
   function eachEl(root, d, fn) {
     if (d > 16) return;
     var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
-    for (var i = 0; i < q.length; i++) {
-      fn(q[i]);
-      var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
-      if (sr) eachEl(sr, d + 1, fn);
-    }
+    for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); }
   }
   function attr(el, a) { try { return el.getAttribute(a) || ""; } catch (e) { return ""; } }
-  function labelOf(el) { return (attr(el, "aria-label") || attr(el, "title") || (el.textContent || "")).replace(/\s+/g, " ").trim().slice(0, 50); }
 
-  // markers the SHIPPED matcher currently recognizes — see if any appear
-  var MARKERS = ["slds-nav-vertical__action", "slds-context-bar__label-action", "navItem", "slds-context-bar__item",
-    "one-app-nav-bar-item", "desktop-vertical-navigation", "lightning-vertical-navigation"];
-  MARKERS.forEach(function (m) { out.currentMarkersSeen[m] = 0; });
-
-  var items = [], firstLeftItem = null;
+  // find rows (tr with data-row-key-value, OR any tr that contains a /r/ link)
+  var rows = [];
   eachEl(document, 0, function (el) {
-    var tag = (el.tagName || "").toLowerCase();
-    var cls = attr(el, "class");
-    var role = attr(el, "role");
-    // count current markers
-    MARKERS.forEach(function (m) { if (cls.indexOf(m) >= 0 || tag.indexOf(m) >= 0) out.currentMarkersSeen[m]++; });
-    if (/slds-context-bar__label-action/.test(cls)) out.topBarAnchors++;
-    // candidate nav item?
-    var looksNav =
-      tag === "a" ||
-      role === "link" || role === "button" || role === "treeitem" || role === "menuitem" || role === "tab" ||
-      /nav.*item|vertical-navigation|slds-nav-vertical|nav-items|navItem|menu-item|tree.*item/i.test(cls) ||
-      /nav-item|navigation-item|tree-item/i.test(tag);
-    if (!looksNav) return;
-    var href = attr(el, "href");
-    var lbl = labelOf(el);
-    if (!lbl && !href) return;
-    var rec = { tag: tag, role: role, cls: cls.slice(0, 90), label: lbl, href: href.slice(0, 80) };
-    items.push(rec);
-    // the first LEFT-nav-looking item (vertical nav, not the top bar) → capture its ancestor chain
-    if (!firstLeftItem && /vertical|nav-vertical|tree/i.test(cls + " " + tag) && lbl) firstLeftItem = el;
+    if ((el.tagName || "").toLowerCase() !== "tr") return;
+    var hasLink = false;
+    eachEl(el, 0, function (a) { if (hasLink) return; if ((a.tagName || "").toLowerCase() === "a" && REC.test(attr(a, "href"))) hasLink = true; });
+    if (hasLink) rows.push(el);
   });
-  // de-dup + cap
-  var seen = {}, uniq = [];
-  for (var i = 0; i < items.length && uniq.length < 60; i++) {
-    var k = items[i].tag + "|" + items[i].role + "|" + items[i].label + "|" + items[i].href;
-    if (seen[k]) continue; seen[k] = 1; uniq.push(items[i]);
-  }
-  out.navItems = uniq;
-  out.notes.push("candidate nav items (deduped, capped 60): " + uniq.length);
-  out.notes.push("top context-bar harvestable anchors: " + out.topBarAnchors + (out.topBarAnchors === 0 ? "  ← if 0, left-nav labels can't resolve via harvest; need learned/seed or the item's own href" : ""));
+  out.notes.push("rows with a record link: " + rows.length);
 
-  // ancestor chain of the first left-nav item (so we learn the container markers to gate on)
-  if (firstLeftItem) {
-    var n = firstLeftItem, g = 0;
-    while (n && g++ < 12) {
-      var t = (n.tagName || "").toLowerCase(), c = attr(n, "class"), r = attr(n, "role");
-      out.firstItemChain.push(t + (r ? "[role=" + r + "]" : "") + (c ? " ." + c.split(/\s+/).slice(0, 3).join(".") : ""));
-      var pe = n.parentElement;
-      if (!pe) { var rt = null; try { rt = n.getRootNode && n.getRootNode(); } catch (e) {} if (rt && rt.host) { pe = rt.host; out.firstItemChain.push("⟦shadow⟧"); } }
-      n = pe;
-    }
-  } else {
-    out.notes.push("no 'vertical/tree' left-nav item matched by the loose probe heuristic — paste the panel so we can see the real markup from navItems[]");
+  if (rows.length) {
+    var tr = rows[0];
+    // enumerate the cells of this row (crossing shadow) in DOM order
+    var cells = [];
+    eachEl(tr, 0, function (el) {
+      var tg = (el.tagName || "").toLowerCase(), role = attr(el, "role");
+      if (tg === "td" || tg === "th" || role === "gridcell" || role === "rowheader") cells.push(el);
+    });
+    // for each record link in the row, find which cell index + label it belongs to
+    var order = 0;
+    eachEl(tr, 0, function (a) {
+      if ((a.tagName || "").toLowerCase() !== "a") return;
+      var hv = attr(a, "href"); if (!REC.test(hv)) return;
+      // which cell contains this anchor?
+      var cellIdx = -1, cellLabel = "", cellRole = "";
+      for (var ci = 0; ci < cells.length; ci++) {
+        var inside = false; eachEl(cells[ci], 0, function (x) { if (x === a) inside = true; });
+        // also check direct containment via contains (same root) as a fallback
+        try { if (!inside && cells[ci].contains && cells[ci].contains(a)) inside = true; } catch (e) {}
+        if (inside) { cellIdx = ci; cellLabel = attr(cells[ci], "data-label") || attr(cells[ci], "aria-label"); cellRole = attr(cells[ci], "role"); break; }
+      }
+      out.firstRowLinks.push({
+        domOrder: order++,
+        href: hv,
+        text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40),
+        cellIndex: cellIdx,
+        cellLabel: cellLabel,
+        cellRole: cellRole,
+        anchorClass: attr(a, "class").slice(0, 60)
+      });
+    });
+    out.notes.push("cells in first row: " + cells.length);
+    out.notes.push("record links in first row: " + out.firstRowLinks.length + "  (if >1, the ⧉ must pick the NAME cell = lowest cellIndex / rowheader, NOT domOrder 0)");
+    // what does the current code pick? first /r/ link anywhere in the row (domOrder 0)
+    if (out.firstRowLinks.length) out.notes.push("current code would open: domOrder 0 → " + out.firstRowLinks[0].href + " (cellIndex " + out.firstRowLinks[0].cellIndex + ", label '" + out.firstRowLinks[0].cellLabel + "')");
   }
 
   var p = document.createElement("div");
   p.id = PANEL_ID;
   p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(720px,95vw);max-height:86vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11.5px/1.5 'SF Mono',Menlo,monospace;box-shadow:0 20px 60px rgba(0,0,0,.6);white-space:pre-wrap;";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v30 — new left-nav ⧉ diagnosis\n(copied to clipboard — paste it back)\n\n" + json;
-  var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;";
-  x.onclick = function () { p.remove(); }; p.appendChild(x);
+  p.textContent = "DOM PROBE v31 — ⧉ wrong-record on standard list\n(copied to clipboard — paste it back)\n\n" + json;
+  var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
 })();

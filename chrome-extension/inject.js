@@ -18042,35 +18042,40 @@ processJSON();
   // omit it. We still exclude field/app routes (/n/, /o/) so a DMO Fields tab gets no ⧉.
   var DC_RECORD_LINK_RE = /\/lightning\/r\/(?:[A-Za-z0-9_]+\/)?[A-Za-z0-9]{15,18}\/view/i;
   function dcRowRealHref(tr) {
-    function firstLightningHref(root) {
-      var found = "";
+    // Collect EVERY record-link anchor in the row (crossing shadow DOM), each with its
+    // on-screen X position. A row can have MORE THAN ONE record link — e.g. a Calculated
+    // Insights / Segment / DLO row links both the NAME (col 1) and a secondary column like
+    // "Data Space" (→ a DataSpace record). The NAME is what the ⧉ must open. The old code took
+    // the FIRST link in DOM order, which could be the Data Space column → opened the wrong
+    // record (reported). The NAME column is ALWAYS the left-most record link, so we pick the
+    // anchor with the smallest left X — robust across every list type, no markup assumptions.
+    function collectRecordLinks(root) {
+      var out = [];
       function scan(node) {
-        if (found || !node) return;
+        if (!node) return;
         var as = null; try { as = node.querySelectorAll ? node.querySelectorAll("a[href]") : null; } catch (e) {}
         if (as) {
           for (var i = 0; i < as.length; i++) {
             var hv = as[i].getAttribute("href") || "";
-            if (DC_RECORD_LINK_RE.test(hv)) {
-              try { found = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
-              catch (e) { found = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
-              break;
-            }
+            if (!DC_RECORD_LINK_RE.test(hv)) continue;
+            var abs; try { abs = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
+            catch (e) { abs = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
+            var x = Infinity; try { var r = as[i].getBoundingClientRect(); if (r && (r.width || r.height)) x = r.left; } catch (e) {}
+            out.push({ href: abs, x: x });
           }
         }
-        if (found) return;
         var all = null; try { all = node.querySelectorAll ? node.querySelectorAll("*") : null; } catch (e) {}
-        if (all) { for (var j = 0; j < all.length && !found; j++) { var sr = null; try { sr = all[j].shadowRoot; } catch (e) {} if (sr) scan(sr); } }
+        if (all) { for (var j = 0; j < all.length; j++) { var sr = null; try { sr = all[j].shadowRoot; } catch (e) {} if (sr) scan(sr); } }
       }
       try { scan(root); } catch (e) {}
-      return found;
+      return out;
     }
-    // 1) prefer the NAME cell (rowheader / th / first td)
-    var nameCell = null;
-    try { nameCell = tr.querySelector('[role="rowheader"]') || tr.querySelector('th') || tr.querySelector('td'); } catch (e) {}
-    var href = nameCell ? firstLightningHref(nameCell) : "";
-    // 2) else, any Lightning link in the whole row
-    if (!href) href = firstLightningHref(tr);
-    return href;
+    var links = collectRecordLinks(tr);
+    if (!links.length) return "";
+    // pick the LEFT-MOST (the name column). Ties / unmeasurable (x=Infinity) keep DOM order.
+    var best = links[0];
+    for (var k = 1; k < links.length; k++) { if (links[k].x < best.x) best = links[k]; }
+    return best.href;
   }
   // ONE shared floating ⧉ for whatever list is active. Body-overlay; never mutates SF's
   // datatable (virtual scroll undisturbed). Anchored to the row's NAME cell. Listeners live
