@@ -811,6 +811,29 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   var hitOnlyDs = ciEnv.dcRowKeyFrom(onlyDs.children[0], { id: "generic", isDmoList: false });
   ok("CI row with ONLY a Data Space lookup → opens nothing (never the wrong object)", !hitOnlyDs);
 
+  // THE ACTUAL LIVE CI ROW (from the in-tool ⧉ diagnostic): name = <a href='javascript:void(0)'
+  // class='text-wrapper'> (NOT a /r/ link), and the ONLY /lightning/r/ link is the Data Space
+  // LOOKUP rendered as <a class='...outputLookupLink...' href='/lightning/r/<id>/view'> (SHORT-
+  // form, so object-exclusion can't catch it). The lookup must be EXCLUDED by its class → no
+  // openable link remains → the ⧉ opens NOTHING (correct: the CI name has no URL in this old
+  // Aura list; opening the Data Space was the bug).
+  var ciName = el("a", { href: "javascript:void(0);", "class": "text-wrapper", _x: 125 }, []);
+  var dsLookup = el("a", { href: "/lightning/r/0vhKh000000TOjwIAG/view", "class": "slds-truncate outputLookupLink", _x: 413 }, []);
+  var ciRealRow = el("tr", {}, [ el("th", {}, [ciName]), el("td", {}, [dsLookup]) ]);
+  var hitCiReal = ciEnv.dcRowKeyFrom(ciRealRow.children[0], { id: "generic", isDmoList: false });
+  ok("LIVE CI row (name=void(0), only link=outputLookupLink Data Space) → ⧉ opens nothing, NOT the Data Space",
+    !hitCiReal || !/0vhKh000000TOjwIAG/.test(hitCiReal.href || ""));
+
+  // A GENUINE name link (NOT a lookup class) must STILL resolve (don't over-exclude). Data
+  // Streams list: name cell has a real record link with no outputLookup class → opens it.
+  var dsEnv = { location: { origin: "https://x.my.salesforce.com", href: "https://x.lightning.force.com/lightning/o/DataStream/home" }, window: {} };
+  vm.runInNewContext(code + "\nthis.dcRowKeyFrom = dcRowKeyFrom;", dsEnv);
+  var realName = el("a", { href: "/lightning/r/1dsKh000000TOcwIAG/view", "class": "slds-truncate", _x: 125 }, []);
+  var dsNameRow = el("tr", {}, [ el("th", {}, [realName]) ]);
+  var hitRealName = dsEnv.dcRowKeyFrom(dsNameRow.children[0], { id: "generic", isDmoList: false });
+  ok("genuine name link (no outputLookup class) still resolves — lookup-skip doesn't over-exclude",
+    !!hitRealName && /1dsKh000000TOcwIAG/.test(hitRealName.href));
+
   // (A) DMO custom row: keyed, NO link → DMO template URL from the key.
   var dmoCell = el("th", {}, []);
   var dmoRow = el("tr", { "data-row-key-value": "ssot__EmailEngagement__dlm" }, [dmoCell]);

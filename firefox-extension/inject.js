@@ -18111,6 +18111,19 @@ processJSON();
           for (var i = 0; i < as.length; i++) {
             var hv = as[i].getAttribute("href") || "";
             if (!DC_RECORD_LINK_RE.test(hv)) continue;
+            // SKIP LOOKUP-COLUMN links. Proven via the live CI row (DOM diagnostic): the row's
+            // NAME is a javascript:void(0) anchor, and the ONLY real /lightning/r/ link is a
+            // "Data Space" LOOKUP column rendered as <a class="outputLookupLink"> inside a
+            // forceOutputLookup cell → it points at a DIFFERENT record (the Data Space), not the
+            // row. Opening it was the reported "CI/Data-Graph opens Data Space" bug. A lookup
+            // column is never the row's own record, so exclude it outright.
+            var isLookup = false;
+            try {
+              var cl = (as[i].getAttribute("class") || "");
+              if (/outputLookupLink/i.test(cl)) isLookup = true;
+              if (!isLookup) { var p = as[i], g = 0; while (p && g++ < 5) { var pc = (p.getAttribute && p.getAttribute("class")) || ""; var pa = (p.getAttribute && p.getAttribute("data-aura-class")) || ""; if (/forceOutputLookup|outputLookupLink/i.test(pc + " " + pa)) { isLookup = true; break; } p = p.parentElement; } }
+            } catch (e) {}
+            if (isLookup) continue;
             var abs; try { abs = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
             catch (e) { abs = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
             var om = hv.match(DC_RECORD_LINK_OBJ_RE); var obj = om ? om[1] : "";
