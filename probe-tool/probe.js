@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v36 — DATA GRAPH *FILTERS* tab. Finds the field chosen in a Sort /
+ * DOM PROBE v37 — DATA GRAPH *FILTERS* tab. Finds the field chosen in a Sort /
  * Condition dropdown and dumps the component props so we can see whether the real
  * field API name is stored anywhere (so we can read it DIRECTLY instead of guessing
  * from a label cache — which breaks when two fields share a label).
@@ -8,13 +8,13 @@
  * tab → pick a Sort Field and add a Condition with a Field. THEN click this. It is
  * read-only and copies JSON to the clipboard. Just click once; no hover.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe36() {
+(function DomProbe37() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
   var out = {
-    probe: "v36", href: location.href,
+    probe: "v37", href: location.href,
     comboboxes: [], conditionRows: [], filterComponents: [],
     selectedLeftObject: null, customTagsPresent: {}, notes: []
   };
@@ -71,11 +71,26 @@
     out.comboboxes.push({ tag: t, role: role, shown: txt(el), inputValue: inner, dataLabel: attr(el, "data-label") || attr(el, "name") || "", props: props(el) });
   });
 
-  // 3) Any filter/condition/sort component — the real condition objects likely live here.
+  // 3) The KNOWN Filters-tab components (discovered via v35's tag census). These are where the
+  // real filter/sort condition objects live — dump their props DEEP + every own-enumerable key.
+  var KNOWN_FILTER_TAGS = [
+    "runtime_cdp-dao-editor-filters-tab",
+    "runtime_cdp-dao-editor-adhoc-filter-builder",
+    "runtime_cdp-dao-editor-adhoc-filter-condition",
+    "runtime_cdp-dao-editor-sort",
+    "runtime_cdp-dao-editor-sort-limit"
+  ];
+  function allOwn(el) {
+    var r = {};
+    try { for (var k in el) { var v; try { v = el[k]; } catch (e) { continue; } if (v == null || typeof v === "function") continue; if (v && typeof v === "object" && (v.nodeType || v === window)) continue; r[k] = shape(v, 0); } } catch (e) {}
+    return r;
+  }
   eachEl(document, 0, function (el) {
     var t = tag(el);
-    if (/filter|condition|sort|rank|criteria/i.test(t) && /cdp|dao|runtime|data/i.test(t)) {
-      out.filterComponents.push({ tag: t, text: txt(el), props: props(el) });
+    var known = KNOWN_FILTER_TAGS.indexOf(t) >= 0;
+    var loose = /filter|condition|sort|rank|criteria/i.test(t) && /cdp|dao|runtime|data/i.test(t);
+    if (known || loose) {
+      out.filterComponents.push({ tag: t, known: known, text: txt(el), props: props(el), allOwnProps: known ? allOwn(el) : undefined });
     }
   });
 
@@ -103,7 +118,7 @@
   p.id = PANEL_ID;
   p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(820px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v36 — Data Graph FILTERS tab\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v37 — Data Graph FILTERS tab\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
