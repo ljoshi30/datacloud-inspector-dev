@@ -995,25 +995,48 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   eq("row 0 api via index-align", aligned2[0], "Id__c");
 
   // BEHAVIOR 8: FILTERS tab — resolve the field shown in a Sort/Condition dropdown to its api via
-  // a persistent label→api cache (fills from the Fields datatable as you browse objects). Mirror
-  // dgCacheFromData + dgResolveApi.
-  function dgCache(arr) {
-    var c = {};
-    for (var i = 0; i < arr.length; i++) { var r = arr[i]; if (!r) continue; var lbl = r.label || r.masterLabel || r.fieldLabel, api = r.name || r.fieldApiName || r.apiName; if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!c[l]) c[l] = String(api); } }
-    return c;
+  // an OBJECT-SCOPED cache (fills as you browse objects). Mirror dgCachePut/dgCacheFromData +
+  // dgResolveApis. Cache shape: cache[objectApi][label] = [api, ...]; "" = global fallback.
+  function dgCachePut(cache, obj, lbl, api) {
+    if (!lbl || !api) return;
+    var o = String(obj || "").toLowerCase(), l = String(lbl).trim().toLowerCase(); if (!l) return;
+    if (!cache[o]) cache[o] = {};
+    var arr = cache[o][l] || (cache[o][l] = []); if (arr.indexOf(api) < 0) arr.push(String(api));
   }
-  function dgResolve(cache, shown) {
-    if (!shown) return "";
+  function dgCacheFromData(cache, arr, obj) {
+    for (var i = 0; i < arr.length; i++) { var r = arr[i]; if (!r) continue; var lbl = r.label, api = r.name, ro = obj || r.objectApiName || ""; if (lbl && api) { dgCachePut(cache, ro, lbl, api); dgCachePut(cache, "", lbl, api); } }
+  }
+  function dgResolveApis(cache, shown, obj) {
+    if (!shown) return [];
     var s = shown.trim();
-    if (s.indexOf(" ") < 0 && /__/.test(s)) return s;
-    return cache[s.toLowerCase()] || "";
+    if (s.indexOf(" ") < 0 && /__/.test(s)) return [s];
+    var l = s.toLowerCase(), o = String(obj || "").toLowerCase();
+    if (o && cache[o] && cache[o][l] && cache[o][l].length) return cache[o][l].slice();
+    if (cache[""] && cache[""][l]) return cache[""][l].slice();
+    return [];
   }
-  var fcache = dgCache([{ label: "Contact Point Email Id", name: "ssot__Id__c" }, { label: "Email Address", name: "ssot__EmailAddress__c" }]);
-  eq("FILTERS: 'Contact Point Email Id' dropdown → ssot__Id__c", dgResolve(fcache, "Contact Point Email Id"), "ssot__Id__c");
-  eq("FILTERS: 'Email Address' → ssot__EmailAddress__c", dgResolve(fcache, "Email Address"), "ssot__EmailAddress__c");
-  eq("FILTERS: a value that's already an api token passes through", dgResolve(fcache, "My_Custom__c"), "My_Custom__c");
-  eq("FILTERS: unknown label → '' (no bogus api)", dgResolve(fcache, "Totally Unknown"), "");
-  eq("FILTERS: placeholder 'Field' (not in cache) → ''", dgResolve(fcache, "Field"), "");
+  var fc = {};
+  dgCacheFromData(fc, [{ label: "Contact Point Email Id", name: "ssot__Id__c" }, { label: "Email Address", name: "ssot__EmailAddress__c" }], "ssot__ContactPointEmail__dlm");
+  eq("FILTERS: scoped 'Email Address' → [ssot__EmailAddress__c]", dgResolveApis(fc, "Email Address", "ssot__ContactPointEmail__dlm").join(","), "ssot__EmailAddress__c");
+  eq("FILTERS: already-an-api token passes through", dgResolveApis(fc, "My_Custom__c", "x").join(","), "My_Custom__c");
+  eq("FILTERS: unknown label → [] (no bogus api)", dgResolveApis(fc, "Totally Unknown", "x").length, 0);
+  eq("FILTERS: placeholder 'Field' → []", dgResolveApis(fc, "Field", "x").length, 0);
+
+  // DUP LABEL case 1 — SAME label on DIFFERENT objects: the SELECTED object's field wins (like the
+  // left side reads node.objectApiName). "Created Date" exists on both objects below.
+  var dc = {};
+  dgCacheFromData(dc, [{ label: "Created Date", name: "ssot__IndCreated__c" }], "ssot__Individual__dlm");
+  dgCacheFromData(dc, [{ label: "Created Date", name: "ssot__CpeCreated__c" }], "ssot__ContactPointEmail__dlm");
+  eq("DUP-OBJ: Created Date resolves to the SELECTED object (Contact Point Email)", dgResolveApis(dc, "Created Date", "ssot__ContactPointEmail__dlm").join(","), "ssot__CpeCreated__c");
+  eq("DUP-OBJ: Created Date resolves to the SELECTED object (Individual)", dgResolveApis(dc, "Created Date", "ssot__Individual__dlm").join(","), "ssot__IndCreated__c");
+
+  // DUP LABEL case 2 — SAME object, SAME label (can't disambiguate by label): return ALL candidates
+  // → caller shows "(?)" + lists them, never a silent wrong pick.
+  var sc = {};
+  dgCacheFromData(sc, [{ label: "Party", name: "ssot__Party__c" }, { label: "Party", name: "ssot__PartyId__c" }], "ssot__ContactPointEmail__dlm");
+  var cands = dgResolveApis(sc, "Party", "ssot__ContactPointEmail__dlm");
+  eq("DUP-SAME-OBJ: returns BOTH candidate apis (ambiguous)", cands.length, 2);
+  ok("DUP-SAME-OBJ: candidates include both apis", cands.indexOf("ssot__Party__c") >= 0 && cands.indexOf("ssot__PartyId__c") >= 0);
 
   // source presence — left restored, reference dedup, label-host walk, tooltip, observer+tick.
   ok("Data Graph module present", /function dcDataGraphApiModule\(\)/.test(src6j));
@@ -1031,8 +1054,16 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
     /_dgTick = setInterval\(/.test(src6j) && /shadow-internal mutations/.test(src6j));
   ok("no FLICKER on the tick: skips re-inject when the content signature is unchanged",
     /function dgSignature/.test(src6j) && /sig === _dgSig/.test(src6j));
-  ok("FILTERS: resolves the dropdown field to its api via a persistent label→api cache",
-    /function dgDecorateFilters/.test(src6j) && /_dgFieldCache/.test(src6j) && /function dgResolveApi/.test(src6j) && /function dgControlLabel/.test(src6j));
+  ok("FILTERS: resolves the dropdown field to its api via a persistent cache",
+    /function dgDecorateFilters/.test(src6j) && /_dgFieldCache/.test(src6j) && /function dgResolveApis/.test(src6j) && /function dgControlLabel/.test(src6j));
+  ok("FILTERS: cache is OBJECT-SCOPED (fixes same-label-different-object, like the left side)",
+    /function dgCachePut/.test(src6j) && /_dgFieldCache\[o\]\[l\]/.test(src6j) && /function dgSelectedObjectApi/.test(src6j) && /dgNodeApi\(dgSafe\(sel, "node"\)\)/.test(src6j));
+  ok("FILTERS: same-object dup labels return ALL candidates → shown with (?), never silent wrong pick",
+    /apis\.length > 1/.test(src6j) && /\(\?\)/.test(src6j) && /Multiple fields share this label/.test(src6j));
+  ok("FILTERS: ONE line per visual dropdown — dedupe by outermost combobox across shadow (fixes 2×)",
+    /function dgOutermostCombo/.test(src6j) && /done\.indexOf\(anchor\) >= 0\) continue;/.test(src6j));
+  ok("FILTERS: copy stays the CLEAN api even when display shows the (?) marker",
+    /function dgInject\(host, apiText, cls, display\)/.test(src6j) && /display != null && display !== apiText/.test(src6j));
   ok("FILTERS: cache fills from field datatables/panels as you browse (dgHarvestCache)",
     /function dgHarvestCache/.test(src6j) && /function dgCacheFromData/.test(src6j));
   ok("FILTERS: controls excluded if inside the left tree or Fields datatable (no double-decorate)",

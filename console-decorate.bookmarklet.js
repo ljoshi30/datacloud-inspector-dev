@@ -19062,10 +19062,12 @@ processJSON();
       for (var i = 0; i < _dgSpans.length; i++) { try { _dgSpans[i].remove(); } catch (e) {} }
       _dgSpans = [];
     }
-    // Create ONE api line as a child of host and register it for removal next pass.
-    function dgInject(host, apiText, cls) {
+    // Create ONE api line as a child of host and register it for removal next pass. `apiText` is
+    // what a click COPIES (always the clean api); optional `display` overrides the visible text
+    // (used for the ambiguous "ssot__X__c (?)" marker, while copy stays the clean api).
+    function dgInject(host, apiText, cls, display) {
       if (!host || !apiText) return;
-      try { var sp = dgMakeSpan(cls); dgSetApi(sp, String(apiText)); host.appendChild(sp); _dgSpans.push(sp); } catch (e) {}
+      try { var sp = dgMakeSpan(cls); dgSetApi(sp, String(apiText)); if (display != null && display !== apiText) sp.textContent = String(display); host.appendChild(sp); _dgSpans.push(sp); } catch (e) {}
     }
     // Belt-and-suspenders clear (on stop): remove tracked spans AND sweep by class in case a prior
     // build left some behind in this tab.
@@ -19168,26 +19170,58 @@ processJSON();
 
     // ── FILTERS tab: show the api of the field chosen in a Sort/Condition dropdown ──────────────
     // The Filters tab is dropdowns, NOT a datatable — so there is no row.name to read. Instead we
-    // keep a PERSISTENT label→api cache that fills from the Fields datatable (which lists EVERY
-    // field of an object, selected or not) as you view objects. On the Filters tab we read the
-    // field label shown in each dropdown and look its api up in that cache. No component-internal
-    // guessing — just proven cache data + the visible dropdown text.
-    var _dgFieldCache = {};   // lowercased field label -> api name
-    function dgCacheFromData(arr) {
+    // keep a PERSISTENT cache that fills from the Fields datatable (which lists EVERY field of an
+    // object, selected or not) as you view objects. On the Filters tab we read the field label in
+    // each dropdown and look up its api. No component-internal guessing — proven cache + the text.
+    //
+    // DUPLICATE LABELS (reported): two fields can share a label. Two cases:
+    //  1) different OBJECTS (common: "Created Date" on every DMO). We scope by object — like the
+    //     LEFT side reads node.objectApiName — so the CURRENTLY-SELECTED object's field wins.
+    //  2) same object, same label (rare). Label alone can't disambiguate → we show ALL candidate
+    //     apis with a "(?)" marker (same policy as the mapping-canvas collision fix), never a
+    //     silent wrong pick.
+    // Cache shape: _dgFieldCache[objectApiName][label] = [api, ...].  "" object = global fallback.
+    var _dgFieldCache = {};
+    function dgCachePut(obj, lbl, api) {
+      if (!lbl || !api) return;
+      var o = String(obj || "").toLowerCase(), l = String(lbl).trim().toLowerCase();
+      if (!l) return;
+      if (!_dgFieldCache[o]) _dgFieldCache[o] = {};
+      var arr = _dgFieldCache[o][l] || (_dgFieldCache[o][l] = []);
+      if (arr.indexOf(api) < 0) arr.push(String(api));
+    }
+    function dgCacheFromData(arr, obj) {
       if (!arr || !arr.length) return;
       for (var i = 0; i < arr.length; i++) {
         var r = arr[i]; if (!r) continue;
         var lbl = r.label || r.masterLabel || r.fieldLabel;
         var api = r.name || r.fieldApiName || r.apiName || r.developerName;
-        if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (l && !_dgFieldCache[l]) _dgFieldCache[l] = String(api); }
+        var ro = obj || r.objectApiName || r.entityApiName || "";
+        if (lbl && api) { dgCachePut(ro, lbl, api); dgCachePut("", lbl, api); }   // object-scoped + global
       }
     }
+    // The object currently selected on the LEFT (its fields are what the Filters tab edits). Read
+    // from the selected tree row's node.objectApiName — the SAME proven prop the left side uses.
+    function dgSelectedObjectApi() {
+      try {
+        var rows = _dgBuckets.rows, sel = null;
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          var aria = ""; try { aria = (r.getAttribute && (r.getAttribute("aria-selected") || "")) || ""; } catch (e) {}
+          var cls = ""; try { cls = (r.className || "") + ""; } catch (e) {}
+          if (aria === "true" || /is-selected|slds-is-selected|row-selected/i.test(cls)) { sel = r; break; }
+        }
+        if (sel) return dgNodeApi(dgSafe(sel, "node")) || "";
+      } catch (e) {}
+      return "";
+    }
     // Harvest field label→api from the field-list components in this pass's buckets (datatables +
-    // dao-editor-fields panels), so a filter can be resolved even if you never opened that object's
-    // Fields tab.
+    // dao-editor-fields panels), keyed to the selected object, so a filter can be resolved even if
+    // you never opened that object's Fields tab.
     function dgHarvestCache() {
-      try { _dgBuckets.tables.forEach(function (dt) { dgCacheFromData(dgSafe(dt, "data")); }); } catch (e) {}
-      try { _dgBuckets.panels.forEach(function (fp) { dgCacheFromData(dgSafe(fp, "data")); dgCacheFromData(dgSafe(fp, "fields")); }); } catch (e) {}
+      var obj = dgSelectedObjectApi();
+      try { _dgBuckets.tables.forEach(function (dt) { dgCacheFromData(dgSafe(dt, "data"), obj); }); } catch (e) {}
+      try { _dgBuckets.panels.forEach(function (fp) { dgCacheFromData(dgSafe(fp, "data"), obj); dgCacheFromData(dgSafe(fp, "fields"), obj); }); } catch (e) {}
     }
     // Climb ancestors (crossing shadow via getRootNode().host) to test containment in a tag set.
     function dgWithinTag(el, tags) {
@@ -19218,24 +19252,51 @@ processJSON();
       if (!v) { try { v = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
       return v;
     }
-    // Resolve a shown value to an api: if it already looks like an api token (has "__", no spaces)
-    // use it; else look the label up in the cache.
-    function dgResolveApi(shown) {
-      if (!shown) return "";
+    // Resolve a shown value to the list of candidate apis, PREFERRING the selected object's scope,
+    // falling back to the global scope. Returns an array: [] = unknown, [api] = unambiguous,
+    // [a,b,…] = genuinely ambiguous (same object OR couldn't scope → caller shows "(?)").
+    function dgResolveApis(shown, obj) {
+      if (!shown) return [];
       var s = shown.trim();
-      if (s.indexOf(" ") < 0 && /__/.test(s)) return s;           // already an api token
-      return _dgFieldCache[s.toLowerCase()] || "";
+      if (s.indexOf(" ") < 0 && /__/.test(s)) return [s];          // already an api token
+      var l = s.toLowerCase(), o = String(obj || "").toLowerCase();
+      if (o && _dgFieldCache[o] && _dgFieldCache[o][l] && _dgFieldCache[o][l].length) return _dgFieldCache[o][l].slice();
+      if (_dgFieldCache[""] && _dgFieldCache[""][l]) return _dgFieldCache[""][l].slice();
+      return [];
+    }
+    // One visual dropdown is NESTED comboboxes in separate shadow roots: lightning-combobox →
+    // (shadow) lightning-base-combobox → (shadow) input[role=combobox]. contains() does NOT cross
+    // shadow, so we climb via getRootNode().host to the OUTERMOST combobox element — the single
+    // node shared by all the nested controls — and dedupe by it (fixes the reported 2× lines).
+    function dgOutermostCombo(el) {
+      var n = el, top = null;
+      while (n) {
+        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
+        var role = ""; try { role = (n.getAttribute && n.getAttribute("role")) || ""; } catch (e) {}
+        if (/combobox/.test(t) || role === "combobox") top = n;
+        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
+      }
+      return top;
     }
     function dgDecorateFilters() {
       var ctrls = dgFilterControls();
+      var obj = dgSelectedObjectApi();
+      var done = [];   // outermost-combobox nodes already decorated this pass (one per dropdown)
       for (var i = 0; i < ctrls.length; i++) {
         var ctrl = ctrls[i];
         var shown = dgControlLabel(ctrl);
-        var api = dgResolveApi(shown);
-        if (!api) continue;
-        try { ctrl.setAttribute("title", "API: " + api); } catch (e) {}   // guaranteed tooltip
-        var host = ctrl.parentElement || ctrl;                            // inline line under it
-        dgInject(host, api, "dc-dg-fapi");
+        var apis = dgResolveApis(shown, obj);
+        if (!apis.length) continue;
+        var anchor = dgOutermostCombo(ctrl) || ctrl;   // the single node shared by nested controls
+        if (done.indexOf(anchor) >= 0) continue;        // already did this visual dropdown
+        done.push(anchor);
+        var copyApi = apis[0];
+        var ambiguous = apis.length > 1;
+        var display = ambiguous ? (apis.join("  |  ") + "  (?)") : copyApi;
+        var tip = ambiguous ? ("Multiple fields share this label — API: " + apis.join(", ")) : ("API: " + copyApi);
+        try { anchor.setAttribute("title", tip); } catch (e) {}           // guaranteed tooltip
+        var host = anchor.parentElement || anchor;                        // inline line under it
+        dgInject(host, copyApi, "dc-dg-fapi", display);
       }
     }
 

@@ -244,7 +244,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
-    .concat(includeDev ? ["Data Model (ERD)", "Object lists &rarr; New Tab", "Nav &rarr; New Tab", "Data Explorer", "Segment", "Activation", "Query Editor", "Data Transform"] : [])
+    .concat(includeDev ? ["Data Model (ERD)", "Data Graph", "Object lists &rarr; New Tab", "Nav &rarr; New Tab", "Data Explorer", "Segment", "Activation", "Query Editor", "Data Transform"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -296,6 +296,14 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li>Includes a <b>cardinality legend</b> (one-to-many, etc.) so the relationships are easy to read.</li>" +
       "<li><b>Searchable entity cards</b> let you look up any object and see everything it&rsquo;s connected to.</li>" +
       "</ul>") +
+    acc("&#128376;&#65039;", "Data Graph", ["Field API Names", "Filters", "Copy"],
+      "<p>The Data Graph builder shows only friendly <b>labels</b> for the fields you pick &mdash; not the API names you need for queries and integrations. Turn on <b>API names</b> from the &#9678; button (bottom-right) to reveal them.</p>" +
+      "<ul>" +
+      "<li><b>Objects &amp; fields</b> &mdash; the API name appears under each object on the left and under each field on the right. It refreshes automatically as you click between objects.</li>" +
+      "<li><b>Filters tab</b> &mdash; the field chosen in each <b>Sort</b> and <b>Condition</b> dropdown is labelled with its API name too (and on hover).</li>" +
+      "<li><b>Click any API name to copy it</b> (it flashes &ldquo;&#10003; Copied&rdquo;). Every field also shows its API name on <b>hover</b> as a fallback.</li>" +
+      "</ul>" +
+      "<span class=\"gi\"><b>Duplicate labels handled safely:</b> when two fields share a label, the tool scopes to the <b>object you&rsquo;re on</b> so you get that object&rsquo;s field &mdash; and if a single object genuinely has two fields with the same label, it shows <b>both</b> candidates with a &ldquo;(?)&rdquo; marker rather than guessing.</span>") +
     acc("&#128194;", "Object lists (records)", ["Open in New Tab"],
       "<p>On <b>any</b> Data Cloud object list &mdash; Data Streams, Data Lake Objects, Data Model Objects, Calculated Insights, Segments, Activations, Data Graphs, Identity Resolution, and the rest &mdash; hover a row and a <b>&#10697;</b> button appears by its name to <b>open that record in a new tab</b>.</p>" +
       "<span class=\"gi\"><b>Why this helps:</b> many of these list rows aren&rsquo;t real links (the name runs a script instead of a URL), so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. The tool reads the row&rsquo;s own record id and opens the exact record directly &mdash; and deliberately ignores lookup columns (e.g. a &ldquo;Data Space&rdquo; cell), so it always opens the row&rsquo;s record, never a related one.</span>") +
@@ -600,6 +608,8 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/acc-nm">Query Editor</, "Query Editor accordion row (stripped from public)"],
     [/acc-nm">Data Transform</, "Data Transform accordion row (stripped from public)"],
     [/Data Model \(ERD\)/, "Data Model / ERD (dev-only, stripped from public)"],
+    [/acc-nm">Data Graph</, "Data Graph accordion row (dev-only, stripped from public)"],
+    [/chip">Data Graph</, "Data Graph chip (dev-only, stripped from public)"],
     [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
     [/chip">Segment</, "Segment chip (stripped from public)"],
     [/Export Rules/, "Export Rules launcher (Segment)"],
