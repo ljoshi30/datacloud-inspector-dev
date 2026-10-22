@@ -1,127 +1,81 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v33 — DATA GRAPH builder: where are the API names?
+ * DOM PROBE v34 — DATA GRAPH builder API names (NO HOVER needed).
  *
- * Goal: add API-name hints on the Data Graph builder like we do on Segment/Activation —
- *   • LEFT panel: each Data Model Object / CI node (its OBJECT api name)
- *   • RIGHT panel: each field row (its FIELD api name + the owning object)
- *   • FILTERS tab: each filtered field's api name
- * The right way (no guessing) is to read the api name off the LWC element's JS PROPERTY,
- * exactly like segApi* does. This probe finds those property paths.
+ * v33 relied on hovering the exact field — fragile (the tracker caught page chrome).
+ * v34 is deterministic: it finds the KNOWN Data Graph components (discovered in the last
+ * probe: runtime_cdp-dao-editor-tree-grid / -tree-grid-row / -tree-grid-cell on the LEFT,
+ * runtime_cdp-dao-editor-fields + runtime_cdp-custom-datatable + lightning-datatable on the
+ * RIGHT) and dumps their JS DATA props so we can see WHERE the field/object API names live.
  *
- * HOW TO USE (read-only, copies JSON):
- *   1. Open a Data Graph → its builder (the Fields view in your screenshot).
- *   2. Click a LEFT object node (e.g. "Individual") so its fields show on the right.
- *   3. HOVER a field row on the right, then click this probe.  It dumps:
- *      - the hovered field row element: tag + any JS prop holding a fieldApiName/objectApiName/
- *        developerName/apiName (deep-scanned), and its text.
- *      - the LEFT node elements: tag + object-api-looking props.
- *      - the custom-element tag names present (so we know the component to hook, e.g.
- *        runtime_cdp-data-graph-*).
- *   Paste the JSON back.
+ * RUN on the Data Graph builder (Fields view). Read-only; copies JSON. Just click once —
+ * no hover. Click a LEFT object first so the right panel has fields, then run.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe33() {
+(function DomProbe34() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
-  var TRACK = "__dcProbeHover";
-  // FIRST click installs a hover tracker + tells you to hover the field then click again.
-  // SECOND click dumps the element you last hovered (plus the generic scan). This lets you
-  // target the EXACT field row / left node / filter chip.
-  if (!window[TRACK]) {
-    window[TRACK] = { el: null };
-    document.addEventListener("mouseover", function (e) { window[TRACK].el = e.target; }, true);
-    var hint = document.createElement("div");
-    hint.id = PANEL_ID;
-    hint.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:12px/1.5 -apple-system,sans-serif;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.6);";
-    hint.innerHTML = "<b>DOM Probe armed.</b><br>Now <b>hover the exact thing</b> you want me to read &mdash; a field row on the right, a DMO/CI node on the left, or a filter field &mdash; then <b>click the DOM Probe bookmark again</b> to capture it.";
-    document.body.appendChild(hint);
-    setTimeout(function () { try { hint.remove(); } catch (e) {} }, 6000);
-    return;
-  }
+  var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
-  var out = { href: location.href, hovered: null, leftNodes: [], customTags: [], notes: [] };
+  var out = { href: location.href, leftTreeRows: [], rightFieldRows: [], datatableData: null, treeGridData: null, notes: [] };
 
-  function eachEl(root, d, fn) { if (!root || d > 16) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i], d); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
-  function attr(el, a) { try { return el.getAttribute(a) || ""; } catch (e) { return ""; } }
+  function eachEl(root, d, fn) { if (!root || d > 18) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
+  function tag(el) { return (el.tagName || "").toLowerCase(); }
   function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 50); } catch (e) { return ""; } }
+  function byTag(t) { var out = []; eachEl(document, 0, function (el) { if (tag(el) === t) out.push(el); }); return out; }
 
-  // deep-scan an element's JS properties for api-name-looking string values
-  var API_KEYS = /^(fieldApiName|objectApiName|developerName|apiName|fieldName|entityName|qualifiedApiName|fullApiName|objectName|dmoApiName|name)$/i;
-  function scanApiProps(el, label) {
-    var hits = [], seen = [];
-    function walk(o, path, depth) {
-      if (!o || depth > 6 || hits.length > 30) return;
-      if (typeof o === "object") { if (seen.indexOf(o) >= 0) return; if (seen.length < 600) seen.push(o); else return; }
-      for (var k in o) {
-        if (hits.length > 30) break;
-        var v; try { v = o[k]; } catch (e) { continue; }
-        if (v == null) continue;
-        var t = typeof v;
-        if (t === "string") {
-          if (API_KEYS.test(k) && /^[A-Za-z0-9_]+(__[a-z]+)?$/.test(v) && v.length > 1 && v.length < 80) hits.push({ path: (path + "." + k).slice(0, 90), value: v });
-        } else if (t === "object") {
-          if (v.nodeType || v === window || k === "parentNode" || k === "ownerDocument" || k === "__proto__" || k === "host") continue;
-          walk(v, path + "." + k, depth + 1);
-        }
-      }
+  // Compact view of an object: for each OWN key, the type and (for strings) the value.
+  // Lets us SEE the shape even when api-name keys are named unusually. Depth-limited.
+  function shape(o, depth) {
+    if (o == null || depth > 3) return typeof o;
+    if (typeof o !== "object") return (typeof o === "string" ? JSON.stringify(o).slice(0, 60) : String(o));
+    if (Array.isArray(o)) return "[" + o.length + "]" + (o.length ? " " + shape(o[0], depth + 1) : "");
+    var r = {}, n = 0;
+    for (var k in o) {
+      if (n++ > 25) { r["…"] = "(more)"; break; }
+      var v; try { v = o[k]; } catch (e) { continue; }
+      if (v && typeof v === "object" && (v.nodeType || v === window)) { r[k] = "[DOM]"; continue; }
+      r[k] = shape(v, depth + 1);
     }
-    try { walk(el, label, 0); } catch (e) {}
-    return hits;
+    return r;
+  }
+  // The LWC data property on an element is usually one of these.
+  function lwcData(el) {
+    var keys = ["data", "columns", "node", "row", "item", "record", "field", "fields", "attribute",
+      "treeNode", "rowData", "value", "_node", "_data", "entity", "objectInfo", "selectedObject"];
+    var found = {};
+    keys.forEach(function (k) { try { if (el[k] != null && typeof el[k] !== "function") found[k] = shape(el[k], 0); } catch (e) {} });
+    return found;
   }
 
-  // 0) THE CAPTURED HOVER (what you pointed at). Climb up to ~10 ancestors (crossing shadow),
-  //    scanning JS props for api names at each level — the api name usually lives a couple of
-  //    levels up from the text span (on the row component). Report the first level that has them.
-  try {
-    var hv = window[TRACK] && window[TRACK].el;
-    if (hv) {
-      var chain = [], n = hv, g = 0, firstHit = null;
-      while (n && g++ < 10 && n.nodeType === 1) {
-        var props = scanApiProps(n, "el");
-        var entry = { level: g - 1, tag: (n.tagName || "").toLowerCase(), cls: attr(n, "class").slice(0, 60), text: txt(n), apiProps: props };
-        chain.push(entry);
-        if (!firstHit && props.length) firstHit = entry;
-        var pe = n.parentElement; if (!pe) { var rt = null; try { rt = n.getRootNode && n.getRootNode(); } catch (e) {} pe = rt && rt.host ? rt.host : null; }
-        n = pe;
-      }
-      out.hovered = { firstApiHit: firstHit, chain: chain };
-    } else { out.hovered = "(no hovered element — hover something, then click the probe again)"; }
-  } catch (e) { out.hovered = "ERR:" + e; }
+  // LEFT tree: runtime_cdp-tree-grid-row (the DMO/CI nodes)
+  byTag("runtime_cdp-tree-grid-row").slice(0, 8).forEach(function (el) {
+    out.leftTreeRows.push({ text: txt(el), props: lwcData(el) });
+  });
+  // the tree grid container (may hold the whole node list)
+  var tg = byTag("runtime_cdp-dao-editor-tree-grid")[0];
+  if (tg) out.treeGridData = lwcData(tg);
 
-  // 1) also capture a few field-row-looking elements generically (fallback context).
-  var fieldRows = [];
+  // RIGHT fields panel + its datatable
+  var fp = byTag("runtime_cdp-dao-editor-fields")[0];
+  if (fp) out.rightFieldsPanel = lwcData(fp);
+  var cdt = byTag("runtime_cdp-custom-datatable")[0] || byTag("lightning-datatable")[0];
+  if (cdt) out.datatableData = lwcData(cdt);
+
+  // the actual field rows in the datatable (tr with cells)
+  var frows = [];
   eachEl(document, 0, function (el) {
-    var tg = (el.tagName || "").toLowerCase();
-    var role = attr(el, "role");
-    var cls = attr(el, "class");
-    // a field row: a grid row / tr / li inside the right Fields table, with some text
-    if ((role === "row" || tg === "tr" || /field-row|datatable-row|slds-hint-parent/i.test(cls)) && txt(el)) {
-      fieldRows.push(el);
-    }
+    if (tag(el) === "runtime_cdp-tree-grid-cell") return;   // left cells, skip
+    if (tag(el) === "tr" && txt(el) && /gridcell|rowheader/i.test((function () { var r = ""; try { r = el.getAttribute("role") || ""; for (var i = 0; i < el.children.length; i++) r += " " + (el.children[i].getAttribute && el.children[i].getAttribute("role") || ""); } catch (e) {} return r; })())) frows.push(el);
   });
-  out.notes.push("candidate field rows found: " + fieldRows.length);
-  out.fieldRowSamples = fieldRows.slice(0, 6).map(function (el) {
-    return { tag: (el.tagName || "").toLowerCase(), text: txt(el), apiProps: scanApiProps(el, "row") };
-  });
+  out.notes.push("datatable <tr> rows found: " + frows.length);
+  out.rightFieldRows = frows.slice(0, 6).map(function (el) { return { text: txt(el), props: lwcData(el) }; });
 
-  // 2) left-panel object nodes (the DMO/CI tree). Look for tree items / rows in the left region.
-  eachEl(document, 0, function (el) {
-    var role = attr(el, "role"), cls = attr(el, "class"), tg = (el.tagName || "").toLowerCase();
-    if ((role === "treeitem" || /tree.*item|dmo-node|object-node|data-model-object/i.test(cls + " " + tg)) && txt(el)) {
-      out.leftNodes.push({ tag: tg, text: txt(el), apiProps: scanApiProps(el, "node") });
-    }
-  });
-  out.leftNodes = out.leftNodes.slice(0, 12);
-
-  // 3) all custom element tag names (runtime_cdp-*, lightning-*) so we know the components present.
-  var tags = {};
-  eachEl(document, 0, function (el) { var tg = (el.tagName || "").toLowerCase(); if (/^(runtime_cdp|lightning|c|force)-/.test(tg)) tags[tg] = (tags[tg] || 0) + 1; });
-  out.customTags = Object.keys(tags).filter(function (t) { return /graph|field|datatable|tree|attribute|object|filter/i.test(t); }).slice(0, 40);
+  out.customTagsPresent = (function () { var s = {}; eachEl(document, 0, function (el) { var t = tag(el); if (/dao-editor|tree-grid|data-model-tab|custom-datatable/.test(t)) s[t] = (s[t] || 0) + 1; }); return s; })();
 
   var p = document.createElement("div");
   p.id = PANEL_ID;
-  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(720px,95vw);max-height:86vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
+  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(760px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v33 — Data Graph API names\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v34 — Data Graph API names (no hover)\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
