@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v34 — DATA GRAPH builder API names (NO HOVER needed).
+ * DOM PROBE v35 — DATA GRAPH builder API names (NO HOVER needed; expands the right datatable).
  *
  * v33 relied on hovering the exact field — fragile (the tracker caught page chrome).
  * v34 is deterministic: it finds the KNOWN Data Graph components (discovered in the last
@@ -10,12 +10,12 @@
  * RUN on the Data Graph builder (Fields view). Read-only; copies JSON. Just click once —
  * no hover. Click a LEFT object first so the right panel has fields, then run.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe34() {
+(function DomProbe35() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
-  var out = { href: location.href, leftTreeRows: [], rightFieldRows: [], datatableData: null, treeGridData: null, notes: [] };
+  var out = { probe: "v35", href: location.href, leftTreeRows: [], rightFieldRows: [], datatableData: null, treeGridData: null, notes: [] };
 
   function eachEl(root, d, fn) { if (!root || d > 18) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
   function tag(el) { return (el.tagName || "").toLowerCase(); }
@@ -85,7 +85,7 @@
   p.id = PANEL_ID;
   p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(760px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v34 — Data Graph API names (no hover)\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v35 — Data Graph API names (no hover)\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
