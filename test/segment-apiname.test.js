@@ -968,50 +968,42 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   eq("dedupe: 0 existing → 1 span", dedupeKeep(0), 1);
   eq("dedupe: 3 stacked → collapses to 1 span", dedupeKeep(3), 1);
 
-  // BEHAVIOR 5: LEFT native-dup skip (the reported "showed two times"). SF prints the object api
-  // natively under each left object → we must NOT add our own. Mirror dgRowShowsApiText: if any
-  // non-dc-dg text node in the row contains the api, we skip. Modelled as a text-node scan.
-  function rowShowsApiText(textNodes, api) {
-    for (var i = 0; i < textNodes.length; i++) { if (textNodes[i].indexOf(api) >= 0) return true; }
-    return false;
-  }
-  ok("LEFT skip when SF already prints the api (fixes 'showed two times')",
-    rowShowsApiText(["Contact Point Address", "ssot__ContactPointAddress__dlm"], "ssot__ContactPointAddress__dlm") === true);
-  ok("LEFT injects when SF does NOT print the api",
-    rowShowsApiText(["Contact Point Address"], "ssot__ContactPointAddress__dlm") === false);
+  // BEHAVIOR 5: LEFT is a NO-OP. SF already prints the object api natively under each left object
+  // (the blue links, present with our tool OFF). Injecting there produced duplicates that STACKED
+  // across re-decorate passes (reported 2×, then 3×). So dgDecorateLeft adds nothing.
+  ok("LEFT decorator is a no-op (SF shows the object api itself → no stacking)",
+    /function dgDecorateLeft\(\) \{ \/\* intentionally a no-op/.test(src6j));
+  ok("legacy left spans cleared ONCE in dgStart, not per pass (VDI-safe — no per-pass full crawl)",
+    /dgStripAll\("dc-dg-oapi"\);/.test(src6j) && /One-time cleanup/.test(src6j));
 
-  // BEHAVIOR 6: RIGHT label-cell targeting (the reported blank field api — we had injected into
-  // the leading CHECKBOX cell, which truncated to "ssot_…"). Mirror dgFindLabelCell: pick the
-  // first NON-checkbox cell whose text contains the label (else first non-checkbox cell w/ text).
-  function findLabelCellIndex(cells, label) {
-    var lab = (label || "").toLowerCase();
-    for (var i = 0; i < cells.length; i++) { if (cells[i].checkbox) continue; var t = (cells[i].text || "").toLowerCase(); if (lab && t.indexOf(lab) >= 0) return i; }
-    for (var k = 0; k < cells.length; k++) { if (cells[k].checkbox) continue; if ((cells[k].text || "").trim()) return k; }
-    return -1;
+  // BEHAVIOR 6: RIGHT label-cell targeting done STRUCTURALLY (the reported blank field api). The
+  // earlier text-match read cell.textContent === "" across the datatable's nested shadow, so it
+  // injected nothing. dgLabelCell picks the FIRST non-checkbox cell — no text needed.
+  function labelCellIndex(cells) {
+    for (var i = 0; i < cells.length; i++) { if (cells[i].checkbox) continue; return i; }
+    return 0;
   }
-  var rowCells = [{ checkbox: true, text: "" }, { text: "First Name" }, { text: "Text" }];
-  eq("RIGHT targets the label cell (idx 1), NOT the checkbox cell (idx 0)", findLabelCellIndex(rowCells, "First Name"), 1);
-  eq("RIGHT falls back to first non-checkbox text cell when label not matched", findLabelCellIndex(rowCells, "Zzz No Match"), 1);
+  eq("RIGHT picks first non-checkbox cell structurally (idx 1), even with empty text", labelCellIndex([{ checkbox: true }, { checkbox: false }, { checkbox: false }]), 1);
+  eq("RIGHT picks idx 0 when there is no checkbox cell", labelCellIndex([{ checkbox: false }, { checkbox: false }]), 0);
 
-  // source presence — the module reads the PROVEN keys, is observer-safe, dev-only + synced.
+  // BEHAVIOR 7: index-alignment data[j].name → the api for row j (proven: the row tooltip used
+  // this and showed the correct 'ssot__IsAnonymous__c').
+  var aligned2 = indexAlign(liveData, 3);
+  eq("row 0 api via index-align", aligned2[0], "Id__c");
+
+  // source presence — right-only decoration, structural cell pick, tooltip, observer-safe.
   ok("Data Graph module present", /function dcDataGraphApiModule\(\)/.test(src6j));
-  ok("LEFT reads object api via dgNodeApi (objectApiName first, future-kind fallbacks)",
-    /function dgNodeApi\(node\)/.test(src6j) && /"objectApiName"/.test(src6j) && /"entityApiName"/.test(src6j));
-  ok("LEFT skips when SF natively renders the api (no duplicate)",
-    /function dgRowShowsApiText/.test(src6j) && /if \(dgRowShowsApiText\(sr, api\) \|\| dgRowShowsApiText\(row, api\)\) return;/.test(src6j));
   ok("RIGHT aligns data[] to rows by index (data[j].name), text-match fallback when misaligned",
     /var aligned = \(dataTrs\.length === data\.length\);/.test(src6j) && /rec && rec\.name/.test(src6j));
-  ok("RIGHT targets the LABEL cell, not the checkbox cell (fixes truncated 'ssot_…')",
-    /function dgFindLabelCell/.test(src6j) && /input\[type="checkbox"\]/.test(src6j));
+  ok("RIGHT targets the LABEL cell STRUCTURALLY (first non-checkbox cell, not by text)",
+    /function dgLabelCell/.test(src6j) && /input\[type="checkbox"\]/.test(src6j) && /first non-checkbox cell/.test(src6j));
   ok("RIGHT sets a guaranteed native tooltip on each row (API: …) as the always-works fallback",
     /row\.setAttribute\("title", "API: " \+ api\)/.test(src6j));
-  ok("LEFT strips ALL our prior spans before deciding (never stacks)",
-    /function dgStripOwn/.test(src6j) && /dgStripOwn\(sr, "dc-dg-oapi"\)/.test(src6j));
   ok("observer DISCONNECTS while we write (no self-trigger feedback loop / VDI peg)",
     /_dgWriting = true;/.test(src6j) && /if \(_dgObs\) _dgObs\.disconnect\(\);/.test(src6j) && /if \(_dgWriting \|\| _dgT\) return;/.test(src6j));
   ok("inline api line is click-to-copy (copies the CURRENT api, sp._dgApi)", /sp\._dgApi/.test(src6j) && /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
   ok("re-applies on DOM change (MutationObserver) so switching DMOs refreshes", /_dgObs = new MutationObserver\(dgSchedule\)/.test(src6j));
-  ok("decorates only VISIBLE rows/tables (skips SF stale cached DOM)", /if \(!isVisible\(row\)\) return;/.test(src6j) && /if \(!isVisible\(dt\)\) return;/.test(src6j));
+  ok("decorates only VISIBLE datatables (skips SF stale cached DOM)", /if \(!isVisible\(dt\)\) return;/.test(src6j));
   ok("exposes toggle + default OFF (user turns it on)", /window\.__dcToggleDgApi/.test(src6j) && /window\.__dcDgApiIsOn/.test(src6j) && /var DG_ON = false;/.test(src6j));
   ok("welcome toast dodges the Data Graph FAB too (no overlap on the right)", /getElementById\("dc-dg-bar"\)/.test(src6j));
   ok("Data Graph module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm6j.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataGraphApiModule/.test(strip); })());
