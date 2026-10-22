@@ -976,7 +976,9 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   // BEHAVIOR 5: LEFT is RESTORED (the names are OURS — they vanished when we stopped injecting, so
   // SF does NOT show them). dgDecorateLeft injects the object api per visible row.
   ok("LEFT decorator injects the object api per visible row (restored — names are ours)",
-    /function dgDecorateLeft\(\)/.test(src6j) && /findByTag\("runtime_cdp-tree-grid-row"\)/.test(src6j) && /dgInject\(host, api, "dc-dg-oapi"\)/.test(src6j));
+    /function dgDecorateLeft\(\)/.test(src6j) && /_dgBuckets\.rows\.forEach/.test(src6j) && /dgInject\(host, api, "dc-dg-oapi"\)/.test(src6j));
+  ok("left tree rows collected into the single-crawl bucket (tag runtime_cdp-tree-grid-row)",
+    /t === "runtime_cdp-tree-grid-row"/.test(src6j) && /b\.rows\.push\(el\)/.test(src6j));
 
   // BEHAVIOR 6: RIGHT anchors onto the element whose OWN text IS the label (dgFindLabelHost),
   // walking across shadow — so we never guess the datatable cell structure. Mirror the match:
@@ -991,6 +993,27 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   // BEHAVIOR 7: index-alignment data[j].name → the api for row j.
   var aligned2 = indexAlign(liveData, 3);
   eq("row 0 api via index-align", aligned2[0], "Id__c");
+
+  // BEHAVIOR 8: FILTERS tab — resolve the field shown in a Sort/Condition dropdown to its api via
+  // a persistent label→api cache (fills from the Fields datatable as you browse objects). Mirror
+  // dgCacheFromData + dgResolveApi.
+  function dgCache(arr) {
+    var c = {};
+    for (var i = 0; i < arr.length; i++) { var r = arr[i]; if (!r) continue; var lbl = r.label || r.masterLabel || r.fieldLabel, api = r.name || r.fieldApiName || r.apiName; if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!c[l]) c[l] = String(api); } }
+    return c;
+  }
+  function dgResolve(cache, shown) {
+    if (!shown) return "";
+    var s = shown.trim();
+    if (s.indexOf(" ") < 0 && /__/.test(s)) return s;
+    return cache[s.toLowerCase()] || "";
+  }
+  var fcache = dgCache([{ label: "Contact Point Email Id", name: "ssot__Id__c" }, { label: "Email Address", name: "ssot__EmailAddress__c" }]);
+  eq("FILTERS: 'Contact Point Email Id' dropdown → ssot__Id__c", dgResolve(fcache, "Contact Point Email Id"), "ssot__Id__c");
+  eq("FILTERS: 'Email Address' → ssot__EmailAddress__c", dgResolve(fcache, "Email Address"), "ssot__EmailAddress__c");
+  eq("FILTERS: a value that's already an api token passes through", dgResolve(fcache, "My_Custom__c"), "My_Custom__c");
+  eq("FILTERS: unknown label → '' (no bogus api)", dgResolve(fcache, "Totally Unknown"), "");
+  eq("FILTERS: placeholder 'Field' (not in cache) → ''", dgResolve(fcache, "Field"), "");
 
   // source presence — left restored, reference dedup, label-host walk, tooltip, observer+tick.
   ok("Data Graph module present", /function dcDataGraphApiModule\(\)/.test(src6j));
@@ -1008,6 +1031,16 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
     /_dgTick = setInterval\(/.test(src6j) && /shadow-internal mutations/.test(src6j));
   ok("no FLICKER on the tick: skips re-inject when the content signature is unchanged",
     /function dgSignature/.test(src6j) && /sig === _dgSig/.test(src6j));
+  ok("FILTERS: resolves the dropdown field to its api via a persistent label→api cache",
+    /function dgDecorateFilters/.test(src6j) && /_dgFieldCache/.test(src6j) && /function dgResolveApi/.test(src6j) && /function dgControlLabel/.test(src6j));
+  ok("FILTERS: cache fills from field datatables/panels as you browse (dgHarvestCache)",
+    /function dgHarvestCache/.test(src6j) && /function dgCacheFromData/.test(src6j));
+  ok("FILTERS: controls excluded if inside the left tree or Fields datatable (no double-decorate)",
+    /dgWithinTag\(el, \["runtime_cdp-tree-grid-row", "runtime_cdp-custom-datatable"\]\)/.test(src6j));
+  ok("VDI-safe: ONE shadow-DOM crawl per pass (dgCollect fills buckets; no per-findByTag crawl)",
+    /function dgCollect/.test(src6j) && /_dgBuckets = b;/.test(src6j) && /dgCollect\(\);\s*\/\/ ONE shadow-DOM crawl/.test(src6j));
+  ok("signature includes the Filters dropdown labels (so switching objects' Filters re-decorates)",
+    /parts\.push\("F:" \+ l\)/.test(src6j));
   ok("observer DISCONNECTS while we write (no self-trigger feedback loop / VDI peg)",
     /_dgWriting = true;/.test(src6j) && /if \(_dgObs\) _dgObs\.disconnect\(\);/.test(src6j) && /if \(_dgWriting \|\| _dgT\) return;/.test(src6j));
   ok("inline api line is click-to-copy (copies the CURRENT api, sp._dgApi)", /sp\._dgApi/.test(src6j) && /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));

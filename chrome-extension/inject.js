@@ -19103,8 +19103,27 @@ processJSON();
     // shows only the friendly label. Proven: they vanished when we stopped injecting.) No stacking
     // now because dgDecorate() removes ALL our spans by reference first (dgClearInjected), every
     // pass — so one per row, always, regardless of SF re-rendering into fresh shadow hosts.
+    // SINGLE shadow-DOM crawl per pass: collect every element bucket we need at once, so the
+    // 700ms tick costs ONE crawl, not one-per-findByTag (VDI-safe). Buckets: left tree rows, field
+    // datatables, field-panel components, and the Filters-tab controls (combobox/input).
+    var _dgBuckets = { rows: [], tables: [], panels: [], controls: [] };
+    function dgCollect() {
+      var b = { rows: [], tables: [], panels: [], controls: [] };
+      try {
+        eachElement(document, function (el) {
+          var t = ""; try { t = (el.tagName || "").toLowerCase(); } catch (e) {}
+          if (t === "runtime_cdp-tree-grid-row") { b.rows.push(el); return; }
+          if (t === "runtime_cdp-custom-datatable") { b.tables.push(el); return; }
+          if (t === "runtime_cdp-dao-editor-fields") { b.panels.push(el); return; }
+          var role = ""; try { role = (el.getAttribute && el.getAttribute("role")) || ""; } catch (e) {}
+          if (/combobox/.test(t) || role === "combobox" || t === "input" || t === "textarea") b.controls.push(el);
+        });
+      } catch (e) {}
+      _dgBuckets = b;
+    }
+
     function dgDecorateLeft() {
-      findByTag("runtime_cdp-tree-grid-row").forEach(function (row) {
+      _dgBuckets.rows.forEach(function (row) {
         if (!isVisible(row)) return;
         var api = dgNodeApi(dgSafe(row, "node"));
         if (!api) return;
@@ -19121,7 +19140,7 @@ processJSON();
     // anchor a click-to-copy line onto the element whose text literally IS the field label — found
     // by walking the row across shadow (dgFindLabelHost), so we never guess the cell structure.
     function dgDecorateRight() {
-      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+      _dgBuckets.tables.forEach(function (dt) {
         if (!isVisible(dt)) return;
         var data = dgSafe(dt, "data");
         if (!data || !data.length) return;
@@ -19147,31 +19166,109 @@ processJSON();
       });
     }
 
-    // A cheap content signature: the selected right-panel field api names + left row count. If it
-    // hasn't changed since our last injection, re-decorating would just remove+re-add identical
-    // spans (visible FLICKER on the 700ms tick). So we skip when unchanged. `force` bypasses it
-    // (used on first start / toggle on).
+    // ── FILTERS tab: show the api of the field chosen in a Sort/Condition dropdown ──────────────
+    // The Filters tab is dropdowns, NOT a datatable — so there is no row.name to read. Instead we
+    // keep a PERSISTENT label→api cache that fills from the Fields datatable (which lists EVERY
+    // field of an object, selected or not) as you view objects. On the Filters tab we read the
+    // field label shown in each dropdown and look its api up in that cache. No component-internal
+    // guessing — just proven cache data + the visible dropdown text.
+    var _dgFieldCache = {};   // lowercased field label -> api name
+    function dgCacheFromData(arr) {
+      if (!arr || !arr.length) return;
+      for (var i = 0; i < arr.length; i++) {
+        var r = arr[i]; if (!r) continue;
+        var lbl = r.label || r.masterLabel || r.fieldLabel;
+        var api = r.name || r.fieldApiName || r.apiName || r.developerName;
+        if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (l && !_dgFieldCache[l]) _dgFieldCache[l] = String(api); }
+      }
+    }
+    // Harvest field label→api from the field-list components in this pass's buckets (datatables +
+    // dao-editor-fields panels), so a filter can be resolved even if you never opened that object's
+    // Fields tab.
+    function dgHarvestCache() {
+      try { _dgBuckets.tables.forEach(function (dt) { dgCacheFromData(dgSafe(dt, "data")); }); } catch (e) {}
+      try { _dgBuckets.panels.forEach(function (fp) { dgCacheFromData(dgSafe(fp, "data")); dgCacheFromData(dgSafe(fp, "fields")); }); } catch (e) {}
+    }
+    // Climb ancestors (crossing shadow via getRootNode().host) to test containment in a tag set.
+    function dgWithinTag(el, tags) {
+      var n = el;
+      while (n) {
+        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
+        if (t && tags.indexOf(t) >= 0) return true;
+        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
+      }
+      return false;
+    }
+    // The field-selection controls on the Filters tab, from this pass's bucket. Exclude anything
+    // inside the LEFT tree or the Fields datatable (handled elsewhere).
+    function dgFilterControls() {
+      var out = [];
+      for (var i = 0; i < _dgBuckets.controls.length; i++) {
+        var el = _dgBuckets.controls[i];
+        if (dgWithinTag(el, ["runtime_cdp-tree-grid-row", "runtime_cdp-custom-datatable"])) continue;
+        out.push(el);
+      }
+      return out;
+    }
+    // The label/value a control currently shows: its .value, else an inner <input> value, else text.
+    function dgControlLabel(el) {
+      var v = "";
+      try { if (el.value != null && el.value !== "") v = String(el.value); } catch (e) {}
+      if (!v) { try { var sr = el.shadowRoot; var inp = (sr || el).querySelector && (sr || el).querySelector("input"); if (inp && inp.value) v = String(inp.value); } catch (e) {} }
+      if (!v) { try { v = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
+      return v;
+    }
+    // Resolve a shown value to an api: if it already looks like an api token (has "__", no spaces)
+    // use it; else look the label up in the cache.
+    function dgResolveApi(shown) {
+      if (!shown) return "";
+      var s = shown.trim();
+      if (s.indexOf(" ") < 0 && /__/.test(s)) return s;           // already an api token
+      return _dgFieldCache[s.toLowerCase()] || "";
+    }
+    function dgDecorateFilters() {
+      var ctrls = dgFilterControls();
+      for (var i = 0; i < ctrls.length; i++) {
+        var ctrl = ctrls[i];
+        var shown = dgControlLabel(ctrl);
+        var api = dgResolveApi(shown);
+        if (!api) continue;
+        try { ctrl.setAttribute("title", "API: " + api); } catch (e) {}   // guaranteed tooltip
+        var host = ctrl.parentElement || ctrl;                            // inline line under it
+        dgInject(host, api, "dc-dg-fapi");
+      }
+    }
+
+    // A cheap content signature: left row count + selected right-panel field api names + the
+    // field shown in each Filters dropdown. If unchanged since the last injection, re-decorating
+    // would just remove+re-add identical spans (FLICKER on the 700ms tick) — so we skip. `force`
+    // bypasses it (first start / toggle on). Including the filter-dropdown labels is what makes
+    // switching between two objects' Filters tabs (same left count, no datatable) re-decorate.
     function dgSignature() {
       var parts = [];
-      try { parts.push("L" + findByTag("runtime_cdp-tree-grid-row").length); } catch (e) {}
+      parts.push("L" + _dgBuckets.rows.length);
       try {
-        findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+        _dgBuckets.tables.forEach(function (dt) {
           if (!isVisible(dt)) return;
           var data = dgSafe(dt, "data");
           if (data && data.length) for (var i = 0; i < data.length; i++) { if (data[i] && data[i].name) parts.push(data[i].name); }
         });
       } catch (e) {}
+      try { dgFilterControls().forEach(function (c) { var l = dgControlLabel(c); if (l) parts.push("F:" + l); }); } catch (e) {}
       return parts.join("|");
     }
     var _dgSig = null;
     function dgDecorate(force) {
       if (!DG_ON) return;
+      dgCollect();                // ONE shadow-DOM crawl → fills _dgBuckets for everything below
+      dgHarvestCache();           // keep the label→api cache current (fills as you browse objects)
       var sig = dgSignature();
       if (!force && sig === _dgSig && _dgSpans.length) return;   // nothing changed → no flicker
       _dgSig = sig;
       dgClearInjected();          // remove ALL our spans by reference FIRST → cannot ever stack
       dgDecorateLeft();
       dgDecorateRight();
+      dgDecorateFilters();
     }
 
     // Re-decorate on DOM change. Two triggers: (1) a MutationObserver for the light DOM, and (2) a
