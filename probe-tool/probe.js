@@ -1,91 +1,109 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v35 — DATA GRAPH builder API names (NO HOVER needed; expands the right datatable).
+ * DOM PROBE v36 — DATA GRAPH *FILTERS* tab. Finds the field chosen in a Sort /
+ * Condition dropdown and dumps the component props so we can see whether the real
+ * field API name is stored anywhere (so we can read it DIRECTLY instead of guessing
+ * from a label cache — which breaks when two fields share a label).
  *
- * v33 relied on hovering the exact field — fragile (the tracker caught page chrome).
- * v34 is deterministic: it finds the KNOWN Data Graph components (discovered in the last
- * probe: runtime_cdp-dao-editor-tree-grid / -tree-grid-row / -tree-grid-cell on the LEFT,
- * runtime_cdp-dao-editor-fields + runtime_cdp-custom-datatable + lightning-datatable on the
- * RIGHT) and dumps their JS DATA props so we can see WHERE the field/object API names live.
- *
- * RUN on the Data Graph builder (Fields view). Read-only; copies JSON. Just click once —
- * no hover. Click a LEFT object first so the right panel has fields, then run.
+ * RUN on the Data Graph builder → select an object on the LEFT → open the FILTERS
+ * tab → pick a Sort Field and add a Condition with a Field. THEN click this. It is
+ * read-only and copies JSON to the clipboard. Just click once; no hover.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe35() {
+(function DomProbe36() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
-  var out = { probe: "v35", href: location.href, leftTreeRows: [], rightFieldRows: [], datatableData: null, treeGridData: null, notes: [] };
+  var out = {
+    probe: "v36", href: location.href,
+    comboboxes: [], conditionRows: [], filterComponents: [],
+    selectedLeftObject: null, customTagsPresent: {}, notes: []
+  };
 
-  function eachEl(root, d, fn) { if (!root || d > 18) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i]); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
+  function eachEl(root, d, fn) { if (!root || d > 20) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i], d); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
   function tag(el) { return (el.tagName || "").toLowerCase(); }
-  function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 50); } catch (e) { return ""; } }
-  function byTag(t) { var out = []; eachEl(document, 0, function (el) { if (tag(el) === t) out.push(el); }); return out; }
+  function attr(el, n) { try { return el.getAttribute(n); } catch (e) { return null; } }
+  function txt(el) { try { return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60); } catch (e) { return ""; } }
 
-  // Compact view of an object: for each OWN key, the type and (for strings) the value.
-  // Lets us SEE the shape even when api-name keys are named unusually. Depth-limited.
+  // Compact view of a value: for objects, each OWN key → type/(string value). Depth-limited so
+  // we SEE the shape even when the api-name key is named unusually.
   function shape(o, depth) {
-    if (o == null || depth > 3) return typeof o;
-    if (typeof o !== "object") return (typeof o === "string" ? JSON.stringify(o).slice(0, 60) : String(o));
+    if (o == null || depth > 4) return typeof o;
+    if (typeof o !== "object") return (typeof o === "string" ? JSON.stringify(o).slice(0, 80) : String(o));
     if (Array.isArray(o)) return "[" + o.length + "]" + (o.length ? " " + shape(o[0], depth + 1) : "");
     var r = {}, n = 0;
     for (var k in o) {
-      if (n++ > 25) { r["…"] = "(more)"; break; }
+      if (n++ > 40) { r["…"] = "(more)"; break; }
       var v; try { v = o[k]; } catch (e) { continue; }
       if (v && typeof v === "object" && (v.nodeType || v === window)) { r[k] = "[DOM]"; continue; }
+      if (typeof v === "function") { r[k] = "fn"; continue; }
       r[k] = shape(v, depth + 1);
     }
     return r;
   }
-  // The LWC data property on an element is usually one of these.
-  function lwcData(el) {
-    var keys = ["data", "columns", "node", "row", "item", "record", "field", "fields", "attribute",
-      "treeNode", "rowData", "value", "_node", "_data", "entity", "objectInfo", "selectedObject"];
+  // Dump the LWC-ish data props an element may carry.
+  function props(el) {
+    var keys = ["value", "name", "fieldApiName", "apiName", "field", "fields", "selectedField",
+      "selected", "selectedValue", "options", "condition", "conditions", "subject", "filter",
+      "filters", "sortBy", "sortField", "sort", "data", "row", "item", "record", "node",
+      "attribute", "objectApiName", "entityApiName", "label", "developerName", "columnApiName",
+      "_value", "_selectedValue", "primaryObjectName", "targetObjectName"];
     var found = {};
-    keys.forEach(function (k) { try { if (el[k] != null && typeof el[k] !== "function") found[k] = shape(el[k], 0); } catch (e) {} });
+    keys.forEach(function (k) { try { var v = el[k]; if (v != null && typeof v !== "function") found[k] = shape(v, 0); } catch (e) {} });
+    // also any own-enumerable props that LOOK like they hold an api/field (defensive net)
+    try { for (var k in el) { if (/api|field|subject|condition|sort/i.test(k) && !(k in found)) { try { var v2 = el[k]; if (v2 != null && typeof v2 !== "function") found[k] = shape(v2, 0); } catch (e) {} } } } catch (e) {}
     return found;
   }
 
-  // LEFT tree: runtime_cdp-tree-grid-row (the DMO/CI nodes)
-  byTag("runtime_cdp-tree-grid-row").slice(0, 8).forEach(function (el) {
-    out.leftTreeRows.push({ text: txt(el), props: lwcData(el) });
-  });
-  // the tree grid container (may hold the whole node list)
-  var tg = byTag("runtime_cdp-dao-editor-tree-grid")[0];
-  if (tg) out.treeGridData = lwcData(tg);
-
-  // RIGHT fields panel + its datatable. EXPAND the first data row + all columns FULLY (deeper
-  // shape) so we can see the field-API-name key. There are TWO custom-datatables (the dialog
-  // Fields tab + the dao-editor right panel) — dump BOTH, and prefer the one under dao-editor.
-  var fp = byTag("runtime_cdp-dao-editor-fields")[0];
-  if (fp) out.rightFieldsPanel = lwcData(fp);
-  var cdts = byTag("runtime_cdp-custom-datatable").concat(byTag("lightning-datatable"));
-  out.datatables = cdts.slice(0, 4).map(function (cdt, i) {
-    var o = { index: i, tag: tag(cdt) };
-    try { o.firstRow = cdt.data && cdt.data.length ? shape(cdt.data[0], 0) : "(no data[])"; } catch (e) { o.firstRow = "ERR:" + e; }
-    try { o.columns = cdt.columns ? cdt.columns.map(function (c) { return shape(c, 1); }) : "(no columns)"; } catch (e) { o.columns = "ERR:" + e; }
-    try { o.dataLen = cdt.data ? cdt.data.length : 0; } catch (e) {}
-    return o;
-  });
-  // also the dao-editor-fields panel's own data, expanded one level deeper
-  if (fp) { try { out.fieldsPanelDeep = { fields: fp.fields ? shape(fp.fields, 0) : undefined, data: fp.data ? shape(fp.data, 0) : undefined, selectedObject: fp.selectedObject ? shape(fp.selectedObject, 0) : undefined }; } catch (e) {} }
-
-  // the actual field rows in the datatable (tr with cells)
-  var frows = [];
+  // 1) The LEFT selected object (so we know which object the filter is on).
   eachEl(document, 0, function (el) {
-    if (tag(el) === "runtime_cdp-tree-grid-cell") return;   // left cells, skip
-    if (tag(el) === "tr" && txt(el) && /gridcell|rowheader/i.test((function () { var r = ""; try { r = el.getAttribute("role") || ""; for (var i = 0; i < el.children.length; i++) r += " " + (el.children[i].getAttribute && el.children[i].getAttribute("role") || ""); } catch (e) {} return r; })())) frows.push(el);
+    if (tag(el) === "runtime_cdp-tree-grid-row") {
+      var sel = attr(el, "aria-selected") === "true" || /is-selected|slds-is-selected/.test((el.className || "") + "");
+      if (sel) { try { out.selectedLeftObject = { text: txt(el), node: shape(el.node, 0) }; } catch (e) {} }
+    }
   });
-  out.notes.push("datatable <tr> rows found: " + frows.length);
-  out.rightFieldRows = frows.slice(0, 6).map(function (el) { return { text: txt(el), props: lwcData(el) }; });
 
-  out.customTagsPresent = (function () { var s = {}; eachEl(document, 0, function (el) { var t = tag(el); if (/dao-editor|tree-grid|data-model-tab|custom-datatable/.test(t)) s[t] = (s[t] || 0) + 1; }); return s; })();
+  // 2) Every combobox (Sort Field / Condition Field). Dump props + the visible value + inner input.
+  eachEl(document, 0, function (el) {
+    var t = tag(el), role = attr(el, "role") || "";
+    var isCombo = /combobox/.test(t) || role === "combobox" || t === "lightning-combobox" || t === "lightning-base-combobox" || t === "lightning-grouped-combobox";
+    if (!isCombo) return;
+    var inner = ""; try { var i2 = (el.shadowRoot || el).querySelector("input"); if (i2) inner = i2.value || ""; } catch (e) {}
+    out.comboboxes.push({ tag: t, role: role, shown: txt(el), inputValue: inner, dataLabel: attr(el, "data-label") || attr(el, "name") || "", props: props(el) });
+  });
+
+  // 3) Any filter/condition/sort component — the real condition objects likely live here.
+  eachEl(document, 0, function (el) {
+    var t = tag(el);
+    if (/filter|condition|sort|rank|criteria/i.test(t) && /cdp|dao|runtime|data/i.test(t)) {
+      out.filterComponents.push({ tag: t, text: txt(el), props: props(el) });
+    }
+  });
+
+  // 4) Condition rows rendered as a row structure (label/operator/value triples).
+  eachEl(document, 0, function (el) {
+    var t = tag(el);
+    if (/condition-row|filter-row|criteria-row/i.test(t)) out.conditionRows.push({ tag: t, text: txt(el), props: props(el) });
+  });
+
+  // 5) Census of custom tags present (so if none of the above hit, we still see what IS here).
+  out.customTagsPresent = (function () { var s = {}; eachEl(document, 0, function (el) { var t = tag(el); if (/cdp|dao-editor|filter|condition|sort|combobox|rank/i.test(t)) s[t] = (s[t] || 0) + 1; }); return s; })();
+
+  out.notes.push("comboboxes found: " + out.comboboxes.length);
+  out.notes.push("filter/condition/sort components: " + out.filterComponents.length);
+  out.notes.push("condition rows: " + out.conditionRows.length);
+  if (!out.comboboxes.length) out.notes.push("No combobox captured — make sure a Sort Field / Condition Field is SELECTED on the Filters tab before running.");
+
+  // cap arrays so the JSON stays pasteable
+  function cap(a, n) { return a.length > n ? a.slice(0, n) : a; }
+  out.comboboxes = cap(out.comboboxes, 10);
+  out.filterComponents = cap(out.filterComponents, 10);
+  out.conditionRows = cap(out.conditionRows, 10);
 
   var p = document.createElement("div");
   p.id = PANEL_ID;
-  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(760px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
+  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(820px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v35 — Data Graph API names (no hover)\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v36 — Data Graph FILTERS tab\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
