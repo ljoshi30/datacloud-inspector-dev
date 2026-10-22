@@ -19108,15 +19108,16 @@ processJSON();
     // SINGLE shadow-DOM crawl per pass: collect every element bucket we need at once, so the
     // 700ms tick costs ONE crawl, not one-per-findByTag (VDI-safe). Buckets: left tree rows, field
     // datatables, field-panel components, and the Filters-tab controls (combobox/input).
-    var _dgBuckets = { rows: [], tables: [], panels: [], controls: [] };
+    var _dgBuckets = { rows: [], tables: [], panels: [], controls: [], conditions: [] };
     function dgCollect() {
-      var b = { rows: [], tables: [], panels: [], controls: [] };
+      var b = { rows: [], tables: [], panels: [], controls: [], conditions: [] };
       try {
         eachElement(document, function (el) {
           var t = ""; try { t = (el.tagName || "").toLowerCase(); } catch (e) {}
           if (t === "runtime_cdp-tree-grid-row") { b.rows.push(el); return; }
           if (t === "runtime_cdp-custom-datatable") { b.tables.push(el); return; }
           if (t === "runtime_cdp-dao-editor-fields") { b.panels.push(el); return; }
+          if (t === "runtime_cdp-dao-editor-adhoc-filter-condition") { b.conditions.push(el); return; }
           var role = ""; try { role = (el.getAttribute && el.getAttribute("role")) || ""; } catch (e) {}
           if (/combobox/.test(t) || role === "combobox" || t === "input" || t === "textarea") b.controls.push(el);
         });
@@ -19233,70 +19234,83 @@ processJSON();
       }
       return false;
     }
-    // The field-selection controls on the Filters tab, from this pass's bucket. Exclude anything
-    // inside the LEFT tree or the Fields datatable (handled elsewhere).
-    function dgFilterControls() {
-      var out = [];
-      for (var i = 0; i < _dgBuckets.controls.length; i++) {
-        var el = _dgBuckets.controls[i];
-        if (dgWithinTag(el, ["runtime_cdp-tree-grid-row", "runtime_cdp-custom-datatable"])) continue;
-        out.push(el);
-      }
-      return out;
-    }
-    // The label/value a control currently shows: its .value, else an inner <input> value, else text.
-    function dgControlLabel(el) {
-      var v = "";
-      try { if (el.value != null && el.value !== "") v = String(el.value); } catch (e) {}
-      if (!v) { try { var sr = el.shadowRoot; var inp = (sr || el).querySelector && (sr || el).querySelector("input"); if (inp && inp.value) v = String(inp.value); } catch (e) {} }
-      if (!v) { try { v = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
-      return v;
-    }
-    // Resolve a shown value to the list of candidate apis, PREFERRING the selected object's scope,
-    // falling back to the global scope. Returns an array: [] = unknown, [api] = unambiguous,
-    // [a,b,…] = genuinely ambiguous (same object OR couldn't scope → caller shows "(?)").
+    // Looks like a real field api token? (has "__", single token). Used to accept a combobox value
+    // as an EXACT api and to reject non-field dropdowns (Sort Order="DESC", criteria="AND").
+    function dgLooksLikeApi(s) { return !!s && String(s).trim().indexOf(" ") < 0 && /__/.test(s); }
+
+    // Resolve a shown LABEL to candidate apis via the object-scoped cache (FALLBACK path, used only
+    // when a combobox doesn't expose its value). [] unknown · [api] unambiguous · [a,b,…] ambiguous.
     function dgResolveApis(shown, obj) {
       if (!shown) return [];
       var s = shown.trim();
-      if (s.indexOf(" ") < 0 && /__/.test(s)) return [s];          // already an api token
+      if (dgLooksLikeApi(s)) return [s];
       var l = s.toLowerCase(), o = String(obj || "").toLowerCase();
       if (o && _dgFieldCache[o] && _dgFieldCache[o][l] && _dgFieldCache[o][l].length) return _dgFieldCache[o][l].slice();
       if (_dgFieldCache[""] && _dgFieldCache[""][l]) return _dgFieldCache[""][l].slice();
       return [];
     }
-    // One visual dropdown is NESTED comboboxes in separate shadow roots: lightning-combobox →
-    // (shadow) lightning-base-combobox → (shadow) input[role=combobox]. contains() does NOT cross
-    // shadow, so we climb via getRootNode().host to the OUTERMOST combobox element — the single
-    // node shared by all the nested controls — and dedupe by it (fixes the reported 2× lines).
-    function dgOutermostCombo(el) {
-      var n = el, top = null;
-      while (n) {
-        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
-        var role = ""; try { role = (n.getAttribute && n.getAttribute("role")) || ""; } catch (e) {}
-        if (/combobox/.test(t) || role === "combobox") top = n;
-        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
-      }
-      return top;
+
+    // A field-selector combobox is labelled "Sort Field" or "Field" (NOT "Sort Order" / "Take
+    // Action When"). Match on .label so we only decorate field pickers.
+    function dgIsFieldCombo(el) {
+      var lbl = ""; try { lbl = String(el.label || ""); } catch (e) {}
+      return /^(sort field|field)$/i.test(lbl.trim());
     }
-    function dgDecorateFilters() {
-      var ctrls = dgFilterControls();
+    // The label text a combobox currently displays (e.g. "Individual Id") — from its inner button
+    // text. Used only for the cache fallback when .value is somehow empty.
+    function dgComboShownText(el) {
+      try { var b = (el.shadowRoot || el).querySelector('[role="combobox"],button,input'); if (b) return (b.value || b.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+      return "";
+    }
+
+    // FILTERS tab — EXACT, from component props (proven by DOM Probe v36/37), NOT label-guessing:
+    //  • a field dropdown is a <lightning-combobox> labelled "Sort Field"/"Field" whose .value IS
+    //    the field api (e.g. "ssot__Id__c"). Because .value is the UNIQUE api, duplicate LABELS
+    //    cannot be confused — two "Party" fields have distinct values ssot__Party__c vs
+    //    ssot__PartyId__c. This is the real fix to the duplicate-label question.
+    //  • a condition is <runtime_cdp-dao-editor-adhoc-filter-condition> with .condition.field = api.
+    // FALLBACK: only if a field combobox exposes no api-looking .value do we resolve its shown
+    // label via the object-scoped cache (dgResolveApis). We anchor on the combobox itself (one
+    // visible control = one combobox), so there's no cross-shadow double-count.
+    function dgFilterTargets() {
+      var seen = [], out = [];
+      function add(anchor, api) {
+        if (!anchor || !dgLooksLikeApi(api)) return;
+        if (seen.indexOf(anchor) >= 0) return;
+        seen.push(anchor); out.push({ anchor: anchor, api: String(api) });
+      }
       var obj = dgSelectedObjectApi();
-      var done = [];   // outermost-combobox nodes already decorated this pass (one per dropdown)
-      for (var i = 0; i < ctrls.length; i++) {
-        var ctrl = ctrls[i];
-        var shown = dgControlLabel(ctrl);
-        var apis = dgResolveApis(shown, obj);
-        if (!apis.length) continue;
-        var anchor = dgOutermostCombo(ctrl) || ctrl;   // the single node shared by nested controls
-        if (done.indexOf(anchor) >= 0) continue;        // already did this visual dropdown
-        done.push(anchor);
-        var copyApi = apis[0];
-        var ambiguous = apis.length > 1;
-        var display = ambiguous ? (apis.join("  |  ") + "  (?)") : copyApi;
-        var tip = ambiguous ? ("Multiple fields share this label — API: " + apis.join(", ")) : ("API: " + copyApi);
-        try { anchor.setAttribute("title", tip); } catch (e) {}           // guaranteed tooltip
-        var host = anchor.parentElement || anchor;                        // inline line under it
-        dgInject(host, copyApi, "dc-dg-fapi", display);
+      // 1) field comboboxes — .value is the api (exact). Cache fallback only if value is missing.
+      for (var i = 0; i < _dgBuckets.controls.length; i++) {
+        var el = _dgBuckets.controls[i];
+        if ((el.tagName || "").toLowerCase() !== "lightning-combobox") continue;
+        if (!dgIsFieldCombo(el)) continue;                 // skips Sort Order / Take Action When
+        if (dgWithinTag(el, ["runtime_cdp-tree-grid-row", "runtime_cdp-custom-datatable"])) continue;
+        var val = ""; try { val = String(el.value || ""); } catch (e) {}
+        if (dgLooksLikeApi(val)) { add(el, val); continue; }   // EXACT
+        var cands = dgResolveApis(dgComboShownText(el), obj); // FALLBACK (label → cache)
+        if (cands.length) add(el, cands[0]);
+      }
+      // 2) condition components — .condition.field (set once the user picks a Field). From the
+      // single-crawl bucket (no extra crawl).
+      for (var k = 0; k < _dgBuckets.conditions.length; k++) {
+        var cel = _dgBuckets.conditions[k];
+        var c = dgSafe(cel, "condition"); var f = c && c.field;
+        if (dgLooksLikeApi(f)) {
+          var combo = null; try { combo = (cel.shadowRoot || cel).querySelector("lightning-combobox"); } catch (e) {}
+          add(combo || cel, f);
+        }
+      }
+      return out;
+    }
+
+    function dgDecorateFilters() {
+      var targets = dgFilterTargets();
+      for (var i = 0; i < targets.length; i++) {
+        var anchor = targets[i].anchor, api = targets[i].api;
+        try { anchor.setAttribute("title", "API: " + api); } catch (e) {}   // guaranteed tooltip
+        var host = anchor.parentElement || anchor;                          // inline line under it
+        dgInject(host, api, "dc-dg-fapi");
       }
     }
 
@@ -19315,7 +19329,7 @@ processJSON();
           if (data && data.length) for (var i = 0; i < data.length; i++) { if (data[i] && data[i].name) parts.push(data[i].name); }
         });
       } catch (e) {}
-      try { dgFilterControls().forEach(function (c) { var l = dgControlLabel(c); if (l) parts.push("F:" + l); }); } catch (e) {}
+      try { dgFilterTargets().forEach(function (t) { parts.push("F:" + t.api); }); } catch (e) {}
       return parts.join("|");
     }
     var _dgSig = null;

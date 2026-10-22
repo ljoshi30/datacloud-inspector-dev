@@ -994,9 +994,34 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   var aligned2 = indexAlign(liveData, 3);
   eq("row 0 api via index-align", aligned2[0], "Id__c");
 
-  // BEHAVIOR 8: FILTERS tab — resolve the field shown in a Sort/Condition dropdown to its api via
-  // an OBJECT-SCOPED cache (fills as you browse objects). Mirror dgCachePut/dgCacheFromData +
-  // dgResolveApis. Cache shape: cache[objectApi][label] = [api, ...]; "" = global fallback.
+  // BEHAVIOR 8a: FILTERS tab — EXACT read from the field combobox's .value (DOM Probe v36/37
+  // proved a Sort Field / Field <lightning-combobox> has .value = the field API, e.g.
+  // "ssot__Id__c"). This is THE fix to the duplicate-label question: .value is the UNIQUE api, so
+  // two fields that share a label are never confused. Mirror dgLooksLikeApi + dgIsFieldCombo +
+  // the dgFilterTargets value-first logic.
+  function dgLooksLikeApi(s) { return !!s && String(s).trim().indexOf(" ") < 0 && /__/.test(s); }
+  function dgIsFieldCombo(label) { return /^(sort field|field)$/i.test(String(label || "").trim()); }
+  // resolve ONE combobox: exact .value if it's an api, else null (fallback handled separately)
+  function comboApi(combo) {
+    if (!dgIsFieldCombo(combo.label)) return null;       // skip Sort Order / Take Action When
+    if (dgLooksLikeApi(combo.value)) return combo.value;  // EXACT
+    return null;
+  }
+  eq("EXACT: Sort Field combobox value → ssot__Id__c", comboApi({ label: "Sort Field", value: "ssot__Id__c" }), "ssot__Id__c");
+  eq("EXACT: Field combobox value → ssot__EmailAddress__c", comboApi({ label: "Field", value: "ssot__EmailAddress__c" }), "ssot__EmailAddress__c");
+  eq("EXACT: Sort Order combobox (value DESC) is NOT a field → null", comboApi({ label: "Sort Order", value: "DESC" }), null);
+  eq("EXACT: Take Action When (value AND) is NOT a field → null", comboApi({ label: "Take Action When", value: "AND" }), null);
+  // THE duplicate-label guarantee: two fields labelled "Party" — the VALUE disambiguates exactly.
+  eq("DUP-LABEL EXACT: 'Party' combo A → ssot__Party__c (by value, not label)", comboApi({ label: "Field", value: "ssot__Party__c" }), "ssot__Party__c");
+  eq("DUP-LABEL EXACT: 'Party' combo B → ssot__PartyId__c (same label, different value)", comboApi({ label: "Field", value: "ssot__PartyId__c" }), "ssot__PartyId__c");
+  // condition component: .condition.field is the api (set once a Field is picked)
+  function conditionApi(cond) { return (cond && dgLooksLikeApi(cond.field)) ? cond.field : null; }
+  eq("CONDITION: .condition.field → ssot__City__c", conditionApi({ field: "ssot__City__c", operator: "EQ" }), "ssot__City__c");
+  eq("CONDITION: empty new condition (field '') → null (nothing to show yet)", conditionApi({ field: "", operator: "" }), null);
+
+  // BEHAVIOR 8b: FALLBACK ONLY — if a field combobox somehow exposes no api .value, resolve its
+  // shown LABEL via an OBJECT-SCOPED cache. Mirror dgCachePut/dgCacheFromData + dgResolveApis.
+  // Cache shape: cache[objectApi][label] = [api, ...]; "" = global fallback.
   function dgCachePut(cache, obj, lbl, api) {
     if (!lbl || !api) return;
     var o = String(obj || "").toLowerCase(), l = String(lbl).trim().toLowerCase(); if (!l) return;
@@ -1054,24 +1079,30 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
     /_dgTick = setInterval\(/.test(src6j) && /shadow-internal mutations/.test(src6j));
   ok("no FLICKER on the tick: skips re-inject when the content signature is unchanged",
     /function dgSignature/.test(src6j) && /sig === _dgSig/.test(src6j));
-  ok("FILTERS: resolves the dropdown field to its api via a persistent cache",
-    /function dgDecorateFilters/.test(src6j) && /_dgFieldCache/.test(src6j) && /function dgResolveApis/.test(src6j) && /function dgControlLabel/.test(src6j));
-  ok("FILTERS: cache is OBJECT-SCOPED (fixes same-label-different-object, like the left side)",
-    /function dgCachePut/.test(src6j) && /_dgFieldCache\[o\]\[l\]/.test(src6j) && /function dgSelectedObjectApi/.test(src6j) && /dgNodeApi\(dgSafe\(sel, "node"\)\)/.test(src6j));
-  ok("FILTERS: same-object dup labels return ALL candidates → shown with (?), never silent wrong pick",
-    /apis\.length > 1/.test(src6j) && /\(\?\)/.test(src6j) && /Multiple fields share this label/.test(src6j));
-  ok("FILTERS: ONE line per visual dropdown — dedupe by outermost combobox across shadow (fixes 2×)",
-    /function dgOutermostCombo/.test(src6j) && /done\.indexOf\(anchor\) >= 0\) continue;/.test(src6j));
-  ok("FILTERS: copy stays the CLEAN api even when display shows the (?) marker",
-    /function dgInject\(host, apiText, cls, display\)/.test(src6j) && /display != null && display !== apiText/.test(src6j));
+  ok("FILTERS: reads the EXACT field api from the combobox .value (proven by probe v36/37)",
+    /function dgFilterTargets/.test(src6j) && /val = String\(el\.value \|\| ""\)/.test(src6j) && /if \(dgLooksLikeApi\(val\)\) \{ add\(el, val\); continue; \}/.test(src6j));
+  ok("FILTERS: only FIELD comboboxes decorated (label 'Sort Field'/'Field'; skips Sort Order/criteria)",
+    /function dgIsFieldCombo/.test(src6j) && /\^\(sort field\|field\)\$/i.test(src6j));
+  ok("FILTERS: EXACT value means duplicate LABELS are never confused (value is the unique api)",
+    /duplicate LABELS[\s\S]{0,80}cannot be confused/.test(src6j));
+  ok("FILTERS: reads condition.field from the adhoc-filter-condition component",
+    /runtime_cdp-dao-editor-adhoc-filter-condition/.test(src6j) && /dgSafe\(cel, "condition"\)/.test(src6j) && /c && c\.field/.test(src6j));
+  ok("FILTERS: condition components collected in the single crawl (bucket, no extra crawl)",
+    /b\.conditions\.push\(el\)/.test(src6j) && /_dgBuckets\.conditions/.test(src6j));
+  ok("FILTERS: cache is a FALLBACK only, object-scoped (used when .value is missing)",
+    /function dgCachePut/.test(src6j) && /_dgFieldCache\[o\]\[l\]/.test(src6j) && /function dgResolveApis/.test(src6j) && /dgResolveApis\(dgComboShownText\(el\), obj\)/.test(src6j));
+  ok("FILTERS: object scope read from the selected tree row's node (like the left side)",
+    /function dgSelectedObjectApi/.test(src6j) && /dgNodeApi\(dgSafe\(sel, "node"\)\)/.test(src6j));
+  ok("FILTERS: one anchor per combobox, de-duped by node reference (no cross-shadow 2×)",
+    /seen\.indexOf\(anchor\) >= 0\) return;/.test(src6j) && /seen\.push\(anchor\)/.test(src6j));
   ok("FILTERS: cache fills from field datatables/panels as you browse (dgHarvestCache)",
     /function dgHarvestCache/.test(src6j) && /function dgCacheFromData/.test(src6j));
-  ok("FILTERS: controls excluded if inside the left tree or Fields datatable (no double-decorate)",
+  ok("FILTERS: field comboboxes excluded if inside the left tree or Fields datatable",
     /dgWithinTag\(el, \["runtime_cdp-tree-grid-row", "runtime_cdp-custom-datatable"\]\)/.test(src6j));
   ok("VDI-safe: ONE shadow-DOM crawl per pass (dgCollect fills buckets; no per-findByTag crawl)",
     /function dgCollect/.test(src6j) && /_dgBuckets = b;/.test(src6j) && /dgCollect\(\);\s*\/\/ ONE shadow-DOM crawl/.test(src6j));
-  ok("signature includes the Filters dropdown labels (so switching objects' Filters re-decorates)",
-    /parts\.push\("F:" \+ l\)/.test(src6j));
+  ok("signature includes each Filters field api (so switching objects' Filters re-decorates)",
+    /parts\.push\("F:" \+ t\.api\)/.test(src6j));
   ok("observer DISCONNECTS while we write (no self-trigger feedback loop / VDI peg)",
     /_dgWriting = true;/.test(src6j) && /if \(_dgObs\) _dgObs\.disconnect\(\);/.test(src6j) && /if \(_dgWriting \|\| _dgT\) return;/.test(src6j));
   ok("inline api line is click-to-copy (copies the CURRENT api, sp._dgApi)", /sp\._dgApi/.test(src6j) && /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
