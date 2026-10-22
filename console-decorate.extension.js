@@ -19076,19 +19076,44 @@ processJSON();
     // LEFT tree: object api under each visible tree-grid row's NAME cell. Anchor to the name-text
     // leaf (.slds-truncate) so the line sits under the label and the one-span dedupe is scoped to
     // a leaf (no nested-row interference). Visible-only skips SF's stale cached rows.
+    // Remove ALL of our own spans of one class within a subtree (light + the node's own shadow).
+    function dgStripOwn(root, cls) {
+      try { var q = root.querySelectorAll ? root.querySelectorAll("." + cls) : []; for (var i = q.length - 1; i >= 0; i--) { try { q[i].remove(); } catch (e) {} } } catch (e) {}
+    }
+    // Does the row ALREADY render `api` as visible text (SF's own native api-name link), ignoring
+    // our injected spans? SF's Data Graph builder prints the DLO/DMO api under each LEFT object
+    // natively — so if we also inject, the user sees it TWICE (the reported "showed two times").
+    // We detect the native text and skip our own line entirely. Text-node walk excludes .dc-dg-*.
+    function dgRowShowsApiText(root, api) {
+      if (!api) return false;
+      try {
+        var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (el.classList && (el.classList.contains("dc-dg-oapi") || el.classList.contains("dc-dg-fapi"))) continue;
+          var cn = el.childNodes || [];
+          for (var j = 0; j < cn.length; j++) {
+            if (cn[j].nodeType === 3 && cn[j].nodeValue && cn[j].nodeValue.indexOf(api) >= 0) return true;
+          }
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    // LEFT tree: SF already shows the object api natively under each object. So we do NOT add our
+    // own (that was the duplicate). We only ensure ZERO of OUR spans remain here. If a future SF
+    // version STOPS showing it natively, we inject exactly one (strip-then-add → never stacks).
     function dgDecorateLeft() {
       findByTag("runtime_cdp-tree-grid-row").forEach(function (row) {
         if (!isVisible(row)) return;
         var api = dgNodeApi(dgSafe(row, "node"));
         if (!api) return;
         var sr = null; try { sr = row.shadowRoot || row; } catch (e) { sr = row; }
-        // GUARANTEE one line per row: a tree-grid-row's shadow may hold several candidate anchors
-        // (.slds-tree__item / .slds-truncate / [class*=label]) AND our own span — anchoring onto a
-        // different one each pass is what stacked copies (reported 3×). So first strip EVERY
-        // existing .dc-dg-oapi in THIS row, then anchor fresh. Scoped to the row (not the doc) so
-        // rows never clobber each other.
-        try { var old = sr.querySelectorAll ? sr.querySelectorAll(".dc-dg-oapi") : []; for (var i = old.length - 1; i >= 0; i--) old[i].remove(); } catch (e) {}
-        // Pick a name-cell anchor, but NEVER our own injected span.
+        // Always clear OUR prior spans first → guarantees at most one of ours per row.
+        dgStripOwn(sr, "dc-dg-oapi"); if (sr !== row) dgStripOwn(row, "dc-dg-oapi");
+        // SF prints the api itself → leave SF's, add nothing (fixes "showed two times").
+        if (dgRowShowsApiText(sr, api) || dgRowShowsApiText(row, api)) return;
+        // SF did NOT show it → add exactly one under the name cell.
         var host = null;
         try {
           host = sr.querySelector(".slds-tree__item, .slds-truncate, [class*='label']");
@@ -19099,12 +19124,37 @@ processJSON();
       });
     }
 
-    // RIGHT Fields panel: field api under each datatable row. The field api is row.name (probe
-    // v35). We align the datatable's .data[] to its rendered <tr> rows BY INDEX (proven to match
-    // render order) — far more reliable than label-text matching. If counts don't line up (e.g. a
-    // virtualized/partial render), we fall back to a label→api map. Decorating the datatable this
-    // way re-runs automatically when you click a different LEFT object (the panel swaps → observer
-    // fires → we re-align to the new object's fields).
+    // Find the LABEL cell of a datatable row — the one showing the field label — NOT the leading
+    // checkbox/selection cell (injecting there truncated the api to "ssot_…", the reported bug).
+    function dgFindLabelCell(row, label) {
+      try {
+        var cells = row.querySelectorAll ? row.querySelectorAll("th,td") : [];
+        var lab = (label || "").trim().toLowerCase();
+        // 1) a non-checkbox cell whose text contains the field label
+        for (var i = 0; i < cells.length; i++) {
+          var c = cells[i];
+          if (c.querySelector && c.querySelector('input[type="checkbox"],lightning-primitive-cell-checkbox,lightning-input')) continue;
+          var t = ""; try { t = (c.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
+          if (lab && t && t.indexOf(lab) >= 0) return c;
+        }
+        // 2) else the first non-checkbox cell that has any text
+        for (var k = 0; k < cells.length; k++) {
+          var c2 = cells[k];
+          if (c2.querySelector && c2.querySelector('input[type="checkbox"],lightning-primitive-cell-checkbox')) continue;
+          var t2 = ""; try { t2 = (c2.textContent || "").trim(); } catch (e) {}
+          if (t2) return c2;
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // RIGHT Fields panel: SF does NOT show the field api here (only "Field Label/Name" + "Data
+    // Type"), so this is where we add value. The field api is row.name (probe v35). We align the
+    // datatable's .data[] to its rendered rows BY INDEX; if counts don't line up (virtualized),
+    // we match each visible row to .data[] by its label text. For EACH row we (a) set a native
+    // tooltip on the whole <tr> ("API: …") — guaranteed to work even when a cell can't be
+    // targeted — and (b) inject a click-to-copy line under the LABEL cell (not the checkbox cell).
+    // Re-runs automatically when you click a different LEFT object (panel swaps → observer fires).
     function dgDecorateRight() {
       findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
         if (!isVisible(dt)) return;
@@ -19115,21 +19165,19 @@ processJSON();
         var dataTrs = [];
         for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) dataTrs.push(trs[i]); }
         if (!dataTrs.length) return;
-        if (dataTrs.length === data.length) {
-          for (var j = 0; j < data.length; j++) {
-            var api = data[j] && data[j].name; if (!api) continue;
-            var cell = dataTrs[j].querySelector("th,td"); if (cell) dgInject(cell, String(api), "dc-dg-fapi");
+        var aligned = (dataTrs.length === data.length);
+        for (var j = 0; j < dataTrs.length; j++) {
+          var row = dataTrs[j];
+          var rec = aligned ? data[j] : null;
+          var api = rec && rec.name, label = rec && rec.label;
+          if (!api) {   // virtualized/misaligned → match this row's text to a data[] label
+            var rowText = ""; try { rowText = (row.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
+            for (var m = 0; m < data.length; m++) { var r = data[m]; if (r && r.label && r.name && rowText.indexOf(String(r.label).toLowerCase()) >= 0) { api = r.name; label = r.label; break; } }
           }
-        } else {
-          // fallback: label→api map (proven keys: label + name)
-          var map = {};
-          for (var m = 0; m < data.length; m++) { var r = data[m]; if (!r) continue; var lbl = r.label, api2 = r.name; if (lbl && api2) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api2); } }
-          for (var n = 0; n < dataTrs.length; n++) {
-            var c2 = dataTrs[n].querySelector("th,td"); if (!c2) continue;
-            var t2 = ""; try { t2 = (c2.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
-            var a2 = map[t2] || map[t2.split(/primary key/)[0].trim()];
-            if (a2) dgInject(c2, a2, "dc-dg-fapi");
-          }
+          if (!api) continue;
+          try { row.setAttribute("title", "API: " + api); } catch (e) {}   // guaranteed tooltip
+          var cell = dgFindLabelCell(row, label);
+          if (cell) dgInject(cell, String(api), "dc-dg-fapi");             // click-to-copy line
         }
       });
     }

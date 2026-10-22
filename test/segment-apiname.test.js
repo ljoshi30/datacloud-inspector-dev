@@ -968,15 +968,45 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   eq("dedupe: 0 existing → 1 span", dedupeKeep(0), 1);
   eq("dedupe: 3 stacked → collapses to 1 span", dedupeKeep(3), 1);
 
+  // BEHAVIOR 5: LEFT native-dup skip (the reported "showed two times"). SF prints the object api
+  // natively under each left object → we must NOT add our own. Mirror dgRowShowsApiText: if any
+  // non-dc-dg text node in the row contains the api, we skip. Modelled as a text-node scan.
+  function rowShowsApiText(textNodes, api) {
+    for (var i = 0; i < textNodes.length; i++) { if (textNodes[i].indexOf(api) >= 0) return true; }
+    return false;
+  }
+  ok("LEFT skip when SF already prints the api (fixes 'showed two times')",
+    rowShowsApiText(["Contact Point Address", "ssot__ContactPointAddress__dlm"], "ssot__ContactPointAddress__dlm") === true);
+  ok("LEFT injects when SF does NOT print the api",
+    rowShowsApiText(["Contact Point Address"], "ssot__ContactPointAddress__dlm") === false);
+
+  // BEHAVIOR 6: RIGHT label-cell targeting (the reported blank field api — we had injected into
+  // the leading CHECKBOX cell, which truncated to "ssot_…"). Mirror dgFindLabelCell: pick the
+  // first NON-checkbox cell whose text contains the label (else first non-checkbox cell w/ text).
+  function findLabelCellIndex(cells, label) {
+    var lab = (label || "").toLowerCase();
+    for (var i = 0; i < cells.length; i++) { if (cells[i].checkbox) continue; var t = (cells[i].text || "").toLowerCase(); if (lab && t.indexOf(lab) >= 0) return i; }
+    for (var k = 0; k < cells.length; k++) { if (cells[k].checkbox) continue; if ((cells[k].text || "").trim()) return k; }
+    return -1;
+  }
+  var rowCells = [{ checkbox: true, text: "" }, { text: "First Name" }, { text: "Text" }];
+  eq("RIGHT targets the label cell (idx 1), NOT the checkbox cell (idx 0)", findLabelCellIndex(rowCells, "First Name"), 1);
+  eq("RIGHT falls back to first non-checkbox text cell when label not matched", findLabelCellIndex(rowCells, "Zzz No Match"), 1);
+
   // source presence — the module reads the PROVEN keys, is observer-safe, dev-only + synced.
   ok("Data Graph module present", /function dcDataGraphApiModule\(\)/.test(src6j));
   ok("LEFT reads object api via dgNodeApi (objectApiName first, future-kind fallbacks)",
     /function dgNodeApi\(node\)/.test(src6j) && /"objectApiName"/.test(src6j) && /"entityApiName"/.test(src6j));
-  ok("RIGHT aligns data[] to rows by index (data[j].name), label-map only as fallback",
-    /dataTrs\.length === data\.length/.test(src6j) && /data\[j\] && data\[j\]\.name/.test(src6j));
-  ok("one-span-per-host dedupe removes the 3× stack", /mine\.length - 1; k >= 1; k--/.test(src6j));
-  ok("LEFT also strips ALL existing api lines in the row BEFORE re-anchoring (kills 3× stack)",
-    /querySelectorAll\(".dc-dg-oapi"\)/.test(src6j) && /span:not\(.dc-dg-oapi\):not\(.dc-dg-fapi\)/.test(src6j));
+  ok("LEFT skips when SF natively renders the api (no duplicate)",
+    /function dgRowShowsApiText/.test(src6j) && /if \(dgRowShowsApiText\(sr, api\) \|\| dgRowShowsApiText\(row, api\)\) return;/.test(src6j));
+  ok("RIGHT aligns data[] to rows by index (data[j].name), text-match fallback when misaligned",
+    /var aligned = \(dataTrs\.length === data\.length\);/.test(src6j) && /rec && rec\.name/.test(src6j));
+  ok("RIGHT targets the LABEL cell, not the checkbox cell (fixes truncated 'ssot_…')",
+    /function dgFindLabelCell/.test(src6j) && /input\[type="checkbox"\]/.test(src6j));
+  ok("RIGHT sets a guaranteed native tooltip on each row (API: …) as the always-works fallback",
+    /row\.setAttribute\("title", "API: " \+ api\)/.test(src6j));
+  ok("LEFT strips ALL our prior spans before deciding (never stacks)",
+    /function dgStripOwn/.test(src6j) && /dgStripOwn\(sr, "dc-dg-oapi"\)/.test(src6j));
   ok("observer DISCONNECTS while we write (no self-trigger feedback loop / VDI peg)",
     /_dgWriting = true;/.test(src6j) && /if \(_dgObs\) _dgObs\.disconnect\(\);/.test(src6j) && /if \(_dgWriting \|\| _dgT\) return;/.test(src6j));
   ok("inline api line is click-to-copy (copies the CURRENT api, sp._dgApi)", /sp\._dgApi/.test(src6j) && /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
