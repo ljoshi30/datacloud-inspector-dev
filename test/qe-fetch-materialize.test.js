@@ -35,14 +35,18 @@ const FE_MAX_POLL = 20;
 function shouldPoll(arrData, status, haveSchema, pollAttempt, totalFetched) {
   if (arrData.length !== 0) return false;             // any rows → progressing, never poll
   if ((totalFetched || 0) > 0) return false;          // rows already in → empty batch = end, stop
-  if (pollAttempt >= FE_MAX_POLL) return false;       // ceiling reached → give up, finish
   var st = status || {};
   var cs = st.completionStatus;
   var runningStatus = (cs === "Unspecified" || cs === "Running" || cs === "Processing" ||
     cs === "InProgress" || (typeof st.progress === "number" && st.progress < 100));
   var noTerminalSignal = (cs == null && !(typeof st.progress === "number" && st.progress >= 100));
-  var looksUnfinished = runningStatus || (!haveSchema && noTerminalSignal);
-  return looksUnfinished;
+  var shouldPollNow = runningStatus || (!haveSchema && noTerminalSignal);
+  // CEILING: explicit "running" → wait the full ceiling (a big query can take seconds). "Silence"
+  // (empty + no status + no schema) is almost always a genuinely-empty table → at most ONE quick
+  // retry, NOT the full ~12s wait (the reported slowness). Mirror of the shipped _ceiling logic.
+  var ceiling = runningStatus ? FE_MAX_POLL : 1;
+  if (pollAttempt >= ceiling) return false;
+  return shouldPollNow;
 }
 
 // ── 1. Still-materializing responses → KEEP POLLING (the actual bug) ──────────────
@@ -75,6 +79,17 @@ console.log("\n4. poll ceiling");
 ok("at ceiling → stop even if still running", !shouldPoll([], { completionStatus: "Running" }, true, FE_MAX_POLL));
 ok("one below ceiling → still polls", shouldPoll([], { completionStatus: "Running" }, true, FE_MAX_POLL - 1));
 ok("ceiling bounds total wait (<= ~30s at 1.5s/poll)", FE_MAX_POLL * 1.5 <= 31);
+
+// ── 4b. FAST-FAIL on empty/no-signal (the reported 12s wait) ──────────────────────
+// Empty batch with NO explicit running status + no schema = almost always a genuinely-empty
+// table. It gets at most ONE quick retry, NOT the full ceiling — so a 0-row query finishes in
+// ~1.5s, not ~12s. An EXPLICIT running status still gets the full ceiling (real materialization).
+console.log("\n4b. empty + no signal fails fast (≤1 retry); explicit-running keeps full ceiling");
+ok("silent empty: FIRST attempt polls once", shouldPoll([], {}, false, 0));
+ok("silent empty: SECOND attempt stops (≤1 retry, ~1.5s total — not 12s)", !shouldPoll([], {}, false, 1));
+ok("silent empty: null status same fast-fail", shouldPoll([], null, false, 0) && !shouldPoll([], null, false, 1));
+ok("EXPLICIT running still polls well past attempt 1 (real query materializing)", shouldPoll([], { completionStatus: "Running" }, false, 3));
+ok("progress<100 (explicit) still polls past attempt 1", shouldPoll([], { progress: 40 }, false, 3));
 
 // ── 5. The exact reported scenario ────────────────────────────────────────────────
 console.log("\n5. reported scenario: SF grid shows the row ~2.5s later; we quit at 0.5s");
@@ -123,12 +138,15 @@ console.log("\n6. source presence (poll wired into qeFetchExport, not just teste
   ok("checks completionStatus Running/Unspecified", /completionStatus[\s\S]{0,80}(Running|Unspecified)/.test(feBody));
   ok("distinguishes completed-empty via schema (no false 30s hang)", /_haveSchema|haveSchema/.test(feBody));
   // REGRESSION GUARD: poll ONLY on cold start (totalFetched===0) so a small result doesn't
-  // poll 30s at the end. Must be ANDed into the Fetch-path poll condition.
-  ok("Fetch poll gated on cold start (totalFetched === 0 → no 30s tail on small results)",
-    /arrData\.length === 0 && totalFetched === 0 && _looksUnfinished/.test(feBody));
+  // poll at the end. Must be ANDed into the Fetch-path poll condition, with a per-case ceiling.
+  ok("Fetch poll gated on cold start (totalFetched === 0 → no tail on small results)",
+    /arrData\.length === 0 && totalFetched === 0 && _shouldPoll && pollAttempt < _ceiling/.test(feBody));
+  // FAST-FAIL ceiling: explicit-running → full FE_MAX_POLL; silent empty → 1 retry (no ~12s wait).
+  ok("per-case poll ceiling (explicit-running=full, silent empty=1 retry)",
+    /var _ceiling = _runningStatus \? FE_MAX_POLL : 1;/.test(feBody));
   // the fix lives in SHARED code → must be present in the bookmarklet source too
   ok("bookmarklet source got the same poll (shared fix synced)", /FE_MAX_POLL/.test(bm) && /pollAttempt/.test(bm));
-  ok("bookmarklet Fetch poll also cold-start gated", /arrData\.length === 0 && totalFetched === 0 && _looksUnfinished/.test(bm));
+  ok("bookmarklet Fetch poll also cold-start gated + per-case ceiling", /arrData\.length === 0 && totalFetched === 0 && _shouldPoll && pollAttempt < _ceiling/.test(bm) && /var _ceiling = _runningStatus \? FE_MAX_POLL : 1;/.test(bm));
   // the STREAMING path has the same guard (got === 0)
   ok("stream poll gated on cold start (got === 0)", /arr\.length === 0 && got === 0 &&/.test(src) && /arr\.length === 0 && got === 0 &&/.test(bm));
 }

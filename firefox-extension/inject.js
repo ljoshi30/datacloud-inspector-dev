@@ -13390,22 +13390,24 @@
               // matches neither → it finishes immediately, no wait.
               var _st = rv.status || {};
               var _cs = _st.completionStatus;
+              // EXPLICIT "still running" signal from the server — the ONLY reliable reason to wait.
               var _runningStatus = (_cs === "Unspecified" || _cs === "Running" || _cs === "Processing" ||
                 _cs === "InProgress" || (typeof _st.progress === "number" && _st.progress < 100));
               var _haveSchema = (cols2.length > 0) || (meta && meta.length > 0);
               var _noTerminalSignal = (_cs == null && !(typeof _st.progress === "number" && _st.progress >= 100));
-              var _looksUnfinished = _runningStatus || (!_haveSchema && _noTerminalSignal);
-              // CRITICAL: only poll BEFORE any row has been fetched (totalFetched === 0). The
-              // materialization race is a COLD-START problem — the very first offset-0 batch can
-              // come back empty while the query is still cooking. But once rows HAVE arrived, the
-              // query has materialized, so a later empty batch (e.g. the OFFSET page just past a
-              // small result) is the genuine END of data — finishing instantly. Without this
-              // gate, a tiny result (say 2 rows) fetched the rows, then issued one more OFFSET
-              // page that returned empty, which looked "unfinished" and polled 20×1.5s = 30s
-              // before finishing — the "2 rows took forever" regression. (It also made every
-              // large export sit ~30s at the end.) Gating on totalFetched===0 keeps the original
-              // 0-rows cold-start fix while restoring instant finish for every non-empty result.
-              if (arrData.length === 0 && totalFetched === 0 && _looksUnfinished && pollAttempt < FE_MAX_POLL) {
+              // POLL DECISION (tuned for speed on empty tables — the reported 12s wait):
+              //   • If the server EXPLICITLY says running → poll up to the full ceiling (a big
+              //     query really can take a few seconds to materialize). This is the real race.
+              //   • If the batch is empty with NO explicit signal at all (no status, no schema),
+              //     that's AMBIGUOUS but almost always a genuinely-empty result. Do at most ONE
+              //     quick confirmation retry, then finish — don't sit for ~12s assuming it's
+              //     cooking. (A completed 0-row result typically returns schema or a terminal
+              //     status → it finishes instantly and never even enters this branch.)
+              // Only poll before any row is fetched (cold start) — once rows arrive an empty
+              // batch is the true end of data (prevents the "2 rows took 30s at the end" bug).
+              var _ceiling = _runningStatus ? FE_MAX_POLL : 1;   // explicit-running: full wait; silence: 1 retry
+              var _shouldPoll = _runningStatus || (!_haveSchema && _noTerminalSignal);
+              if (arrData.length === 0 && totalFetched === 0 && _shouldPoll && pollAttempt < _ceiling) {
                 if (onProgress) onProgress(totalFetched, userLimit || 0);
                 setTimeout(function () { fetchBatch(offset, pollAttempt + 1); }, FE_POLL_MS);
                 return;
