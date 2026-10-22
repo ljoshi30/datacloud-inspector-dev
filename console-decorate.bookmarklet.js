@@ -19053,64 +19053,73 @@ processJSON();
       }, true);
       return sp;
     }
-    // Inject/refresh EXACTLY ONE api line as a DIRECT child of host. Direct-children only (never a
-    // subtree sweep) so nested tree rows can't delete each other's lines. Any extra copies (the
-    // reported 3× stack) are removed here — the invariant is one-span-per-host, every pass.
+    // UNSTACKABLE dedup: we keep a list of EVERY span we create and remove them ALL by direct node
+    // reference at the start of each pass (dgClearInjected), then re-create fresh. Node references
+    // don't care about shadow boundaries or which host element SF re-rendered — so it is impossible
+    // to stack (the reported 2×→3× growth). No DOM guessing, no per-host dedup, no full-doc crawl.
+    var _dgSpans = [];
+    function dgClearInjected() {
+      for (var i = 0; i < _dgSpans.length; i++) { try { _dgSpans[i].remove(); } catch (e) {} }
+      _dgSpans = [];
+    }
+    // Create ONE api line as a child of host and register it for removal next pass.
     function dgInject(host, apiText, cls) {
       if (!host || !apiText) return;
-      try {
-        var mine = [], ch = host.children || [];
-        for (var i = 0; i < ch.length; i++) { var c = ch[i]; if (c.classList && c.classList.contains(cls)) mine.push(c); }
-        if (mine.length) {
-          for (var k = mine.length - 1; k >= 1; k--) { try { mine[k].remove(); } catch (e) {} }   // kill the stack
-          if (mine[0]._dgApi !== apiText) dgSetApi(mine[0], apiText);
-          return;
-        }
-        var sp = dgMakeSpan(cls); dgSetApi(sp, apiText); host.appendChild(sp);
-      } catch (e) {}
+      try { var sp = dgMakeSpan(cls); dgSetApi(sp, String(apiText)); host.appendChild(sp); _dgSpans.push(sp); } catch (e) {}
     }
+    // Belt-and-suspenders clear (on stop): remove tracked spans AND sweep by class in case a prior
+    // build left some behind in this tab.
     function dgClearAll() {
+      dgClearInjected();
       try { eachElement(document, function (el) { if (el.classList && (el.classList.contains("dc-dg-oapi") || el.classList.contains("dc-dg-fapi"))) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
     }
-
-    // Remove ALL of our own spans of one class, GLOBALLY (crossing every shadow root). This is the
-    // only reliable way to clear prior injections — a row-scoped strip missed copies after SF
-    // re-rendered the tree into fresh shadow hosts, so they ACCUMULATED (2×, then 3× — reported).
-    function dgStripAll(cls) {
-      try { eachElement(document, function (el) { if (el.classList && el.classList.contains(cls)) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
-    }
-
-    // LEFT tree: SF ALREADY prints the object/DLO/DMO api name natively under each object (the blue
-    // links — present even with our tool OFF). So we add NOTHING here; injecting only produced
-    // duplicates that stacked across re-decorate passes (the reported "showing multiple times").
-    // Nothing to do per pass — any legacy left spans are cleared once in dgStart.
-    function dgDecorateLeft() { /* intentionally a no-op: SF shows the object api itself */ }
-
-    // Pick the row's LABEL cell structurally — NOT by text (datatable cell text lives in a nested
-    // shadow root, so cell.textContent reads EMPTY from the light DOM, which is why text-matching
-    // injected nothing — the reported blank right side). The leading cell is the checkbox; the
-    // label is the first cell that ISN'T the checkbox cell.
-    function dgLabelCell(row) {
+    // Walk a row's descendants (crossing shadow) to find the element whose OWN text node shows
+    // `label` — the real on-screen label location — so we anchor the api line exactly there,
+    // regardless of the datatable's cell structure (which I must NOT keep guessing at). Skips our
+    // own spans. Returns null if not found (caller falls back to the tooltip only).
+    function dgFindLabelHost(row, label) {
+      if (!row || !label) return null;
+      var want = String(label).trim().toLowerCase(), hit = null;
       try {
-        var cells = row.querySelectorAll ? row.querySelectorAll("th,td") : [];
-        for (var i = 0; i < cells.length; i++) {
-          var c = cells[i];
-          var isCheckbox = false;
-          try { isCheckbox = !!(c.querySelector && c.querySelector('input[type="checkbox"],lightning-primitive-cell-checkbox,[data-label="Select Row"]')); } catch (e) {}
-          if (isCheckbox) continue;
-          return c;   // first non-checkbox cell = the Field Label/Name column
-        }
-        return cells[0] || null;
-      } catch (e) { return null; }
+        (function walk(root) {
+          if (hit || !root || !root.querySelectorAll) return;
+          var els = root.querySelectorAll("*");
+          for (var i = 0; i < els.length && !hit; i++) {
+            var el = els[i];
+            if (el.classList && (el.classList.contains("dc-dg-oapi") || el.classList.contains("dc-dg-fapi"))) continue;
+            var cn = el.childNodes || [];
+            for (var j = 0; j < cn.length; j++) {
+              if (cn[j].nodeType === 3 && cn[j].nodeValue && cn[j].nodeValue.trim().toLowerCase() === want) { hit = el; break; }
+            }
+            var sr2 = null; try { sr2 = el.shadowRoot; } catch (e) {}
+            if (sr2 && !hit) walk(sr2);
+          }
+        })(row.shadowRoot || row);
+      } catch (e) {}
+      return hit;
     }
 
-    // RIGHT Fields panel: SF does NOT show the field api here (only "Field Label/Name" + "Data
-    // Type") — so THIS is our value-add. The field api is row.name (probe v35). We align the
-    // datatable's .data[] to its rendered rows BY INDEX (proven: the row tooltip used this exact
-    // alignment and showed the correct api). For EACH row we (a) set a native tooltip on the whole
-    // <tr> ("API: …") — always works, the user approved tooltip-fallback — and (b) inject a
-    // click-to-copy line into the LABEL cell (targeted structurally, not by text). Re-runs when you
-    // click a different LEFT object (panel swaps → observer fires → re-aligned to new fields).
+    // LEFT tree: inject the object api under each visible object row. (These names ARE ours — SF
+    // shows only the friendly label. Proven: they vanished when we stopped injecting.) No stacking
+    // now because dgDecorate() removes ALL our spans by reference first (dgClearInjected), every
+    // pass — so one per row, always, regardless of SF re-rendering into fresh shadow hosts.
+    function dgDecorateLeft() {
+      findByTag("runtime_cdp-tree-grid-row").forEach(function (row) {
+        if (!isVisible(row)) return;
+        var api = dgNodeApi(dgSafe(row, "node"));
+        if (!api) return;
+        var sr = null; try { sr = row.shadowRoot || row; } catch (e) { sr = row; }
+        var host = null;
+        try { host = sr.querySelector(".slds-tree__item, .slds-truncate, [class*='label']") || sr.querySelector("span:not(.dc-dg-oapi):not(.dc-dg-fapi)") || row; } catch (e) { host = row; }
+        dgInject(host, api, "dc-dg-oapi");
+      });
+    }
+
+    // RIGHT Fields panel: SF does NOT show the field api (only "Field Label/Name" + "Data Type") —
+    // this is our value-add. Field api = row.name (probe v35), aligned to rendered rows by index.
+    // For each row: (a) set a native "API: …" tooltip on the whole <tr> (always works), and (b)
+    // anchor a click-to-copy line onto the element whose text literally IS the field label — found
+    // by walking the row across shadow (dgFindLabelHost), so we never guess the cell structure.
     function dgDecorateRight() {
       findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
         if (!isVisible(dt)) return;
@@ -19125,43 +19134,69 @@ processJSON();
         for (var j = 0; j < dataTrs.length; j++) {
           var row = dataTrs[j];
           var rec = aligned ? data[j] : null;
-          var api = rec && rec.name;
+          var api = rec && rec.name, label = rec && rec.label;
           if (!api) {   // virtualized/misaligned → match this row's text to a data[] label
             var rowText = ""; try { rowText = (row.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
-            for (var m = 0; m < data.length; m++) { var r = data[m]; if (r && r.label && r.name && rowText.indexOf(String(r.label).toLowerCase()) >= 0) { api = r.name; break; } }
+            for (var m = 0; m < data.length; m++) { var r = data[m]; if (r && r.label && r.name && rowText.indexOf(String(r.label).toLowerCase()) >= 0) { api = r.name; label = r.label; break; } }
           }
           if (!api) continue;
           try { row.setAttribute("title", "API: " + api); } catch (e) {}   // guaranteed tooltip
-          var cell = dgLabelCell(row);
-          if (cell) dgInject(cell, String(api), "dc-dg-fapi");             // click-to-copy inline
+          var host = dgFindLabelHost(row, label);                          // exact label element
+          if (host) dgInject(host, String(api), "dc-dg-fapi");             // click-to-copy inline
         }
       });
     }
 
-    function dgDecorate() { if (!DG_ON) return; dgDecorateLeft(); dgDecorateRight(); }
+    // A cheap content signature: the selected right-panel field api names + left row count. If it
+    // hasn't changed since our last injection, re-decorating would just remove+re-add identical
+    // spans (visible FLICKER on the 700ms tick). So we skip when unchanged. `force` bypasses it
+    // (used on first start / toggle on).
+    function dgSignature() {
+      var parts = [];
+      try { parts.push("L" + findByTag("runtime_cdp-tree-grid-row").length); } catch (e) {}
+      try {
+        findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+          if (!isVisible(dt)) return;
+          var data = dgSafe(dt, "data");
+          if (data && data.length) for (var i = 0; i < data.length; i++) { if (data[i] && data[i].name) parts.push(data[i].name); }
+        });
+      } catch (e) {}
+      return parts.join("|");
+    }
+    var _dgSig = null;
+    function dgDecorate(force) {
+      if (!DG_ON) return;
+      var sig = dgSignature();
+      if (!force && sig === _dgSig && _dgSpans.length) return;   // nothing changed → no flicker
+      _dgSig = sig;
+      dgClearInjected();          // remove ALL our spans by reference FIRST → cannot ever stack
+      dgDecorateLeft();
+      dgDecorateRight();
+    }
 
-    // Observer that does NOT react to our own writes. We disconnect while decorating and reconnect
-    // after, and guard with _dgWriting — otherwise each injected span would re-trigger the
-    // observer, re-decorate, and stack copies (the reported 3× bug + a VDI-pegging feedback loop).
-    var _dgObs = null, _dgT = null, _dgWriting = false;
-    function dgSchedule() { if (_dgWriting || _dgT) return; _dgT = setTimeout(function () { _dgT = null; dgRun(); }, 250); }
-    function dgRun() {
+    // Re-decorate on DOM change. Two triggers: (1) a MutationObserver for the light DOM, and (2) a
+    // slow interval tick — because SF swaps the field panel INSIDE a shadow root when you click a
+    // different object, and a light-DOM observer does NOT see shadow-internal mutations (that's why
+    // switching objects went stale). The tick (700ms) is the catch-all; it's cheap because
+    // dgDecorate just re-reads JS props. We disconnect the observer while we write + guard with
+    // _dgWriting so our own injections never re-trigger a pass (no feedback-loop / VDI peg).
+    var _dgObs = null, _dgT = null, _dgTick = null, _dgWriting = false;
+    function dgSchedule() { if (_dgWriting || _dgT) return; _dgT = setTimeout(function () { _dgT = null; dgRun(false); }, 250); }
+    function dgRun(force) {
       if (!DG_ON) return;
       _dgWriting = true;
       try { if (_dgObs) _dgObs.disconnect(); } catch (e) {}
-      try { dgDecorate(); } catch (e) {}
+      try { dgDecorate(force); } catch (e) {}
       try { if (_dgObs && DG_ON) _dgObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
       _dgWriting = false;
     }
     function dgStart() {
       DG_ON = true;
-      // One-time cleanup: a prior build in THIS tab may have injected left-side spans (now a
-      // no-op). Strip them once here, not per pass, so we don't pay a full-doc crawl every 250ms.
-      dgStripAll("dc-dg-oapi");
       if (!_dgObs) { try { _dgObs = new MutationObserver(dgSchedule); } catch (e) {} }
-      dgRun();
+      if (!_dgTick) { try { _dgTick = setInterval(function () { if (DG_ON && !_dgWriting) dgRun(false); }, 700); } catch (e) {} }
+      dgRun(true);
     }
-    function dgStop() { DG_ON = false; try { if (_dgObs) _dgObs.disconnect(); } catch (e) {} dgClearAll(); }
+    function dgStop() { DG_ON = false; try { if (_dgObs) _dgObs.disconnect(); } catch (e) {} try { if (_dgTick) { clearInterval(_dgTick); _dgTick = null; } } catch (e) {} dgClearAll(); }
     try {
       window.__dcToggleDgApi = function () { if (DG_ON) dgStop(); else dgStart(); return DG_ON; };
       window.__dcDgApiIsOn = function () { return DG_ON; };
@@ -19177,7 +19212,7 @@ processJSON();
         var row = document.createElement("button");
         row.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
         var dgApiIconSvg = "<svg width='15' height='15' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
-        function paint() { var on = window.__dcDgApiIsOn && window.__dcDgApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;'>" + dgApiIconSvg + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>Field API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each field (hover a row too)" : "Show each field's API name (hover or copy)") + "</span></div>"; }
+        function paint() { var on = window.__dcDgApiIsOn && window.__dcDgApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;'>" + dgApiIconSvg + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each object & field (hover too)" : "Show API name under each object & field") + "</span></div>"; }
         paint();
         row.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleDgApi(); } catch (er) {} paint(); };
         menu.appendChild(dcMakeMenuCloseX(function () { closeDg(); }));
@@ -19382,7 +19417,7 @@ processJSON();
       else if (t === "Transform") { pageTitle = "Data Transform"; pageFeats = ["Read the definition in plain English"]; }
       else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
       else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
-      else if (document.getElementById("dc-dg-bar")) { pageTitle = "Data Graph builder"; pageFeats = ["Click the ◎ button → show each field's API name (under the label + on hover)", "Click a field API name to copy it"]; }
+      else if (document.getElementById("dc-dg-bar")) { pageTitle = "Data Graph builder"; pageFeats = ["Click the ◎ button → show API names under each object & field (and on hover)", "Click any API name to copy it"]; }
       else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Cloud list"; pageFeats = ["Hover a row → ⧉ opens that record in a new tab"]; }
       // always-on globals (dev build) — clearer wording: it's a button that appears when you
       // hover a Data Cloud menu item.
