@@ -40,7 +40,11 @@ function shouldPoll(arrData, status, haveSchema, pollAttempt, totalFetched) {
   var runningStatus = (cs === "Unspecified" || cs === "Running" || cs === "Processing" ||
     cs === "InProgress" || (typeof st.progress === "number" && st.progress < 100));
   var noTerminalSignal = (cs == null && !(typeof st.progress === "number" && st.progress >= 100));
-  var shouldPollNow = runningStatus || (!haveSchema && noTerminalSignal);
+  // rowsProcessed>0 on an empty batch = the scan RAN and matched nothing = genuine 0 rows → STOP
+  // (proven live: SF grid showed rowsProcessed=17811 / retrieved=0 but our poll waited ~9s).
+  var rpS = parseInt(st.rowsProcessed != null ? st.rowsProcessed : st.rowCount, 10);
+  var scanDone = !isNaN(rpS) && rpS > 0;
+  var shouldPollNow = !scanDone && (runningStatus || (!haveSchema && noTerminalSignal));
   // CEILING: explicit "running" → wait the full ceiling (a big query can take seconds). "Silence"
   // (empty + no status + no schema) is almost always a genuinely-empty table → at most ONE quick
   // retry, NOT the full ~12s wait (the reported slowness). Mirror of the shipped _ceiling logic.
@@ -90,6 +94,15 @@ ok("silent empty: SECOND attempt stops (≤1 retry, ~1.5s total — not 12s)", !
 ok("silent empty: null status same fast-fail", shouldPoll([], null, false, 0) && !shouldPoll([], null, false, 1));
 ok("EXPLICIT running still polls well past attempt 1 (real query materializing)", shouldPoll([], { completionStatus: "Running" }, false, 3));
 ok("progress<100 (explicit) still polls past attempt 1", shouldPoll([], { progress: 40 }, false, 3));
+
+// ── 4c. SCAN DONE (rowsProcessed>0, empty) → STOP immediately (the reported 10s wait) ──
+// The live case: SF scanned 17,811 rows and matched 0 (rowsProcessed=17811, retrieved=0). The
+// scan RAN → it's a genuine 0-row result → stop at once, don't poll ~9s.
+console.log("\n4c. rowsProcessed>0 + empty → stop immediately (scan ran, matched nothing)");
+ok("empty + rowsProcessed=17811 → STOP even if status looks running", !shouldPoll([], { completionStatus: "Running", rowsProcessed: 17811 }, false, 0));
+ok("empty + rowsProcessed=17811 + no status → STOP", !shouldPoll([], { rowsProcessed: 17811 }, false, 0));
+ok("empty + rowCount=17811 (alt field) → STOP", !shouldPoll([], { rowCount: 17811 }, false, 0));
+ok("empty + rowsProcessed=0 (truly not started) → still polls (not a finished scan)", shouldPoll([], { completionStatus: "Running", rowsProcessed: 0 }, false, 0));
 
 // ── 5. The exact reported scenario ────────────────────────────────────────────────
 console.log("\n5. reported scenario: SF grid shows the row ~2.5s later; we quit at 0.5s");
@@ -144,6 +157,10 @@ console.log("\n6. source presence (poll wired into qeFetchExport, not just teste
   // FAST-FAIL ceiling: explicit-running → full FE_MAX_POLL; silent empty → 1 retry (no ~12s wait).
   ok("per-case poll ceiling (explicit-running=full, silent empty=1 retry)",
     /var _ceiling = _runningStatus \? FE_MAX_POLL : 1;/.test(feBody));
+  // SCAN-DONE fast-stop: rowsProcessed>0 on an empty batch = genuine 0-row result → don't poll.
+  ok("Fetch stops on rowsProcessed>0 empty batch (_scanDone gates _shouldPoll)",
+    /var _scanDone = !isNaN\(_rpSeen\) && _rpSeen > 0;/.test(feBody) && /_shouldPoll = !_scanDone &&/.test(feBody));
+  ok("stream path has the same scanDone fast-stop", /var scanDone = !isNaN\(rpS\) && rpS > 0;/.test(src) && /got === 0 && !scanDone &&/.test(src) && /var scanDone = !isNaN\(rpS\) && rpS > 0;/.test(bm));
   // the fix lives in SHARED code → must be present in the bookmarklet source too
   ok("bookmarklet source got the same poll (shared fix synced)", /FE_MAX_POLL/.test(bm) && /pollAttempt/.test(bm));
   ok("bookmarklet Fetch poll also cold-start gated + per-case ceiling", /arrData\.length === 0 && totalFetched === 0 && _shouldPoll && pollAttempt < _ceiling/.test(bm) && /var _ceiling = _runningStatus \? FE_MAX_POLL : 1;/.test(bm));

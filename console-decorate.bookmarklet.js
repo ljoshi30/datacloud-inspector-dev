@@ -13390,23 +13390,25 @@
               // matches neither → it finishes immediately, no wait.
               var _st = rv.status || {};
               var _cs = _st.completionStatus;
-              // EXPLICIT "still running" signal from the server — the ONLY reliable reason to wait.
+              // EXPLICIT "still running" signal from the server.
               var _runningStatus = (_cs === "Unspecified" || _cs === "Running" || _cs === "Processing" ||
                 _cs === "InProgress" || (typeof _st.progress === "number" && _st.progress < 100));
               var _haveSchema = (cols2.length > 0) || (meta && meta.length > 0);
               var _noTerminalSignal = (_cs == null && !(typeof _st.progress === "number" && _st.progress >= 100));
-              // POLL DECISION (tuned for speed on empty tables — the reported 12s wait):
-              //   • If the server EXPLICITLY says running → poll up to the full ceiling (a big
-              //     query really can take a few seconds to materialize). This is the real race.
-              //   • If the batch is empty with NO explicit signal at all (no status, no schema),
-              //     that's AMBIGUOUS but almost always a genuinely-empty result. Do at most ONE
-              //     quick confirmation retry, then finish — don't sit for ~12s assuming it's
-              //     cooking. (A completed 0-row result typically returns schema or a terminal
-              //     status → it finishes instantly and never even enters this branch.)
-              // Only poll before any row is fetched (cold start) — once rows arrive an empty
-              // batch is the true end of data (prevents the "2 rows took 30s at the end" bug).
-              var _ceiling = _runningStatus ? FE_MAX_POLL : 1;   // explicit-running: full wait; silence: 1 retry
-              var _shouldPoll = _runningStatus || (!_haveSchema && _noTerminalSignal);
+              // ROWS-PROCESSED = the engine already SCANNED rows. On an empty batch, rowsProcessed>0
+              // means the scan RAN and simply matched nothing → it's a genuine 0-row result, DONE.
+              // (Proven live: SF's own grid showed rowsProcessed=17811, rowsRetrieved=0 in 633ms,
+              // yet our poll waited the full ~9s because it only looked at completionStatus/progress
+              // and ignored this. A query that is still materializing reports rowsProcessed=0.)
+              var _rpSeen = parseInt(_st.rowsProcessed != null ? _st.rowsProcessed : _st.rowCount, 10);
+              var _scanDone = !isNaN(_rpSeen) && _rpSeen > 0;
+              // POLL DECISION (fast on empty results):
+              //   • scan already done (rowsProcessed>0) + empty → genuinely 0 rows → STOP now.
+              //   • else explicit running → wait up to the full ceiling (real materialization).
+              //   • else silence (no status, no schema) → at most ONE quick retry, then stop.
+              // Only poll on cold start (totalFetched===0); once rows arrive an empty batch = end.
+              var _ceiling = _runningStatus ? FE_MAX_POLL : 1;
+              var _shouldPoll = !_scanDone && (_runningStatus || (!_haveSchema && _noTerminalSignal));
               if (arrData.length === 0 && totalFetched === 0 && _shouldPoll && pollAttempt < _ceiling) {
                 if (onProgress) onProgress(totalFetched, userLimit || 0);
                 setTimeout(function () { fetchBatch(offset, pollAttempt + 1); }, FE_POLL_MS);
@@ -13579,10 +13581,13 @@
                 var running = (cs === "Unspecified" || cs === "Running" || cs === "Processing" || cs === "InProgress" || (typeof st.progress === "number" && st.progress < 100));
                 var haveSchema = !!cols || (meta && meta.length);
                 var noTerminal = (cs == null && !(typeof st.progress === "number" && st.progress >= 100));
+                // rowsProcessed>0 on an empty batch = scan ran + matched nothing = genuine 0 rows → STOP.
+                var rpS = parseInt(st.rowsProcessed != null ? st.rowsProcessed : st.rowCount, 10);
+                var scanDone = !isNaN(rpS) && rpS > 0;
                 // Only poll on a COLD START (got === 0). Once rows have been written, an empty
                 // batch is the true end of data → finish now. (Same regression as the Fetch path:
                 // without the got===0 gate, a small result polled ~30s at the end.)
-                if (arr.length === 0 && got === 0 && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
+                if (arr.length === 0 && got === 0 && !scanDone && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
                   if (onProgress) onProgress(got);
                   if (arr.length === 0 || got >= cap) { finishOk(); }
@@ -19011,94 +19016,145 @@ processJSON();
     var DG_ON = false;
     function dgSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
-    // Build a label→fieldApi map from the RIGHT datatable's .data[] (authoritative; the field
-    // api is row.name). Rebuilt each pass since the panel swaps per selected object.
-    function dgFieldMap() {
-      var map = {};
-      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
-        var data = dgSafe(dt, "data");
-        if (data && data.length) for (var i = 0; i < data.length; i++) {
-          var r = data[i]; if (!r) continue;
-          var lbl = r.label, api = r.name;   // proven keys (probe v35)
-          if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api); }
-        }
-      });
-      return map;
+    // Read an object/entity api name off a LEFT tree node. objectApiName is the PROVEN key (DOM
+    // Probe v35, DMO nodes today). The fallbacks mean a FUTURE node kind — a Calculated Insight,
+    // a Segment, or anything SF adds to this tree later — still shows & copies SOMETHING instead
+    // of silently nothing. We prefer a value that LOOKS like an api (contains "__"); otherwise we
+    // take the first non-empty string so a plain developer name still copies.
+    function dgNodeApi(node) {
+      if (!node) return "";
+      var keys = ["objectApiName", "entityApiName", "dataModelObjectApiName", "ciApiName", "apiName", "developerName"];
+      var fallback = "";
+      for (var i = 0; i < keys.length; i++) {
+        var v = dgSafe(node, keys[i]);
+        if (typeof v === "string" && v) { if (/__/.test(v)) return v; if (!fallback) fallback = v; }
+      }
+      return fallback;
     }
 
-    // Inject (or update) a grey api line under an element's label text. Idempotent.
-    function dgInject(hostEl, apiText, cls) {
-      if (!hostEl || !apiText) return;
+    // One styled, click-to-copy grey api line. Built once per host; its copy target is the
+    // CURRENT api stored on the element (sp._dgApi), so updating text also updates what's copied.
+    function dgSetApi(sp, apiText) { sp._dgApi = apiText; sp.textContent = apiText; try { sp.setAttribute("title", "Click to copy " + apiText); } catch (e) {} }
+    function dgMakeSpan(cls) {
+      var sp = document.createElement("span");
+      sp.className = cls;
+      var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+      s("display", "block"); s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace");
+      s("color", "#4a6fa5"); s("margin-top", "1px"); s("white-space", "nowrap");
+      s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("max-width", "100%");
+      s("cursor", "pointer"); s("user-select", "text");
+      sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
+      sp.addEventListener("click", function (e) {
+        e.stopPropagation(); e.preventDefault();
+        var apiText = sp._dgApi || sp.textContent, restore = apiText;
+        function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#4a6fa5"); }, 900); }
+        try { navigator.clipboard.writeText(apiText).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = apiText; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+        catch (e3) { flash(); }
+      }, true);
+      return sp;
+    }
+    // Inject/refresh EXACTLY ONE api line as a DIRECT child of host. Direct-children only (never a
+    // subtree sweep) so nested tree rows can't delete each other's lines. Any extra copies (the
+    // reported 3× stack) are removed here — the invariant is one-span-per-host, every pass.
+    function dgInject(host, apiText, cls) {
+      if (!host || !apiText) return;
       try {
-        var ex = hostEl.querySelector(":scope > ." + cls);
-        if (ex) { if (ex.textContent === apiText) return; ex.textContent = apiText; return; }
-        var sp = document.createElement("span");
-        sp.className = cls;
-        sp.textContent = apiText;
-        sp.setAttribute("title", "Click to copy " + apiText);
-        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
-        s("display", "block"); s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace");
-        s("color", "#4a6fa5"); s("margin-top", "1px"); s("white-space", "nowrap");
-        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("max-width", "100%");
-        s("cursor", "pointer"); s("user-select", "text");
-        sp.addEventListener("mousedown", function (e) { e.stopPropagation(); });
-        sp.addEventListener("click", function (e) {
-          e.stopPropagation(); e.preventDefault();
-          var restore = sp.textContent;
-          function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#4a6fa5"); }, 900); }
-          try { navigator.clipboard.writeText(apiText).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = apiText; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
-          catch (e3) { flash(); }
-        });
-        hostEl.appendChild(sp);
+        var mine = [], ch = host.children || [];
+        for (var i = 0; i < ch.length; i++) { var c = ch[i]; if (c.classList && c.classList.contains(cls)) mine.push(c); }
+        if (mine.length) {
+          for (var k = mine.length - 1; k >= 1; k--) { try { mine[k].remove(); } catch (e) {} }   // kill the stack
+          if (mine[0]._dgApi !== apiText) dgSetApi(mine[0], apiText);
+          return;
+        }
+        var sp = dgMakeSpan(cls); dgSetApi(sp, apiText); host.appendChild(sp);
       } catch (e) {}
     }
     function dgClearAll() {
       try { eachElement(document, function (el) { if (el.classList && (el.classList.contains("dc-dg-oapi") || el.classList.contains("dc-dg-fapi"))) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
     }
 
-    function dgDecorate() {
-      if (!DG_ON) return;
-      // LEFT nodes: object api under each tree-grid row's label cell.
+    // LEFT tree: object api under each visible tree-grid row's NAME cell. Anchor to the name-text
+    // leaf (.slds-truncate) so the line sits under the label and the one-span dedupe is scoped to
+    // a leaf (no nested-row interference). Visible-only skips SF's stale cached rows.
+    function dgDecorateLeft() {
       findByTag("runtime_cdp-tree-grid-row").forEach(function (row) {
-        var node = dgSafe(row, "node"); if (!node || !node.objectApiName) return;
-        // anchor the api line on the row's visible label cell (first cell with the display text)
+        if (!isVisible(row)) return;
+        var api = dgNodeApi(dgSafe(row, "node"));
+        if (!api) return;
+        var sr = null; try { sr = row.shadowRoot || row; } catch (e) { sr = row; }
+        // GUARANTEE one line per row: a tree-grid-row's shadow may hold several candidate anchors
+        // (.slds-tree__item / .slds-truncate / [class*=label]) AND our own span — anchoring onto a
+        // different one each pass is what stacked copies (reported 3×). So first strip EVERY
+        // existing .dc-dg-oapi in THIS row, then anchor fresh. Scoped to the row (not the doc) so
+        // rows never clobber each other.
+        try { var old = sr.querySelectorAll ? sr.querySelectorAll(".dc-dg-oapi") : []; for (var i = old.length - 1; i >= 0; i--) old[i].remove(); } catch (e) {}
+        // Pick a name-cell anchor, but NEVER our own injected span.
         var host = null;
         try {
-          var sr = row.shadowRoot || row;
-          host = sr.querySelector(".slds-tree__item, .slds-truncate, [class*='label']") || sr.querySelector("span") || row;
+          host = sr.querySelector(".slds-tree__item, .slds-truncate, [class*='label']");
+          if (!host) { var spans = sr.querySelectorAll ? sr.querySelectorAll("span:not(.dc-dg-oapi):not(.dc-dg-fapi)") : []; host = spans[0] || null; }
+          if (!host) host = row;
         } catch (e) { host = row; }
-        dgInject(host, node.objectApiName, "dc-dg-oapi");
+        dgInject(host, api, "dc-dg-oapi");
       });
-      // RIGHT fields: field api under each datatable row's label. The datatable renders rows as
-      // <tr> whose rowheader/first cell shows the label; map label→api from .data[].
-      var fmap = dgFieldMap();
+    }
+
+    // RIGHT Fields panel: field api under each datatable row. The field api is row.name (probe
+    // v35). We align the datatable's .data[] to its rendered <tr> rows BY INDEX (proven to match
+    // render order) — far more reliable than label-text matching. If counts don't line up (e.g. a
+    // virtualized/partial render), we fall back to a label→api map. Decorating the datatable this
+    // way re-runs automatically when you click a different LEFT object (the panel swaps → observer
+    // fires → we re-align to the new object's fields).
+    function dgDecorateRight() {
       findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
-        var sr = dt.shadowRoot || dt; var trs = [];
-        try { trs = sr.querySelectorAll("tr"); } catch (e) {}
-        for (var i = 0; i < trs.length; i++) {
-          var tr = trs[i];
-          var cell = null; try { cell = tr.querySelector('th [class*="label"], th, td'); } catch (e) {}
-          if (!cell) continue;
-          var t = ""; try { t = (cell.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
-          // strip a trailing "Primary Key"/subtext the cell may include
-          var key = t.toLowerCase();
-          var api = fmap[key];
-          if (!api) { // try first line only (label sometimes concatenated with subtext)
-            var first = key.split(/primary key|\n/)[0].trim(); api = fmap[first];
+        if (!isVisible(dt)) return;
+        var data = dgSafe(dt, "data");
+        if (!data || !data.length) return;
+        var sr = dt.shadowRoot || dt, trs = [];
+        try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
+        var dataTrs = [];
+        for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) dataTrs.push(trs[i]); }
+        if (!dataTrs.length) return;
+        if (dataTrs.length === data.length) {
+          for (var j = 0; j < data.length; j++) {
+            var api = data[j] && data[j].name; if (!api) continue;
+            var cell = dataTrs[j].querySelector("th,td"); if (cell) dgInject(cell, String(api), "dc-dg-fapi");
           }
-          if (api) dgInject(cell, api, "dc-dg-fapi");
+        } else {
+          // fallback: label→api map (proven keys: label + name)
+          var map = {};
+          for (var m = 0; m < data.length; m++) { var r = data[m]; if (!r) continue; var lbl = r.label, api2 = r.name; if (lbl && api2) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api2); } }
+          for (var n = 0; n < dataTrs.length; n++) {
+            var c2 = dataTrs[n].querySelector("th,td"); if (!c2) continue;
+            var t2 = ""; try { t2 = (c2.textContent || "").replace(/\s+/g, " ").trim().toLowerCase(); } catch (e) {}
+            var a2 = map[t2] || map[t2.split(/primary key/)[0].trim()];
+            if (a2) dgInject(c2, a2, "dc-dg-fapi");
+          }
         }
       });
     }
 
-    var _dgObs = null, _dgT = null;
-    function dgSchedule() { if (_dgT) return; _dgT = setTimeout(function () { _dgT = null; if (DG_ON) { try { dgDecorate(); } catch (e) {} } }, 200); }
+    function dgDecorate() { if (!DG_ON) return; dgDecorateLeft(); dgDecorateRight(); }
+
+    // Observer that does NOT react to our own writes. We disconnect while decorating and reconnect
+    // after, and guard with _dgWriting — otherwise each injected span would re-trigger the
+    // observer, re-decorate, and stack copies (the reported 3× bug + a VDI-pegging feedback loop).
+    var _dgObs = null, _dgT = null, _dgWriting = false;
+    function dgSchedule() { if (_dgWriting || _dgT) return; _dgT = setTimeout(function () { _dgT = null; dgRun(); }, 250); }
+    function dgRun() {
+      if (!DG_ON) return;
+      _dgWriting = true;
+      try { if (_dgObs) _dgObs.disconnect(); } catch (e) {}
+      try { dgDecorate(); } catch (e) {}
+      try { if (_dgObs && DG_ON) _dgObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _dgWriting = false;
+    }
     function dgStart() {
       DG_ON = true;
-      try { dgDecorate(); } catch (e) {}
-      if (!_dgObs) { try { _dgObs = new MutationObserver(dgSchedule); _dgObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {} }
+      if (!_dgObs) { try { _dgObs = new MutationObserver(dgSchedule); } catch (e) {} }
+      dgRun();
     }
-    function dgStop() { DG_ON = false; try { if (_dgObs) { _dgObs.disconnect(); _dgObs = null; } } catch (e) {} dgClearAll(); }
+    function dgStop() { DG_ON = false; try { if (_dgObs) _dgObs.disconnect(); } catch (e) {} dgClearAll(); }
     try {
       window.__dcToggleDgApi = function () { if (DG_ON) dgStop(); else dgStart(); return DG_ON; };
       window.__dcDgApiIsOn = function () { return DG_ON; };
@@ -19113,7 +19169,8 @@ processJSON();
         menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s,transform .2s;opacity:0;transform:translateY(12px) scale(.95);";
         var row = document.createElement("button");
         row.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
-        function paint() { var on = window.__dcDgApiIsOn && window.__dcDgApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;font:600 13px/1 monospace;color:#fff'>Ic</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each object & field" : "Show API name under each label") + "</span></div>"; }
+        var dgApiIconSvg = "<svg width='15' height='15' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+        function paint() { var on = window.__dcDgApiIsOn && window.__dcDgApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;'>" + dgApiIconSvg + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each object & field" : "Show API name under each label") + "</span></div>"; }
         paint();
         row.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleDgApi(); } catch (er) {} paint(); };
         menu.appendChild(dcMakeMenuCloseX(function () { closeDg(); }));
@@ -19318,6 +19375,7 @@ processJSON();
       else if (t === "Transform") { pageTitle = "Data Transform"; pageFeats = ["Read the definition in plain English"]; }
       else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
       else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
+      else if (document.getElementById("dc-dg-bar")) { pageTitle = "Data Graph builder"; pageFeats = ["Click the ◎ button → turn on API names under each object & field", "Click any API name to copy it"]; }
       else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Cloud list"; pageFeats = ["Hover a row → ⧉ opens that record in a new tab"]; }
       // always-on globals (dev build) — clearer wording: it's a button that appears when you
       // hover a Data Cloud menu item.
@@ -19340,7 +19398,10 @@ processJSON();
       // right if no launcher is present (e.g. the nav/list ⧉ pages have no FAB).
       var side = "right";
       try {
-        var bar = document.getElementById("dc-bar");
+        // Any of the launcher FABs can be present (detail=#dc-bar, Activation=#dc-act-bar,
+        // ERD=#dc-erd-bar, Data Graph=#dc-dg-bar). Dodge whichever one is on-screen so the toast
+        // never lands on top of the FAB (the Data Graph FAB sits bottom-right like this toast).
+        var bar = document.getElementById("dc-bar") || document.getElementById("dc-dg-bar") || document.getElementById("dc-act-bar") || document.getElementById("dc-erd-bar");
         if (bar) {
           var br = bar.getBoundingClientRect();
           // launcher on the left half of the viewport → toast goes right, and vice-versa.

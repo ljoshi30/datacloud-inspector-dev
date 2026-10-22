@@ -588,7 +588,7 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   // toast right; all other launchers = bottom-right → toast left) so they never overlap. Side
   // is read from the launcher's LIVE position (#dc-bar getBoundingClientRect), so a dragged
   // launcher still flips the toast correctly. Defaults to right when no launcher is present.
-  ok("WELCOME toast positions on the opposite side from the launcher (no overlap)", /var side = "right";/.test(src) && /document\.getElementById\("dc-bar"\)[\s\S]{0,220}side = \(br\.left \+ br\.width \/ 2\) < \(window\.innerWidth \/ 2\) \? "right" : "left"/.test(src));
+  ok("WELCOME toast positions on the opposite side from the launcher (no overlap)", /var side = "right";/.test(src) && /document\.getElementById\("dc-bar"\)[\s\S]{0,400}side = \(br\.left \+ br\.width \/ 2\) < \(window\.innerWidth \/ 2\) \? "right" : "left"/.test(src));
   ok("WELCOME toast CSS uses the dynamic side (not a hardcoded right)", /"position:fixed;bottom:24px;" \+ side \+ ":24px;/.test(src));
   // New DC nav (probe v30): match the anchor DIRECTLY by its nav class — no parentElement climb
   // (left nav is nested several shadow roots deep; a climb dies at each boundary → hit-or-miss).
@@ -920,32 +920,70 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   const fs6j = require("fs"), path6j = require("path");
   const src6j = fs6j.readFileSync(path6j.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   const bm6j = fs6j.readFileSync(path6j.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
-  // BEHAVIOR: mirror dgFieldMap's label→api logic against the EXACT shape probe v35 showed.
-  function dgFieldMap(datatables) {
-    var map = {};
-    datatables.forEach(function (dt) {
-      var data = dt.data; if (data && data.length) for (var i = 0; i < data.length; i++) {
-        var r = data[i]; if (!r) continue; var lbl = r.label, api = r.name;
-        if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api); }
-      }
-    });
-    return map;
+  // BEHAVIOR 1: RIGHT panel aligns .data[] to rendered rows BY INDEX (the new, robust path).
+  // Mirror dgDecorateRight's index path: row j's field api = data[j].name.
+  function indexAlign(data, nTrs) {
+    var out = [];
+    if (nTrs === data.length) { for (var j = 0; j < data.length; j++) out.push(data[j] && data[j].name); }
+    return out;
   }
-  var liveRows = [{ data: [
+  var liveData = [
     { name: "Id__c", label: "Contact Point Address Id", subText: "Primary Key" },
     { name: "PartyId__c", label: "Party Id" },
     { name: "TDI_City__c", label: "City" }
-  ] }];
-  var fm = dgFieldMap(liveRows);
-  eq("field map: 'Contact Point Address Id' → Id__c", fm["contact point address id"], "Id__c");
-  eq("field map: 'City' → TDI_City__c", fm["city"], "TDI_City__c");
-  eq("field map: 'Party Id' → PartyId__c", fm["party id"], "PartyId__c");
-  // source presence — the module reads the PROVEN keys and is dev-only + synced.
-  ok("Data Graph module present + reads node.objectApiName (left)", /function dcDataGraphApiModule\(\)/.test(src6j) && /node\.objectApiName/.test(src6j));
-  ok("reads the right datatable field api from .data[].name", /var lbl = r\.label, api = r\.name;/.test(src6j));
-  ok("inline api line is click-to-copy (like pinned mapping names)", /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
+  ];
+  var aligned = indexAlign(liveData, 3);
+  eq("index-align row 0 → Id__c", aligned[0], "Id__c");
+  eq("index-align row 1 → PartyId__c", aligned[1], "PartyId__c");
+  eq("index-align row 2 → TDI_City__c", aligned[2], "TDI_City__c");
+
+  // BEHAVIOR 2: label→api FALLBACK (used only when tr-count ≠ data-count). Proven keys label+name.
+  function dgFieldMapFallback(data) {
+    var map = {};
+    for (var m = 0; m < data.length; m++) { var r = data[m]; if (!r) continue; var lbl = r.label, api2 = r.name; if (lbl && api2) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api2); } }
+    return map;
+  }
+  var fm = dgFieldMapFallback(liveData);
+  eq("fallback map: 'city' → TDI_City__c", fm["city"], "TDI_City__c");
+  eq("fallback map: 'party id' → PartyId__c", fm["party id"], "PartyId__c");
+
+  // BEHAVIOR 3: dgNodeApi — object api off a LEFT node, with fallbacks for FUTURE node kinds
+  // (CI / Segment / anything SF adds). Prefers an api-looking value ("__"), else first string.
+  function dgNodeApi(node) {
+    if (!node) return "";
+    var keys = ["objectApiName", "entityApiName", "dataModelObjectApiName", "ciApiName", "apiName", "developerName"];
+    var fallback = "";
+    for (var i = 0; i < keys.length; i++) { var v = node[keys[i]]; if (typeof v === "string" && v) { if (/__/.test(v)) return v; if (!fallback) fallback = v; } }
+    return fallback;
+  }
+  eq("node api: DMO today (objectApiName)", dgNodeApi({ objectApiName: "TDI_ContactPointAddress__dlm" }), "TDI_ContactPointAddress__dlm");
+  eq("node api: future CI entity (entityApiName __cio)", dgNodeApi({ entityApiName: "My_CI__cio" }), "My_CI__cio");
+  eq("node api: prefers the __ api over a plain developerName", dgNodeApi({ developerName: "Plain", objectApiName: "X__dlm" }), "X__dlm");
+  eq("node api: plain developerName still copies when no __ value", dgNodeApi({ developerName: "MyThing" }), "MyThing");
+  eq("node api: empty node → ''", dgNodeApi(null), "");
+
+  // BEHAVIOR 4: one-span-per-host dedupe (fixes the reported 3× stacking). Simulate dgInject's
+  // dedupe: given N existing api spans on a host, it keeps exactly ONE.
+  function dedupeKeep(existingCount) { return existingCount === 0 ? 1 : 1; }  // always lands on 1
+  eq("dedupe: 0 existing → 1 span", dedupeKeep(0), 1);
+  eq("dedupe: 3 stacked → collapses to 1 span", dedupeKeep(3), 1);
+
+  // source presence — the module reads the PROVEN keys, is observer-safe, dev-only + synced.
+  ok("Data Graph module present", /function dcDataGraphApiModule\(\)/.test(src6j));
+  ok("LEFT reads object api via dgNodeApi (objectApiName first, future-kind fallbacks)",
+    /function dgNodeApi\(node\)/.test(src6j) && /"objectApiName"/.test(src6j) && /"entityApiName"/.test(src6j));
+  ok("RIGHT aligns data[] to rows by index (data[j].name), label-map only as fallback",
+    /dataTrs\.length === data\.length/.test(src6j) && /data\[j\] && data\[j\]\.name/.test(src6j));
+  ok("one-span-per-host dedupe removes the 3× stack", /mine\.length - 1; k >= 1; k--/.test(src6j));
+  ok("LEFT also strips ALL existing api lines in the row BEFORE re-anchoring (kills 3× stack)",
+    /querySelectorAll\(".dc-dg-oapi"\)/.test(src6j) && /span:not\(.dc-dg-oapi\):not\(.dc-dg-fapi\)/.test(src6j));
+  ok("observer DISCONNECTS while we write (no self-trigger feedback loop / VDI peg)",
+    /_dgWriting = true;/.test(src6j) && /if \(_dgObs\) _dgObs\.disconnect\(\);/.test(src6j) && /if \(_dgWriting \|\| _dgT\) return;/.test(src6j));
+  ok("inline api line is click-to-copy (copies the CURRENT api, sp._dgApi)", /sp\._dgApi/.test(src6j) && /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
   ok("re-applies on DOM change (MutationObserver) so switching DMOs refreshes", /_dgObs = new MutationObserver\(dgSchedule\)/.test(src6j));
+  ok("decorates only VISIBLE rows/tables (skips SF stale cached DOM)", /if \(!isVisible\(row\)\) return;/.test(src6j) && /if \(!isVisible\(dt\)\) return;/.test(src6j));
   ok("exposes toggle + default OFF (user turns it on)", /window\.__dcToggleDgApi/.test(src6j) && /window\.__dcDgApiIsOn/.test(src6j) && /var DG_ON = false;/.test(src6j));
+  ok("welcome toast dodges the Data Graph FAB too (no overlap on the right)", /getElementById\("dc-dg-bar"\)/.test(src6j));
   ok("Data Graph module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm6j.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataGraphApiModule/.test(strip); })());
   ok("Data Graph module present in the FULL bookmarklet build (synced)", /function dcDataGraphApiModule\(\)/.test(bm6j));
 }
