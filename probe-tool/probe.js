@@ -54,11 +54,21 @@
   var tg = byTag("runtime_cdp-dao-editor-tree-grid")[0];
   if (tg) out.treeGridData = lwcData(tg);
 
-  // RIGHT fields panel + its datatable
+  // RIGHT fields panel + its datatable. EXPAND the first data row + all columns FULLY (deeper
+  // shape) so we can see the field-API-name key. There are TWO custom-datatables (the dialog
+  // Fields tab + the dao-editor right panel) — dump BOTH, and prefer the one under dao-editor.
   var fp = byTag("runtime_cdp-dao-editor-fields")[0];
   if (fp) out.rightFieldsPanel = lwcData(fp);
-  var cdt = byTag("runtime_cdp-custom-datatable")[0] || byTag("lightning-datatable")[0];
-  if (cdt) out.datatableData = lwcData(cdt);
+  var cdts = byTag("runtime_cdp-custom-datatable").concat(byTag("lightning-datatable"));
+  out.datatables = cdts.slice(0, 4).map(function (cdt, i) {
+    var o = { index: i, tag: tag(cdt) };
+    try { o.firstRow = cdt.data && cdt.data.length ? shape(cdt.data[0], 0) : "(no data[])"; } catch (e) { o.firstRow = "ERR:" + e; }
+    try { o.columns = cdt.columns ? cdt.columns.map(function (c) { return shape(c, 1); }) : "(no columns)"; } catch (e) { o.columns = "ERR:" + e; }
+    try { o.dataLen = cdt.data ? cdt.data.length : 0; } catch (e) {}
+    return o;
+  });
+  // also the dao-editor-fields panel's own data, expanded one level deeper
+  if (fp) { try { out.fieldsPanelDeep = { fields: fp.fields ? shape(fp.fields, 0) : undefined, data: fp.data ? shape(fp.data, 0) : undefined, selectedObject: fp.selectedObject ? shape(fp.selectedObject, 0) : undefined }; } catch (e) {} }
 
   // the actual field rows in the datatable (tr with cells)
   var frows = [];
