@@ -208,6 +208,15 @@ console.log("\n8. streaming full export present + guarded");
   // FIRST — else the server rejects the request with a raw error (reported). Guard before firing.
   ok("Export ALL checks session before firing in bookmarklet mode", /var _extMode = \(typeof extBridgePresent === "function"\) && extBridgePresent\(\);/.test(src) && /var _haveSession = [\s\S]{0,120}haveCredsOnly\(\)/.test(src) && /if \(!_extMode && !_haveSession\)/.test(src));
   ok("Export ALL session guard shows a clear 'Run a query first' message (not a raw server error)", /Run a query first[\s\S]{0,260}Run Query<\/b>/.test(src));
+  // Export ALL COUNTS FIRST: if 0 rows → 'Nothing to export', never opens the save dialog (so you
+  // can't save a CSV for an empty result). Save-picker lives in startExportStream, called ONLY
+  // when count !== 0 (or count unavailable).
+  ok("Export ALL counts before prompting for a file (count-first gate)", /Checking for rows…/.test(src) && /runQeCount\(_preCountSql, ds\)/.test(src));
+  ok("Export ALL with 0 rows shows 'Nothing to export' and does NOT open the save dialog", /pc && pc\.ok && pc\.count === 0/.test(src) && /Nothing to export/.test(src) && /return;\s*\/\/ never open the save dialog for an empty result/.test(src));
+  ok("save-picker is gated behind the count (startExportStream called only when not-0)", /startExportStream\(\);\s*\n\s*\}\);/.test(src) && /function startExportStream\(\)/.test(src));
+  // Poll ceilings cut from ~30s to ~9s so a genuinely-empty/0-row table fails fast (reported 35s).
+  ok("fetch cold-start poll ceiling reduced to ~9s (FE_MAX_POLL = 6)", /var FE_MAX_POLL = 6;/.test(src));
+  ok("stream cold-start poll ceiling reduced to ~9s (MAX_POLL = 6)", /POLL_MS = 1500, MAX_POLL = 6;/.test(src));
   // validateSql (shared by Count/Fetch/Export ALL) now BLOCKS multiple statements — the exact
   // cause of the reported "syntax error: got SELECT, expected ... end of input".
   ok("validateSql rejects multiple ';'-separated queries", /multiple queries \(separated by/.test(src));
@@ -266,9 +275,12 @@ console.log("\n8. streaming full export present + guarded");
   ok("tracks auto-move vs user-drag (two separate flags)", /var _autoPositioned = false/.test(src) && /var _userDragged = false/.test(src));
   ok("clamp marks its repositioning as AUTOMATIC (_autoPositioned = true)", /_autoPositioned = true;\s*\/\/ remember THIS was an automatic move/.test(src));
   ok("a real drag marks _userDragged + clears auto flag", /_dragMoved = true; _userDragged = true; _autoPositioned = false;/.test(src));
-  ok("closing the panel snaps an AUTO-moved launcher back to its home corner", /if \(_autoPositioned && !_userDragged\) resetWrapToDefaultAnchor\(\)/.test(src));
+  // Closing snaps back UNLESS the user dragged it. We do NOT gate on _autoPositioned (set inside
+  // a rAF a frame later) — a quick open→close would miss it and strand the FAB (reported). Only
+  // a real drag is preserved.
+  ok("closing the panel snaps the launcher home unless the user dragged it", /if \(!_userDragged\) resetWrapToDefaultAnchor\(\)/.test(src));
   ok("reset restores the exact default anchor (bottom:16px/left:16px)", /function resetWrapToDefaultAnchor\(\)[\s\S]{0,200}bottom = "16px";[\s\S]{0,40}left = "16px"/.test(src));
-  ok("snap-back + drag-respect synced into the bookmarklet build too", /var _autoPositioned = false/.test(bm) && /if \(_autoPositioned && !_userDragged\) resetWrapToDefaultAnchor\(\)/.test(bm));
+  ok("snap-back + drag-respect synced into the bookmarklet build too", /var _autoPositioned = false/.test(bm) && /if \(!_userDragged\) resetWrapToDefaultAnchor\(\)/.test(bm));
 
   // ── View Results renders in non-blocking chunks (VDI-safe) ─────────────────────────
   // Building up to 2,000 rows × many columns in ONE synchronous innerHTML froze VDI tabs.
@@ -327,6 +339,10 @@ console.log("\n8. streaming full export present + guarded");
       renderStreamCard: function () { return true; },
       makeStreamCancelBtn: function () { return fakeEl(); },
       setExportBusy: function () {},   // closure helper the handler now calls (pause Count/Fetch)
+      // count-first gate: goBtn runs runQeCount, then calls startExportStream (a sibling fn in
+      // streamBtn.onclick's scope). Stub both so the isolated handler-run doesn't false-positive.
+      runQeCount: function () { return Promise.resolve({ ok: true, count: 5 }); },
+      startExportStream: function () {},
       // vars the ENCLOSING streamBtn.onclick legitimately declares before goBtn (so the
       // guard flags only TRUE cross-.then leaks, not these in-scope locals):
       sql: 'SELECT * FROM "T__dll"', ds: "DS", tableName: "T__dll", hasLimit: false,

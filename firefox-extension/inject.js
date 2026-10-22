@@ -12873,10 +12873,13 @@
         }
       } else {
         card.style.display = "none";
-        // Panel closed. If the launcher was ONLY auto-moved (to stay visible while the tall
-        // panel was open) and the user never dragged it, snap it back to its home corner so
-        // the FAB doesn't stay stranded mid-screen. A user-dragged position is left untouched.
-        if (_autoPositioned && !_userDragged) resetWrapToDefaultAnchor();
+        // Panel closed → snap the launcher back to its home corner UNLESS the user explicitly
+        // dragged it. We do NOT gate on _autoPositioned here: that flag is set inside a
+        // requestAnimationFrame (a frame after the clamp runs), so a quick open→close would
+        // check it before it was set and leave the FAB stranded mid-screen (the reported bug).
+        // The auto-move only ever exists to keep an OPEN panel visible, so on close returning
+        // home is always correct; only a real drag is preserved.
+        if (!_userDragged) resetWrapToDefaultAnchor();
       }
       fab.style.background = _panelOpen ? "linear-gradient(135deg,#7c3aed,#6d28d9)" : "linear-gradient(135deg,#475569,#334155)";
     };
@@ -13317,7 +13320,9 @@
         // did not, so a slow query (joins/large scans) returned "0 rows" even though SF's
         // own grid showed rows seconds later. Poll the SAME offset until the batch is ready.
         var FE_POLL_MS = 1500;
-        var FE_MAX_POLL = 20;   // ~30s ceiling — well past SF's own materialization time
+        var FE_MAX_POLL = 6;    // ~9s ceiling. A real query materializes in 2-3s; 30s (the old
+                                // value) just punished genuinely-empty / 0-row tables with a long
+                                // dead wait before concluding "no rows". 6×1.5s ≈ 9s is plenty.
 
         function finish() {
           var blob = new Blob(csvOut, { type: "text/csv" });
@@ -13544,7 +13549,7 @@
           var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
           var ASK = 49999;
           var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
-          var dsi = 0, POLL_MS = 1500, MAX_POLL = 20;
+          var dsi = 0, POLL_MS = 1500, MAX_POLL = 6;   // ~9s cold-start ceiling (was 30s) — fail fast on empty
           function batch(offset, pollAttempt) {
             pollAttempt = pollAttempt || 0;
             if (cancelled() || got >= cap) { finishOk(); return; }
@@ -14601,9 +14606,33 @@
       if (noBtn) noBtn.onclick = function () { cardBody.innerHTML = "<div style='font-size:12px;color:#475569;'>Export cancelled — no credits used.</div>"; };
       var goBtn = document.getElementById("dc-stream-go");
       if (goBtn) goBtn.onclick = function () {
+        // ── COUNT FIRST, then prompt for the file ───────────────────────────────────────────
+        // The browser's save dialog MUST be opened before streaming. If we open it first and the
+        // query has 0 rows, the user picks a file only to get an empty export (reported). So we
+        // run a quick COUNT first: if it's 0, say "Nothing to export" and NEVER open the save
+        // dialog. If the count is >0 — or the count is too heavy to compute (ok=false) — we
+        // proceed to the picker (never block a real export on a flaky count). One small count
+        // query; cheap vs. a wasted full export + file prompt.
+        cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Checking for rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
+        var _innerForCount = sql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
+        var _preCountSql = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(_innerForCount) ? _innerForCount : "SELECT COUNT(*) AS TotalRows FROM (" + _innerForCount + ") AS countWrapper";
+        var _precount = (typeof runQeCount === "function")
+          ? runQeCount(_preCountSql, ds).then(function (r) { return r; }, function () { return { ok: false, count: -1 }; })
+          : Promise.resolve({ ok: false, count: -1 });
+        _precount.then(function (pc) {
+          if (pc && pc.ok && pc.count === 0) {
+            cardBody.innerHTML = ""
+              + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Nothing to export</span></div>"
+              + "<div style='font-size:12px;color:#475569;line-height:1.6;'>This query returns <b>0 rows</b>, so there&rsquo;s nothing to save — no file was created and no credits were used for an export.</div>";
+            return;   // never open the save dialog for an empty result
+          }
+          // >0 rows (or count unavailable) → proceed to the save picker + stream.
+          startExportStream();
+        });
+      };
+      // The actual save-picker + stream, factored out so the count-first gate can call it.
+      function startExportStream() {
         var handle;
-        // Declared in the HANDLER scope (not inside a .then) so BOTH the progress .then and
-        // the completion .then can read it — a .then-local var is undefined in the next .then.
         var startT = Date.now();
         var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
         Promise.resolve().then(function () { return window.showSaveFilePicker(opts); }).then(function (h) {
