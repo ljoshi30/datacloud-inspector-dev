@@ -18985,6 +18985,154 @@ processJSON();
   }
   /* @strip:end */
 
+  /* @strip:start dev
+   * ── DATA GRAPH builder: inline API names (dev-only) ─────────────────────────────────
+   * Shows the API name under each label on the Data Graph editor, like Segment/Activation.
+   * PROVEN DOM (DOM Probe v35 on the live org):
+   *   LEFT tree:  <runtime_cdp-tree-grid-row>.node = { objectApiName:"TDI_…__dlm",
+   *               displayName, ariaLabel, foreignKeyFieldApiName, foreignKeyFromParentFieldApiName }
+   *   RIGHT grid: <runtime_cdp-custom-datatable>.data[] = { name:"Id__c" (FIELD api), label, … }
+   *               rendered as rows whose visible text is the label.
+   * Approach: read those JS props (never guessed), inject a small grey ".dc-dg-api" line under
+   * the label text. A MutationObserver re-applies when you click a left object (the right panel
+   * swaps) or scroll (virtualized rows). Toggle on/off; default OFF (user turns it on from the
+   * Data Graph FAB). Filters tab: best-effort via the same field api map (see dcDgFieldApiByLabel).
+   */
+  (function dcDataGraphApiModule() {
+    function dgIsEditor() {
+      try {
+        if (findByTag("runtime_cdp-dao-editor").length > 0) return true;
+        // app route carries a base64 daoAction/editor_view token
+        var h = location.href; return /daoAction|dao-editor|editor_view/i.test(h) && /one\/one\.app/i.test(h);
+      } catch (e) { return false; }
+    }
+    if (!dgIsEditor()) return;
+
+    var DG_ON = false;
+    function dgSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // Build a label→fieldApi map from the RIGHT datatable's .data[] (authoritative; the field
+    // api is row.name). Rebuilt each pass since the panel swaps per selected object.
+    function dgFieldMap() {
+      var map = {};
+      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+        var data = dgSafe(dt, "data");
+        if (data && data.length) for (var i = 0; i < data.length; i++) {
+          var r = data[i]; if (!r) continue;
+          var lbl = r.label, api = r.name;   // proven keys (probe v35)
+          if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api); }
+        }
+      });
+      return map;
+    }
+
+    // Inject (or update) a grey api line under an element's label text. Idempotent.
+    function dgInject(hostEl, apiText, cls) {
+      if (!hostEl || !apiText) return;
+      try {
+        var ex = hostEl.querySelector(":scope > ." + cls);
+        if (ex) { if (ex.textContent === apiText) return; ex.textContent = apiText; return; }
+        var sp = document.createElement("span");
+        sp.className = cls;
+        sp.textContent = apiText;
+        sp.setAttribute("title", "Click to copy " + apiText);
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "block"); s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace");
+        s("color", "#4a6fa5"); s("margin-top", "1px"); s("white-space", "nowrap");
+        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("max-width", "100%");
+        s("cursor", "pointer"); s("user-select", "text");
+        sp.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+        sp.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          var restore = sp.textContent;
+          function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#4a6fa5"); }, 900); }
+          try { navigator.clipboard.writeText(apiText).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = apiText; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+          catch (e3) { flash(); }
+        });
+        hostEl.appendChild(sp);
+      } catch (e) {}
+    }
+    function dgClearAll() {
+      try { eachElement(document, function (el) { if (el.classList && (el.classList.contains("dc-dg-oapi") || el.classList.contains("dc-dg-fapi"))) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+    }
+
+    function dgDecorate() {
+      if (!DG_ON) return;
+      // LEFT nodes: object api under each tree-grid row's label cell.
+      findByTag("runtime_cdp-tree-grid-row").forEach(function (row) {
+        var node = dgSafe(row, "node"); if (!node || !node.objectApiName) return;
+        // anchor the api line on the row's visible label cell (first cell with the display text)
+        var host = null;
+        try {
+          var sr = row.shadowRoot || row;
+          host = sr.querySelector(".slds-tree__item, .slds-truncate, [class*='label']") || sr.querySelector("span") || row;
+        } catch (e) { host = row; }
+        dgInject(host, node.objectApiName, "dc-dg-oapi");
+      });
+      // RIGHT fields: field api under each datatable row's label. The datatable renders rows as
+      // <tr> whose rowheader/first cell shows the label; map label→api from .data[].
+      var fmap = dgFieldMap();
+      findByTag("runtime_cdp-custom-datatable").forEach(function (dt) {
+        var sr = dt.shadowRoot || dt; var trs = [];
+        try { trs = sr.querySelectorAll("tr"); } catch (e) {}
+        for (var i = 0; i < trs.length; i++) {
+          var tr = trs[i];
+          var cell = null; try { cell = tr.querySelector('th [class*="label"], th, td'); } catch (e) {}
+          if (!cell) continue;
+          var t = ""; try { t = (cell.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+          // strip a trailing "Primary Key"/subtext the cell may include
+          var key = t.toLowerCase();
+          var api = fmap[key];
+          if (!api) { // try first line only (label sometimes concatenated with subtext)
+            var first = key.split(/primary key|\n/)[0].trim(); api = fmap[first];
+          }
+          if (api) dgInject(cell, api, "dc-dg-fapi");
+        }
+      });
+    }
+
+    var _dgObs = null, _dgT = null;
+    function dgSchedule() { if (_dgT) return; _dgT = setTimeout(function () { _dgT = null; if (DG_ON) { try { dgDecorate(); } catch (e) {} } }, 200); }
+    function dgStart() {
+      DG_ON = true;
+      try { dgDecorate(); } catch (e) {}
+      if (!_dgObs) { try { _dgObs = new MutationObserver(dgSchedule); _dgObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {} }
+    }
+    function dgStop() { DG_ON = false; try { if (_dgObs) { _dgObs.disconnect(); _dgObs = null; } } catch (e) {} dgClearAll(); }
+    try {
+      window.__dcToggleDgApi = function () { if (DG_ON) dgStop(); else dgStart(); return DG_ON; };
+      window.__dcDgApiIsOn = function () { return DG_ON; };
+    } catch (e) {}
+
+    // Minimal FAB to toggle it (the Data Graph editor isn't a detail-launcher page).
+    try {
+      if (!document.getElementById("dc-dg-bar") && typeof dcMakeMenuCloseX === "function") {
+        var wrap = document.createElement("div"); wrap.id = "dc-dg-bar";
+        wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+        var menu = document.createElement("div"); menu.id = "dc-fab-menu";
+        menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s,transform .2s;opacity:0;transform:translateY(12px) scale(.95);";
+        var row = document.createElement("button");
+        row.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
+        function paint() { var on = window.__dcDgApiIsOn && window.__dcDgApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;font:600 13px/1 monospace;color:#fff'>Ic</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each object & field" : "Show API name under each label") + "</span></div>"; }
+        paint();
+        row.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleDgApi(); } catch (er) {} paint(); };
+        menu.appendChild(dcMakeMenuCloseX(function () { closeDg(); }));
+        menu.appendChild(row);
+        var fab = document.createElement("button");
+        fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#2d2b55,#5b4f9e);box-shadow:0 4px 18px rgba(91,79,158,.5);display:flex;align-items:center;justify-content:center;";
+        fab.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none'><circle cx='12' cy='12' r='10' stroke='#fff' stroke-width='1.5'/><circle cx='12' cy='9.5' r='2.5' fill='#fff'/><path d='M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4' stroke='#fff' stroke-width='1.5' stroke-linecap='round'/></svg>";
+        var mOpen = false;
+        function openDg() { mOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.style.pointerEvents = "auto"; }
+        function closeDg() { mOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.style.pointerEvents = "none"; }
+        fab.onclick = function (e) { e.stopPropagation(); mOpen ? closeDg() : openDg(); };
+        document.addEventListener("pointerdown", function (e) { if (mOpen && !wrap.contains(e.target)) closeDg(); }, true);
+        wrap.appendChild(menu); wrap.appendChild(fab);
+        (document.body || document.documentElement).appendChild(wrap);
+      }
+    } catch (e) {}
+  })();
+  /* @strip:end */
+
   if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /displayType=graph/i.test(window.location.href)) return;

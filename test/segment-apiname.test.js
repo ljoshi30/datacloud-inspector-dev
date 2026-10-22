@@ -911,5 +911,44 @@ console.log("\n6i. new-tab hint: once in bookmarklet mode, never in extension mo
   ok("new-tab hint synced into bookmarklet build", /function dcNewTabHint\(\)/.test(bm6i));
 }
 
+// ── 6j. Data Graph API-name decorator (dev-only) — proven DOM from DOM Probe v35 ──────
+// LEFT: runtime_cdp-tree-grid-row.node.objectApiName. RIGHT: runtime_cdp-custom-datatable
+// .data[].{name:fieldApi, label}. We BEHAVIOR-test the field-map extraction (label→name) and
+// source-presence of the reads, so a refactor can't silently break the proven keys.
+console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + right row.name)");
+{
+  const fs6j = require("fs"), path6j = require("path");
+  const src6j = fs6j.readFileSync(path6j.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  const bm6j = fs6j.readFileSync(path6j.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+  // BEHAVIOR: mirror dgFieldMap's label→api logic against the EXACT shape probe v35 showed.
+  function dgFieldMap(datatables) {
+    var map = {};
+    datatables.forEach(function (dt) {
+      var data = dt.data; if (data && data.length) for (var i = 0; i < data.length; i++) {
+        var r = data[i]; if (!r) continue; var lbl = r.label, api = r.name;
+        if (lbl && api) { var l = String(lbl).trim().toLowerCase(); if (!map[l]) map[l] = String(api); }
+      }
+    });
+    return map;
+  }
+  var liveRows = [{ data: [
+    { name: "Id__c", label: "Contact Point Address Id", subText: "Primary Key" },
+    { name: "PartyId__c", label: "Party Id" },
+    { name: "TDI_City__c", label: "City" }
+  ] }];
+  var fm = dgFieldMap(liveRows);
+  eq("field map: 'Contact Point Address Id' → Id__c", fm["contact point address id"], "Id__c");
+  eq("field map: 'City' → TDI_City__c", fm["city"], "TDI_City__c");
+  eq("field map: 'Party Id' → PartyId__c", fm["party id"], "PartyId__c");
+  // source presence — the module reads the PROVEN keys and is dev-only + synced.
+  ok("Data Graph module present + reads node.objectApiName (left)", /function dcDataGraphApiModule\(\)/.test(src6j) && /node\.objectApiName/.test(src6j));
+  ok("reads the right datatable field api from .data[].name", /var lbl = r\.label, api = r\.name;/.test(src6j));
+  ok("inline api line is click-to-copy (like pinned mapping names)", /navigator\.clipboard\.writeText\(apiText\)/.test(src6j));
+  ok("re-applies on DOM change (MutationObserver) so switching DMOs refreshes", /_dgObs = new MutationObserver\(dgSchedule\)/.test(src6j));
+  ok("exposes toggle + default OFF (user turns it on)", /window\.__dcToggleDgApi/.test(src6j) && /window\.__dcDgApiIsOn/.test(src6j) && /var DG_ON = false;/.test(src6j));
+  ok("Data Graph module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm6j.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataGraphApiModule/.test(strip); })());
+  ok("Data Graph module present in the FULL bookmarklet build (synced)", /function dcDataGraphApiModule\(\)/.test(bm6j));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);
