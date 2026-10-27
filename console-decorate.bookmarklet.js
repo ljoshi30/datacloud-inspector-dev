@@ -19531,19 +19531,46 @@ processJSON();
       p.style.left = left + "px"; p.style.top = top + "px";
     }
 
-    // Given a hovered Formula cell, find its row's formula from data[] by INDEX (proven alignment).
-    // Returns {label, formula} or null. We INJECT NOTHING — purely read props on demand.
+    // Build {label,formula} from a data record IF it's a formula field with a formula, else null.
+    function fmRecFormula(rec) {
+      if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
+      var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
+      var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
+      return { label: String(label), formula: String(formula) };
+    }
+    // The datatable's unique row key (Lightning datatable `keyField`, default "id").
+    function fmKeyField(table) { var k = fmSafe(table, "keyField"); return (typeof k === "string" && k) ? k : "id"; }
+    // The key value a rendered <tr> carries. Proven (probe v15-v20, DMO new-tab work): the row key
+    // is on data-row-key-value; also check a couple of known fallbacks.
+    function fmRowKey(row) {
+      try {
+        var k = row.getAttribute && (row.getAttribute("data-row-key-value") || row.getAttribute("data-row-key") || row.getAttribute("data-key-value"));
+        if (k) return k;
+      } catch (e) {}
+      return null;
+    }
+
+    // Given a hovered Formula cell, find its row's formula from data[]. PRIMARY: match by row KEY
+    // (data-row-key-value ↔ data[].<keyField>) so it works even when the table is VIRTUALIZED
+    // (rendered rows < data length — the reported "sometimes shows, sometimes not" on long SFTP
+    // streams). FALLBACK: index alignment when counts happen to match. We INJECT NOTHING.
     function fmFormulaForCell(cell, row, table) {
       try {
         if (!fmIsFieldTable(table)) return null;
         var data = fmSafe(table, "data"); if (!Array.isArray(data) || !data.length) return null;
+        // PRIMARY — by key (virtualization-proof)
+        var key = fmRowKey(row);
+        if (key != null) {
+          var kf = fmKeyField(table);
+          for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && String(fmSafe(r, kf)) === String(key)) return fmRecFormula(r); }
+        }
+        // FALLBACK — by index, only when fully aligned
         var rows = fmDataRows(table);
-        if (rows.length !== data.length) return null;   // only when aligned (proven count match)
-        var idx = rows.indexOf(row); if (idx < 0) return null;
-        var rec = data[idx]; if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
-        var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
-        var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
-        return { label: String(label), formula: String(formula) };
+        if (rows.length === data.length) {
+          var idx = rows.indexOf(row);
+          if (idx >= 0) return fmRecFormula(data[idx]);
+        }
+        return null;
       } catch (e) { return null; }
     }
 

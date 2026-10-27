@@ -90,28 +90,44 @@ console.log("\n4. index alignment gate (proven: visible table rendered-rows === 
   ok("13 data / 13 rendered → aligned", aligned(13, 13) === true);
 }
 
-console.log("\n4b. ON-DEMAND cell→formula resolution (hover the Formula cell; inject nothing)");
+console.log("\n4b. cell→formula resolution: match by ROW KEY (virtualization-proof), index fallback");
 {
-  // Mirror of fmFormulaForCell: given the hovered row's index into data[], return {label,formula}
-  // ONLY if it's a formula field with a formula and the table is aligned.
-  function cellFormula(data, renderedRowCount, rowIndex) {
-    if (data.length !== renderedRowCount) return null;   // alignment gate
-    if (rowIndex < 0) return null;
-    var rec = data[rowIndex];
+  function recFormula(rec) {
     if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
     var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
     return { label: String(rec.fieldLabel || rec.fieldName || "Formula"), formula: String(formula) };
   }
-  var data = [
-    { fieldLabel: "Person Name", fieldName: "Person_Name__c", isFormulaField: "true", formula: "CONCAT(sourceField['contact_first_name'], \" \",sourceField['contact_last_name'])" },
-    { fieldLabel: "affinity", fieldName: "catalog_affinity__c", isFormulaField: "false", formula: "" }
+  // Mirror of fmFormulaForCell: PRIMARY = match hovered row's key to data[].<keyField>, regardless
+  // of how many rows are rendered; FALLBACK = index alignment only when rendered count === data.
+  function cellFormula(data, keyField, renderedKeys, hoveredKey, hoveredIndex) {
+    // PRIMARY — by key
+    if (hoveredKey != null) {
+      for (var i = 0; i < data.length; i++) { if (String(data[i][keyField]) === String(hoveredKey)) return recFormula(data[i]); }
+    }
+    // FALLBACK — by index when fully aligned
+    if (renderedKeys.length === data.length && hoveredIndex >= 0) return recFormula(data[hoveredIndex]);
+    return null;
+  }
+  // 109-field SFTP-style table, only 3 rows rendered (VIRTUALIZED) — the reported failure case.
+  var big = [];
+  for (var i = 0; i < 109; i++) big.push({ id: "f" + i, fieldLabel: "F" + i, fieldName: "F" + i + "__c", isFormulaField: "false", formula: "" });
+  big[7] = { id: "f7", fieldLabel: "Data Source Object", fieldName: "DataSourceObject__c", isFormulaField: "true", formula: "env['filename']" };
+  var rendered = ["f5", "f6", "f7"];   // only 3 of 109 in the DOM (virtualized)
+
+  var got = cellFormula(big, "id", rendered, "f7", -1 /* index unknown/irrelevant */);
+  eq("VIRTUALIZED (3 of 109 rendered): hover the formula row by KEY → its formula", got && got.formula, "env['filename']");
+  eq("VIRTUALIZED: label resolved too", got && got.label, "Data Source Object");
+  eq("VIRTUALIZED: hover a NON-formula row by key → null", cellFormula(big, "id", rendered, "f6", -1), null);
+  eq("key not in data → null (no wrong match)", cellFormula(big, "id", rendered, "nope", -1), null);
+
+  // small aligned table with NO key attr available → index fallback still works
+  var small = [
+    { id: "a", fieldLabel: "Person Name", fieldName: "Person_Name__c", isFormulaField: "true", formula: "CONCAT(a,b)" },
+    { id: "b", fieldLabel: "affinity", fieldName: "x__c", isFormulaField: "false", formula: "" }
   ];
-  var got = cellFormula(data, 2, 0);
-  eq("hover formula row 0 → its exact formula", got && got.formula, "CONCAT(sourceField['contact_first_name'], \" \",sourceField['contact_last_name'])");
-  eq("hover formula row 0 → its label", got && got.label, "Person Name");
-  eq("hover NON-formula row 1 → null (nothing shown)", cellFormula(data, 2, 1), null);
-  eq("misaligned table (data 2 / rendered 0) → null (don't trust index)", cellFormula(data, 0, 0), null);
-  eq("row not found (index -1) → null", cellFormula(data, 2, -1), null);
+  eq("aligned + no key: index fallback row 0 → formula", cellFormula(small, "id", ["a", "b"], null, 0) && cellFormula(small, "id", ["a", "b"], null, 0).formula, "CONCAT(a,b)");
+  eq("aligned + no key: index fallback NON-formula row 1 → null", cellFormula(small, "id", ["a", "b"], null, 1), null);
+  eq("misaligned + no key (can't trust index) → null", cellFormula(small, "id", ["a"], null, 0), null);
 
   // Mirror of fmIsFormulaCell: formula column detected by data-label OR a check icon.
   function isFormulaCell(dataLabel, hasCheckIcon) { return /formula/i.test(dataLabel || "") || !!hasCheckIcon; }
@@ -132,9 +148,11 @@ console.log("\n5. source presence — on-demand (no inject, no poll), dev-only, 
   ok("reads formula DIRECTLY from data[idx].formula (no guessing)",
     /fmSafe\(rec, "formula"\)/.test(src) && /fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)/.test(src));
   ok("resolves the hovered cell's row to a formula ONLY if it's a formula field with a formula",
-    /function fmFormulaForCell/.test(src) && /if \(!rec \|\| !fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)\) return null;/.test(src) && /if \(formula == null \|\| formula === ""\) return null;/.test(src));
-  ok("aligns data[] to rendered rows by INDEX, only when counts match (proven by probe v38)",
-    /if \(rows\.length !== data\.length\) return null;/.test(src) && /var idx = rows\.indexOf\(row\)/.test(src));
+    /function fmFormulaForCell/.test(src) && /function fmRecFormula/.test(src) && /if \(!rec \|\| !fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)\) return null;/.test(src) && /if \(formula == null \|\| formula === ""\) return null;/.test(src));
+  ok("PRIMARY match is by ROW KEY (virtualization-proof) — fixes long/SFTP streams + intermittency",
+    /function fmRowKey/.test(src) && /data-row-key-value/.test(src) && /String\(fmSafe\(r, kf\)\) === String\(key\)/.test(src));
+  ok("keyField read from the datatable (default 'id')", /function fmKeyField/.test(src) && /fmSafe\(table, "keyField"\)/.test(src));
+  ok("index alignment kept only as a FALLBACK when counts match", /if \(rows\.length === data\.length\)/.test(src) && /var idx = rows\.indexOf\(row\)/.test(src));
   ok("field table identified by headerLabel + fieldLabel (same as export)",
     /names\.indexOf\("headerLabel"\) >= 0 && names\.indexOf\("fieldLabel"\) >= 0/.test(src));
   ok("triggers ONLY on the Formula column cell (data-label OR check-icon fallback)",
