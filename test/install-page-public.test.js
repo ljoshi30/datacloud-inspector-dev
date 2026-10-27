@@ -27,7 +27,7 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
   ok("verifyPublicHtmlAccuracy() guard exists", /verifyPublicHtmlAccuracy/.test(b));
   ok("guard runs on the public pubHtml", /verifyPublicHtmlAccuracy\)\(pubHtml\)|\}\)\(pubHtml\)/.test(b));
   ok("guard aborts the build (process.exit) on a violation",
-    /verifyPublicHtmlAccuracy[\s\S]{0,1600}process\.exit\(1\)/.test(b));
+    /verifyPublicHtmlAccuracy[\s\S]{0,2200}process\.exit\(1\)/.test(b));
 }
 
 console.log("\n2. Dev-only accordion rows are gated behind includeDev");
@@ -53,6 +53,7 @@ console.log("\n3. The forbidden list covers the stripped features + internal exa
   ok("guards against a Segment accordion row", /acc-nm">Segment</.test(b));
   ok("guards against Data Model (ERD) leaking public", /Data Model \\\(ERD\\\)/.test(b));
   ok("guards against a Data Graph accordion row (dev-only)", /acc-nm">Data Graph</.test(b));
+  ok("guards against a Formula-fields accordion row (dev-only)", /acc-nm">Formula fields/.test(b));
   ok("guards against Birth Date example", /birth\\s\*date|birth\s*date/i.test(b));
   ok("guards against Account Number example", /account number/i.test(b));
 }

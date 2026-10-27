@@ -19404,6 +19404,204 @@ processJSON();
   })();
   /* @strip:end */
 
+  /* @strip:start dev
+   * ── DATA STREAM / DLO: hover a formula field to see & copy its formula (dev-only) ───────────
+   * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never
+   * displayed on the page (you must open our export modal). This adds an on-page hover popover.
+   * PROVEN DOM (DOM Probe v38 on the live org):
+   *   <runtime_cdp-custom-datatable>.data[] = { fieldLabel, fieldName:"X__c", isFormulaField:"true",
+   *                                              formula:"if(ISEMPTY(...)) {…}", … }
+   *   The VISIBLE table's rendered <tr> count === data.length  → align data[j] ↔ row j by INDEX
+   *   (proven: index 1 table had 56 rows / 56 data; stale cached copies had 0 rendered rows).
+   *   Cell text lives in nested shadow (renderedRowText === "") → anchor on the <tr> by index,
+   *   never by text. We mark formula rows with a small ƒ badge, set an "ƒ <formula>" row title as
+   *   a guaranteed fallback, and show a popover with a Copy button on hover. Toggle on/off; default
+   *   OFF (turned on from the Data Stream / DLO FAB). Read-only.
+   */
+  (function dcDsFormulaModule() {
+    // Only on a Data Stream or DLO detail page — the two pages with the formula Fields table.
+    try {
+      if (!/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(location.href) &&
+          !/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return;
+    } catch (e) { return; }
+
+    var FM_ON = false;
+    function fmSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+    function fmTruthy(v) { return String(v == null ? "" : v).toLowerCase() === "true"; }
+
+    // A field datatable = the one whose columns include headerLabel + fieldLabel (NOT the
+    // refresh-history table). Same identifier the export uses (readDsFields).
+    function fmIsFieldTable(dt) {
+      try {
+        var cols = fmSafe(dt, "columns"); if (!Array.isArray(cols)) return false;
+        var names = cols.map(function (c) { return fmSafe(c, "fieldName") || ""; });
+        return names.indexOf("headerLabel") >= 0 && names.indexOf("fieldLabel") >= 0;
+      } catch (e) { return false; }
+    }
+
+    // The rendered data <tr>s of a datatable (those with a th/td cell), in render order.
+    function fmDataRows(dt) {
+      var sr = dt.shadowRoot || dt, trs = [], out = [];
+      try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
+      for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) out.push(trs[i]); }
+      return out;
+    }
+
+    // ── one shared popover (built once) ──────────────────────────────────────────────
+    var _fmPop = null, _fmPopFor = null, _fmHideT = null;
+    function fmBuildPopover() {
+      if (_fmPop) return _fmPop;
+      var p = document.createElement("div");
+      p.id = "dc-fm-pop";
+      p.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:420px;min-width:200px;background:#0b1020;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:0;font:12px/1.5 -apple-system,sans-serif;";
+      var head = document.createElement("div");
+      head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid #243049;";
+      var ttl = document.createElement("span"); ttl.id = "dc-fm-ttl"; ttl.style.cssText = "font:600 12px/1.3 -apple-system,sans-serif;color:#9fb0c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      var copy = document.createElement("button"); copy.id = "dc-fm-copy"; copy.textContent = "Copy";
+      copy.style.cssText = "flex-shrink:0;border:1px solid #3b82f6;background:#1d4ed8;color:#fff;border-radius:6px;padding:3px 10px;font:600 11px/1 -apple-system,sans-serif;cursor:pointer;";
+      head.appendChild(ttl); head.appendChild(copy);
+      var body = document.createElement("pre"); body.id = "dc-fm-body";
+      body.style.cssText = "margin:0;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:11px/1.5 'SF Mono',Menlo,Consolas,monospace;color:#e5edff;";
+      p.appendChild(head); p.appendChild(body);
+      // keep open while the pointer is over the popover (so you can click Copy / select text)
+      p.addEventListener("pointerenter", function () { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
+      p.addEventListener("pointerleave", function () { fmScheduleHide(); });
+      copy.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var txt = body.textContent || "";
+        function flash() { copy.textContent = "✓ Copied"; setTimeout(function () { copy.textContent = "Copy"; }, 900); }
+        try { navigator.clipboard.writeText(txt).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+        catch (e3) { flash(); }
+      });
+      document.body.appendChild(p);
+      _fmPop = p;
+      return p;
+    }
+    function fmScheduleHide() { if (_fmHideT) clearTimeout(_fmHideT); _fmHideT = setTimeout(function () { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; }, 180); }
+    function fmShowPopover(anchorRect, label, formula) {
+      var p = fmBuildPopover();
+      p.querySelector("#dc-fm-ttl").textContent = "ƒ " + (label || "Formula");
+      p.querySelector("#dc-fm-body").textContent = formula;
+      p.style.display = "block";
+      // position below the row, clamped to viewport
+      var pw = Math.min(420, Math.max(200, p.offsetWidth || 300));
+      var left = Math.max(8, Math.min(anchorRect.left, (window.innerWidth || 1200) - pw - 8));
+      var top = anchorRect.bottom + 6;
+      var ph = p.offsetHeight || 120;
+      if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 6);
+      p.style.left = left + "px"; p.style.top = top + "px";
+    }
+
+    // Decorate: for each VISIBLE field datatable, align data[] ↔ rendered rows by index; on a
+    // formula row add a ƒ badge + row title + hover handlers. Index alignment proven by v38.
+    var _fmSpans = [];
+    function fmClear() {
+      for (var i = 0; i < _fmSpans.length; i++) { try { _fmSpans[i].remove(); } catch (e) {} }
+      _fmSpans = [];
+      // also drop the hover wiring flag + title we set on rows
+      try { _fmRows.forEach(function (tr) { try { tr.__dcFmWired = false; tr.removeAttribute("title"); } catch (e) {} }); } catch (e) {}
+      _fmRows = [];
+    }
+    var _fmRows = [];
+    function fmDecorate() {
+      if (!FM_ON) return;
+      var tables = findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable);
+      for (var t = 0; t < tables.length; t++) {
+        var dt = tables[t];
+        var data = fmSafe(dt, "data"); if (!Array.isArray(data) || !data.length) continue;
+        var rows = fmDataRows(dt);
+        if (rows.length !== data.length) continue;   // only when aligned (proven count match)
+        for (var j = 0; j < rows.length; j++) {
+          var rec = data[j]; if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) continue;
+          var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") continue;
+          var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
+          fmWireRow(rows[j], String(label), String(formula));
+        }
+      }
+    }
+    function fmWireRow(tr, label, formula) {
+      if (!tr || tr.__dcFmWired) return;
+      tr.__dcFmWired = true;
+      _fmRows.push(tr);
+      try { tr.setAttribute("title", "ƒ " + label + " = " + formula); } catch (e) {}   // guaranteed fallback
+      // ƒ badge on the first cell so the row is discoverable as hoverable
+      try {
+        var cell = tr.querySelector("th,td");
+        if (cell) {
+          var badge = document.createElement("span");
+          badge.className = "dc-fm-badge"; badge.textContent = "ƒ";
+          badge.setAttribute("title", "Hover to see this field's formula");
+          var s = function (p, v) { try { badge.style.setProperty(p, v, "important"); } catch (e) {} };
+          s("display", "inline-flex"); s("align-items", "center"); s("justify-content", "center");
+          s("width", "15px"); s("height", "15px"); s("margin-right", "5px"); s("border-radius", "4px");
+          s("background", "#eef2ff"); s("color", "#4338ca"); s("font", "italic 700 11px/1 Georgia,serif");
+          s("vertical-align", "middle"); s("cursor", "help");
+          cell.insertBefore(badge, cell.firstChild);
+          _fmSpans.push(badge);
+        }
+      } catch (e) {}
+      // hover handlers on the whole row
+      tr.addEventListener("pointerenter", function () {
+        if (!FM_ON) return;
+        if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; }
+        var rect; try { rect = tr.getBoundingClientRect(); } catch (e) { return; }
+        _fmPopFor = tr;
+        fmShowPopover(rect, label, formula);
+      });
+      tr.addEventListener("pointerleave", function () { if (_fmPopFor === tr) fmScheduleHide(); });
+    }
+
+    // Signature of formula content so the 700ms tick only re-decorates when it changes (no churn).
+    function fmSignature() {
+      var parts = [];
+      try {
+        findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable).forEach(function (dt) {
+          var data = fmSafe(dt, "data"); if (!Array.isArray(data)) return;
+          for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && fmTruthy(fmSafe(r, "isFormulaField"))) parts.push((r.fieldName || "") + ":" + (r.formula || "")); }
+        });
+      } catch (e) {}
+      return parts.join("|");
+    }
+    var _fmSig = null, _fmObs = null, _fmT = null, _fmTick = null, _fmWriting = false;
+    function fmRun(force) {
+      if (!FM_ON) return;
+      var sig = fmSignature();
+      if (!force && sig === _fmSig && _fmRows.length) return;
+      _fmSig = sig;
+      _fmWriting = true;
+      try { if (_fmObs) _fmObs.disconnect(); } catch (e) {}
+      try { fmClear(); fmDecorate(); } catch (e) {}
+      try { if (_fmObs && FM_ON) _fmObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _fmWriting = false;
+    }
+    function fmSchedule() { if (_fmWriting || _fmT) return; _fmT = setTimeout(function () { _fmT = null; fmRun(false); }, 250); }
+    function fmStart() {
+      FM_ON = true;
+      if (!_fmObs) { try { _fmObs = new MutationObserver(fmSchedule); } catch (e) {} }
+      if (!_fmTick) { try { _fmTick = setInterval(function () { if (FM_ON && !_fmWriting) fmRun(false); }, 700); } catch (e) {} }
+      fmRun(true);
+    }
+    function fmStop() {
+      FM_ON = false;
+      try { if (_fmObs) _fmObs.disconnect(); } catch (e) {}
+      try { if (_fmTick) { clearInterval(_fmTick); _fmTick = null; } } catch (e) {}
+      try { if (_fmPop) _fmPop.style.display = "none"; } catch (e) {}
+      _fmSig = null;
+      fmClear();
+    }
+    try {
+      window.__dcToggleDsFormula = function () { if (FM_ON) fmStop(); else fmStart(); return FM_ON; };
+      window.__dcDsFormulaIsOn = function () { return FM_ON; };
+      // how many formula fields exist (so the launcher can hide the row when there are none)
+      window.__dcDsFormulaCount = function () {
+        var n = 0;
+        try { findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable).forEach(function (dt) { var data = fmSafe(dt, "data"); if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && fmTruthy(fmSafe(r, "isFormulaField")) && r.formula) n++; } }); } catch (e) {}
+        return n;
+      };
+    } catch (e) {}
+  })();
+  /* @strip:end */
+
   if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /displayType=graph/i.test(window.location.href)) return;
@@ -19458,8 +19656,27 @@ processJSON();
         };
       }
 
+      // DataStream/DLO-only "Show formulas" entry — TOGGLES the hover popover (no panel). Shown
+      // ONLY when the page actually has formula fields (count>0); dev-gated at runtime because the
+      // toggle fn only exists when the dev-only formula module loaded. Export is unaffected.
+      let fmRow = null;
+      if ((detailPageType === "DataStream" || detailPageType === "DLO") &&
+          typeof window.__dcToggleDsFormula === "function" &&
+          typeof window.__dcDsFormulaCount === "function" && window.__dcDsFormulaCount() > 0) {
+        const fxIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><text x='3' y='12' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='13'>ƒ</text></svg>";
+        const fxOnNow = (typeof window.__dcDsFormulaIsOn === "function") && window.__dcDsFormulaIsOn();
+        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Toggle formula hints: hover a formula field to see its formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover a formula field" : "Off — click to enable hover");
+        const fxSub = fmRow.querySelector("span:last-child");
+        fmRow.onclick = (e) => {
+          e.stopPropagation();
+          let on = false; try { on = window.__dcToggleDsFormula(); } catch (err) {}
+          if (fxSub) fxSub.textContent = on ? "On — hover a formula field" : "Off — click to enable hover";
+        };
+      }
+
       menu.appendChild(dl);
       if (segApiRow) menu.appendChild(segApiRow);
+      if (fmRow) menu.appendChild(fmRow);
 
       const fab = document.createElement("button");
       fab.id = "dc-fab";

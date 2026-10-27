@@ -1,0 +1,135 @@
+// Data Stream / DLO formula-hover feature — pure logic + source-presence tests. Run in Node.
+//   node test/ds-formula-hover.test.js
+//
+// Feature: on a Data Stream / DLO page, the Fields table shows a Formula column as a CHECKMARK
+// only — the actual expression is never on the page. Toggle "Show formulas" from the FAB → hover
+// a FORMULA field → a popover shows its formula with a Copy button. ONLY formula fields react.
+//
+// PROVEN DOM (DOM Probe v38 on the real org — field datatable):
+//   <runtime_cdp-custom-datatable>.data[] = { fieldLabel, fieldName:"X__c",
+//        isFormulaField:"true"|"false", formula:"if(ISEMPTY(...)) {…}" | "" , … }
+//   The VISIBLE table's rendered <tr> count === data.length  → align data[j] ↔ row j by INDEX.
+//   (Stale cached copies render 0 rows → skipped via visibility.)
+// The formula is read DIRECTLY off data[j].formula — no guessing.
+
+let pass = 0, fail = 0;
+function ok(name, cond, extra) { if (cond) { pass++; console.log("  ✓ " + name); } else { fail++; console.log("  ✗ " + name + (extra ? "  → " + extra : "")); } }
+function eq(name, got, want) { ok(name, got === want, "got " + JSON.stringify(got) + " want " + JSON.stringify(want)); }
+
+function fmSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+function fmTruthy(v) { return String(v == null ? "" : v).toLowerCase() === "true"; }
+
+// Mirror of fmDecorate's per-row qualify: a row gets wired ONLY if it's a formula field with a
+// non-empty formula. Returns the formula to show, or null (row is left completely alone).
+function qualifyRow(rec) {
+  if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
+  var formula = fmSafe(rec, "formula");
+  if (formula == null || formula === "") return null;
+  return String(formula);
+}
+
+// Mirror of the field-table identification (columns include headerLabel + fieldLabel).
+function isFieldTable(cols) {
+  if (!Array.isArray(cols)) return false;
+  var names = cols.map(function (c) { return fmSafe(c, "fieldName") || ""; });
+  return names.indexOf("headerLabel") >= 0 && names.indexOf("fieldLabel") >= 0;
+}
+
+// Mirror of the index-alignment gate: only decorate when rendered row count === data length.
+function aligned(dataLen, renderedRowCount) { return dataLen === renderedRowCount; }
+
+// Mirror of __dcDsFormulaCount: number of formula fields with a formula.
+function formulaCount(data) {
+  var n = 0;
+  for (var i = 0; i < data.length; i++) { if (qualifyRow(data[i]) != null) n++; }
+  return n;
+}
+
+console.log("\n1. ONLY formula fields qualify (the explicit requirement)");
+{
+  // real rows from DOM Probe v38
+  var fFormula = { fieldLabel: "cdp_sys_PartitionDate", fieldName: "cdp_sys_PartitionDate__c", isFormulaField: "true", formula: "if(ISEMPTY(formulaField['dateTime__c'])) { null; } else { DAYPRECISION(formulaField['dateTime__c']); }" };
+  var fConst   = { fieldLabel: "Data Source", fieldName: "DataSource__c", isFormulaField: "true", formula: "'UploadedFiles'" };
+  var fPlain   = { fieldLabel: "affinity", fieldName: "catalog_affinity__c", isFormulaField: "false", formula: "" };
+  var fFlaggedButEmpty = { fieldLabel: "Weird", fieldName: "Weird__c", isFormulaField: "true", formula: "" };
+
+  eq("formula field with expression → shows the formula", qualifyRow(fFormula), "if(ISEMPTY(formulaField['dateTime__c'])) { null; } else { DAYPRECISION(formulaField['dateTime__c']); }");
+  eq("formula field with a constant expression → shows it", qualifyRow(fConst), "'UploadedFiles'");
+  eq("NON-formula field → null (no popover, no badge, row untouched)", qualifyRow(fPlain), null);
+  eq("flagged formula but empty expression → null (nothing to show)", qualifyRow(fFlaggedButEmpty), null);
+  eq("null record → null", qualifyRow(null), null);
+  eq("missing isFormulaField → null", qualifyRow({ fieldName: "X__c", formula: "ABC" }), null);
+}
+
+console.log("\n2. formula count drives whether the FAB row is offered at all");
+{
+  var mixed = [
+    { isFormulaField: "true", formula: "A" },
+    { isFormulaField: "false", formula: "" },
+    { isFormulaField: "true", formula: "B" },
+    { isFormulaField: "true", formula: "" }   // flagged-but-empty doesn't count
+  ];
+  eq("count = number of formula fields WITH an expression", formulaCount(mixed), 2);
+  eq("no formula fields → count 0 (launcher hides the Show-formulas row)", formulaCount([{ isFormulaField: "false", formula: "" }]), 0);
+  eq("empty table → 0", formulaCount([]), 0);
+}
+
+console.log("\n3. field-table identification (headerLabel + fieldLabel)");
+{
+  var fieldCols = [{ fieldName: "headerLabel" }, { fieldName: "fieldLabel" }, { fieldName: "Field API Name" }, { fieldName: "Formula Field" }];
+  var historyCols = [{ fieldName: "startExecutionTime" }, { fieldName: "status" }];
+  ok("field table recognized", isFieldTable(fieldCols) === true);
+  ok("refresh-history table NOT treated as field table", isFieldTable(historyCols) === false);
+  ok("non-array columns → false", isFieldTable(null) === false);
+}
+
+console.log("\n4. index alignment gate (proven: visible table rendered-rows === data length)");
+{
+  ok("56 data / 56 rendered → aligned, decorate", aligned(56, 56) === true);
+  ok("56 data / 0 rendered (stale cached table) → NOT aligned, skip", aligned(56, 0) === false);
+  ok("13 data / 13 rendered → aligned", aligned(13, 13) === true);
+}
+
+console.log("\n5. source presence — the module is wired, dev-only, VDI-safe, export-independent");
+{
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+
+  ok("module present", /function dcDsFormulaModule\(\)/.test(src));
+  ok("gated to Data Stream / DLO detail pages only",
+    /\/\\\/r\\\/DataStream\\\/\[a-zA-Z0-9\]\{15,18\}\\\//.test(src) && /DataLakeObjectInstance/.test(src));
+  ok("reads formula DIRECTLY from data[j].formula (no guessing)",
+    /fmSafe\(rec, "formula"\)/.test(src) && /fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)/.test(src));
+  ok("ONLY wires rows that are formula fields with a non-empty formula",
+    /if \(!rec \|\| !fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)\) continue;/.test(src) && /if \(formula == null \|\| formula === ""\) continue;/.test(src));
+  ok("aligns data[] to rendered rows by INDEX, only when counts match (proven by probe v38)",
+    /if \(rows\.length !== data\.length\) continue;/.test(src));
+  ok("field table identified by headerLabel + fieldLabel (same as export)",
+    /names\.indexOf\("headerLabel"\) >= 0 && names\.indexOf\("fieldLabel"\) >= 0/.test(src));
+  ok("decorates only VISIBLE field datatables (skips stale cached 0-row copies)",
+    /findVisibleByTag\("runtime_cdp-custom-datatable"\)\.filter\(fmIsFieldTable\)/.test(src));
+  ok("popover has a Copy button that writes the formula to clipboard",
+    /id = "dc-fm-pop"/.test(src) && /navigator\.clipboard\.writeText\(txt\)/.test(src));
+  ok("ƒ badge marks formula rows for discoverability", /className = "dc-fm-badge"; badge\.textContent = "ƒ"/.test(src));
+  ok("row title fallback always set (ƒ label = formula)", /tr\.setAttribute\("title", "ƒ " \+ label \+ " = " \+ formula\)/.test(src));
+  ok("toggle + default OFF + count exposed to the launcher",
+    /window\.__dcToggleDsFormula/.test(src) && /window\.__dcDsFormulaIsOn/.test(src) && /window\.__dcDsFormulaCount/.test(src) && /var FM_ON = false;/.test(src));
+  ok("VDI-safe: signature guard + 700ms tick + observer disconnect while writing",
+    /function fmSignature/.test(src) && /_fmTick = setInterval\(/.test(src) && /_fmWriting = true;/.test(src));
+  ok("stop() clears the interval tick (no leaked timer)", /clearInterval\(_fmTick\)/.test(src));
+
+  // launcher wiring: the row shows ONLY when count>0, and export is a separate button
+  ok("launcher offers the toggle ONLY when formula fields exist (count>0)",
+    /window\.__dcDsFormulaCount\(\) > 0/.test(src));
+  ok("launcher row is DataStream/DLO only", /\(detailPageType === "DataStream" \|\| detailPageType === "DLO"\)[\s\S]{0,160}__dcToggleDsFormula/.test(src));
+  ok("export button (Export Fields) is a SEPARATE action, unaffected by the toggle",
+    /openDsExport\(\)/.test(src) && /dc-detail-btn/.test(src));
+
+  // dev-only: stripped from the public bookmarklet
+  ok("module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDsFormulaModule/.test(strip); })());
+  ok("module present in the FULL bookmarklet build (synced)", /function dcDsFormulaModule\(\)/.test(bm));
+}
+
+console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
+process.exit(fail === 0 ? 0 : 1);

@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -244,7 +244,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
-    .concat(includeDev ? ["Data Model (ERD)", "Data Graph", "Object lists &rarr; New Tab", "Nav &rarr; New Tab", "Data Explorer", "Segment", "Activation", "Query Editor", "Data Transform"] : [])
+    .concat(includeDev ? ["Data Model (ERD)", "Data Graph", "Formula fields", "Object lists &rarr; New Tab", "Nav &rarr; New Tab", "Data Explorer", "Segment", "Activation", "Query Editor", "Data Transform"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -304,6 +304,13 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li><b>Click any API name to copy it</b> (it flashes &ldquo;&#10003; Copied&rdquo;). Every field also shows its API name on <b>hover</b> as a fallback.</li>" +
       "</ul>" +
       "<span class=\"gi\"><b>Duplicate labels are exact, not guessed:</b> the Filters tab reads each dropdown&rsquo;s <b>selected field API directly</b> from the page &mdash; so even if two fields share the same label, you always get the exact one that was picked.</span>") +
+    acc("&#402;", "Formula fields (Data Stream / DLO)", ["Hover", "Copy"],
+      "<p>On a Data Stream or Data Lake Object page, the Fields table shows a <b>Formula</b> column &mdash; but only as a checkmark. The actual expression isn&rsquo;t shown anywhere on the page. Turn on <b>Show formulas</b> from the launcher menu to read it without opening the export.</p>" +
+      "<ul>" +
+      "<li>Formula fields get a small <b>&#402;</b> badge so you can spot them.</li>" +
+      "<li><b>Hover</b> a formula field &mdash; a popover shows the full expression (scrollable if long) with a <b>Copy</b> button. Only formula fields react; the rest of the table is untouched.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">The <b>Show formulas</b> option only appears when the page actually has formula fields. It&rsquo;s separate from <b>Export Fields</b> &mdash; if you just want the whole list, export still includes the formula expressions.</span>") +
     acc("&#128194;", "Object lists (records)", ["Open in New Tab"],
       "<p>On <b>any</b> Data Cloud object list &mdash; Data Streams, Data Lake Objects, Data Model Objects, Calculated Insights, Segments, Activations, Data Graphs, Identity Resolution, and the rest &mdash; hover a row and a <b>&#10697;</b> button appears by its name to <b>open that record in a new tab</b>.</p>" +
       "<span class=\"gi\"><b>Why this helps:</b> many of these list rows aren&rsquo;t real links (the name runs a script instead of a URL), so a normal right-click &rarr; &ldquo;Open in new tab&rdquo; doesn&rsquo;t work &mdash; today you have to duplicate the tab. The tool reads the row&rsquo;s own record id and opens the exact record directly &mdash; and deliberately ignores lookup columns (e.g. a &ldquo;Data Space&rdquo; cell), so it always opens the row&rsquo;s record, never a related one.</span>") +
@@ -610,6 +617,8 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/Data Model \(ERD\)/, "Data Model / ERD (dev-only, stripped from public)"],
     [/acc-nm">Data Graph</, "Data Graph accordion row (dev-only, stripped from public)"],
     [/chip">Data Graph</, "Data Graph chip (dev-only, stripped from public)"],
+    [/acc-nm">Formula fields/, "Formula-fields accordion row (dev-only, stripped from public)"],
+    [/chip">Formula fields</, "Formula-fields chip (dev-only, stripped from public)"],
     [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
     [/chip">Segment</, "Segment chip (stripped from public)"],
     [/Export Rules/, "Export Rules launcher (Segment)"],
