@@ -90,7 +90,37 @@ console.log("\n4. index alignment gate (proven: visible table rendered-rows === 
   ok("13 data / 13 rendered → aligned", aligned(13, 13) === true);
 }
 
-console.log("\n5. source presence — the module is wired, dev-only, VDI-safe, export-independent");
+console.log("\n4b. ON-DEMAND cell→formula resolution (hover the Formula cell; inject nothing)");
+{
+  // Mirror of fmFormulaForCell: given the hovered row's index into data[], return {label,formula}
+  // ONLY if it's a formula field with a formula and the table is aligned.
+  function cellFormula(data, renderedRowCount, rowIndex) {
+    if (data.length !== renderedRowCount) return null;   // alignment gate
+    if (rowIndex < 0) return null;
+    var rec = data[rowIndex];
+    if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
+    var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
+    return { label: String(rec.fieldLabel || rec.fieldName || "Formula"), formula: String(formula) };
+  }
+  var data = [
+    { fieldLabel: "Person Name", fieldName: "Person_Name__c", isFormulaField: "true", formula: "CONCAT(sourceField['contact_first_name'], \" \",sourceField['contact_last_name'])" },
+    { fieldLabel: "affinity", fieldName: "catalog_affinity__c", isFormulaField: "false", formula: "" }
+  ];
+  var got = cellFormula(data, 2, 0);
+  eq("hover formula row 0 → its exact formula", got && got.formula, "CONCAT(sourceField['contact_first_name'], \" \",sourceField['contact_last_name'])");
+  eq("hover formula row 0 → its label", got && got.label, "Person Name");
+  eq("hover NON-formula row 1 → null (nothing shown)", cellFormula(data, 2, 1), null);
+  eq("misaligned table (data 2 / rendered 0) → null (don't trust index)", cellFormula(data, 0, 0), null);
+  eq("row not found (index -1) → null", cellFormula(data, 2, -1), null);
+
+  // Mirror of fmIsFormulaCell: formula column detected by data-label OR a check icon.
+  function isFormulaCell(dataLabel, hasCheckIcon) { return /formula/i.test(dataLabel || "") || !!hasCheckIcon; }
+  ok("cell with data-label 'Formula Field' → formula cell", isFormulaCell("Formula Field", false) === true);
+  ok("cell with a check icon (no data-label) → formula cell (fallback)", isFormulaCell("", true) === true);
+  ok("cell in 'Data Type' column, no check → NOT a formula cell", isFormulaCell("Data Type", false) === false);
+}
+
+console.log("\n5. source presence — on-demand (no inject, no poll), dev-only, export-independent");
 {
   const fs = require("fs"), path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
@@ -99,25 +129,28 @@ console.log("\n5. source presence — the module is wired, dev-only, VDI-safe, e
   ok("module present", /function dcDsFormulaModule\(\)/.test(src));
   ok("gated to Data Stream / DLO detail pages only",
     /\/\\\/r\\\/DataStream\\\/\[a-zA-Z0-9\]\{15,18\}\\\//.test(src) && /DataLakeObjectInstance/.test(src));
-  ok("reads formula DIRECTLY from data[j].formula (no guessing)",
+  ok("reads formula DIRECTLY from data[idx].formula (no guessing)",
     /fmSafe\(rec, "formula"\)/.test(src) && /fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)/.test(src));
-  ok("ONLY wires rows that are formula fields with a non-empty formula",
-    /if \(!rec \|\| !fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)\) continue;/.test(src) && /if \(formula == null \|\| formula === ""\) continue;/.test(src));
+  ok("resolves the hovered cell's row to a formula ONLY if it's a formula field with a formula",
+    /function fmFormulaForCell/.test(src) && /if \(!rec \|\| !fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)\) return null;/.test(src) && /if \(formula == null \|\| formula === ""\) return null;/.test(src));
   ok("aligns data[] to rendered rows by INDEX, only when counts match (proven by probe v38)",
-    /if \(rows\.length !== data\.length\) continue;/.test(src));
+    /if \(rows\.length !== data\.length\) return null;/.test(src) && /var idx = rows\.indexOf\(row\)/.test(src));
   ok("field table identified by headerLabel + fieldLabel (same as export)",
     /names\.indexOf\("headerLabel"\) >= 0 && names\.indexOf\("fieldLabel"\) >= 0/.test(src));
-  ok("decorates only VISIBLE field datatables (skips stale cached 0-row copies)",
-    /findVisibleByTag\("runtime_cdp-custom-datatable"\)\.filter\(fmIsFieldTable\)/.test(src));
-  ok("popover has a Copy button that writes the formula to clipboard",
-    /id = "dc-fm-pop"/.test(src) && /navigator\.clipboard\.writeText\(txt\)/.test(src));
-  ok("ƒ badge marks formula rows for discoverability", /className = "dc-fm-badge"; badge\.textContent = "ƒ"/.test(src));
-  ok("row title fallback always set (ƒ label = formula)", /tr\.setAttribute\("title", "ƒ " \+ label \+ " = " \+ formula\)/.test(src));
+  ok("triggers ONLY on the Formula column cell (data-label OR check-icon fallback)",
+    /function fmIsFormulaCell/.test(src) && /\/formula\/i\.test\(fmCellLabel\(cell\)\)/.test(src) && /fmCellHasCheckIcon/.test(src));
+  ok("INJECTS NOTHING into the table (no badge, no row title) — row size never changes",
+    !/dc-fm-badge/.test(src) && !/tr\.setAttribute\("title"/.test(src) && !/cell\.insertBefore/.test(src));
+  ok("NO MutationObserver and NO interval in the module (zero idle/background work)",
+    !/MutationObserver\(fmSchedule\)/.test(src) && !/setInterval\([^)]*fmRun/.test(src) && !/_fmTick/.test(src));
+  ok("only always-on cost is ONE delegated pointerover listener, added on enable",
+    /document\.addEventListener\("pointerover", fmOnOver, true\)/.test(src) && /function fmWire/.test(src));
+  ok("hover handler early-returns when the feature is OFF (cheap no-op)",
+    /function fmOnOver\(e\) \{\s*if \(!FM_ON\) return;/.test(src));
+  ok("popover built lazily (only when first shown) with a Copy button to clipboard",
+    /function fmBuildPopover/.test(src) && /id = "dc-fm-pop"/.test(src) && /navigator\.clipboard\.writeText\(txt\)/.test(src));
   ok("toggle + default OFF + count exposed to the launcher",
     /window\.__dcToggleDsFormula/.test(src) && /window\.__dcDsFormulaIsOn/.test(src) && /window\.__dcDsFormulaCount/.test(src) && /var FM_ON = false;/.test(src));
-  ok("VDI-safe: signature guard + 700ms tick + observer disconnect while writing",
-    /function fmSignature/.test(src) && /_fmTick = setInterval\(/.test(src) && /_fmWriting = true;/.test(src));
-  ok("stop() clears the interval tick (no leaked timer)", /clearInterval\(_fmTick\)/.test(src));
 
   // launcher wiring: the row shows ONLY when count>0, and export is a separate button
   ok("launcher offers the toggle ONLY when formula fields exist (count>0)",

@@ -19405,18 +19405,20 @@ processJSON();
   /* @strip:end */
 
   /* @strip:start dev
-   * ── DATA STREAM / DLO: hover a formula field to see & copy its formula (dev-only) ───────────
-   * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never
-   * displayed on the page (you must open our export modal). This adds an on-page hover popover.
+   * ── DATA STREAM / DLO: hover the Formula-column checkmark to see & copy its formula (dev-only) ─
+   * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never on
+   * the page (you must open our export modal). This shows it in a hover popover with a Copy button.
    * PROVEN DOM (DOM Probe v38 on the live org):
    *   <runtime_cdp-custom-datatable>.data[] = { fieldLabel, fieldName:"X__c", isFormulaField:"true",
    *                                              formula:"if(ISEMPTY(...)) {…}", … }
-   *   The VISIBLE table's rendered <tr> count === data.length  → align data[j] ↔ row j by INDEX
-   *   (proven: index 1 table had 56 rows / 56 data; stale cached copies had 0 rendered rows).
-   *   Cell text lives in nested shadow (renderedRowText === "") → anchor on the <tr> by index,
-   *   never by text. We mark formula rows with a small ƒ badge, set an "ƒ <formula>" row title as
-   *   a guaranteed fallback, and show a popover with a Copy button on hover. Toggle on/off; default
-   *   OFF (turned on from the Data Stream / DLO FAB). Read-only.
+   *   Rendered <tr> count === data.length on the visible table → data[j] ↔ row j by INDEX.
+   * DESIGN (addresses the reported row-resize + VDI cost of the first cut): FULLY ON-DEMAND.
+   *   • We INJECT NOTHING into the table — no badge, no title — so row height/width never change.
+   *   • NO MutationObserver and NO interval — zero idle/background work (the old 700ms shadow crawl
+   *     was the VDI weight). Instead ONE delegated pointerover listener (capture) that cheaply
+   *     no-ops unless the feature is ON and the pointer is on a Formula-column checkmark cell.
+   *   • On such a hover we read the row's formula live from data[] and show a popover anchored to
+   *     the cell. Toggle on/off from the FAB; default OFF. Read-only.
    */
   (function dcDsFormulaModule() {
     // Only on a Data Stream or DLO detail page — the two pages with the formula Fields table.
@@ -19429,8 +19431,8 @@ processJSON();
     function fmSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
     function fmTruthy(v) { return String(v == null ? "" : v).toLowerCase() === "true"; }
 
-    // A field datatable = the one whose columns include headerLabel + fieldLabel (NOT the
-    // refresh-history table). Same identifier the export uses (readDsFields).
+    // A field datatable = columns include headerLabel + fieldLabel (NOT the refresh-history table).
+    // Same identifier the export uses (readDsFields).
     function fmIsFieldTable(dt) {
       try {
         var cols = fmSafe(dt, "columns"); if (!Array.isArray(cols)) return false;
@@ -19438,7 +19440,6 @@ processJSON();
         return names.indexOf("headerLabel") >= 0 && names.indexOf("fieldLabel") >= 0;
       } catch (e) { return false; }
     }
-
     // The rendered data <tr>s of a datatable (those with a th/td cell), in render order.
     function fmDataRows(dt) {
       var sr = dt.shadowRoot || dt, trs = [], out = [];
@@ -19447,7 +19448,46 @@ processJSON();
       return out;
     }
 
-    // ── one shared popover (built once) ──────────────────────────────────────────────
+    // Is this cell the FORMULA column? Lightning's datatable primitive stamps each data cell with
+    // data-label = the column's label (used for SLDS responsive stacking) — the formula column's
+    // label contains "Formula" ("Formula Field"). That's the primary signal. FALLBACK (in case
+    // this custom datatable doesn't stamp data-label): the formula column renders a CHECK icon
+    // (isFormulaFieldIcon = "utility:check" per probe v38) — so a cell containing a check icon on a
+    // formula row is the formula cell. Either way we only ever act on a confirmed formula ROW
+    // (fmFormulaForCell gates that), so the worst case is simply not triggering — never wrong data.
+    function fmCellLabel(cell) {
+      try { return (cell.getAttribute && (cell.getAttribute("data-label") || cell.getAttribute("aria-label"))) || ""; } catch (e) { return ""; }
+    }
+    function fmCellHasCheckIcon(cell) {
+      try {
+        var ic = cell.querySelector && cell.querySelector("lightning-icon,lightning-primitive-icon,svg,use");
+        if (!ic) return false;
+        var s = ""; try { s = (ic.getAttribute && (ic.getAttribute("icon-name") || ic.getAttribute("href") || ic.getAttribute("xlink:href"))) || ""; } catch (e) {}
+        if (/check/i.test(s)) return true;
+        // the primitive-icon nests a <use xlink:href="…#check">
+        var u = cell.querySelector && cell.querySelector("use");
+        if (u) { var h = ""; try { h = u.getAttribute("xlink:href") || u.getAttribute("href") || ""; } catch (e) {} if (/check/i.test(h)) return true; }
+        return false;
+      } catch (e) { return false; }
+    }
+    function fmIsFormulaCell(cell) { return /formula/i.test(fmCellLabel(cell)) || fmCellHasCheckIcon(cell); }
+
+    // Climb from an event target (crossing shadow via getRootNode().host) to the nearest matching
+    // ancestor: {cell, row, table}. Stops at the datatable. No polling — only runs on a hover.
+    function fmClimb(start) {
+      var n = start, cell = null, row = null, table = null;
+      var hops = 0;
+      while (n && hops++ < 60) {
+        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
+        if (!cell && (t === "td" || t === "th")) cell = n;
+        if (!row && t === "tr") row = n;
+        if (t === "runtime_cdp-custom-datatable") { table = n; break; }
+        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
+      }
+      return { cell: cell, row: row, table: table };
+    }
+
+    // ── one shared popover (built once, only when first needed) ───────────────────────
     var _fmPop = null, _fmPopFor = null, _fmHideT = null;
     function fmBuildPopover() {
       if (_fmPop) return _fmPop;
@@ -19483,7 +19523,6 @@ processJSON();
       p.querySelector("#dc-fm-ttl").textContent = "ƒ " + (label || "Formula");
       p.querySelector("#dc-fm-body").textContent = formula;
       p.style.display = "block";
-      // position below the row, clamped to viewport
       var pw = Math.min(420, Math.max(200, p.offsetWidth || 300));
       var left = Math.max(8, Math.min(anchorRect.left, (window.innerWidth || 1200) - pw - 8));
       var top = anchorRect.bottom + 6;
@@ -19492,107 +19531,60 @@ processJSON();
       p.style.left = left + "px"; p.style.top = top + "px";
     }
 
-    // Decorate: for each VISIBLE field datatable, align data[] ↔ rendered rows by index; on a
-    // formula row add a ƒ badge + row title + hover handlers. Index alignment proven by v38.
-    var _fmSpans = [];
-    function fmClear() {
-      for (var i = 0; i < _fmSpans.length; i++) { try { _fmSpans[i].remove(); } catch (e) {} }
-      _fmSpans = [];
-      // also drop the hover wiring flag + title we set on rows
-      try { _fmRows.forEach(function (tr) { try { tr.__dcFmWired = false; tr.removeAttribute("title"); } catch (e) {} }); } catch (e) {}
-      _fmRows = [];
-    }
-    var _fmRows = [];
-    function fmDecorate() {
-      if (!FM_ON) return;
-      var tables = findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable);
-      for (var t = 0; t < tables.length; t++) {
-        var dt = tables[t];
-        var data = fmSafe(dt, "data"); if (!Array.isArray(data) || !data.length) continue;
-        var rows = fmDataRows(dt);
-        if (rows.length !== data.length) continue;   // only when aligned (proven count match)
-        for (var j = 0; j < rows.length; j++) {
-          var rec = data[j]; if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) continue;
-          var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") continue;
-          var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
-          fmWireRow(rows[j], String(label), String(formula));
-        }
-      }
-    }
-    function fmWireRow(tr, label, formula) {
-      if (!tr || tr.__dcFmWired) return;
-      tr.__dcFmWired = true;
-      _fmRows.push(tr);
-      try { tr.setAttribute("title", "ƒ " + label + " = " + formula); } catch (e) {}   // guaranteed fallback
-      // ƒ badge on the first cell so the row is discoverable as hoverable
+    // Given a hovered Formula cell, find its row's formula from data[] by INDEX (proven alignment).
+    // Returns {label, formula} or null. We INJECT NOTHING — purely read props on demand.
+    function fmFormulaForCell(cell, row, table) {
       try {
-        var cell = tr.querySelector("th,td");
-        if (cell) {
-          var badge = document.createElement("span");
-          badge.className = "dc-fm-badge"; badge.textContent = "ƒ";
-          badge.setAttribute("title", "Hover to see this field's formula");
-          var s = function (p, v) { try { badge.style.setProperty(p, v, "important"); } catch (e) {} };
-          s("display", "inline-flex"); s("align-items", "center"); s("justify-content", "center");
-          s("width", "15px"); s("height", "15px"); s("margin-right", "5px"); s("border-radius", "4px");
-          s("background", "#eef2ff"); s("color", "#4338ca"); s("font", "italic 700 11px/1 Georgia,serif");
-          s("vertical-align", "middle"); s("cursor", "help");
-          cell.insertBefore(badge, cell.firstChild);
-          _fmSpans.push(badge);
-        }
-      } catch (e) {}
-      // hover handlers on the whole row
-      tr.addEventListener("pointerenter", function () {
-        if (!FM_ON) return;
-        if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; }
-        var rect; try { rect = tr.getBoundingClientRect(); } catch (e) { return; }
-        _fmPopFor = tr;
-        fmShowPopover(rect, label, formula);
-      });
-      tr.addEventListener("pointerleave", function () { if (_fmPopFor === tr) fmScheduleHide(); });
+        if (!fmIsFieldTable(table)) return null;
+        var data = fmSafe(table, "data"); if (!Array.isArray(data) || !data.length) return null;
+        var rows = fmDataRows(table);
+        if (rows.length !== data.length) return null;   // only when aligned (proven count match)
+        var idx = rows.indexOf(row); if (idx < 0) return null;
+        var rec = data[idx]; if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
+        var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
+        var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
+        return { label: String(label), formula: String(formula) };
+      } catch (e) { return null; }
     }
 
-    // Signature of formula content so the 700ms tick only re-decorates when it changes (no churn).
-    function fmSignature() {
-      var parts = [];
-      try {
-        findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable).forEach(function (dt) {
-          var data = fmSafe(dt, "data"); if (!Array.isArray(data)) return;
-          for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && fmTruthy(fmSafe(r, "isFormulaField"))) parts.push((r.fieldName || "") + ":" + (r.formula || "")); }
-        });
-      } catch (e) {}
-      return parts.join("|");
-    }
-    var _fmSig = null, _fmObs = null, _fmT = null, _fmTick = null, _fmWriting = false;
-    function fmRun(force) {
+    // THE only always-on cost: one delegated pointerover listener (capture). It returns in a few
+    // cheap checks unless the feature is ON and the pointer is on a Formula-column cell. No
+    // observer, no interval, no injected DOM → nothing changes row size and nothing runs idle.
+    var _fmWired = false;
+    function fmOnOver(e) {
       if (!FM_ON) return;
-      var sig = fmSignature();
-      if (!force && sig === _fmSig && _fmRows.length) return;
-      _fmSig = sig;
-      _fmWriting = true;
-      try { if (_fmObs) _fmObs.disconnect(); } catch (e) {}
-      try { fmClear(); fmDecorate(); } catch (e) {}
-      try { if (_fmObs && FM_ON) _fmObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
-      _fmWriting = false;
+      var cell = null, climbed;
+      try {
+        var tgt = (e.composedPath && e.composedPath()[0]) || e.target;
+        climbed = fmClimb(tgt);
+      } catch (er) { return; }
+      cell = climbed && climbed.cell;
+      if (!cell || !climbed.row || !climbed.table) return;
+      if (!fmIsFormulaCell(cell)) { if (_fmPopFor) fmScheduleHide(); return; }   // not the formula column
+      var info = fmFormulaForCell(cell, climbed.row, climbed.table);
+      if (!info) { if (_fmPopFor) fmScheduleHide(); return; }
+      if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; }
+      _fmPopFor = cell;
+      var rect; try { rect = cell.getBoundingClientRect(); } catch (er2) { return; }
+      fmShowPopover(rect, info.label, info.formula);
     }
-    function fmSchedule() { if (_fmWriting || _fmT) return; _fmT = setTimeout(function () { _fmT = null; fmRun(false); }, 250); }
-    function fmStart() {
-      FM_ON = true;
-      if (!_fmObs) { try { _fmObs = new MutationObserver(fmSchedule); } catch (e) {} }
-      if (!_fmTick) { try { _fmTick = setInterval(function () { if (FM_ON && !_fmWriting) fmRun(false); }, 700); } catch (e) {} }
-      fmRun(true);
+    function fmOnOut(e) {
+      if (!FM_ON || !_fmPopFor) return;
+      // hide when leaving the formula cell (unless moving onto the popover, handled by its own enter)
+      try { var climbed = fmClimb((e.composedPath && e.composedPath()[0]) || e.target); if (climbed.cell === _fmPopFor) fmScheduleHide(); } catch (er) {}
     }
-    function fmStop() {
-      FM_ON = false;
-      try { if (_fmObs) _fmObs.disconnect(); } catch (e) {}
-      try { if (_fmTick) { clearInterval(_fmTick); _fmTick = null; } } catch (e) {}
-      try { if (_fmPop) _fmPop.style.display = "none"; } catch (e) {}
-      _fmSig = null;
-      fmClear();
+    function fmWire() {
+      if (_fmWired) return;
+      _fmWired = true;
+      try { document.addEventListener("pointerover", fmOnOver, true); } catch (e) {}
+      try { document.addEventListener("pointerout", fmOnOut, true); } catch (e) {}
     }
+
     try {
-      window.__dcToggleDsFormula = function () { if (FM_ON) fmStop(); else fmStart(); return FM_ON; };
+      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; } return FM_ON; };
       window.__dcDsFormulaIsOn = function () { return FM_ON; };
-      // how many formula fields exist (so the launcher can hide the row when there are none)
+      // how many formula fields exist (so the launcher only OFFERS the toggle when there are any).
+      // Read on demand (menu open) — not polled.
       window.__dcDsFormulaCount = function () {
         var n = 0;
         try { findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable).forEach(function (dt) { var data = fmSafe(dt, "data"); if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && fmTruthy(fmSafe(r, "isFormulaField")) && r.formula) n++; } }); } catch (e) {}

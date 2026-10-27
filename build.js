@@ -307,8 +307,8 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     acc("&#402;", "Formula fields (Data Stream / DLO)", ["Hover", "Copy"],
       "<p>On a Data Stream or Data Lake Object page, the Fields table shows a <b>Formula</b> column &mdash; but only as a checkmark. The actual expression isn&rsquo;t shown anywhere on the page. Turn on <b>Show formulas</b> from the launcher menu to read it without opening the export.</p>" +
       "<ul>" +
-      "<li>Formula fields get a small <b>&#402;</b> badge so you can spot them.</li>" +
-      "<li><b>Hover</b> a formula field &mdash; a popover shows the full expression (scrollable if long) with a <b>Copy</b> button. Only formula fields react; the rest of the table is untouched.</li>" +
+      "<li><b>Hover the checkmark</b> in the Formula column &mdash; a popover shows the full expression (scrollable if long) with a <b>Copy</b> button.</li>" +
+      "<li>Only the Formula column reacts; the tool adds nothing to the table, so rows don&rsquo;t move or resize.</li>" +
       "</ul>" +
       "<span class=\"gi\">The <b>Show formulas</b> option only appears when the page actually has formula fields. It&rsquo;s separate from <b>Export Fields</b> &mdash; if you just want the whole list, export still includes the formula expressions.</span>") +
     acc("&#128194;", "Object lists (records)", ["Open in New Tab"],
