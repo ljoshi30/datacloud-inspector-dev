@@ -218,8 +218,8 @@ function makePayload(code, label) {
 // ---- install.html builder (feature list gated by includeDev) ----
 function makeHtml(hrefSafe, includeDev, buildId) {
   const heroBlurb = includeDev
-    ? `Data Cloud hides the things developers need &mdash; the API names behind friendly labels, the SQL behind a 1,000-row grid, the formula behind a checkmark. Data 360 Inspector surfaces all of it: reveal &amp; copy API names everywhere, read formulas and segment/transform logic, and pull any object out to CSV, Sheets, or Excel. Read-only, zero setup.`
-    : `Data Cloud shows field <b>labels</b>, not the <b>API names</b> you need to build queries and integrations &mdash; and getting a field list out means copying row by row. Data 360 Inspector reveals and copies API names on the DLO&rarr;DMO mapping canvas, and exports Data&nbsp;Stream, DLO &amp; DMO fields to Sheets, CSV, or Excel in one click. Read-only, zero setup.`;
+    ? `See the <b>API names</b>, formulas, and logic that Data Cloud hides behind friendly labels &mdash; and copy or export any of it in one click. Data 360 Inspector reveals and copies API names across Data Cloud, and exports field lists and query results to CSV, Sheets, or Excel. Read-only, zero setup.`
+    : `See the <b>API names</b> Data Cloud hides behind friendly labels &mdash; and get field lists out without copying row by row. Data 360 Inspector reveals and copies API names on the DLO&rarr;DMO mapping canvas, and exports Data&nbsp;Stream, DLO &amp; DMO fields to CSV, Sheets, or Excel in one click. Read-only, zero setup.`;
 
   // ── ONE consolidated "What it does" grid — one card per supported page ──────────
   // Replaces the old 3 redundant sections (Supported-pages tiles + Features-by-page
