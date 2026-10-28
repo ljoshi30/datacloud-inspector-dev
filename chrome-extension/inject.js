@@ -38,16 +38,14 @@
     try { _prevUrl = window.__DC_DECOR__.loadUrl || ""; } catch (e) {}
     var _curUrl = ""; try { _curUrl = location.href; } catch (e) {}
     try { window.__DC_DECOR__.teardown(); } catch (e) {}
-    // Reset the welcome guard so re-activating (off→on) on the same page confirms again.
-    try { window.__dcWelcomeShownFor = null; } catch (e) {}
     if (_prevUrl === _curUrl) {
       // same page → toggle OFF. The ⧉ overlays install their listeners on `document` and
       // deliberately SURVIVE teardown (so they persist across SPA navigation without a
       // re-click). A user toggle-off must still stop them, so set a global OFF flag the ⧉
       // handlers check (they bail + stay hidden). Cleared again on the next activation.
       try { window.__dcOff = true; } catch (e) {}
-      // Show a brief confirmation so it isn't a silent/confusing "nothing happened" — then
-      // stop (re-click again re-activates + re-shows the welcome).
+      // Show a brief one-line confirmation so toggling off isn't a silent/confusing "nothing
+      // happened" — then stop (re-click again re-activates).
       try {
         var _offT = document.createElement("div");
         _offT.id = "dc-off-toast";
@@ -18316,20 +18314,11 @@ processJSON();
   // the new tab won't have the tool until the user clicks the bookmark there. We can't change
   // that, but we can make it non-confusing: a brief, ONCE-PER-SESSION note. In EXTENSION mode
   // the new tab auto-loads, so we show nothing. Not a nag — fires at most once per tab session.
-  function dcNewTabHint() {
-    try {
-      if (typeof extBridgePresent === "function" && extBridgePresent()) return;   // extension auto-loads → no hint
-      if (window.__dcNewTabHintShown) return;
-      window.__dcNewTabHintShown = true;
-      var t = document.createElement("div");
-      t.id = "dc-newtab-hint";
-      t.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483647;max-width:300px;background:#111827;color:#fff;font:500 12.5px/1.5 -apple-system,sans-serif;padding:11px 14px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;";
-      t.innerHTML = "Opened in a new tab. <b>Tip:</b> click the <b>Data 360 Inspector</b> bookmark in that tab to use the tool there too. <span style='color:#94a3b8;'>(The browser extension does this automatically.)</span>";
-      document.body.appendChild(t);
-      requestAnimationFrame(function () { t.style.opacity = "1"; t.style.transform = "translateY(0)"; });
-      setTimeout(function () { t.style.opacity = "0"; t.style.transform = "translateY(8px)"; setTimeout(function () { try { t.remove(); } catch (e) {} }, 350); }, 5000);
-    } catch (e) {}
-  }
+  // (No-op) The old "opened in a new tab — click the bookmark there too" black-box toast was
+  // removed with the welcome toast (user feedback: intrusive, unread). The ⧉ button now carries a
+  // hover tooltip instead, and opening a new tab is self-evident. Kept as a no-op so the two ⧉
+  // click handlers that call it stay simple.
+  function dcNewTabHint() { /* intentionally does nothing — discoverability is on the ⧉ tooltip */ }
   var dcListHideT = null;
   function dcListHideSoon() { if (dcListHideT) return; dcListHideT = setTimeout(function () { dcListHideT = null; var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, 250); }
   function dcGetListBtn() {
@@ -18339,6 +18328,7 @@ processJSON();
     btn.id = "dc-list-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
+    btn.title = "Open this record in a new tab";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
@@ -18592,6 +18582,7 @@ processJSON();
     btn.id = "dc-nav-newtab";
     btn.target = "_blank"; btn.rel = "noopener";
     btn.textContent = "⧉";
+    btn.title = "Open in a new tab";
     btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
     btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
     btn.addEventListener("mouseenter", function () { if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; } });
@@ -19900,89 +19891,11 @@ processJSON();
     }
   }
 
-  /* @strip:start dev
-   * ── Welcome toast: positive "what's enabled here" on activation ───────────────────
-   * The launcher FAB visibly signals the tool is active on builder/detail pages, but the
-   * ⧉ "open in new tab" features (nav + DMO list) have NO launcher — so there was no sign
-   * they're on. This toast fixes that: a brief, page-aware, POSITIVE confirmation of what
-   * you just enabled on THIS page + the always-on globals. Replaces the old negative "not
-   * supported" toast as the primary activation feedback. Auto-dismisses; shown once per
-   * page (guarded) so SPA nav / bookmarklet re-click doesn't spam. */
-  function dcWelcomeToast() {
-    try {
-      if (document.getElementById("dc-welcome")) return;
-      if (window.__dcWelcomeShown) return;   // already shown this tab session (set only on real render below)
-      // page-specific feature lines (only what's actually live on this page)
-      var pageTitle = "", pageFeats = [];
-      var t = detailPageType;
-      if (t === "Segment") { pageTitle = "Segment builder"; pageFeats = ["Hover attributes for API names (press C to copy)", "Export rules → Sheets / HTML / Excel"]; }
-      else if (t === "Activation") { pageTitle = "Activation"; pageFeats = (typeof isActivationWizardPage === "function" && isActivationWizardPage()) ? ["Hover attributes for API names", "Export included attributes"] : ["Export this activation's attributes & mappings"]; }
-      else if (t === "DataModel") { pageTitle = "Data Model (ERD)"; pageFeats = ["Generate a copyable Mermaid ERD"]; }
-      else if (t === "DataExplore") { pageTitle = "Data Explorer"; pageFeats = ["See all columns, filter/sort, Export CSV (≤500K)"]; }
-      else if (t === "QueryEditor") { pageTitle = "Query Editor"; pageFeats = ["Run SQL + Export full result CSV (≤500K)"]; }
-      else if (t === "Transform") { pageTitle = "Data Transform"; pageFeats = ["Read the definition in plain English"]; }
-      else if (t === "DataStream" || t === "DLO" || t === "DMO") { pageTitle = t === "DMO" ? "DMO detail" : (t === "DLO" ? "DLO detail" : "Data Stream detail"); pageFeats = ["Export fields (API name, type, status) → Sheets / CSV"]; }
-      else if (typeof findByTag === "function" && findByTag(TAGGING_CMP).length > 0) { pageTitle = "DLO → DMO Mapping canvas"; pageFeats = ["Hover/pin API names", "Export the mapping table"]; }
-      else if (document.getElementById("dc-dg-bar")) { pageTitle = "Data Graph builder"; pageFeats = ["Click the ◎ button → show API names under each object & field (and on hover)", "Click any API name to copy it"]; }
-      else if (typeof dcActiveListType === "function" && dcActiveListType()) { pageTitle = "Data Cloud list"; pageFeats = ["Hover a row → ⧉ opens that record in a new tab"]; }
-      // always-on globals (dev build) — clearer wording: it's a button that appears when you
-      // hover a Data Cloud menu item.
-      var globals = [];
-      if (window.__dcNavNewTabInstalled) globals.push("Hover a Data Cloud menu item to get a ⧉ “open in new tab” button");
-      if (typeof dcActiveListType === "function" && dcActiveListType() && t !== "DataModel") { /* already covered as page feat */ }
-      if (!pageTitle && !globals.length) return;   // nothing to announce
-
-      function li(txt) { return "<div style='display:flex;gap:7px;align-items:flex-start;margin-top:3px'><span style='color:#34d399;flex-shrink:0'>✓</span><span>" + txt + "</span></div>"; }
-      var html = "<div style='display:flex;align-items:flex-start;gap:10px'>"
-        + "<span style='font-size:18px;line-height:1.1'>&#10697;</span>"
-        + "<div style='flex:1'><strong style='display:block;margin-bottom:5px;font-size:13px'>Data 360 Inspector — active</strong>";
-      if (pageTitle) { html += "<div style='color:#cbd5e1;font-size:11px;font-weight:600;margin-bottom:2px'>On this page · " + pageTitle + "</div><div style='color:#94a3b8;font-size:11.5px;line-height:1.45'>" + pageFeats.map(li).join("") + "</div>"; }
-      if (globals.length) { html += "<div style='color:#cbd5e1;font-size:11px;font-weight:600;margin:7px 0 2px'>Everywhere</div><div style='color:#94a3b8;font-size:11.5px;line-height:1.45'>" + globals.map(li).join("") + "</div>"; }
-      html += "</div><button id='dc-welcome-x' style='border:none;background:transparent;color:#64748b;cursor:pointer;font-size:16px;line-height:1;padding:0 2px'>&times;</button></div>";
-
-      // Show the toast on the OPPOSITE side from the launcher so they never overlap. The
-      // Query Editor launcher sits bottom-LEFT; all others sit bottom-RIGHT. Read the launcher's
-      // actual on-screen side (#dc-bar) and put the toast on the other side. Default to the
-      // right if no launcher is present (e.g. the nav/list ⧉ pages have no FAB).
-      var side = "right";
-      try {
-        // Any of the launcher FABs can be present (detail=#dc-bar, Activation=#dc-act-bar,
-        // ERD=#dc-erd-bar, Data Graph=#dc-dg-bar). Dodge whichever one is on-screen so the toast
-        // never lands on top of the FAB (the Data Graph FAB sits bottom-right like this toast).
-        var bar = document.getElementById("dc-bar") || document.getElementById("dc-dg-bar") || document.getElementById("dc-act-bar") || document.getElementById("dc-erd-bar");
-        if (bar) {
-          var br = bar.getBoundingClientRect();
-          // launcher on the left half of the viewport → toast goes right, and vice-versa.
-          side = (br.left + br.width / 2) < (window.innerWidth / 2) ? "right" : "left";
-        }
-      } catch (e) {}
-      var toast = document.createElement("div");
-      toast.id = "dc-welcome";
-      toast.style.cssText = "position:fixed;bottom:24px;" + side + ":24px;z-index:2147483647;background:#111827;color:#fff;font:500 13px/1.4 -apple-system,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.45);max-width:330px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s;";
-      toast.innerHTML = html;
-      document.body.appendChild(toast);
-      // Mark "shown" ONLY now that it actually rendered — NOT eagerly at schedule time. The old
-      // code set the flag before the 600ms timer fired, so if this function bailed early
-      // ("nothing to announce" on some page), the flag stuck true and the popup never appeared
-      // again for the whole tab session. Setting it here means a page with nothing to say leaves
-      // the flag false, so the NEXT page that does have something still gets its one popup.
-      try { window.__dcWelcomeShown = true; } catch (e) {}
-      requestAnimationFrame(function () { toast.style.opacity = "1"; toast.style.transform = "translateY(0)"; });
-      // Auto-dismiss a bit quicker (4s) — it's a confirmation, not something to read twice.
-      var killer = setTimeout(function () { toast.style.opacity = "0"; toast.style.transform = "translateY(8px)"; setTimeout(function () { try { toast.remove(); } catch (e) {} }, 350); }, 4000);
-      var x = toast.querySelector("#dc-welcome-x");
-      if (x) x.onclick = function () { clearTimeout(killer); try { toast.remove(); } catch (e) {} };
-    } catch (e) {}
-  }
-  // Show ONCE PER SESSION (not per page). The welcome is an activation confirmation — seeing
-  // it on every navigation is annoying (user feedback). dcWelcomeToast() self-guards on
-  // window.__dcWelcomeShown, and sets that flag ONLY when it actually renders — so a page with
-  // nothing to announce no longer "burns" the one-shot (the bug: popup never came back). 600ms
-  // delay so it feels responsive while LWC settles enough to detect the page type.
-  try {
-    if (!window.__dcWelcomeShown) setTimeout(dcWelcomeToast, 600);
-  } catch (e) {}
-  /* @strip:end */
+  // (Removed) The page-activation "welcome" toast — a large black box that appeared bottom-left/
+  // right on every feature page — was removed per user feedback: it's intrusive, too wordy, and
+  // unread. Discoverability now lives entirely on hover/tooltips next to each feature (the FAB
+  // buttons carry titles; the ⧉ open-in-new-tab button carries its own tooltip; API-name/formula
+  // hints appear on hover). No global popup on activation.
 
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
   // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll

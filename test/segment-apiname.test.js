@@ -576,20 +576,9 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV route resolve order href-first → learned → seed (zero-maintenance)", /function dcRouteForLabel\s*\(/.test(src) && /dc_nav_routes_learned_v1/.test(src) && /function dcCaptureCurrentNavRoute\s*\(/.test(src));
   ok("NAV harvests label→href LIVE from top nav (covers 28+ incl. future; left-nav empty-href items resolve via this)", /function dcHarvestNavRoutes\s*\(/.test(src) && /slds-context-bar__label-action/.test(src) && /dcRouteForLabel[\s\S]{0,400}dcHarvestNavRoutes\(\)/.test(src));
   ok("NAV skips category-header groups (Segment & Act etc. get no ⧉)", /category-header\/\.test\(cls\)\)\s*return null/.test(src) && /!\/category-header\/\.test\(cls\)/.test(src));
-  ok("WELCOME toast announces page features + globals (once per SESSION, auto-dismiss)", /function dcWelcomeToast\s*\(/.test(src) && /__dcWelcomeShown\b/.test(src) && /On this page/.test(src) && /Everywhere/.test(src));
-  ok("WELCOME shows once per session (not per page) + faster delay", /if \(!window\.__dcWelcomeShown\) setTimeout\(dcWelcomeToast, 600\)/.test(src));
-  // BUG FIX: the one-shot flag must be set ONLY when the toast actually RENDERS, not eagerly at
-  // schedule time. The old eager set meant a page with "nothing to announce" burned the one-shot
-  // and the popup never came back for the whole tab session (reported: "not seeing the popup").
-  ok("WELCOME flag set on real render, not eagerly (so a quiet page doesn't burn the one-shot)",
-    /document\.body\.appendChild\(toast\);[\s\S]{0,800}window\.__dcWelcomeShown = true;/.test(src) &&
-    /if \(window\.__dcWelcomeShown\) return;\s*\/\/ already shown this tab session/.test(src));
-  // WELCOME toast appears on the OPPOSITE side from the launcher (QE launcher = bottom-left →
-  // toast right; all other launchers = bottom-right → toast left) so they never overlap. Side
-  // is read from the launcher's LIVE position (#dc-bar getBoundingClientRect), so a dragged
-  // launcher still flips the toast correctly. Defaults to right when no launcher is present.
-  ok("WELCOME toast positions on the opposite side from the launcher (no overlap)", /var side = "right";/.test(src) && /document\.getElementById\("dc-bar"\)[\s\S]{0,400}side = \(br\.left \+ br\.width \/ 2\) < \(window\.innerWidth \/ 2\) \? "right" : "left"/.test(src));
-  ok("WELCOME toast CSS uses the dynamic side (not a hardcoded right)", /"position:fixed;bottom:24px;" \+ side \+ ":24px;/.test(src));
+  // The page-activation "welcome" black-box toast was REMOVED (user feedback: intrusive, too
+  // wordy, unread). Discoverability is on hover/tooltips instead. Lock it stays gone.
+  ok("WELCOME toast removed (no dcWelcomeToast, no #dc-welcome, no schedule)", !/dcWelcomeToast/.test(src) && !/"dc-welcome"/.test(src) && !/__dcWelcomeShown/.test(src));
   // New DC nav (probe v30): match the anchor DIRECTLY by its nav class — no parentElement climb
   // (left nav is nested several shadow roots deep; a climb dies at each boundary → hit-or-miss).
   ok("NAV ⧉ matches the anchor directly by nav class (dcNavAnchorToItem)", /function dcNavAnchorToItem\s*\(/.test(src) && /slds-context-bar__label-action\|slds-nav-vertical__action/.test(src));
@@ -612,46 +601,6 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("⧉ does NOT read the old persisted flag (no getItem gate that could stick it off)", !/localStorage\.getItem\(DC_NEWTAB_LS\)/.test(src));
   ok("stale ⧉ enable flag is cleared on load (so a past Off can't keep it hidden)", /localStorage\.removeItem\(DC_NEWTAB_LS\)/.test(src));
   ok("SEGMENT DOM-fallback gated to /cmp/ builder routes (stale wizard no longer misclassifies Home/list as Segment)", /looksLikeBuilderRoute = \/\\\/lightning\\\/cmp\\\//.test(src) && /\\\/lightning\\\/page\\\/\|\\\/lightning\\\/o\\\/\[A-Za-z\]\+\\\/home/.test(src) && /looksLikeBuilderRoute[\s\S]{0,160}runtime_cdp-segment-wizard/.test(src));
-}
-
-// ── 6f. BEHAVIOR (not presence): the welcome one-shot survives a "quiet" page ────────
-// This EXECUTES the actual guard logic (not a regex). It models the exact bug the user hit:
-// land on a page with nothing to announce (quiet), then a page that DOES have something. The
-// popup must still appear on the second page. The old eager-flag code failed this.
-console.log("\n6f. welcome one-shot behavior: a quiet page must not burn the popup");
-{
-  // Faithful model of the fixed control flow:
-  //   trigger: if (!win.__dcWelcomeShown) schedule(toast)
-  //   toast(): if (win.__dcWelcomeShown) return; ...decide content...; if nothing → return
-  //            (flag NOT set); else append + set win.__dcWelcomeShown = true.
-  function makeWelcome() {
-    var win = {};                 // fresh "tab session"
-    var rendered = 0;
-    function toast(hasContent) {
-      if (win.__dcWelcomeShown) return;          // self-guard
-      if (!hasContent) return;                   // "nothing to announce" → must NOT set the flag
-      rendered++;
-      win.__dcWelcomeShown = true;               // set ONLY on real render
-    }
-    function visitPage(hasContent) {
-      if (!win.__dcWelcomeShown) toast(hasContent);   // trigger (no eager set)
-    }
-    return { visitPage: visitPage, shown: function () { return rendered; }, win: win };
-  }
-
-  var w = makeWelcome();
-  w.visitPage(false);  // quiet page (e.g. a route with no detected feature)
-  eq("quiet page renders nothing", w.shown(), 0);
-  ok("quiet page did NOT burn the one-shot (flag still false)", w.win.__dcWelcomeShown !== true);
-  w.visitPage(true);   // next page has something to announce
-  eq("next page WITH content shows the popup (the reported bug is fixed)", w.shown(), 1);
-  w.visitPage(true);   // and again elsewhere
-  eq("stays once-per-session after it has shown (no repeat)", w.shown(), 1);
-
-  // Opposite order sanity: an active page first shows once, then never again.
-  var w2 = makeWelcome();
-  w2.visitPage(true); w2.visitPage(true); w2.visitPage(false);
-  eq("active-first: shows exactly once across the session", w2.shown(), 1);
 }
 
 // ── 6g. BEHAVIOR: list ⧉ activates on real list pages, NOT a DMO detail Fields tab ───
@@ -880,35 +829,20 @@ console.log("\n6h. list ⧉ row resolution behavior (standard list rows now cove
   ok("HEADER row skipped (no ⧉ on the column header)", hitHdr === null);
 }
 
-// ── 6i. BEHAVIOR: new-tab hint shows ONCE in bookmarklet mode, NEVER in extension mode ──
-// A bookmarklet can't auto-run in a new tab, so clicking a ⧉ shows a one-time heads-up. In
-// EXTENSION mode the new tab auto-loads (background injects), so the hint must NOT appear.
-console.log("\n6i. new-tab hint: once in bookmarklet mode, never in extension mode");
+// ── 6i. new-tab ⧉ discoverability is a HOVER TOOLTIP, not a black-box toast ──────────
+// The old "opened in a new tab — click the bookmark there too" toast was removed (user feedback:
+// intrusive black boxes). dcNewTabHint is now a no-op, and each ⧉ button carries a title tooltip.
+console.log("\n6i. new-tab ⧉: tooltip instead of toast; hint is a no-op");
 {
-  const vm6i = require("vm");
   const fs6i = require("fs"), path6i = require("path");
   const src6i = fs6i.readFileSync(path6i.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  function grab6i(name) { var m = src6i.match(new RegExp("function " + name + "\\s*\\([^)]*\\)\\s*\\{")); if (!m) return ""; var s = src6i.indexOf(m[0]), i = src6i.indexOf("{", s), d = 0, e = i; for (; i < src6i.length; i++) { var c = src6i[i]; if (c === "{") d++; else if (c === "}") { d--; if (d === 0) { e = i; break; } } } return src6i.slice(s, e + 1); }
-  function run(extMode) {
-    var created = 0;
-    var fakeEl = { style: {}, innerHTML: "", remove: function () {}, };
-    var win = { __dcNewTabHintShown: false, requestAnimationFrame: function (f) {} };
-    var sb = {
-      extBridgePresent: function () { return extMode; },
-      window: win,
-      document: { createElement: function () { created++; return fakeEl; }, body: { appendChild: function () {} } },
-      requestAnimationFrame: function (f) {}, setTimeout: function () {},
-    };
-    vm6i.runInNewContext(grab6i("dcNewTabHint") + "\nthis.dcNewTabHint = dcNewTabHint;", sb);
-    sb.dcNewTabHint(); sb.dcNewTabHint(); sb.dcNewTabHint();   // 3 clicks
-    return created;
-  }
-  eq("bookmarklet mode: hint shows exactly ONCE across 3 clicks", run(false), 1);
-  eq("extension mode: hint NEVER shows (new tab auto-loads)", run(true), 0);
-  // wired into BOTH ⧉ click handlers + synced to bookmarklet build
-  ok("both ⧉ click handlers call dcNewTabHint()", (src6i.match(/ev\.stopPropagation\(\); dcNewTabHint\(\);/g) || []).length >= 2);
-  var bm6i = fs6i.readFileSync(path6i.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
-  ok("new-tab hint synced into bookmarklet build", /function dcNewTabHint\(\)/.test(bm6i));
+  const bm6i = fs6i.readFileSync(path6i.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+  ok("dcNewTabHint is now a NO-OP (no toast element, no innerHTML)", /function dcNewTabHint\(\) \{ \/\* intentionally does nothing/.test(src6i));
+  ok("no new-tab-hint toast element remains", !/"dc-newtab-hint"/.test(src6i) && !/__dcNewTabHintShown/.test(src6i));
+  ok("list ⧉ button carries a hover tooltip", /btn\.title = "Open this record in a new tab";/.test(src6i));
+  ok("nav ⧉ button carries a hover tooltip", /btn\.title = "Open in a new tab";/.test(src6i));
+  ok("both ⧉ click handlers still call dcNewTabHint() (now a harmless no-op)", (src6i.match(/ev\.stopPropagation\(\); dcNewTabHint\(\);/g) || []).length >= 2);
+  ok("no-op hint synced into bookmarklet build", /function dcNewTabHint\(\) \{ \/\* intentionally does nothing/.test(bm6i));
 }
 
 // ── 6j. Data Graph API-name decorator (dev-only) — proven DOM from DOM Probe v35 ──────
@@ -1110,7 +1044,6 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   ok("decorates only VISIBLE rows/tables (skips SF stale cached DOM)", /if \(!isVisible\(row\)\) return;/.test(src6j) && /if \(!isVisible\(dt\)\) return;/.test(src6j));
   ok("stop() clears the interval tick (no leaked timer after toggling off)", /clearInterval\(_dgTick\)/.test(src6j));
   ok("exposes toggle + default OFF (user turns it on)", /window\.__dcToggleDgApi/.test(src6j) && /window\.__dcDgApiIsOn/.test(src6j) && /var DG_ON = false;/.test(src6j));
-  ok("welcome toast dodges the Data Graph FAB too (no overlap on the right)", /getElementById\("dc-dg-bar"\)/.test(src6j));
   ok("Data Graph module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm6j.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataGraphApiModule/.test(strip); })());
   ok("Data Graph module present in the FULL bookmarklet build (synced)", /function dcDataGraphApiModule\(\)/.test(bm6j));
 }
