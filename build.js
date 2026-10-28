@@ -289,7 +289,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
 
   const devRows = !includeDev ? "" :
     acc("&#128376;&#65039;", "Data Graph", ["Hover", "Filters", "Copy"],
-      "<p><b>The gap:</b> the Data Graph builder shows field <b>labels</b> only &mdash; the API names you need for queries and integrations are nowhere on screen. Turn on <b>API names</b> from the &#9678; button (bottom-right).</p>" +
+      "<p><b>The gap:</b> the Data Graph builder shows only <b>labels</b> for the objects and fields you add &mdash; and labels repeat. So as you build, you can&rsquo;t be sure which exact field you selected, or which one a filter is on. The unique <b>API name</b> tells you &mdash; but it&rsquo;s nowhere on screen. Turn on <b>API names</b> from the &#9678; button (bottom-right).</p>" +
       "<ul>" +
       "<li><b>Objects &amp; fields</b> &mdash; the API name appears under each object on the left and each field on the right, refreshing as you click between objects.</li>" +
       "<li><b>Filters tab</b> &mdash; the field chosen in each Sort and Condition dropdown gets its API name too.</li>" +
@@ -314,7 +314,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<span class=\"gi\">Saved column choices stay in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>") +
     qeAccordion +
     acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
-      "<p><b>The gap:</b> the segment builder hides the real logic behind friendly labels &mdash; you can&rsquo;t see the API names or take the rules with you.</p>" +
+      "<p><b>The gap:</b> the segment builder shows rules by friendly <b>label</b> &mdash; but the same label can mean different fields on different objects, so you can&rsquo;t be sure which field a rule actually targets. The <b>API name</b> makes it exact &mdash; and there&rsquo;s no way to take the rules with you.</p>" +
       "<ul>" +
       "<li><b>Hover</b> any attribute or rule for its object and field API name; press <kbd>C</kbd> to copy.</li>" +
       "<li><b>Export</b> every condition &mdash; Include, Exclude, Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters intact, plus object and field API-name columns. To Google Sheets, HTML, or Excel.</li>" +
