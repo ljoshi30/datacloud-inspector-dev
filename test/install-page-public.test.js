@@ -33,15 +33,15 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
 console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 {
   ok("devRows is gated by includeDev", /devRows\s*=\s*!includeDev\s*\?\s*""/.test(b));
-  ok("devRows carries Data Model (ERD) / Segment / Data Explorer / Query Editor / Data Transform (+ new-tab + Activation rows)",
-    /devRows[\s\S]{0,2000}Data Model \(ERD\)[\s\S]{0,4000}Segment[\s\S]{0,3000}Data Explorer[\s\S]{0,2000}qeAccordion[\s\S]{0,2000}Data Transform/.test(b));
+  ok("devRows carries the dev accordions (Data Graph / Formula / Data Explorer / Query Editor / Segment / Activation / Data Transform / ERD)",
+    /devRows[\s\S]{0,400}"Data Graph"[\s\S]{0,4000}"Data Explorer"[\s\S]{0,3000}qeAccordion[\s\S]{0,3000}"Segment"[\s\S]{0,2000}"Activation"[\s\S]{0,2000}"Data Transform"[\s\S]{0,2000}"Data Model \(ERD\)"/.test(b));
   ok("Query Editor is its OWN detailed accordion (qeAccordion) spliced into devRows",
-    /const qeAccordion = acc\("[^"]*", "Query Editor"/.test(b) && /Data Explorer[\s\S]{0,2000}\n\s*qeAccordion \+\n/.test(b));
-  ok("devRows includes the open-in-new-tab rows (Object lists + Nav) + Activation",
-    /"Object lists \(records\)"/.test(b) && /Left &amp; Top Nav/.test(b) && /"Activation"/.test(b) && /Open in New Tab/.test(b));
-  // The object-list ⧉ row now reflects ALL object lists (not just DMO) and the lookup-column fix.
-  ok("object-list row describes ALL lists + the lookup-column safeguard",
-    /On <b>any<\/b> Data Cloud object list/.test(b) && /ignores lookup columns/.test(b));
+    /const qeAccordion = acc\("[^"]*", "Query Editor"/.test(b) && /\n\s*qeAccordion \+\n/.test(b));
+  ok("devRows includes the consolidated Open-in-New-Tab accordion (lists + nav) + Activation",
+    /"Open in New Tab \(lists &amp; nav\)"/.test(b) && /"Activation"/.test(b));
+  // The open-in-new-tab row covers ALL lists + nav and documents the lookup-column safeguard.
+  ok("new-tab row describes ALL lists/nav + the lookup-column safeguard",
+    /in <b>any<\/b> object list/.test(b) && /ignores lookup columns/.test(b));
   ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
@@ -71,7 +71,7 @@ console.log("\n5. Row-limit claims match the code (no false/guessed numbers)");
   // (DC_MAX_RENDER_ROWS), not an SF UI limit. Must never return.
   ok("no false 'SF 2,000-row UI limit' claim", !/2,?000-row UI limit/.test(b));
   // Verified facts that SHOULD be present in the dev feature copy.
-  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /only about <b>1,000 rows<\/b>/.test(b) && /past the 1,000 on-screen rows/.test(b));
+  ok("Query Editor grid cap stated as 1,000 rows (SF product UI)", /at most <b>1,000 rows<\/b>/.test(b) && /passes the 1,000-row screen limit/.test(b));
   ok("Explorer's 100-row own-view is stated", /own view loads 100 rows|loads only 100 rows|100 rows/.test(b));
   ok("CSV export cap stated as 500K (matches DC_MAX_TOTAL_EXPORT=500000)", /500K rows/.test(b));
 }

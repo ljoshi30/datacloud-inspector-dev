@@ -103,7 +103,7 @@
   <div class="hero">
     <div class="hero-info">
       <h1>Data 360 Inspector</h1>
-      <p>Reveals API names on the DLO&rarr;DMO mapping canvas and exports Data&nbsp;Stream, DLO &amp; DMO fields to Sheets, CSV, or Excel. Read-only, zero setup.</p>
+      <p>Data Cloud shows field <b>labels</b>, not the <b>API names</b> you need to build queries and integrations &mdash; and getting a field list out means copying row by row. Data 360 Inspector reveals and copies API names on the DLO&rarr;DMO mapping canvas, and exports Data&nbsp;Stream, DLO &amp; DMO fields to Sheets, CSV, or Excel in one click. Read-only, zero setup.</p>
       <div class="badge rec">&#9679; Read-only &middot; nothing leaves your browser</div>
     </div>
     <div class="hero-cta">
@@ -123,20 +123,20 @@
   </details>
 
   <div class="card">
-    <h2>What it does</h2>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Works on these pages (the launcher shows only that page&rsquo;s buttons) &mdash; click a row to see what you can do. All read-only.</p>
+    <h2>What it does, page by page</h2>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Open any Data Cloud page below and the launcher shows just that page&rsquo;s tools. Each row names the Data Cloud gap it closes &mdash; click to expand. Everything is read-only.</p>
     <div class="chips" style="margin-bottom:10px"><span class="chip">DLO &rarr; DMO Mapping Canvas</span><span class="chip">Data Stream</span><span class="chip">DLO</span><span class="chip">DMO</span></div>
     <details class="acc">
-        <summary><span class="acc-ic">&#128257;</span><span class="acc-nm">DLO &rarr; DMO Mapping Canvas</span><span class="acc-pills"><span class="pill">API Tooltip</span><span class="pill">Pin API names</span><span class="pill">Export</span></span></summary>
-        <div class="acc-body"><p>The mapping canvas normally shows only field <b>labels</b> &mdash; not the API names you actually need when building queries, transforms, or integrations. This fills that gap.</p><ul><li><b>API Tooltip</b> &mdash; hover a field to see its API name on both the source (DLO) and target (DMO) side; press <kbd>C</kbd> to copy. When on, the button shows a green &ldquo;&bull; ON&rdquo; so you know it&rsquo;s live.</li><li><b>Pin API names</b> &mdash; show every API name on the canvas at once, so you can read the whole mapping without hovering. <b>Click any pinned name to copy it</b> (it flashes &ldquo;&#10003; Copied&rdquo;).</li><li><b>Export</b> &mdash; download the full mapping table (source field &rarr; target field, with both API names) to Google Sheets or CSV. You can filter to a single DMO first.</li></ul><span class="gi"><b>Good to know:</b> if the same label is used on both a DLO and a DMO, the tooltip marks which side it read so you&rsquo;re never shown the wrong API name.</span></div>
+        <summary><span class="acc-ic">&#128257;</span><span class="acc-nm">DLO &rarr; DMO Mapping Canvas</span><span class="acc-pills"><span class="pill">Hover</span><span class="pill">Pin</span><span class="pill">Export</span></span></summary>
+        <div class="acc-body"><p><b>The gap:</b> the mapping canvas shows only field <b>labels</b>. To write a query, transform, or integration you need the <b>API name</b> &mdash; which the canvas never displays.</p><ul><li><b>Hover</b> any field to see its API name on both sides of the mapping &mdash; source (DLO) and target (DMO). Press <kbd>C</kbd> to copy the one under your cursor.</li><li><b>Pin</b> shows every API name on the canvas at once, so you can read the whole mapping without hovering. Click any pinned name to copy it.</li><li><b>Export</b> the full mapping as a table &mdash; source field &rarr; target field with both API names &mdash; to Google Sheets or CSV. Filter to one DMO first if you want.</li></ul><span class="gi">If a label is reused on both a DLO and a DMO, the tooltip marks which side it read &mdash; so you never copy the wrong object&rsquo;s API name.</span></div>
       </details><details class="acc">
         <summary><span class="acc-ic">&#127760;</span><span class="acc-nm">Data Stream &amp; DLO</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
-        <div class="acc-body"><p>On a Data Stream or Data Lake Object page, export the complete field list in one click &mdash; no copy-pasting row by row.</p><p>Each row includes the <b>API name</b>, <b>label</b>, <b>data type</b>, <b>status</b>, and <b>key qualifier</b> (primary key / event time / etc.). Copy it straight into Google Sheets, or download as a CSV.</p></div>
+        <div class="acc-body"><p><b>The gap:</b> to document a Data Stream or Data Lake Object&rsquo;s schema today you read the Fields table and copy it one row at a time.</p><p>This exports the <b>whole field list in one click</b> &mdash; each row with its <b>API name</b>, <b>label</b>, <b>data type</b>, <b>status</b>, and <b>key qualifier</b> (primary key, event time, &hellip;). Straight to Google Sheets or CSV.</p></div>
       </details><details class="acc">
         <summary><span class="acc-ic">&#128450;</span><span class="acc-nm">DMO Detail</span><span class="acc-pills"><span class="pill">Export Fields</span></span></summary>
-        <div class="acc-body"><p>On a Data Model Object detail page, grab both tabs of information:</p><ul><li><b>Fields</b> &mdash; API name, data type, whether the field is mapped, and its key qualifier.</li><li><b>Relationships</b> &mdash; the objects this DMO is related to and the fields that join them.</li></ul><p>Copy it into Google Sheets, or download as an Excel (XLS) file.</p></div>
+        <div class="acc-body"><p><b>The gap:</b> a Data Model Object&rsquo;s fields and relationships live on separate tabs, with no way to take them with you.</p><p>This exports both in one click, to Google Sheets or Excel (XLS):</p><ul><li><b>Fields</b> &mdash; API name, data type, whether the field is mapped, and its key qualifier.</li><li><b>Relationships</b> &mdash; every object this DMO joins to, and the fields that join them.</li></ul></div>
       </details>
-    <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Modals are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; to remove the tool entirely, click the bookmark again.</p>
+    <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Panels are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; click the bookmark again to remove the tool completely.</p>
     <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>
   </div>
   <details class="acc" style="margin-top:16px">
