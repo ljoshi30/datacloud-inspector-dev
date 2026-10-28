@@ -1,7 +1,7 @@
-// Data Stream / DLO formula-hover feature — pure logic + source-presence tests. Run in Node.
+// Data Stream formula-hover feature — pure logic + source-presence tests. Run in Node.
 //   node test/ds-formula-hover.test.js
 //
-// Feature: on a Data Stream / DLO page, the Fields table shows a Formula column as a CHECKMARK
+// Feature: on a Data Stream page, the Fields table shows a Formula column as a CHECKMARK
 // only — the actual expression is never on the page. Toggle "Show formulas" from the FAB → hover
 // a FORMULA field → a popover shows its formula with a Copy button. ONLY formula fields react.
 //
@@ -143,8 +143,8 @@ console.log("\n5. source presence — on-demand (no inject, no poll), dev-only, 
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
 
   ok("module present", /function dcDsFormulaModule\(\)/.test(src));
-  ok("gated to Data Stream / DLO detail pages only",
-    /\/\\\/r\\\/DataStream\\\/\[a-zA-Z0-9\]\{15,18\}\\\//.test(src) && /DataLakeObjectInstance/.test(src));
+  ok("gated to Data Stream detail pages ONLY (DLO proven by probe v40 to carry no formulas)",
+    /\/\\\/r\\\/DataStream\\\/\[a-zA-Z0-9\]\{15,18\}\\\//.test(src) && !/DataLakeObjectInstance/.test(src.slice(src.indexOf("dcDsFormulaModule"), src.indexOf("dcDsFormulaModule") + 1200)));
   ok("reads formula DIRECTLY from data[idx].formula (no guessing)",
     /fmSafe\(rec, "formula"\)/.test(src) && /fmTruthy\(fmSafe\(rec, "isFormulaField"\)\)/.test(src));
   ok("resolves the hovered cell's row to a formula ONLY if it's a formula field with a formula",
@@ -173,7 +173,7 @@ console.log("\n5. source presence — on-demand (no inject, no poll), dev-only, 
   // launcher wiring: the row shows ONLY when count>0, and export is a separate button
   ok("launcher offers the toggle ONLY when formula fields exist (count>0)",
     /window\.__dcDsFormulaCount\(\) > 0/.test(src));
-  ok("launcher row is DataStream/DLO only", /\(detailPageType === "DataStream" \|\| detailPageType === "DLO"\)[\s\S]{0,160}__dcToggleDsFormula/.test(src));
+  ok("launcher row is DataStream only", /if \(detailPageType === "DataStream" &&[\s\S]{0,160}__dcToggleDsFormula/.test(src));
   ok("export button (Export Fields) is a SEPARATE action, unaffected by the toggle",
     /openDsExport\(\)/.test(src) && /dc-detail-btn/.test(src));
 

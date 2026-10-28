@@ -160,5 +160,62 @@ function cacheDecision(cachedRows, loadedFns, cols) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 6. dcDistinctValues — distinct values of a column from LOADED rows (no query). Mirrors
+//    console-decorate.js. Sorted by count desc, then value asc; null/"" → one "(blank)" bucket.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n6. dcDistinctValues — distinct values + counts from loaded rows (WHERE-clause helper)");
+function dcDistinctValues(rows, fieldName) {
+  var map = Object.create(null), order = [];
+  for (var i = 0; i < (rows ? rows.length : 0); i++) {
+    var r = rows[i]; if (!r) continue;
+    var v = r[fieldName];
+    var key = (v == null || v === "") ? "" : String(v);
+    if (map[key] === undefined) { map[key] = 0; order.push(key); }
+    map[key]++;
+  }
+  return order.map(function (k) { return { value: k, count: map[k] }; })
+    .sort(function (a, b) { return b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0); });
+}
+{
+  var rows = [
+    { ds: "UploadedFiles" }, { ds: "s3://a.csv" }, { ds: "UploadedFiles" },
+    { ds: "UploadedFiles" }, { ds: null }, { ds: "s3://a.csv" }, { ds: "" }
+  ];
+  var d = dcDistinctValues(rows, "ds");
+  // 3 distinct buckets: UploadedFiles (3), (blank)=null+"" (2), s3://a.csv (2)
+  eq("distinct count", d.length, 3);
+  eq("most common first (UploadedFiles ×3)", d[0].value, "UploadedFiles");
+  eq("its count", d[0].count, 3);
+  // count tie (2 vs 2) → value asc: "" < "s3://a.csv", so blank comes before s3
+  eq("tie broken by value asc: blank second", d[1].value + ":" + d[1].count, ":2");
+  eq("then s3://a.csv ×2", d[2].value + ":" + d[2].count, "s3://a.csv:2");
+  // null and "" collapse into ONE blank bucket (count 2)
+  var blank = d.filter(function (x) { return x.value === ""; });
+  eq("null + '' → single blank bucket", blank.length, 1);
+  eq("blank count = 2 (null + empty)", blank[0].count, 2);
+
+  // SQL IN(...) builder mirror — blank → NULL, quotes escaped
+  function sqlLit(v) { return v === "" ? "NULL" : "'" + String(v).replace(/'/g, "''") + "'"; }
+  eq("sqlLit value", sqlLit("UploadedFiles"), "'UploadedFiles'");
+  eq("sqlLit blank → NULL", sqlLit(""), "NULL");
+  eq("sqlLit escapes quotes", sqlLit("O'Brien"), "'O''Brien'");
+
+  eq("empty rows → []", dcDistinctValues([], "ds").length, 0);
+  eq("null rows → []", dcDistinctValues(null, "ds").length, 0);
+
+  // source presence
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("dcDistinctValues present in source", /function dcDistinctValues\(rows, fieldName\)/.test(src));
+  ok("distinct-values popover present (Σ button → copyable list + Copy IN)", /function dcShowDistinct/.test(src) && /Copy IN/.test(src) && /thDistinct/.test(src));
+  ok("distinct computed from loaded rows, warns when set is incomplete", /rows\.__serverRowCount && rows\.__serverRowCount > rows\.length/.test(src));
+  ok("Data Explorer distinct code is dev-only (stripped from the public bookmarklet)", (function () {
+    var bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+    var stripped = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
+    return /function dcDistinctValues/.test(bm) && !/function dcDistinctValues/.test(stripped);
+  })());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

@@ -8845,7 +8845,24 @@
   // Remembers the last rendered results table so it can be REOPENED after the user
   // closes it (accidentally or not) WITHOUT re-querying — the rows are still in memory.
   let _lastTableState = null;   // { objectName, columns, rows, wantRows, allColumns }
-  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); }
+
+  // Distinct values of ONE column, computed from the ALREADY-LOADED rows (no extra query, no
+  // credits). Returns [{ value, count }] sorted by count desc, then value asc. null/"" collapse to
+  // a single "(blank)" bucket keyed by "". Pure + testable (mirrored in the explorer test).
+  function dcDistinctValues(rows, fieldName) {
+    var map = Object.create(null), order = [];
+    for (var i = 0; i < (rows ? rows.length : 0); i++) {
+      var r = rows[i]; if (!r) continue;
+      var v = r[fieldName];
+      var key = (v == null || v === "") ? "" : String(v);
+      if (map[key] === undefined) { map[key] = 0; order.push(key); }
+      map[key]++;
+    }
+    return order.map(function (k) { return { value: k, count: map[k] }; })
+      .sort(function (a, b) { return b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0); });
+  }
+
+  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
   function reopenLastTable() {
     if (_lastTableState && typeof showAllColumnsTable === "function") {
       var s = _lastTableState;
@@ -9082,6 +9099,71 @@
   // out of scope for the results table). Assigned when the modal builds; used by the
   // results table's "Edit SQL" button to relaunch the editor.
   var _openSoqlEditor = null;
+
+  // Distinct-values popover for a column — opened from a header "Σ" button. Lists each distinct
+  // value with its row count and a Copy button (copy the value straight into a WHERE clause), plus
+  // "Copy IN (…)" to grab all values at once. Computed from loaded rows (no query). anchorRect
+  // positions it under the header; `complete` tells the user whether the loaded set is the full
+  // result (so counts/values aren't mistaken for the whole table when only a page is loaded).
+  function dcShowDistinct(fieldName, label, rows, anchorRect, complete) {
+    var old = document.getElementById("dc-distinct-pop"); if (old) old.remove();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+    var vals = dcDistinctValues(rows, fieldName);
+    var pop = document.createElement("div");
+    pop.id = "dc-distinct-pop";
+    pop.style.cssText = "position:fixed;z-index:2147483647;width:min(380px,92vw);max-height:60vh;display:flex;flex-direction:column;background:#0b1020;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);font:12px/1.5 -apple-system,sans-serif;";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid #243049;flex-shrink:0;";
+    head.innerHTML = "<span style='font:600 12px/1.3 -apple-system,sans-serif;color:#9fb0c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>" + esc(label || fieldName) + " &middot; " + vals.length + " distinct</span>";
+    var headBtns = document.createElement("div"); headBtns.style.cssText = "display:flex;gap:6px;flex-shrink:0;";
+    var copyIn = document.createElement("button"); copyIn.textContent = "Copy IN (…)"; copyIn.title = "Copy all values as a SQL IN (...) list";
+    copyIn.style.cssText = "border:1px solid #3b82f6;background:#1d4ed8;color:#fff;border-radius:6px;padding:3px 8px;font:600 10px -apple-system,sans-serif;cursor:pointer;";
+    var closeB = document.createElement("button"); closeB.textContent = "×"; closeB.style.cssText = "border:none;background:none;color:#9fb0c6;font-size:16px;line-height:1;cursor:pointer;";
+    closeB.onclick = function () { pop.remove(); };
+    headBtns.appendChild(copyIn); headBtns.appendChild(closeB); head.appendChild(headBtns); pop.appendChild(head);
+
+    if (!complete) {
+      var warn = document.createElement("div");
+      warn.style.cssText = "padding:6px 10px;background:#3a2c10;color:#fde9c8;font-size:11px;border-bottom:1px solid #243049;flex-shrink:0;";
+      warn.textContent = "From the loaded rows only — fetch more rows for the complete set.";
+      pop.appendChild(warn);
+    }
+    var list = document.createElement("div");
+    list.style.cssText = "overflow:auto;padding:4px 0;";
+    var sqlLit = function (v) { return v === "" ? "NULL" : "'" + String(v).replace(/'/g, "''") + "'"; };
+    vals.forEach(function (d) {
+      var row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #141c2e;";
+      var txt = document.createElement("span");
+      txt.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.4 'SF Mono',Menlo,Consolas,monospace;" + (d.value === "" ? "color:#64748b;font-style:italic;" : "color:#e5edff;");
+      txt.textContent = d.value === "" ? "(blank)" : d.value;
+      txt.title = d.value;
+      var cnt = document.createElement("span"); cnt.textContent = String(d.count); cnt.style.cssText = "flex-shrink:0;color:#94a3b8;font-size:10px;min-width:28px;text-align:right;";
+      var cp = document.createElement("button"); cp.textContent = "Copy"; cp.style.cssText = "flex-shrink:0;border:1px solid #334;background:#162134;color:#cfe0ff;border-radius:5px;padding:2px 7px;font:600 10px -apple-system,sans-serif;cursor:pointer;";
+      cp.onclick = function () { var v = d.value; try { navigator.clipboard.writeText(v); } catch (e) {} cp.textContent = "✓"; setTimeout(function () { cp.textContent = "Copy"; }, 700); };
+      row.appendChild(txt); row.appendChild(cnt); row.appendChild(cp); list.appendChild(row);
+    });
+    pop.appendChild(list);
+    copyIn.onclick = function () {
+      var inList = vals.map(function (d) { return sqlLit(d.value); }).join(", ");
+      var clause = sqlQuoteIdent(fieldName) + " IN (" + inList + ")";
+      try { navigator.clipboard.writeText(clause); } catch (e) {}
+      copyIn.textContent = "✓ Copied"; setTimeout(function () { copyIn.textContent = "Copy IN (…)"; }, 900);
+    };
+    document.body.appendChild(pop);
+    // position under the header cell, clamped to viewport
+    var pw = pop.offsetWidth || 360, ph = pop.offsetHeight || 240;
+    var left = Math.max(8, Math.min(anchorRect.left, (window.innerWidth || 1200) - pw - 8));
+    var top = anchorRect.bottom + 4;
+    if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 4);
+    pop.style.left = left + "px"; pop.style.top = top + "px";
+    // close on outside click / Escape
+    setTimeout(function () {
+      var onDoc = function (e) { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("pointerdown", onDoc, true); } };
+      document.addEventListener("pointerdown", onDoc, true);
+    }, 50);
+    pop.addEventListener("keydown", function (e) { if (e.key === "Escape") pop.remove(); });
+  }
   // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
@@ -10207,9 +10289,23 @@
         try { navigator.clipboard.writeText(fn); } catch (ex) {}
         thCopy.textContent = "✓"; setTimeout(function () { thCopy.textContent = "⧉"; }, 700);
       };
-      th.addEventListener("mouseenter", function () { thCopy.style.display = "block"; });
-      th.addEventListener("mouseleave", function () { thCopy.style.display = "none"; });
+      // Distinct-values button (Σ) — lists this column's distinct values + counts with copy, so
+      // you can grab a value for a WHERE clause without hunting through records. Computed from the
+      // loaded rows (no extra query/credits). Appears on hover; doesn't trigger sort.
+      const thDistinct = document.createElement("button");
+      thDistinct.textContent = "Σ";
+      thDistinct.title = "Distinct values of this column (with counts) — copy one into a WHERE clause";
+      thDistinct.style.cssText = "position:absolute;top:3px;right:30px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
+      thDistinct.onclick = function (e) {
+        e.stopPropagation();
+        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length);
+        var rect; try { rect = thDistinct.getBoundingClientRect(); } catch (ex) { rect = { left: 100, top: 60, bottom: 80 }; }
+        dcShowDistinct(fn, meta[fn] || fn, rows, rect, complete);
+      };
+      th.addEventListener("mouseenter", function () { thCopy.style.display = "block"; thDistinct.style.display = "block"; });
+      th.addEventListener("mouseleave", function () { thCopy.style.display = "none"; thDistinct.style.display = "none"; });
       th.appendChild(thCopy);
+      th.appendChild(thDistinct);
       // ── Resizable header: drag the right edge to widen/narrow this column ──────
       const grip = document.createElement("div");
       grip.style.cssText = "position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
@@ -13721,9 +13817,9 @@
       { key: "nullsOrBlanks",        label: "Nulls / blanks in a field",     group: "Data quality", fields: ["object", "column"],
         help: "Finds rows where a field is empty or blank.",
         example: function (obj) { return "Example: finds every row in " + obj + " where the column you pick is empty or blank."; } },
-      { key: "valueDistribution",    label: "Value distribution",            group: "Data quality", fields: ["object", "column"],
-        help: "Counts how many rows have each distinct value — good for spotting typos/variants (e.g. 'CA' vs 'California').",
-        example: function (obj) { return "Example: lists every distinct value in a column of " + obj + " with a count, most common first — good for spotting 'CA' vs 'California'."; } },
+      { key: "valueDistribution",    label: "Distinct values of a column (for a WHERE clause)", group: "Data quality", fields: ["object", "column"],
+        help: "Lists every distinct value in a column with a row count (most common first) — so you can see the exact values a column holds and copy one straight into a WHERE clause, instead of querying records to hunt for it. Also good for spotting typos/variants (e.g. 'CA' vs 'California'). Tip: in View Results, click any value cell to copy it.",
+        example: function (obj) { return "Example: lists every distinct value in a column of " + obj + " with a count, most common first — e.g. each Data Source Object value — so you can grab the exact value to filter on."; } },
       { key: "normalizedDuplicates", label: "Normalized duplicate check",    group: "Data quality", fields: ["object", "column"],
         help: "Like exact duplicates, but ignores case and leading/trailing spaces (e.g. 'John Smith' vs 'john smith  ').",
         example: function (obj) { return "Example: in " + obj + ", finds 'John Smith', 'john smith', and 'JOHN SMITH  ' as ONE duplicate, not three separate values."; } },
@@ -19421,10 +19517,12 @@ processJSON();
    *     the cell. Toggle on/off from the FAB; default OFF. Read-only.
    */
   (function dcDsFormulaModule() {
-    // Only on a Data Stream or DLO detail page — the two pages with the formula Fields table.
+    // Only on a Data Stream detail page. DLOs were proven (DOM Probe v40) to NOT carry the formula
+    // expression — their field table has no Formula column and every row is isFormulaField:false
+    // (the formula is applied at ingestion; the DLO stores only the materialized value). So the
+    // feature can never show anything on a DLO → don't even run there.
     try {
-      if (!/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(location.href) &&
-          !/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return;
+      if (!/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return;
     } catch (e) { return; }
 
     var FM_ON = false;
@@ -19679,7 +19777,7 @@ processJSON();
       // ONLY when the page actually has formula fields (count>0); dev-gated at runtime because the
       // toggle fn only exists when the dev-only formula module loaded. Export is unaffected.
       let fmRow = null;
-      if ((detailPageType === "DataStream" || detailPageType === "DLO") &&
+      if (detailPageType === "DataStream" &&
           typeof window.__dcToggleDsFormula === "function" &&
           typeof window.__dcDsFormulaCount === "function" && window.__dcDsFormulaCount() > 0) {
         const fxIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><text x='3' y='12' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='13'>ƒ</text></svg>";

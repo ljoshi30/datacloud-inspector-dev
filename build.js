@@ -304,8 +304,8 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li><b>Click any API name to copy it</b> (it flashes &ldquo;&#10003; Copied&rdquo;). Every field also shows its API name on <b>hover</b> as a fallback.</li>" +
       "</ul>" +
       "<span class=\"gi\"><b>Duplicate labels are exact, not guessed:</b> the Filters tab reads each dropdown&rsquo;s <b>selected field API directly</b> from the page &mdash; so even if two fields share the same label, you always get the exact one that was picked.</span>") +
-    acc("&#402;", "Formula fields (Data Stream / DLO)", ["Hover", "Copy"],
-      "<p>On a Data Stream or Data Lake Object page, the Fields table shows a <b>Formula</b> column &mdash; but only as a checkmark. The actual expression isn&rsquo;t shown anywhere on the page. Turn on <b>Show formulas</b> from the launcher menu to read it without opening the export.</p>" +
+    acc("&#402;", "Formula fields (Data Stream)", ["Hover", "Copy"],
+      "<p>On a Data Stream page, the Fields table shows a <b>Formula</b> column &mdash; but only as a checkmark. The actual expression isn&rsquo;t shown anywhere on the page. Turn on <b>Show formulas</b> from the launcher menu to read it without opening the export.</p>" +
       "<ul>" +
       "<li><b>Hover the checkmark</b> in the Formula column &mdash; a popover shows the full expression (scrollable if long) with a <b>Copy</b> button.</li>" +
       "<li>Only the Formula column reacts; the tool adds nothing to the table, so rows don&rsquo;t move or resize.</li>" +
@@ -337,6 +337,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<ul>" +
       "<li><b>Columns</b> &mdash; pick exactly which fields to show (well past the 10-column limit), reorder them, and save the set so it&rsquo;s there next time. Then view all their data together in one table.</li>" +
       "<li><b>Sort, multi-filter, and a live row count</b> on the results, plus an <b>Edit SQL</b> option if you want to tweak the query behind the view.</li>" +
+      "<li><b>Distinct values (&Sigma;)</b> &mdash; hover a column header and click <b>&Sigma;</b> to see every distinct value in that column with a row count, each with a <b>Copy</b> button (plus <b>Copy IN (&hellip;)</b> for all of them). Great for grabbing the exact value to put in a WHERE clause &mdash; no need to query records to hunt for it. Computed from the loaded rows, so it&rsquo;s instant and free.</li>" +
       "<li><b>Export CSV</b> &mdash; download the rows. Large exports fetch in batches automatically, up to <b>500,000 rows</b>, and you can cancel partway.</li>" +
       "</ul>" +
       "<span class=\"gi\">Column choices are saved only in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>") +
