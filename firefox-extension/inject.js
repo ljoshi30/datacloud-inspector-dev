@@ -20155,9 +20155,9 @@ processJSON();
         xlsB.onclick = function () {
           try {
             var built = dsfXlsxSheet(model);
-            var metaLine = "Data Space filter · Object: " + model.objectLabel + " (" + model.objectDevName + ") · Logic: " + dsfSummary(model);
-            var sheetRows = built.rows.concat([new Array(built.rows[0].length).fill(""), [metaLine]]);
-            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1, styleFor: built.styleFor, merges: built.merges, cols: built.cols, rowHeights: built.rowHeights }], { wrapLastRow: true });
+            // No trailing meta/logic cell — it wrapped ugly down column A and the object + logic
+            // are already in the modal header / Logic-summary. Keep the sheet to just the grid.
+            var buf = buildXlsx([{ name: "Filters", rows: built.rows, headerRow: 1, styleFor: built.styleFor, merges: built.merges, cols: built.cols, rowHeights: built.rowHeights }], {});
             dsfDownload(buf, fn + "-filters.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
           } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
