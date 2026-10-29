@@ -19927,7 +19927,20 @@ processJSON();
       // The one that joins groups is the between-op; we surface whatever we read, never invent. For
       // a flat (single implicit group) filter there's nothing BETWEEN groups → leave it blank.
       var betweenOp = groups.length > 1 ? dsfReadBetweenOp(groups) : "";
-      return { objectDevName: objectDevName, objectLabel: objectLabel || objectDevName, groups: groups, betweenOp: betweenOp };
+
+      // COMPLETENESS GUARANTEE (org-agnostic): the single leaf that's ALWAYS one-per-condition,
+      // regardless of how an org nests its groups, is runtime_cdp-data-spaces-table-filter-item.
+      // Count those on screen and compare to what we actually captured. If they differ, we may be
+      // missing conditions on an unfamiliar structure → the UI WARNS instead of silently exporting
+      // a subset. (We never want to hand someone a filter export that quietly dropped rules.)
+      var captured = 0; groups.forEach(function (g) { captured += g.conditions.length; });
+      var onScreen = 0;
+      try {
+        findByTag("runtime_cdp-data-spaces-table-filter-item").forEach(function (el) {
+          var f = dsfSafe(el, "filter"); if (f && f.field) onScreen++;   // real condition items only
+        });
+      } catch (e) {}
+      return { objectDevName: objectDevName, objectLabel: objectLabel || objectDevName, groups: groups, betweenOp: betweenOp, capturedCount: captured, onScreenCount: onScreen };
     }
 
     // Read the between-group operator from the DOM. We look for short AND/OR text nodes and pick
@@ -20253,6 +20266,15 @@ processJSON();
       if (!model.groups.length) {
         body.innerHTML = "<p style='color:#5c6b8a;font-size:13px'>No filter found on this object. Open the object&rsquo;s <b>Edit Filters</b> (so the conditions render on the page), then click <b>Export Filters</b> again.</p>";
       } else {
+        // COMPLETENESS warning — org-agnostic safety net. If the number of condition items on
+        // screen doesn't match what we captured, we might be missing conditions on an unfamiliar
+        // nesting → say so LOUDLY rather than hand over a silently-incomplete export.
+        if (model.onScreenCount && model.capturedCount !== model.onScreenCount) {
+          var cwarn = document.createElement("div");
+          cwarn.style.cssText = "background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:12px;color:#b91c1c;";
+          cwarn.innerHTML = "&#9888; Captured <b>" + model.capturedCount + "</b> of <b>" + model.onScreenCount + "</b> conditions on screen. This filter may use a structure the tool hasn&rsquo;t seen &mdash; please verify before relying on this export, and report it so we can support that shape.";
+          body.appendChild(cwarn);
+        }
         // between-op warning (never show a guessed operator)
         if (!model.betweenOp && model.groups.length > 1) {
           var warn = document.createElement("div");

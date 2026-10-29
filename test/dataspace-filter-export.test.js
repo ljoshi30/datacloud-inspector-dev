@@ -230,6 +230,9 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
   ok("top-level groups exclude nested child groups (no double-count)", /childIds\[sg\.id\] = true/.test(src) && /return !childIds\[id\]/.test(src));
   ok("FLAT filter fallback: when NO group wrapper exists, read -filter-item elements directly as one implicit group (fixes the Loyalty 3-condition OR case)",
     /if \(!groups\.length\)/.test(src) && /findByTag\("runtime_cdp-data-spaces-table-filter-item"\)/.test(src) && /dsfSafe\(el, "filter"\)/.test(src) && /id: "flat", operator: flatJoin/.test(src));
+  ok("ORG-AGNOSTIC completeness check: counts on-screen -filter-item leaves vs captured; model carries both",
+    /var captured = 0; groups\.forEach/.test(src) && /findByTag\("runtime_cdp-data-spaces-table-filter-item"\)/.test(src) && /capturedCount: captured, onScreenCount: onScreen/.test(src));
+  ok("UI WARNS (loudly) when captured != on-screen — never a silently-incomplete export", /model\.capturedCount !== model\.onScreenCount/.test(src) && /Captured <b>" \+ model\.capturedCount/.test(src) && /report it so we can support that shape/.test(src));
   ok("one row per condition + group/logic columns", /var DSF_COLS = \[/.test(src) && /"Within-group logic", "Between-groups logic"/.test(src) && /ci === 0 \? groupLabel : ""/.test(src));
   ok("ONE download (Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
     var i = src.indexOf("function dcDataSpaceFilterExport"); var j = src.indexOf("/* @strip:end */", i); var mod = src.slice(i, j);
