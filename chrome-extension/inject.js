@@ -19906,8 +19906,9 @@ processJSON();
       var HEAD = ["Group", "#", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value", "Logic", "Groups"];
       var RAIL = 8, BRAIL = 9;                     // 0-based column indexes of the two rail cols
       var rows = [HEAD.slice()];
-      var merges = [], rowStyle = {}, condNum = 0, rn = 1;   // rn: last written row (1-based), row1=header
+      var merges = [], rowStyle = {}, spacerRows = {}, rowHeights = {}, condNum = 0, rn = 1;   // rn: last row (1-based), row1=header
       var firstGroupRow = 2, lastGroupRow = 1;
+      var ncols = HEAD.length;
       function colL(i) { var s = "", n = i + 1; while (n > 0) { s = String.fromCharCode(64 + (n % 26 || 26)) + s; n = Math.floor((n - (n % 26 ? 0 : 26)) / 26); } return s; }
       model.groups.forEach(function (g, gi) {
         var isOr = String(g.operator).toUpperCase() === "OR";
@@ -19933,8 +19934,16 @@ processJSON();
         }
         if (gi === 0) firstGroupRow = gStart;
         lastGroupRow = gEnd;
+        // thin SPACER row between groups — white gap in cols A–I; the between-rail (J) merge spans
+        // through it (below) so the OR bar stays continuous like SF. Not after the last group.
+        if (gi < model.groups.length - 1) {
+          rn++;
+          rows.push(new Array(ncols).fill(""));
+          spacerRows[rn] = true; rowHeights[rn] = 6;             // short gap
+        }
       });
-      // between-groups rail: ONE merged bar across every group row (col J), only when >1 group
+      // between-groups rail: ONE merged bar from the first group's start to the last group's end
+      // (col J), spanning the interior spacer rows → the OR bar is unbroken. Only when >1 group.
       var betweenStyle = model.betweenOp ? (model.betweenOp.toUpperCase() === "OR" ? 9 : 8) : 10;
       if (model.groups.length > 1) {
         merges.push(colL(BRAIL) + firstGroupRow + ":" + colL(BRAIL) + lastGroupRow);
@@ -19942,6 +19951,9 @@ processJSON();
       }
       function styleFor(rowNum, col) {
         if (rowNum === 1) return 3;                              // header
+        // spacer row: white everywhere EXCEPT the between-rail column, which stays inside the
+        // J-merge and keeps the orange/green bar (the merge anchor's fill paints the whole span).
+        if (spacerRows[rowNum]) return (col === BRAIL ? betweenStyle : null);
         var st = rowStyle[rowNum]; if (!st) return null;         // meta rows → default
         if (col === RAIL) return st.rail;                        // within-group rail
         if (col === BRAIL) return betweenStyle;                  // between-groups rail
@@ -19958,7 +19970,7 @@ processJSON();
         { min: 9, max: 9, width: 8 },    // Logic rail
         { min: 10, max: 10, width: 9 }   // Groups rail
       ];
-      return { rows: rows, styleFor: styleFor, merges: merges, cols: cols };
+      return { rows: rows, styleFor: styleFor, merges: merges, cols: cols, rowHeights: rowHeights };
     }
 
     // Plain-English one-liner, e.g. (A = true AND B IS EMPTY) OR (C = x)
@@ -20145,7 +20157,7 @@ processJSON();
             var built = dsfXlsxSheet(model);
             var metaLine = "Data Space filter · Object: " + model.objectLabel + " (" + model.objectDevName + ") · Logic: " + dsfSummary(model);
             var sheetRows = built.rows.concat([new Array(built.rows[0].length).fill(""), [metaLine]]);
-            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1, styleFor: built.styleFor, merges: built.merges, cols: built.cols }], { wrapLastRow: true });
+            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1, styleFor: built.styleFor, merges: built.merges, cols: built.cols, rowHeights: built.rowHeights }], { wrapLastRow: true });
             dsfDownload(buf, fn + "-filters.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
           } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
