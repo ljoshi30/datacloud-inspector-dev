@@ -19683,9 +19683,9 @@ processJSON();
     }
 
     // ONE shadow crawl per pass → collect the field rows + the DMO section components.
-    var _irBuckets = { rows: [], sections: [] };
+    var _irBuckets = { rows: [], sections: [], combos: [] };
     function irCollect() {
-      var b = { rows: [], sections: [] };
+      var b = { rows: [], sections: [], combos: [] };
       try {
         (function walk(root, d) {
           if (!root || d > 25) return;
@@ -19694,6 +19694,7 @@ processJSON();
             var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
             if (t === "runtime_cdp-identity-resolution-recon-rule-field") b.rows.push(q[i]);
             else if (t === "runtime_cdp-identity-resolution-recon-table-rules") b.sections.push(q[i]);
+            else if (t === "lightning-combobox") b.combos.push(q[i]);   // match-criteria dropdowns
             var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
             if (sr) walk(sr, d + 1);
           }
@@ -19718,12 +19719,24 @@ processJSON();
         var host = irLabelHost(sec, ent.label) ; if (!host) return;   // only when the header label is on screen
         irInject(host, String(ent.id));
       });
+      // MATCH CRITERIA modal: each criterion row has "Data Model Object" + "Field" comboboxes whose
+      // .value IS the api (TDI_ContactPointEmail__dlm / EmailAddress__c) — proven by probe v50. The
+      // "Match Method" combobox's value (EXACT/FUZZY) is NOT an api → skipped via the __ check.
+      _irBuckets.combos.forEach(function (cb) {
+        if (!isVisible(cb)) return;
+        var lbl = ""; try { lbl = String(cb.label || ""); } catch (e) {}
+        if (!/^(data model object|field)$/i.test(lbl.trim())) return;   // only the api-bearing dropdowns
+        var val = ""; try { val = String(cb.value || ""); } catch (e) {}
+        if (!val || !/__/.test(val)) return;                             // api-looking only (skips EXACT etc.)
+        irInject(cb.parentElement || cb, val);                           // line under the dropdown
+      });
     }
     // signature = the api names currently present → skip redraw when nothing changed (no flicker/churn)
     function irSignature() {
       var parts = [];
       try { _irBuckets.sections.forEach(function (s) { var e = irSafe(s, "entity"); if (e && e.id) parts.push("S:" + e.id); }); } catch (e) {}
       try { _irBuckets.rows.forEach(function (r) { if (isVisible(r)) { var f = irSafe(r, "fieldId"); if (f) parts.push(f); } }); } catch (e) {}
+      try { _irBuckets.combos.forEach(function (c) { if (isVisible(c)) { var v = ""; try { v = String(c.value || ""); } catch (e) {} if (/__/.test(v)) parts.push("C:" + v); } }); } catch (e) {}
       return parts.join("|");
     }
     var _irSig = null, _irObs = null, _irT = null, _irWriting = false;

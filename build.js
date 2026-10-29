@@ -307,6 +307,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<p><b>The gap:</b> the Identity Resolution ruleset shows each DMO section and its reconciliation fields by friendly <b>label</b> only (Account Multiline, Birth Date, First Name&hellip;) &mdash; not the API names you need for queries and integrations. Turn on <b>API names</b> from the &#9678; button.</p>" +
       "<ul>" +
       "<li>The API name appears under each <b>DMO section</b> and under each <b>reconciliation field</b>. Click any to copy it.</li>" +
+      "<li>In the <b>Configure Match Criteria</b> dialog, the API name shows under each <b>Data Model Object</b> and <b>Field</b> dropdown too.</li>" +
       "<li>Works for <b>every DMO</b> as you expand its section &mdash; each field&rsquo;s exact API is read straight from the page, so even fields that share a label are never confused.</li>" +
       "</ul>") +
     acc("&#128202;", "Data Explorer", ["Columns", "Distinct values", "Export CSV"],

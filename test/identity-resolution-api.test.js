@@ -51,6 +51,27 @@ console.log("\n3. EVERY row/section is decorated (not a fixed list) — loop cov
   ok("each api is the row's own", produced[0] === "TDI_A__c" && produced[2] === "TDI_C__c");
 }
 
+console.log("\n3b. MATCH CRITERIA modal — combobox .value IS the api (proven v50), skip Match Method");
+{
+  // Mirror the combo pass: only "Data Model Object"/"Field" dropdowns, value must look like an api.
+  function comboApi(cb) {
+    var lbl = String(cb.label || "").trim();
+    if (!/^(data model object|field)$/i.test(lbl)) return null;
+    var v = String(cb.value || "");
+    return /__/.test(v) ? v : null;
+  }
+  eq("Data Model Object dropdown → its dmo api", comboApi({ label: "Data Model Object", value: "TDI_ContactPointEmail__dlm" }), "TDI_ContactPointEmail__dlm");
+  eq("Field dropdown → its field api", comboApi({ label: "Field", value: "EmailAddress__c" }), "EmailAddress__c");
+  eq("Match Method (EXACT) → null (not an api)", comboApi({ label: "Match Method", value: "EXACT" }), null);
+  eq("Field dropdown with no selection → null", comboApi({ label: "Field", value: "" }), null);
+  // every criterion row's two api dropdowns are covered (loop, not fixed)
+  var combos = [
+    { label: "Data Model Object", value: "TDI_ContactPointEmail__dlm" }, { label: "Field", value: "EmailAddress__c" }, { label: "Match Method", value: "EXACT" },
+    { label: "Data Model Object", value: "TDI_ContactPointPhone__dlm" }, { label: "Field", value: "FormattedE164PhoneNumber__c" }, { label: "Match Method", value: "EXACT" }
+  ];
+  eq("2 rows × (object+field) = 4 api lines, methods skipped", combos.map(comboApi).filter(Boolean).length, 4);
+}
+
 console.log("\n4. source presence — proven props, org-agnostic loop, VDI-safe scaffolding, dev-only");
 {
   const fs = require("fs"), path = require("path");
@@ -64,6 +85,8 @@ console.log("\n4. source presence — proven props, org-agnostic loop, VDI-safe 
   ok("DMO api from the section's entity.id", /irSafe\(sec, "entity"\)/.test(src) && /ent\.id/.test(src));
   ok("ORG-AGNOSTIC: loops ALL rows + ALL sections found (no hardcoded dmo/field list)",
     /_irBuckets\.rows\.forEach/.test(src) && /_irBuckets\.sections\.forEach/.test(src));
+  ok("MATCH CRITERIA: reads combobox .value as api for Data Model Object / Field, skips Match Method",
+    /_irBuckets\.combos\.forEach/.test(src) && /\^\(data model object\|field\)\$/i.test(src) && /!\/__\/.test\(val\)/.test(src) && /lightning-combobox/.test(src));
   ok("ONE shadow crawl per pass (irCollect) — not a per-move scan (VDI-safe)",
     /function irCollect/.test(src) && /q\[i\]\.shadowRoot/.test(src) && /recon-rule-field/.test(src) && /recon-table-rules/.test(src));
   ok("unstackable dedup: tracked spans cleared by reference each pass", /var _irSpans = \[\]/.test(src) && /function irClear/.test(src) && /_irSpans\.push\(sp\)/.test(src));
