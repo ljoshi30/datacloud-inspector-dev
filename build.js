@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js", "dataspace-filter-export.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js", "dataspace-filter-export.test.js", "identity-resolution-api.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -244,7 +244,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
-    .concat(includeDev ? ["Data Graph", "Formula fields", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
+    .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -303,6 +303,12 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li>Only that column reacts and nothing is added to the table, so rows never shift or resize.</li>" +
       "</ul>" +
       "<span class=\"gi\"><b>Show formulas</b> only appears when the stream actually has formula fields.</span>") +
+    acc("&#128273;", "Identity Resolution", ["API Names", "Copy"],
+      "<p><b>The gap:</b> the Identity Resolution ruleset shows each DMO section and its reconciliation fields by friendly <b>label</b> only (Account Multiline, Birth Date, First Name&hellip;) &mdash; not the API names you need for queries and integrations. Turn on <b>API names</b> from the &#9678; button.</p>" +
+      "<ul>" +
+      "<li>The API name appears under each <b>DMO section</b> and under each <b>reconciliation field</b>. Click any to copy it.</li>" +
+      "<li>Works for <b>every DMO</b> as you expand its section &mdash; each field&rsquo;s exact API is read straight from the page, so even fields that share a label are never confused.</li>" +
+      "</ul>") +
     acc("&#128202;", "Data Explorer", ["Columns", "Distinct values", "Export CSV"],
       "<p><b>The gap:</b> Data Explorer shows only ~10 columns at a time and a small slice of rows &mdash; hard to see or take the whole picture.</p>" +
       "<ul>" +
@@ -629,6 +635,8 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/chip">Formula fields</, "Formula-fields chip (dev-only, stripped from public)"],
     [/acc-nm">Data Space Filters/, "Data Space Filters accordion row (dev-only, stripped from public)"],
     [/chip">Data Space Filters</, "Data Space Filters chip (dev-only, stripped from public)"],
+    [/acc-nm">Identity Resolution/, "Identity Resolution accordion row (dev-only, stripped from public)"],
+    [/chip">Identity Resolution</, "Identity Resolution chip (dev-only, stripped from public)"],
     [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
     [/chip">Segment</, "Segment chip (stripped from public)"],
     [/Export Rules/, "Export Rules launcher (Segment)"],

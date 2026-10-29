@@ -19611,6 +19611,172 @@ processJSON();
   /* @strip:end */
 
   /* @strip:start dev
+   * ── IDENTITY RESOLUTION: inline API names on reconciliation rules (dev-only) ────────────────
+   * The IR ruleset page shows each DMO section (Contact Point Address, Individual, …) and, under
+   * each, its reconciliation FIELDS by friendly label only — no API names you need for queries.
+   * PROVEN DOM (DOM Probe v48/v49 on the live org):
+   *   each visible field row  <runtime_cdp-identity-resolution-recon-rule-field>.fieldId =
+   *       "TDI_Account_Multiline__c"  (the FIELD api, read DIRECTLY off the row — no label match)
+   *   each DMO section        <runtime_cdp-identity-resolution-recon-table-rules>.entity =
+   *       { id:"TDI_Individual__dlm" (DMO api), label:"Individual", fields:[…] }
+   * Same approved pattern as Data Graph: read those props (never guessed), inject ONE small grey
+   * click-to-copy api line per row/section; reference-tracked spans (unstackable); ONE shadow crawl
+   * per pass; signature guard to skip no-op redraws; observer DISCONNECTS while we write; default
+   * OFF (toggle from a FAB). VDI-light: idle cost is ~zero (debounced observer, no per-move scan).
+   */
+  (function dcIdentityResApiModule() {
+    try { if (!/\/r\/IdentityResolution\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return; } catch (e) { return; }
+    var IR_ON = false;
+    function irSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // One styled, click-to-copy grey api line (same look/behavior as Data Graph's).
+    var _irSpans = [];
+    function irClear() { for (var i = 0; i < _irSpans.length; i++) { try { _irSpans[i].remove(); } catch (e) {} } _irSpans = []; }
+    function irInject(host, apiText) {
+      if (!host || !apiText) return;
+      try {
+        var sp = document.createElement("span");
+        sp.className = "dc-ir-api";
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "block"); s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace");
+        s("color", "#4a6fa5"); s("margin-top", "1px"); s("white-space", "nowrap");
+        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("max-width", "100%");
+        s("cursor", "pointer"); s("user-select", "text");
+        sp._irApi = String(apiText); sp.textContent = String(apiText);
+        try { sp.setAttribute("title", "Click to copy " + apiText); } catch (e) {}
+        sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
+        sp.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          var t = sp._irApi, restore = t;
+          function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#4a6fa5"); }, 900); }
+          try { navigator.clipboard.writeText(t).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+          catch (e3) { flash(); }
+        }, true);
+        host.appendChild(sp); _irSpans.push(sp);
+      } catch (e) {}
+    }
+    // the text leaf showing `label` inside a row/section, so the api line sits right under it
+    // (skip our own spans). Falls back to the element itself.
+    function irLabelHost(root, label) {
+      if (!root) return null;
+      var want = String(label || "").trim().toLowerCase(), hit = null;
+      if (!want) return null;
+      try {
+        (function walk(r) {
+          if (hit || !r || !r.querySelectorAll) return;
+          var els = r.querySelectorAll("*");
+          for (var i = 0; i < els.length && !hit; i++) {
+            var el = els[i];
+            if (el.classList && el.classList.contains("dc-ir-api")) continue;
+            var cn = el.childNodes || [];
+            for (var j = 0; j < cn.length; j++) { if (cn[j].nodeType === 3 && cn[j].nodeValue && cn[j].nodeValue.trim().toLowerCase() === want) { hit = el; break; } }
+            var sr = null; try { sr = el.shadowRoot; } catch (e) {}
+            if (sr && !hit) walk(sr);
+          }
+        })(root.shadowRoot || root);
+      } catch (e) {}
+      return hit;
+    }
+
+    // ONE shadow crawl per pass → collect the field rows + the DMO section components.
+    var _irBuckets = { rows: [], sections: [] };
+    function irCollect() {
+      var b = { rows: [], sections: [] };
+      try {
+        (function walk(root, d) {
+          if (!root || d > 25) return;
+          var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+          for (var i = 0; i < q.length; i++) {
+            var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
+            if (t === "runtime_cdp-identity-resolution-recon-rule-field") b.rows.push(q[i]);
+            else if (t === "runtime_cdp-identity-resolution-recon-table-rules") b.sections.push(q[i]);
+            var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
+            if (sr) walk(sr, d + 1);
+          }
+        })(document, 0);
+      } catch (e) {}
+      _irBuckets = b;
+    }
+    function irDecorate() {
+      // FIELD rows: fieldId read DIRECTLY off the row (exact — no label matching). Anchor under the
+      // row's own label text; fall back to the row element if the leaf isn't found.
+      _irBuckets.rows.forEach(function (row) {
+        if (!isVisible(row)) return;
+        var api = irSafe(row, "fieldId"); if (!api || !/__/.test(String(api))) return;
+        var label = irSafe(row, "label") || "";
+        var host = irLabelHost(row, label) || row;
+        irInject(host, String(api));
+      });
+      // DMO sections: entity.id is the DMO api; show it under the section's label header.
+      _irBuckets.sections.forEach(function (sec) {
+        if (!isVisible(sec)) return;
+        var ent = irSafe(sec, "entity"); if (!ent || !ent.id) return;
+        var host = irLabelHost(sec, ent.label) ; if (!host) return;   // only when the header label is on screen
+        irInject(host, String(ent.id));
+      });
+    }
+    // signature = the api names currently present → skip redraw when nothing changed (no flicker/churn)
+    function irSignature() {
+      var parts = [];
+      try { _irBuckets.sections.forEach(function (s) { var e = irSafe(s, "entity"); if (e && e.id) parts.push("S:" + e.id); }); } catch (e) {}
+      try { _irBuckets.rows.forEach(function (r) { if (isVisible(r)) { var f = irSafe(r, "fieldId"); if (f) parts.push(f); } }); } catch (e) {}
+      return parts.join("|");
+    }
+    var _irSig = null, _irObs = null, _irT = null, _irWriting = false;
+    function irRun(force) {
+      if (!IR_ON) return;
+      irCollect();
+      var sig = irSignature();
+      if (!force && sig === _irSig && _irSpans.length) return;
+      _irSig = sig;
+      _irWriting = true;
+      try { if (_irObs) _irObs.disconnect(); } catch (e) {}
+      try { irClear(); irDecorate(); } catch (e) {}
+      try { if (_irObs && IR_ON) _irObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _irWriting = false;
+    }
+    function irSchedule() { if (_irWriting || _irT) return; _irT = setTimeout(function () { _irT = null; irRun(false); }, 300); }
+    function irStart() { IR_ON = true; if (!_irObs) { try { _irObs = new MutationObserver(irSchedule); } catch (e) {} } irRun(true); }
+    function irStop() { IR_ON = false; try { if (_irObs) _irObs.disconnect(); } catch (e) {} _irSig = null; irClear(); }
+    try {
+      window.__dcToggleIrApi = function () { if (IR_ON) irStop(); else irStart(); return IR_ON; };
+      window.__dcIrApiIsOn = function () { return IR_ON; };
+    } catch (e) {}
+
+    // Minimal FAB (bottom-right) — the IR page has no detail launcher of its own.
+    try {
+      if (!document.getElementById("dc-ir-bar") && typeof dcMakeMenuCloseX === "function") {
+        var wrap = document.createElement("div"); wrap.id = "dc-ir-bar";
+        wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+        var menu = document.createElement("div");
+        menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s,transform .2s;opacity:0;transform:translateY(12px) scale(.95);";
+        var row = document.createElement("button");
+        row.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
+        row.onmouseenter = function () { row.style.background = "rgba(255,255,255,.07)"; };
+        row.onmouseleave = function () { row.style.background = "#111827"; };
+        var apiIcon = "<svg width='15' height='15' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+        function paint() { var on = window.__dcIrApiIsOn && window.__dcIrApiIsOn(); row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#4338ca);display:flex;align-items:center;justify-content:center;'>" + apiIcon + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>API names " + (on ? "<span style=\"color:#34d399;font-size:11px\">● ON</span>" : "") + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + (on ? "Shown under each DMO & field" : "Show API name under each DMO & field") + "</span></div>"; }
+        paint();
+        row.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleIrApi(); } catch (er) {} paint(); };
+        menu.appendChild(dcMakeMenuCloseX(function () { closeIr(); }));
+        menu.appendChild(row);
+        var fab = document.createElement("button");
+        fab.title = "Identity Resolution — show API names";
+        fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#2d2b55,#5b4f9e);box-shadow:0 4px 18px rgba(91,79,158,.5);display:flex;align-items:center;justify-content:center;";
+        fab.innerHTML = "<svg width='20' height='20' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.7' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+        var mOpen = false;
+        function openIr() { mOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.style.pointerEvents = "auto"; }
+        function closeIr() { mOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.style.pointerEvents = "none"; }
+        fab.onclick = function (e) { e.stopPropagation(); mOpen ? closeIr() : openIr(); };
+        document.addEventListener("pointerdown", function (e) { if (mOpen && !wrap.contains(e.target)) closeIr(); }, true);
+        wrap.appendChild(menu); wrap.appendChild(fab);
+        (document.body || document.documentElement).appendChild(wrap);
+      }
+    } catch (e) {}
+  })();
+  /* @strip:end */
+
+  /* @strip:start dev
    * ── DATA STREAM / DLO: hover the Formula-column checkmark to see & copy its formula (dev-only) ─
    * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never on
    * the page (you must open our export modal). This shows it in a hover popover with a Copy button.
