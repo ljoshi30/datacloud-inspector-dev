@@ -224,15 +224,18 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
 
   ok("module present", /function dcDataSpaceFilterExport\(\)/.test(src));
   ok("gated to Data Space detail pages only", /\/\\\/r\\\/DataSpace\\\/\[a-zA-Z0-9\]\{15,18\}\\\//.test(src));
-  ok("reads the proven filter-group component + .filterGroup", /findByTag\("runtime_cdp-data-spaces-table-filter-group"\)/.test(src) && /dsfSafe\(el, "filterGroup"\)/.test(src));
-  ok("within-group operator read from data (filterOperator)", /g\.filterOperator \|\| "AND"/.test(src));
+  ok("STRUCTURE-BASED reader: own full shadow crawl (dsfCrawl), NOT findByTag (which filtered to live/visible and dropped the modal items — the '0 conditions' bug)",
+    /function dsfCrawl\(fn\)/.test(src) && /q = root\.querySelectorAll\("\*"\)/.test(src) && /q\[i\]\.shadowRoot/.test(src) && !/findByTag\("runtime_cdp-data-spaces-table-filter/.test(src));
+  ok("picks up BOTH shapes by prop, any tag/visibility: .filterGroup (group) + .filter (loose condition)",
+    /var fg = dsfSafe\(el, "filterGroup"\)/.test(src) && /var f = dsfSafe\(el, "filter"\)/.test(src) && /f\.field && f\.filterType !== "GROUP"/.test(src));
+  ok("within-group operator read from data (filterOperator)", /fg\.filterOperator \|\| "AND"/.test(src));
   ok("between-group operator read from the DOM AND/OR bar (not invented)", /function dsfReadBetweenOp/.test(src) && /\^\(AND\|OR\)\$/.test(src) && /dcWithinTag2\(el, "runtime_cdp-data-spaces-table-filter-group"\)/.test(src));
   ok("top-level groups exclude nested child groups (no double-count)", /childIds\[sg\.id\] = true/.test(src) && /return !childIds\[id\]/.test(src));
-  ok("FLAT filter fallback: when NO group wrapper exists, read -filter-item elements directly as one implicit group (fixes the Loyalty 3-condition OR case)",
-    /if \(!groups\.length\)/.test(src) && /findByTag\("runtime_cdp-data-spaces-table-filter-item"\)/.test(src) && /dsfSafe\(el, "filter"\)/.test(src) && /id: "flat", operator: flatJoin/.test(src));
-  ok("ORG-AGNOSTIC completeness check: counts on-screen -filter-item leaves vs captured; model carries both",
-    /var captured = 0; groups\.forEach/.test(src) && /findByTag\("runtime_cdp-data-spaces-table-filter-item"\)/.test(src) && /capturedCount: captured, onScreenCount: onScreen/.test(src));
-  ok("UI WARNS (loudly) when captured != on-screen — never a silently-incomplete export", /model\.capturedCount !== model\.onScreenCount/.test(src) && /Captured <b>" \+ model\.capturedCount/.test(src) && /report it so we can support that shape/.test(src));
+  ok("FLAT filter → loose conditions become one implicit group (fixes Loyalty 3-condition OR)",
+    /if \(!groups\.length && looseConds\.length\)/.test(src) && /id: "flat", operator: flatJoin/.test(src));
+  ok("ORG-AGNOSTIC completeness count uses the SAME crawl (can't disagree with capture)",
+    /var captured = 0; groups\.forEach/.test(src) && /dsfCrawl\(function \(el\) \{ var f = dsfSafe\(el, "filter"\); if \(f && f\.field/.test(src) && /capturedCount: captured, onScreenCount: onScreen/.test(src));
+  ok("UI WARNS only when on-screen > captured (missing rules) — not on grouped filters that carry conditions in filterGroup.filters[]", /model\.capturedCount < model\.onScreenCount/.test(src) && /Captured <b>" \+ model\.capturedCount/.test(src) && /report it so we can support that shape/.test(src));
   ok("one row per condition + group/logic columns", /var DSF_COLS = \[/.test(src) && /"Within-group logic", "Between-groups logic"/.test(src) && /ci === 0 \? groupLabel : ""/.test(src));
   ok("ONE download (Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
     var i = src.indexOf("function dcDataSpaceFilterExport"); var j = src.indexOf("/* @strip:end */", i); var mod = src.slice(i, j);

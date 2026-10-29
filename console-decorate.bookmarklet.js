@@ -19849,17 +19849,44 @@ processJSON();
 
     function dsfSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
+    // Walk ALL shadow DOM and hand every element to fn — our OWN crawl (not findByTag, which
+    // filters to "live/visible" and was dropping the modal's filter items on some objects, the
+    // reported "0 conditions" bug). Structure-first: we don't care about tag names or visibility,
+    // only which elements CARRY the filter data props. Mirrors the probe's eachEl exactly.
+    function dsfCrawl(fn) {
+      function walk(root, d) {
+        if (!root || d > 25) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length; i++) {
+          fn(q[i]);
+          var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
+          if (sr) walk(sr, d + 1);
+        }
+      }
+      try { walk(document, 0); } catch (e) {}
+    }
+    // A raw filter/group object → normalized condition (object/field/operator/value + API names).
+    function dsfCond(f, setObjLabel) {
+      var obj = f.object || {}, fld = f.field || {}, op = f.operator || {};
+      if (setObjLabel && obj.label) setObjLabel(String(obj.label));
+      return {
+        objectLabel: obj.label || "", objectApi: obj.devName || "",
+        fieldLabel: fld.label || "", fieldApi: fld.devName || "", fieldType: fld.type || "",
+        operator: op.label || op.devName || "", operatorDevName: op.devName || "",
+        value: (f.value === undefined || f.value === null) ? "" : String(f.value)
+      };
+    }
+
     // Collect the DISTINCT top-level filter groups (dedup by id) + the object being filtered.
-    // Returns { objectDevName, objectLabel, groups:[{id, operator, conditions:[...]}], betweenOp }.
+    // STRUCTURE-BASED: we crawl everything once and pick up whatever carries .filterGroup (a group)
+    // or .filter (a standalone condition) — regardless of tag/visibility — so grouped, flat, and
+    // nested filters all flow through one path on any org.
+    // Returns { objectDevName, objectLabel, groups:[{id, operator, conditions:[...]}], betweenOp, … }.
     function dsfRead() {
-      var groupsById = {}, order = [], objectDevName = "", objectLabel = "";
-      try {
-        findByTag("runtime_cdp-data-spaces-table-filter").forEach(function (el) {
-          var o = dsfSafe(el, "objectDevName"); if (o && !objectDevName) objectDevName = String(o);
-        });
-      } catch (e) {}
-      // flatten a filterGroup into display conditions (handles nested filterGroups defensively,
-      // though v42 showed one flat level in practice).
+      var groupsById = {}, order = [], childIds = {}, looseConds = [], seenGroupEls = [];
+      var objectDevName = "", objectLabel = "";
+      function setObjLabel(v) { if (!objectLabel) objectLabel = v; }
+      // recurse a filterGroup's filters[]/filterGroups[] into flat conditions
       function flatten(g, acc) {
         if (!g) return;
         var filters = dsfSafe(g, "filters");
@@ -19867,60 +19894,38 @@ processJSON();
           for (var i = 0; i < filters.length; i++) {
             var f = filters[i]; if (!f) continue;
             if (f.filterType === "GROUP" || f.filterGroups || (f.filters && !f.field)) { flatten(f, acc); continue; }
-            var obj = f.object || {}, fld = f.field || {}, op = f.operator || {};
-            if (!objectLabel && obj.label) objectLabel = String(obj.label);
-            acc.push({
-              objectLabel: obj.label || "", objectApi: obj.devName || "",
-              fieldLabel: fld.label || "", fieldApi: fld.devName || "", fieldType: fld.type || "",
-              operator: op.label || op.devName || "", operatorDevName: op.devName || "",
-              value: (f.value === undefined || f.value === null) ? "" : String(f.value)
-            });
+            acc.push(dsfCond(f, setObjLabel));
           }
         }
         var sub = dsfSafe(g, "filterGroups");
         if (Array.isArray(sub)) sub.forEach(function (sg) { flatten(sg, acc); });
       }
-      try {
-        findByTag("runtime_cdp-data-spaces-table-filter-group").forEach(function (el) {
-          var fg = dsfSafe(el, "filterGroup"); if (!fg || !fg.id || groupsById[fg.id]) return;
-          var conds = []; flatten(fg, conds);
-          groupsById[fg.id] = { id: fg.id, operator: fg.filterOperator || "AND", conditions: conds };
-          order.push(fg.id);
-        });
-      } catch (e) {}
-      // which groups are nested inside another (so they aren't ALSO treated as top-level)
-      var childIds = {};
-      try {
-        findByTag("runtime_cdp-data-spaces-table-filter-group").forEach(function (el) {
-          var fg = dsfSafe(el, "filterGroup"); if (!fg) return;
-          var sub = dsfSafe(fg, "filterGroups");
-          if (Array.isArray(sub)) sub.forEach(function (sg) { if (sg && sg.id) childIds[sg.id] = true; });
-        });
-      } catch (e) {}
+      // ONE crawl: harvest object name, groups (by .filterGroup), and loose conditions (by .filter).
+      dsfCrawl(function (el) {
+        var o = dsfSafe(el, "objectDevName"); if (o && !objectDevName) objectDevName = String(o);
+        var fg = dsfSafe(el, "filterGroup");
+        if (fg && fg.id) {
+          seenGroupEls.push(fg);
+          if (!groupsById[fg.id]) {
+            var conds = []; flatten(fg, conds);
+            groupsById[fg.id] = { id: fg.id, operator: fg.filterOperator || "AND", conditions: conds };
+            order.push(fg.id);
+          }
+          return;
+        }
+        // a standalone condition item (flat filter, no group wrapper)
+        var f = dsfSafe(el, "filter");
+        if (f && f.field && f.filterType !== "GROUP") looseConds.push(dsfCond(f, setObjLabel));
+      });
+      // mark groups that are nested inside another (so they're not ALSO treated as top-level)
+      seenGroupEls.forEach(function (fg) { var sub = dsfSafe(fg, "filterGroups"); if (Array.isArray(sub)) sub.forEach(function (sg) { if (sg && sg.id) childIds[sg.id] = true; }); });
       var groups = order.filter(function (id) { return !childIds[id]; }).map(function (id) { return groupsById[id]; });
 
-      // FALLBACK — a FLAT filter has NO group wrapper: SF renders only standalone
-      // runtime_cdp-data-spaces-table-filter-item elements (proven on the Loyalty object, v43:
-      // "No filter-group element found"). When no groups were built, read those items DIRECTLY as
-      // ONE implicit group. Each item carries .filter = {object, field, operator, value} (v41).
-      // The join for a flat list is the single AND/OR bar on the right → use the between-op read.
+      // FLAT filter (no group wrapper): the loose conditions ARE the filter → one implicit group,
+      // joined by the single on-screen AND/OR bar. Dedup is unnecessary (one element per item).
       var flatJoin = dsfReadBetweenOp([]);
-      if (!groups.length) {
-        var flatConds = [];
-        try {
-          findByTag("runtime_cdp-data-spaces-table-filter-item").forEach(function (el) {
-            var f = dsfSafe(el, "filter"); if (!f || !f.field) return;
-            var obj = f.object || {}, fld = f.field || {}, op = f.operator || {};
-            if (!objectLabel && obj.label) objectLabel = String(obj.label);
-            flatConds.push({
-              objectLabel: obj.label || "", objectApi: obj.devName || "",
-              fieldLabel: fld.label || "", fieldApi: fld.devName || "", fieldType: fld.type || "",
-              operator: op.label || op.devName || "", operatorDevName: op.devName || "",
-              value: (f.value === undefined || f.value === null) ? "" : String(f.value)
-            });
-          });
-        } catch (e) {}
-        if (flatConds.length) groups = [{ id: "flat", operator: flatJoin || "AND", conditions: flatConds }];
+      if (!groups.length && looseConds.length) {
+        groups = [{ id: "flat", operator: flatJoin || "AND", conditions: looseConds }];
       }
 
       // BETWEEN-group operator: read the rendered AND/OR bar(s) that sit OUTSIDE the group cards.
@@ -19928,18 +19933,14 @@ processJSON();
       // a flat (single implicit group) filter there's nothing BETWEEN groups → leave it blank.
       var betweenOp = groups.length > 1 ? dsfReadBetweenOp(groups) : "";
 
-      // COMPLETENESS GUARANTEE (org-agnostic): the single leaf that's ALWAYS one-per-condition,
-      // regardless of how an org nests its groups, is runtime_cdp-data-spaces-table-filter-item.
-      // Count those on screen and compare to what we actually captured. If they differ, we may be
-      // missing conditions on an unfamiliar structure → the UI WARNS instead of silently exporting
-      // a subset. (We never want to hand someone a filter export that quietly dropped rules.)
+      // COMPLETENESS GUARANTEE (org-agnostic): the "actual" is every element that carries a real
+      // condition (.filter.field) — counted via the SAME crawl as the capture, so it can't
+      // disagree with the crawl itself. Compare to what landed in groups. If they differ, we may
+      // be missing conditions on an unfamiliar nesting → the UI WARNS instead of silently
+      // exporting a subset. (Never hand someone a filter export that quietly dropped rules.)
       var captured = 0; groups.forEach(function (g) { captured += g.conditions.length; });
       var onScreen = 0;
-      try {
-        findByTag("runtime_cdp-data-spaces-table-filter-item").forEach(function (el) {
-          var f = dsfSafe(el, "filter"); if (f && f.field) onScreen++;   // real condition items only
-        });
-      } catch (e) {}
+      dsfCrawl(function (el) { var f = dsfSafe(el, "filter"); if (f && f.field && f.filterType !== "GROUP") onScreen++; });
       return { objectDevName: objectDevName, objectLabel: objectLabel || objectDevName, groups: groups, betweenOp: betweenOp, capturedCount: captured, onScreenCount: onScreen };
     }
 
@@ -20266,10 +20267,11 @@ processJSON();
       if (!model.groups.length) {
         body.innerHTML = "<p style='color:#5c6b8a;font-size:13px'>No filter found on this object. Open the object&rsquo;s <b>Edit Filters</b> (so the conditions render on the page), then click <b>Export Filters</b> again.</p>";
       } else {
-        // COMPLETENESS warning — org-agnostic safety net. If the number of condition items on
-        // screen doesn't match what we captured, we might be missing conditions on an unfamiliar
-        // nesting → say so LOUDLY rather than hand over a silently-incomplete export.
-        if (model.onScreenCount && model.capturedCount !== model.onScreenCount) {
+        // COMPLETENESS warning — org-agnostic safety net. Warn only when MORE conditions are on
+        // screen than we captured (we're missing some on an unfamiliar nesting). We don't warn on
+        // captured > onScreen, because a grouped filter may carry its conditions inside
+        // filterGroup.filters[] without emitting a per-item element for each — not a loss.
+        if (model.capturedCount < model.onScreenCount) {
           var cwarn = document.createElement("div");
           cwarn.style.cssText = "background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:12px;color:#b91c1c;";
           cwarn.innerHTML = "&#9888; Captured <b>" + model.capturedCount + "</b> of <b>" + model.onScreenCount + "</b> conditions on screen. This filter may use a structure the tool hasn&rsquo;t seen &mdash; please verify before relying on this export, and report it so we can support that shape.";
