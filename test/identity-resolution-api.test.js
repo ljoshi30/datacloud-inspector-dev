@@ -90,6 +90,10 @@ console.log("\n4. source presence — proven props, org-agnostic loop, VDI-safe 
   ok("ONE shadow crawl per pass (irCollect) — not a per-move scan (VDI-safe)",
     /function irCollect/.test(src) && /q\[i\]\.shadowRoot/.test(src) && /recon-rule-field/.test(src) && /recon-table-rules/.test(src));
   ok("unstackable dedup: tracked spans cleared by reference each pass", /var _irSpans = \[\]/.test(src) && /function irClear/.test(src) && /_irSpans\.push\(sp\)/.test(src));
+  ok("NO DOUBLE api: irClear also class-sweeps the doc (removes a PRIOR instance's spans) + one-time load sweep",
+    (src.match(/el\.classList\.contains\("dc-ir-api"\)/g) || []).length >= 2);
+  ok("expanding a DMO section / opening a dropdown re-decorates (delegated click re-run, not just childList observer)",
+    /function irOnClick/.test(src) && /document\.addEventListener\("click", irOnClick, true\)/.test(src) && /if \(!IR_ON\) return; setTimeout\(function \(\) \{ irRun\(false\)/.test(src));
   ok("signature guard skips no-op redraws (no flicker/churn)", /function irSignature/.test(src) && /sig === _irSig/.test(src));
   ok("observer DISCONNECTS while writing (no feedback loop / VDI peg)",
     /_irWriting = true;/.test(src) && /if \(_irObs\) _irObs\.disconnect\(\);/.test(src) && /if \(_irWriting \|\| _irT\) return;/.test(src));

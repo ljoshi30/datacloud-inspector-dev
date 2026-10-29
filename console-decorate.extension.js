@@ -19631,7 +19631,15 @@ processJSON();
 
     // One styled, click-to-copy grey api line (same look/behavior as Data Graph's).
     var _irSpans = [];
-    function irClear() { for (var i = 0; i < _irSpans.length; i++) { try { _irSpans[i].remove(); } catch (e) {} } _irSpans = []; }
+    // Clear OUR spans by reference, THEN sweep the whole doc by class — so leftovers from a PRIOR
+    // module instance (re-clicking the bookmarklet starts a fresh closure with an empty _irSpans,
+    // which otherwise can't see the previous run's spans → the reported DOUBLE api names) are also
+    // removed. Belt-and-suspenders, same as Data Graph's dgClearAll.
+    function irClear() {
+      for (var i = 0; i < _irSpans.length; i++) { try { _irSpans[i].remove(); } catch (e) {} }
+      _irSpans = [];
+      try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-ir-api")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+    }
     function irInject(host, apiText) {
       if (!host || !apiText) return;
       try {
@@ -19753,12 +19761,28 @@ processJSON();
       _irWriting = false;
     }
     function irSchedule() { if (_irWriting || _irT) return; _irT = setTimeout(function () { _irT = null; irRun(false); }, 300); }
-    function irStart() { IR_ON = true; if (!_irObs) { try { _irObs = new MutationObserver(irSchedule); } catch (e) {} } irRun(true); }
+    // Expanding a DMO section (or opening a Match-Criteria dropdown) often just toggles VISIBILITY
+    // of rows that are already in the DOM — that fires NO childList mutation, so the observer alone
+    // misses it and the newly-shown fields stay undecorated (reported). A delegated click handler
+    // covers it: any click while ON schedules a re-run a beat later (after SF finishes expanding).
+    // Idle cost is ~zero — it only does anything on an actual click, and only while the feature's on.
+    var _irClickWired = false;
+    function irOnClick() { if (!IR_ON) return; setTimeout(function () { irRun(false); }, 350); }
+    function irStart() {
+      IR_ON = true;
+      if (!_irObs) { try { _irObs = new MutationObserver(irSchedule); } catch (e) {} }
+      if (!_irClickWired) { try { document.addEventListener("click", irOnClick, true); _irClickWired = true; } catch (e) {} }
+      irRun(true);
+    }
     function irStop() { IR_ON = false; try { if (_irObs) _irObs.disconnect(); } catch (e) {} _irSig = null; irClear(); }
     try {
       window.__dcToggleIrApi = function () { if (IR_ON) irStop(); else irStart(); return IR_ON; };
       window.__dcIrApiIsOn = function () { return IR_ON; };
     } catch (e) {}
+
+    // One-time cleanup on load: a PRIOR build/instance in this tab may have left .dc-ir-api spans
+    // (old style). Sweep them once so we never show two api lines per field after a re-click/reload.
+    try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-ir-api")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
 
     // Minimal FAB (bottom-right) — the IR page has no detail launcher of its own.
     try {
