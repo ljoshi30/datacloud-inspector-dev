@@ -19638,12 +19638,16 @@ processJSON();
         var sp = document.createElement("span");
         sp.className = "dc-ir-api";
         var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
-        s("display", "block"); s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace");
-        s("color", "#4a6fa5"); s("margin-top", "1px"); s("white-space", "nowrap");
-        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("max-width", "100%");
-        s("cursor", "pointer"); s("user-select", "text");
+        // inline-block with a clear LEFT GAP (the label is an <a>, so a block span collapsed right
+        // against it — "Account MultilineTDI_…"). A little pill-ish chip reads as a separate
+        // annotation; title carries the full api so a truncated one is still readable on hover.
+        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "baseline");
+        s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace"); s("color", "#5f6b85");
+        s("background", "#eef2f8"); s("border", "1px solid #dfe5ef"); s("border-radius", "4px");
+        s("padding", "0 5px"); s("white-space", "nowrap"); s("max-width", "320px");
+        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
         sp._irApi = String(apiText); sp.textContent = String(apiText);
-        try { sp.setAttribute("title", "Click to copy " + apiText); } catch (e) {}
+        try { sp.setAttribute("title", apiText + "  ·  click to copy"); } catch (e) {}
         sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
         sp.addEventListener("click", function (e) {
           e.stopPropagation(); e.preventDefault();
