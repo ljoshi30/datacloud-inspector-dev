@@ -19710,6 +19710,274 @@ processJSON();
   })();
   /* @strip:end */
 
+  /* @strip:start dev
+   * ── DATA SPACE: export a DLO's membership filters to CSV / Excel / Sheets (dev-only) ────────
+   * On a Data Space page, each member object (DLO) can have a membership filter — grouped
+   * conditions, exactly like a segment. SF lets you build it but NOT take it with you. This
+   * exports it, grouping preserved, like the Segment export.
+   * PROVEN DOM (DOM Probe v41/v42/v43 on the live org):
+   *   <runtime_cdp-data-spaces-table-filter-group>.filterGroup = {
+   *       id, filterOperator:"AND"|"OR", filters:[ CONDITION… ], filterGroups:[ nested… ] }
+   *   each CONDITION = { object:{devName,label}, field:{devName,label,type},
+   *                      operator:{devName,label}, value }
+   *   The WITHIN-group operator is in the data (filterOperator). The BETWEEN-group operator is
+   *   NOT in any JS prop (the host's appliedFilters/filter are undefined) — it exists ONLY as a
+   *   rendered "AND"/"OR" bar in the DOM, so we read it from there and clearly label it as the
+   *   between-groups joiner. (Screens confirmed: within=AND, between=OR is the common shape.)
+   */
+  (function dcDataSpaceFilterExport() {
+    try { if (!/\/r\/DataSpace\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return; } catch (e) { return; }
+
+    function dsfSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // Collect the DISTINCT top-level filter groups (dedup by id) + the object being filtered.
+    // Returns { objectDevName, objectLabel, groups:[{id, operator, conditions:[...]}], betweenOp }.
+    function dsfRead() {
+      var groupsById = {}, order = [], objectDevName = "", objectLabel = "";
+      try {
+        findByTag("runtime_cdp-data-spaces-table-filter").forEach(function (el) {
+          var o = dsfSafe(el, "objectDevName"); if (o && !objectDevName) objectDevName = String(o);
+        });
+      } catch (e) {}
+      // flatten a filterGroup into display conditions (handles nested filterGroups defensively,
+      // though v42 showed one flat level in practice).
+      function flatten(g, acc) {
+        if (!g) return;
+        var filters = dsfSafe(g, "filters");
+        if (Array.isArray(filters)) {
+          for (var i = 0; i < filters.length; i++) {
+            var f = filters[i]; if (!f) continue;
+            if (f.filterType === "GROUP" || f.filterGroups || (f.filters && !f.field)) { flatten(f, acc); continue; }
+            var obj = f.object || {}, fld = f.field || {}, op = f.operator || {};
+            if (!objectLabel && obj.label) objectLabel = String(obj.label);
+            acc.push({
+              objectLabel: obj.label || "", objectApi: obj.devName || "",
+              fieldLabel: fld.label || "", fieldApi: fld.devName || "", fieldType: fld.type || "",
+              operator: op.label || op.devName || "", operatorDevName: op.devName || "",
+              value: (f.value === undefined || f.value === null) ? "" : String(f.value)
+            });
+          }
+        }
+        var sub = dsfSafe(g, "filterGroups");
+        if (Array.isArray(sub)) sub.forEach(function (sg) { flatten(sg, acc); });
+      }
+      try {
+        findByTag("runtime_cdp-data-spaces-table-filter-group").forEach(function (el) {
+          var fg = dsfSafe(el, "filterGroup"); if (!fg || !fg.id || groupsById[fg.id]) return;
+          var conds = []; flatten(fg, conds);
+          groupsById[fg.id] = { id: fg.id, operator: fg.filterOperator || "AND", conditions: conds };
+          order.push(fg.id);
+        });
+      } catch (e) {}
+      // which groups are nested inside another (so they aren't ALSO treated as top-level)
+      var childIds = {};
+      try {
+        findByTag("runtime_cdp-data-spaces-table-filter-group").forEach(function (el) {
+          var fg = dsfSafe(el, "filterGroup"); if (!fg) return;
+          var sub = dsfSafe(fg, "filterGroups");
+          if (Array.isArray(sub)) sub.forEach(function (sg) { if (sg && sg.id) childIds[sg.id] = true; });
+        });
+      } catch (e) {}
+      var groups = order.filter(function (id) { return !childIds[id]; }).map(function (id) { return groupsById[id]; });
+      // BETWEEN-group operator: read the rendered AND/OR bar(s) that sit OUTSIDE the group cards.
+      // The one that joins groups is the between-op; default to the common "OR" only if we can
+      // see one and it isn't the within-op. We surface whatever we read, never invent.
+      var betweenOp = dsfReadBetweenOp(groups);
+      return { objectDevName: objectDevName, objectLabel: objectLabel || objectDevName, groups: groups, betweenOp: betweenOp };
+    }
+
+    // Read the between-group operator from the DOM. We look for short AND/OR text nodes and pick
+    // the operator that is NOT inside a group card (the group-level rail). If exactly one distinct
+    // value is found at the outer level, that's it; else return "" (unknown — we won't guess).
+    function dsfReadBetweenOp(groups) {
+      try {
+        var outer = [];
+        eachElement(document, function (el) {
+          var t = ""; try { t = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+          if (!/^(AND|OR)$/i.test(t)) return;
+          var kids = 0; try { kids = el.children ? el.children.length : 0; } catch (e) {}
+          if (kids > 1) return;                               // leaf-ish only
+          // skip if inside a group card (that's the within-group rail)
+          if (dcWithinTag2(el, "runtime_cdp-data-spaces-table-filter-group")) return;
+          outer.push(t.toUpperCase());
+        });
+        var uniq = {}; outer.forEach(function (v) { uniq[v] = 1; });
+        var keys = Object.keys(uniq);
+        if (keys.length === 1) return keys[0];
+        if (keys.length > 1) return keys.join("/");           // mixed — surface both, don't guess
+      } catch (e) {}
+      return "";
+    }
+    // containment test crossing shadow (local copy so this module is self-contained)
+    function dcWithinTag2(el, tagName) {
+      var n = el;
+      while (n) {
+        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
+        if (t === tagName) return true;
+        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
+      }
+      return false;
+    }
+
+    // Build the export rows: ONE row per condition, carrying the group + logic columns so the
+    // AND/OR structure is unambiguous (like the Segment export). Header first.
+    var DSF_COLS = ["Group", "Within-group logic", "Between-groups logic", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value"];
+    function dsfRows(model) {
+      var rows = [DSF_COLS.slice()];
+      model.groups.forEach(function (g, gi) {
+        var groupLabel = "Group " + (gi + 1);
+        var between = (gi < model.groups.length - 1) ? (model.betweenOp || "") : "";
+        if (!g.conditions.length) { rows.push([groupLabel, g.operator, between, "", "", "(no conditions)", "", "", ""]); return; }
+        g.conditions.forEach(function (c, ci) {
+          rows.push([
+            ci === 0 ? groupLabel : "",          // group label only on first row of the group
+            g.operator,
+            ci === 0 ? between : "",             // between-op shown once per group boundary
+            c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.value
+          ]);
+        });
+      });
+      return rows;
+    }
+    // Plain-English one-liner, e.g. (A = true AND B IS EMPTY) OR (C = x)
+    function dsfSummary(model) {
+      var parts = model.groups.map(function (g) {
+        var inner = g.conditions.map(function (c) { return c.fieldLabel + " " + c.operator + (c.value !== "" ? " " + c.value : ""); }).join(" " + g.operator + " ");
+        return "(" + inner + ")";
+      });
+      return parts.join("  " + (model.betweenOp || "OR") + "  ");
+    }
+
+    function dsfCsvEsc(s) { var t = String(s == null ? "" : s); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; }
+    function dsfToCsv(rows) { return rows.map(function (r) { return r.map(dsfCsvEsc).join(","); }).join("\n"); }
+    function dsfToTsv(rows) { return rows.map(function (r) { return r.map(function (s) { return String(s == null ? "" : s).replace(/\t/g, " "); }).join("\t"); }).join("\n"); }
+    function dsfSafeName(s) { return String(s || "data-space-filter").replace(/[^a-zA-Z0-9_-]/g, "_"); }
+    function dsfDownload(text, filename, mime) {
+      try { var b = new Blob([text], { type: mime || "text/csv;charset=utf-8" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = filename; document.body.appendChild(a); a.click(); setTimeout(function () { try { a.remove(); URL.revokeObjectURL(a.href); } catch (e) {} }, 4000); } catch (e) {}
+    }
+
+    // ── the export panel (segment-style: title + summary + CSV / Excel / Copy-for-Sheets) ──
+    var _dsfEl = null;
+    function dsfClose() { if (_dsfEl) { _dsfEl.remove(); _dsfEl = null; } }
+    function dsfOpen() {
+      var model = dsfRead();
+      dsfClose();
+      var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+      var rows = dsfRows(model);
+      var nConds = rows.length - 1;
+      var p = document.createElement("div");
+      _dsfEl = p;
+      p.id = "dc-dsf-export";
+      p.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);z-index:2147483647;width:min(960px,96vw);max-height:84vh;display:flex;flex-direction:column;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.5);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
+      var hd = document.createElement("div");
+      hd.className = "hd";
+      hd.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move;flex-shrink:0;";
+      hd.innerHTML = "<div><div style='font:700 15px -apple-system,sans-serif;color:#16325c;'>Export Filters &mdash; " + esc(model.objectLabel) + "</div><div style='font:400 11px -apple-system,sans-serif;color:#5c6b8a;margin-top:2px;'>" + esc(model.objectDevName) + " &middot; " + model.groups.length + " group" + (model.groups.length === 1 ? "" : "s") + " &middot; " + nConds + " condition" + (nConds === 1 ? "" : "s") + "</div></div>";
+      var xBtn = document.createElement("button"); xBtn.innerHTML = "&times;"; xBtn.title = "Close"; xBtn.style.cssText = "border:none;background:none;font-size:20px;color:#5c6b8a;cursor:pointer;line-height:1;"; xBtn.onclick = dsfClose;
+      hd.appendChild(xBtn); p.appendChild(hd);
+
+      var body = document.createElement("div");
+      body.style.cssText = "padding:14px 16px;overflow:auto;";
+      if (!model.groups.length) {
+        body.innerHTML = "<p style='color:#5c6b8a'>No filter found on this object. Open the object&rsquo;s <b>Edit Filters</b> so the conditions render, then try again.</p>";
+      } else {
+        // summary
+        var sum = document.createElement("div");
+        sum.style.cssText = "background:#f1f5f9;border-left:3px solid #0d6efd;border-radius:6px;padding:9px 12px;margin:0 0 12px;font:12px/1.5 'SF Mono',Menlo,monospace;color:#334155;white-space:pre-wrap;word-break:break-word;";
+        sum.textContent = dsfSummary(model);
+        if (!model.betweenOp && model.groups.length > 1) {
+          var warn = document.createElement("div");
+          warn.style.cssText = "background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:7px 11px;margin:0 0 12px;font-size:11.5px;color:#78350f;";
+          warn.innerHTML = "The operator <b>between</b> groups wasn&rsquo;t readable from the page, so it&rsquo;s left blank. Within each group it&rsquo;s shown. (Open the filter so the AND/OR bar is visible, then reopen.)";
+          body.appendChild(warn);
+        }
+        body.appendChild(sum);
+        // preview table
+        var tbl = document.createElement("table");
+        tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+        var html = "<thead><tr>" + DSF_COLS.map(function (c) { return "<th style='text-align:left;padding:6px 9px;background:#1f3864;color:#fff;font-weight:700;white-space:nowrap;position:sticky;top:0'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        for (var i = 1; i < rows.length; i++) {
+          var newGroup = rows[i][0] !== "";
+          html += "<tr style='" + (newGroup ? "border-top:2px solid #1f3864;" : "") + "'>" + rows[i].map(function (cell, ci) { return "<td style='padding:5px 9px;border-bottom:1px solid #e8edf5;" + (ci === 5 || ci === 6 ? "font-family:SF Mono,Consolas,monospace;" : "") + "'>" + esc(cell) + "</td>"; }).join("") + "</tr>";
+        }
+        html += "</tbody>";
+        tbl.innerHTML = html;
+        body.appendChild(tbl);
+      }
+      p.appendChild(body);
+
+      if (model.groups.length) {
+        var ft = document.createElement("div");
+        ft.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #e0e5ee;background:#fafbfe;flex-shrink:0;";
+        var mkBtn = function (label, grad) { var b = document.createElement("button"); b.innerHTML = label; b.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:" + grad + ";"; return b; };
+        var fn = dsfSafeName(model.objectDevName);
+        var csvB = mkBtn("&#11015; Download CSV", "linear-gradient(135deg,#0ea5e9,#0369a1)");
+        csvB.onclick = function () { dsfDownload(dsfToCsv(rows), fn + "-filters.csv", "text/csv;charset=utf-8"); csvB.innerHTML = "&#10003; Saved"; setTimeout(function () { csvB.innerHTML = "&#11015; Download CSV"; }, 1200); };
+        var xlsB = mkBtn("&#11015; Download Excel", "linear-gradient(135deg,#16a34a,#15803d)");
+        xlsB.onclick = function () {
+          try {
+            var meta = "Data Space filter\nObject: " + model.objectLabel + " (" + model.objectDevName + ")\nLogic: " + dsfSummary(model);
+            var sheetRows = rows.concat([["", ""], [meta]]);
+            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1 }], { wrapLastRow: true });
+            dsfDownload(buf, fn + "-filters.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
+          } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
+        };
+        var copyB = mkBtn("&#128203; Copy for Sheets", "linear-gradient(135deg,#6366f1,#4338ca)");
+        copyB.onclick = function () {
+          var tsv = dsfToTsv(rows);
+          var done = function () { copyB.innerHTML = "&#10003; Copied"; setTimeout(function () { copyB.innerHTML = "&#128203; Copy for Sheets"; }, 1200); };
+          try { navigator.clipboard.writeText(tsv).then(done, function () { try { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); } catch (e3) { done(); }
+        };
+        ft.appendChild(csvB); ft.appendChild(xlsB); ft.appendChild(copyB);
+        p.appendChild(ft);
+      }
+      document.body.appendChild(p);
+      // drag by header
+      try {
+        var dx = 0, dy = 0;
+        hd.addEventListener("pointerdown", function (e) {
+          if (e.target.closest("button")) return;
+          var r = p.getBoundingClientRect(); p.style.left = r.left + "px"; p.style.top = r.top + "px"; p.style.transform = "none";
+          dx = e.clientX - r.left; dy = e.clientY - r.top;
+          var mv = function (ev) { p.style.left = Math.max(0, Math.min(window.innerWidth - 100, ev.clientX - dx)) + "px"; p.style.top = Math.max(0, ev.clientY - dy) + "px"; };
+          var up = function () { window.removeEventListener("pointermove", mv, true); window.removeEventListener("pointerup", up, true); };
+          window.addEventListener("pointermove", mv, true); window.addEventListener("pointerup", up, true);
+        });
+      } catch (e) {}
+    }
+
+    // expose + count (for a launcher that only shows when a filter is present)
+    try {
+      window.__dcDsFilterExport = dsfOpen;
+      window.__dcDsFilterCount = function () { try { return dsfRead().groups.length; } catch (e) { return 0; } };
+    } catch (e) {}
+
+    // Minimal FAB (the Data Space page has no detail launcher of its own). Appears only when a
+    // filter is actually present; polls briefly because the filter modal opens on demand.
+    try {
+      var _dsfFabTries = 0;
+      var _dsfFabTimer = setInterval(function () {
+        _dsfFabTries++;
+        if (_dsfFabTries > 40) { clearInterval(_dsfFabTimer); return; }   // ~20s then stop
+        if (document.getElementById("dc-dsf-bar")) return;
+        var has = 0; try { has = window.__dcDsFilterCount(); } catch (e) {}
+        if (!has) return;
+        clearInterval(_dsfFabTimer);
+        var wrap = document.createElement("div"); wrap.id = "dc-dsf-bar";
+        wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+        var fab = document.createElement("button");
+        fab.title = "Export this object's filters";
+        fab.style.cssText = "display:flex;align-items:center;gap:8px;border:none;border-radius:24px;cursor:pointer;background:linear-gradient(135deg,#0ea5e9,#4338ca);color:#fff;font:700 13px -apple-system,sans-serif;padding:11px 18px;box-shadow:0 4px 18px rgba(67,56,202,.5);";
+        fab.innerHTML = "<svg width='16' height='16' viewBox='0 0 16 16' fill='none'><path d='M2 3h12M4 3v2.5L7 9v4l2-1V9l3-3.5V3' stroke='#fff' stroke-width='1.4' stroke-linejoin='round'/></svg> Export Filters";
+        fab.onclick = function (e) { e.stopPropagation(); dsfOpen(); };
+        wrap.appendChild(fab);
+        (document.body || document.documentElement).appendChild(wrap);
+      }, 500);
+    } catch (e) {}
+  })();
+  /* @strip:end */
+
   if (detailPageType && detailPageType !== "DataExplore" && detailPageType !== "Transform" && detailPageType !== "QueryEditor" && detailPageType !== "DataModel" && detailPageType !== "Activation" && !/displayType=graph|marketSegmentActivation|\/r\/MarketSegmentActivation/i.test(window.location.href)) {
     function ensureDetailLauncher() {
       if (document.getElementById("dc-bar") || document.getElementById("dc-erd-bar") || /displayType=graph/i.test(window.location.href)) return;

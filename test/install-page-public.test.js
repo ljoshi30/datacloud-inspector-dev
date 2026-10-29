@@ -54,6 +54,7 @@ console.log("\n3. The forbidden list covers the stripped features + internal exa
   ok("guards against Data Model (ERD) leaking public", /Data Model \\\(ERD\\\)/.test(b));
   ok("guards against a Data Graph accordion row (dev-only)", /acc-nm">Data Graph</.test(b));
   ok("guards against a Formula-fields accordion row (dev-only)", /acc-nm">Formula fields/.test(b));
+  ok("guards against a Data Space Filters accordion row (dev-only)", /acc-nm">Data Space Filters/.test(b));
   ok("guards against Birth Date example", /birth\\s\*date|birth\s*date/i.test(b));
   ok("guards against Account Number example", /account number/i.test(b));
 }

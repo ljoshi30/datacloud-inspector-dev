@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js", "dataspace-filter-export.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {
@@ -244,7 +244,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
-    .concat(includeDev ? ["Data Graph", "Formula fields", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
+    .concat(includeDev ? ["Data Graph", "Formula fields", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -328,6 +328,14 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li><b>Export</b> the activation&rsquo;s included attributes with their object and field API names in one click.</li>" +
       "</ul>" +
       "<span class=\"gi\">API-name hints live on the wizard (where attributes exist). A finished activation&rsquo;s read-only page has no attributes to label, so it offers Export only.</span>") +
+    acc("&#128229;", "Data Space Filters", ["Export CSV", "Excel", "Sheets"],
+      "<p><b>The gap:</b> a Data Space can filter which records of an object (DLO) belong to it &mdash; grouped conditions joined by AND/OR, just like a segment. Salesforce lets you build that filter but gives you no way to take it with you to document or review.</p>" +
+      "<ul>" +
+      "<li>Open an object&rsquo;s <b>Edit Filters</b>, then click <b>Export Filters</b> &mdash; you get the whole filter as a table: one row per condition with its <b>object, field label, field API name, operator, and value</b>.</li>" +
+      "<li>The <b>grouping is preserved</b> &mdash; each condition carries its group number, the within-group logic (AND/OR), and the between-group logic &mdash; plus a plain-English summary like <code>(A = true AND B IS EMPTY) OR (C = x)</code>.</li>" +
+      "<li>Download as <b>CSV</b> or <b>Excel</b>, or <b>Copy for Sheets</b> &mdash; the same options the Segment export gives you.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">The operator <b>within</b> each group comes straight from the filter&rsquo;s data. The operator <b>between</b> groups is read from the on-screen AND/OR bar; if the filter isn&rsquo;t open so that bar is visible, the export marks it blank rather than guessing.</span>") +
     acc("&#9881;&#65039;", "Data Transform", ["Plain-English summary"],
       "<p><b>The gap:</b> a Data Transform&rsquo;s definition is dense &mdash; understanding what it does means reading its raw node graph or SQL.</p>" +
       "<p>This reads the transform and writes a <b>plain-English, step-by-step summary</b>: the <b>sources</b> it reads, the <b>filters</b> it applies, any <b>formulas</b> and <b>joins</b>, the <b>outputs</b> it writes, and which fields are <b>kept, dropped, or renamed</b>. Download it as an HTML file you can print to PDF.</p>") +
@@ -619,6 +627,8 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/chip">Data Graph</, "Data Graph chip (dev-only, stripped from public)"],
     [/acc-nm">Formula fields/, "Formula-fields accordion row (dev-only, stripped from public)"],
     [/chip">Formula fields</, "Formula-fields chip (dev-only, stripped from public)"],
+    [/acc-nm">Data Space Filters/, "Data Space Filters accordion row (dev-only, stripped from public)"],
+    [/chip">Data Space Filters</, "Data Space Filters chip (dev-only, stripped from public)"],
     [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
     [/chip">Segment</, "Segment chip (stripped from public)"],
     [/Export Rules/, "Export Rules launcher (Segment)"],
