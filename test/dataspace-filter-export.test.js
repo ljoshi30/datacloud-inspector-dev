@@ -168,17 +168,21 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
   ok("between-group operator read from the DOM AND/OR bar (not invented)", /function dsfReadBetweenOp/.test(src) && /\^\(AND\|OR\)\$/.test(src) && /dcWithinTag2\(el, "runtime_cdp-data-spaces-table-filter-group"\)/.test(src));
   ok("top-level groups exclude nested child groups (no double-count)", /childIds\[sg\.id\] = true/.test(src) && /return !childIds\[id\]/.test(src));
   ok("one row per condition + group/logic columns", /var DSF_COLS = \[/.test(src) && /"Within-group logic", "Between-groups logic"/.test(src) && /ci === 0 \? groupLabel : ""/.test(src));
-  ok("ONE download (colored Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
+  ok("ONE download (Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
     var i = src.indexOf("function dcDataSpaceFilterExport"); var j = src.indexOf("/* @strip:end */", i); var mod = src.slice(i, j);
-    return /buildXlsx\(\[\{ name: "Filters"[\s\S]{0,90}styleFor: built\.styleFor/.test(mod) && /function dsfToTsv/.test(mod) && !/Download CSV/.test(mod);
+    return /buildXlsx\(\[\{ name: "Filters"[\s\S]{0,120}merges: built\.merges, cols: built\.cols/.test(mod) && /function dsfToTsv/.test(mod) && !/Download CSV/.test(mod);
   })());
-  ok("Excel is colored/banded via a styleFor map (header dark+bold, groups tinted AND=blue/OR=purple)", /function dsfXlsxRowsAndStyle/.test(src) && /isOr \? \(alt \? 7 : 5\) : \(alt \? 6 : 4\)/.test(src) && /return col === 0 \? st\.label : st\.band/.test(src));
+  ok("Excel REPLICATES SF rails with MERGED cells: merged Group label, merged within-group rail, merged between-groups rail",
+    /function dsfXlsxSheet/.test(src) && /merges\.push\("A" \+ gStart \+ ":A" \+ gEnd\)/.test(src) && /colL\(RAIL\) \+ gStart/.test(src) && /colL\(BRAIL\) \+ firstGroupRow \+ ":" \+ colL\(BRAIL\) \+ lastGroupRow/.test(src));
+  ok("Excel rail cells styled green(AND)/orange(OR)/amber(unknown), bands blue/purple",
+    /var railStyle = isOr \? 9 : 8/.test(src) && /var band = isOr \? 5 : 4/.test(src) && /betweenStyle = model\.betweenOp \? \(model\.betweenOp\.toUpperCase\(\) === "OR" \? 9 : 8\) : 10/.test(src));
   ok("on-screen preview uses SF-style vertical AND/OR rails (per-group rail + outer rail)", /function dsfCardsHtml/.test(src) && /function dsfGroupHtml/.test(src) && /class='dsf-rail /.test(src) && /dsf-rail outer /.test(src));
   ok("rails colored like SF (AND green, OR orange)", /\.dsf-rail\.and\{--rc:#008000\}\.dsf-rail\.or\{--rc:#c55a11\}/.test(src));
   ok("Copy-for-Sheets copies a real TABLE (cells, not flex) so Sheets/Excel keep the grid", /function dsfTableHtml/.test(src) && /var tableHtml = dsfTableHtml\(model\)/.test(src) && /document\.execCommand\("copy"\)/.test(src) && /function dsfToTsv/.test(src));
-  // buildXlsx gained opt-in color styles without changing default output for existing callers
+  // buildXlsx gained opt-in color styles + merges + column widths WITHOUT changing default output
   const bx = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  ok("buildXlsx supports opt-in colored header + band fills (styleFor), defaults unchanged", /opts\.styleFor/.test(bx) && /fontId=\\"2\\" fillId=\\"2\\"/.test(bx) && /cellXfs count=\\"12\\"/.test(bx));
+  ok("buildXlsx supports opt-in colored styles + merged cells + column widths (defaults unchanged)",
+    /sheet\.merges/.test(bx) && /<mergeCells count=/.test(bx) && /sheet\.cols/.test(bx) && /<cols>/.test(bx) && /cellXfs count=\\"11\\"/.test(bx) && /rail green \(AND\)/.test(bx));
   ok("warns when between-op unreadable (never shows a guessed operator)", /wasn.rsquo;t readable from the page/.test(src));
   ok("exposes open + count; FAB only when a filter exists", /window\.__dcDsFilterExport/.test(src) && /window\.__dcDsFilterCount/.test(src) && /if \(!has\) return;/.test(src));
   ok("FAB poll stops after a bounded number of tries (no infinite timer)", /_dsfFabTries > 40/.test(src));

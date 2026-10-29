@@ -2811,47 +2811,54 @@
     const xmlEsc = (s) => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     const colLetter = (n) => { let s=""; n++; while(n>0){s=String.fromCharCode(64+(n%26||26))+s;n=Math.floor((n-(n%26?0:26))/26);} return s; };
 
-    // Style IDs: 0=normal, 1=bold, 2=wrap (for meta cell). 3+ are COLOR styles (opt-in via
-    // opts.styleFor) — a dark bold-white header + tinted group bands — so a caller can produce a
-    // segment-style colored sheet. Existing callers never reference 3+, so their output is
-    // unchanged. Fonts: 0 normal, 1 bold, 2 bold-white. Fills: 0 none, 1 gray125, 2 header(dark),
-    // 3 AND band, 4 OR band, 5 AND band(alt), 6 OR band(alt).
+    // Style IDs: 0=normal, 1=bold, 2=wrap. 3+ are COLOR/LAYOUT styles (opt-in via opts.styleFor)
+    // so a caller can build a segment-style sheet with a dark header, tinted group bands, and
+    // colored AND/OR rail cells (meant to be MERGED vertically to look like SF's rails). Existing
+    // callers only ever use 0/1/2, so their output is byte-identical.
+    //   Fonts:  0 normal · 1 bold · 2 bold-white
+    //   Fills:  0 none · 1 gray125 · 2 header(#16325C) · 3 AND band(#E8F4FD) · 4 OR band(#F3EEFF)
+    //           · 5 rail green(#008000) · 6 rail orange(#C55A11) · 7 rail amber(#B45309)
+    //   Styles: 3 header · 4 AND band · 5 OR band · 6 AND group-label(bold,centered)
+    //           · 7 OR group-label · 8 AND rail(white/green,centered) · 9 OR rail(white/orange)
+    //           · 10 unknown rail(white/amber)
     const stylesXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
       "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
       "<fonts count=\"3\"><font><sz val=\"11\"/></font><font><b/><sz val=\"11\"/></font><font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/></font></fonts>" +
-      "<fills count=\"7\">" +
+      "<fills count=\"8\">" +
         "<fill><patternFill patternType=\"none\"/></fill>" +
         "<fill><patternFill patternType=\"gray125\"/></fill>" +
         "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF16325C\"/></patternFill></fill>" +   // 2 header dark
         "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFE8F4FD\"/></patternFill></fill>" +   // 3 AND band
         "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFF3EEFF\"/></patternFill></fill>" +   // 4 OR band
-        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFF0F6FF\"/></patternFill></fill>" +   // 5 AND band alt
-        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFAF5FF\"/></patternFill></fill>" +   // 6 OR band alt
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF008000\"/></patternFill></fill>" +   // 5 rail green (AND)
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFC55A11\"/></patternFill></fill>" +   // 6 rail orange (OR)
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFB45309\"/></patternFill></fill>" +   // 7 rail amber (unknown)
       "</fills>" +
       "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
       "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-      "<cellXfs count=\"12\">" +
+      "<cellXfs count=\"11\">" +
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +           // 0: normal
         "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +           // 1: bold
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"><alignment wrapText=\"1\"/></xf>" + // 2: wrap
-        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment vertical=\"center\"/></xf>" + // 3: header bold-white on dark
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 4: AND band
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 5: OR band
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"5\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 6: AND band alt
-        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"6\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 7: OR band alt
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 8: bold label on AND band
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 9: bold label on OR band
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"5\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 10: bold label AND alt
-        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"6\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 11: bold label OR alt
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment vertical=\"center\"/></xf>" + // 3: header
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFill=\"1\" applyAlignment=\"1\"><alignment vertical=\"center\"/></xf>" +   // 4: AND band
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFill=\"1\" applyAlignment=\"1\"><alignment vertical=\"center\"/></xf>" +   // 5: OR band
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>" + // 6: AND group label
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>" + // 7: OR group label
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"5\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>" + // 8: AND rail
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"6\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>" + // 9: OR rail
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"7\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\"/></xf>" + // 10: unknown rail
       "</cellXfs>" +
       "</styleSheet>";
 
     const sharedStrings = []; const ssIndex = {};
     const si = (v) => { const s=String(v==null?"":v); if(s in ssIndex) return ssIndex[s]; const i=sharedStrings.length; sharedStrings.push(s); ssIndex[s]=i; return i; };
 
-    const sheetXmls = sheets.map(({name, rows, headerRow}) => {
+    const sheetXmls = sheets.map((sheet) => {
+      const { name, rows, headerRow } = sheet;
       const hRow = (headerRow != null ? headerRow : 1); // which row is bold (1-based)
       const totalRows = rows.length;
+      const styleFor = sheet.styleFor || opts.styleFor;   // per-sheet styleFor wins over global
       const cells = rows.map((row, ri) => {
         const rowNum = ri + 1;
         const isBoldRow = rowNum === hRow;
@@ -2859,10 +2866,10 @@
         return row.map((val, ci) => {
           const ref = colLetter(ci) + rowNum;
           let sAttr = "";
-          // opts.styleFor(rowNum1Based, colIndex0Based) → a style id (3..11) to COLOR a cell.
-          // Takes precedence so a caller can paint a header/band; falls back to bold/wrap/normal.
+          // styleFor(rowNum1Based, colIndex0Based) → a style id (3..10) to COLOR a cell. Takes
+          // precedence so a caller can paint header/band/rail; falls back to bold/wrap/normal.
           let styleId = null;
-          if (typeof opts.styleFor === "function") { try { const s = opts.styleFor(rowNum, ci); if (s != null) styleId = s; } catch (e) {} }
+          if (typeof styleFor === "function") { try { const s = styleFor(rowNum, ci); if (s != null) styleId = s; } catch (e) {} }
           if (styleId != null) sAttr = " s=\"" + styleId + "\"";
           else if (isBoldRow) sAttr = " s=\"1\"";
           else if (isLastRow && ci === 0 && opts.wrapLastRow) sAttr = " s=\"2\"";
@@ -2875,8 +2882,27 @@
           }
           return "<c r=\""+ref+"\""+sAttr+" t=\"s\"><v>"+si(val)+"</v></c>";
         }).join("");
-      }).map((rowCells, ri) => "<row r=\""+(ri+1)+"\">"+rowCells+"</row>").join("");
-      return "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>"+cells+"</sheetData></worksheet>";
+      }).map((rowCells, ri) => {
+        const rh = sheet.rowHeights && sheet.rowHeights[ri + 1];   // optional 1-based row height
+        return "<row r=\""+(ri+1)+"\""+(rh ? " ht=\""+rh+"\" customHeight=\"1\"" : "")+">"+rowCells+"</row>";
+      }).join("");
+      // optional column widths: sheet.cols = [{min,max,width}] or a flat [w,w,…] array
+      let colsXml = "";
+      const colDefs = sheet.cols;
+      if (Array.isArray(colDefs) && colDefs.length) {
+        const parts = colDefs.map((c, i) => {
+          if (c == null) return "";
+          const min = (typeof c === "object" ? c.min : i + 1), max = (typeof c === "object" ? c.max : i + 1), w = (typeof c === "object" ? c.width : c);
+          return "<col min=\""+min+"\" max=\""+max+"\" width=\""+w+"\" customWidth=\"1\"/>";
+        }).join("");
+        colsXml = "<cols>"+parts+"</cols>";
+      }
+      // optional merged cells: sheet.merges = ["A2:A6", "C2:C19", …]
+      let mergeXml = "";
+      if (Array.isArray(sheet.merges) && sheet.merges.length) {
+        mergeXml = "<mergeCells count=\""+sheet.merges.length+"\">"+sheet.merges.map(m=>"<mergeCell ref=\""+m+"\"/>").join("")+"</mergeCells>";
+      }
+      return "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"+colsXml+"<sheetData>"+cells+"</sheetData>"+mergeXml+"</worksheet>";
     });
 
     const ssXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\""+sharedStrings.length+"\" uniqueCount=\""+sharedStrings.length+"\">"+
@@ -19865,33 +19891,74 @@ processJSON();
       });
       return rows;
     }
-    // Build the Excel rows + a styleFor(rowNum,col) map that paints the colored, banded sheet:
-    //   row 1 = bold white-on-dark header (style 3)
-    //   each group = one tinted band — AND groups blue (4 / 6 alternating), OR groups purple
-    //   (5 / 7); the group-label cell (col 0) is the bold variant (8..11) so it stands out.
-    // Returns { rows, styleFor }. buildXlsx uses it via opts.styleFor.
-    function dsfXlsxRowsAndStyle(model) {
-      var rows = dsfRows(model);                 // header + one row per condition (same columns)
-      // map rowNum(1-based) → { fill:4|5|6|7, label:8|9|10|11 } for the condition rows
-      var rowStyle = {};                          // rowNum -> {band, labelBand}
-      var rn = 1;                                 // row 1 = header
+    // Build the Excel sheet so it REPLICATES the SF rails using MERGED cells:
+    //   Columns:  Group | # | Object | Object API | Field | Field API | Operator | Value |
+    //             [within-group rail] | [between-groups rail]
+    //   • row 1 = bold white-on-dark header.
+    //   • each group's condition rows get a tinted band (blue=AND, purple=OR); the Group cell is
+    //     MERGED down the group's rows (one centered "Group N").
+    //   • the within-group rail column is a MERGED vertical bar for the group, filled green (AND)
+    //     or orange (OR) with the operator centered — exactly like SF's side bar.
+    //   • the between-groups rail column is ONE MERGED bar spanning ALL the group rows, carrying
+    //     the between-op (orange OR / green AND / amber when unknown).
+    // Returns { rows, styleFor, merges, cols, rowHeights } for buildXlsx.
+    function dsfXlsxSheet(model) {
+      var HEAD = ["Group", "#", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value", "Logic", "Groups"];
+      var RAIL = 8, BRAIL = 9;                     // 0-based column indexes of the two rail cols
+      var rows = [HEAD.slice()];
+      var merges = [], rowStyle = {}, condNum = 0, rn = 1;   // rn: last written row (1-based), row1=header
+      var firstGroupRow = 2, lastGroupRow = 1;
+      function colL(i) { var s = "", n = i + 1; while (n > 0) { s = String.fromCharCode(64 + (n % 26 || 26)) + s; n = Math.floor((n - (n % 26 ? 0 : 26)) / 26); } return s; }
       model.groups.forEach(function (g, gi) {
         var isOr = String(g.operator).toUpperCase() === "OR";
-        var alt = (gi % 2) === 1;
-        var band = isOr ? (alt ? 7 : 5) : (alt ? 6 : 4);
-        var labelBand = isOr ? (alt ? 11 : 9) : (alt ? 10 : 8);
-        var conds = g.conditions.length ? g.conditions : [null];
-        conds.forEach(function () { rn++; rowStyle[rn] = { band: band, label: labelBand }; });
+        var band = isOr ? 5 : 4;
+        var railStyle = isOr ? 9 : 8;
+        var conds = g.conditions.length ? g.conditions : [{ objectLabel: "", objectApi: "", fieldLabel: "(no conditions)", fieldApi: "", operator: "", value: "" }];
+        var gStart = rn + 1;
+        conds.forEach(function (c, ci) {
+          condNum++; rn++;
+          rows.push([
+            ci === 0 ? ("Group " + (gi + 1)) : "",
+            condNum, c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.value,
+            ci === 0 ? g.operator : "",            // rail value only on the first row (merged)
+            ""                                      // between rail filled after the loop (merged)
+          ]);
+          rowStyle[rn] = { band: band, rail: railStyle };
+        });
+        var gEnd = rn;
+        // merge the Group label cell (col A) + the within-group rail (col I) down the group
+        if (gEnd > gStart) {
+          merges.push("A" + gStart + ":A" + gEnd);
+          merges.push(colL(RAIL) + gStart + ":" + colL(RAIL) + gEnd);
+        }
+        if (gi === 0) firstGroupRow = gStart;
+        lastGroupRow = gEnd;
       });
-      var ncol = DSF_COLS.length;
-      function styleFor(rowNum, col) {
-        if (rowNum === 1) return 3;               // header
-        var st = rowStyle[rowNum];
-        if (!st) return null;                     // meta/blank rows → default
-        if (col >= ncol) return null;
-        return col === 0 ? st.label : st.band;    // group label cell bold, rest banded
+      // between-groups rail: ONE merged bar across every group row (col J), only when >1 group
+      var betweenStyle = model.betweenOp ? (model.betweenOp.toUpperCase() === "OR" ? 9 : 8) : 10;
+      if (model.groups.length > 1) {
+        merges.push(colL(BRAIL) + firstGroupRow + ":" + colL(BRAIL) + lastGroupRow);
+        rows[firstGroupRow - 1][BRAIL] = model.betweenOp || "OR?";   // value on the top cell of the merge
       }
-      return { rows: rows, styleFor: styleFor };
+      function styleFor(rowNum, col) {
+        if (rowNum === 1) return 3;                              // header
+        var st = rowStyle[rowNum]; if (!st) return null;         // meta rows → default
+        if (col === RAIL) return st.rail;                        // within-group rail
+        if (col === BRAIL) return betweenStyle;                  // between-groups rail
+        if (col === 0) return (st.band === 5 ? 7 : 6);           // Group label: bold centered variant
+        return st.band;                                          // banded condition cells
+      }
+      var cols = [
+        { min: 1, max: 1, width: 10 },   // Group
+        { min: 2, max: 2, width: 4 },    // #
+        { min: 3, max: 4, width: 26 },   // Object + API
+        { min: 5, max: 6, width: 26 },   // Field + API
+        { min: 7, max: 7, width: 16 },   // Operator
+        { min: 8, max: 8, width: 14 },   // Value
+        { min: 9, max: 9, width: 8 },    // Logic rail
+        { min: 10, max: 10, width: 9 }   // Groups rail
+      ];
+      return { rows: rows, styleFor: styleFor, merges: merges, cols: cols };
     }
 
     // Plain-English one-liner, e.g. (A = true AND B IS EMPTY) OR (C = x)
@@ -20057,16 +20124,16 @@ processJSON();
         ft.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #e0e5ee;background:#fafbfe;flex-shrink:0;";
         var mkBtn = function (label, grad) { var b = document.createElement("button"); b.innerHTML = label; b.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:" + grad + ";"; return b; };
         var fn = dsfSafeName(model.objectDevName);
-        // ONE download: a COLORED Excel that mirrors the on-screen grid (bold white-on-dark header,
-        // per-group tinted bands: blue for AND groups, purple for OR). Built on the shared buildXlsx
-        // with a styleFor map so the file looks like the Segment export.
+        // ONE download: a COLORED Excel that REPLICATES the SF rails using merged cells — dark bold
+        // header, per-group tinted bands, a merged Group label, a merged green/orange within-group
+        // rail bar, and a merged between-groups rail bar spanning all groups.
         var xlsB = mkBtn("&#11015; Download Excel", "linear-gradient(135deg,#16a34a,#15803d)");
         xlsB.onclick = function () {
           try {
-            var built = dsfXlsxRowsAndStyle(model);
+            var built = dsfXlsxSheet(model);
             var metaLine = "Data Space filter · Object: " + model.objectLabel + " (" + model.objectDevName + ") · Logic: " + dsfSummary(model);
-            var sheetRows = built.rows.concat([new Array(DSF_COLS.length).fill(""), [metaLine]]);
-            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1 }], { wrapLastRow: true, styleFor: built.styleFor });
+            var sheetRows = built.rows.concat([new Array(built.rows[0].length).fill(""), [metaLine]]);
+            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1, styleFor: built.styleFor, merges: built.merges, cols: built.cols }], { wrapLastRow: true });
             dsfDownload(buf, fn + "-filters.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
           } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
