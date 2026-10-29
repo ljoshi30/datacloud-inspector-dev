@@ -19891,6 +19891,26 @@ processJSON();
       });
       return rows;
     }
+    // FLAT rows for automation: EVERY row fully populated (group #, group label, within-op,
+    // between-op on every condition row — no blanks, no merges) so a script (pandas/openpyxl) can
+    // read it directly. Adds a numeric "Group #" + a "Condition #" so tests can group/assert.
+    var DSF_FLAT_COLS = ["Group #", "Group", "Within-group logic", "Between-groups logic", "Condition #", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value"];
+    function dsfRowsFlat(model) {
+      var rows = [DSF_FLAT_COLS.slice()], n = 0;
+      model.groups.forEach(function (g, gi) {
+        var between = model.betweenOp || "";
+        var conds = g.conditions.length ? g.conditions : [{ objectLabel: "", objectApi: "", fieldLabel: "", fieldApi: "", operator: "", value: "" }];
+        conds.forEach(function (c) {
+          n++;
+          rows.push([gi + 1, "Group " + (gi + 1), g.operator, between, n, c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.value]);
+        });
+      });
+      return rows;
+    }
+    function dsfToCsv(rows) {
+      var esc = function (s) { var t = String(s == null ? "" : s); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      return rows.map(function (r) { return r.map(esc).join(","); }).join("\r\n");
+    }
     // Build the Excel sheet so it REPLICATES the SF rails using MERGED cells:
     //   Columns:  Group | # | Object | Object API | Field | Field API | Operator | Value |
     //             [within-group rail] | [between-groups rail]
@@ -20039,37 +20059,59 @@ processJSON();
       return "<div>" + label + "<div class='dsf-grp'>" + body +
         "<div class='dsf-rail " + railCls + "'><span class='line'></span><span class='conn'>" + dsfEsc(g.operator) + "</span></div></div></div>";
     }
-    // A colored TABLE (for clipboard → Google Sheets / Excel paste, which need real cells, not
-    // flex): dark bold header, per-group tinted band with a colored left edge, AND/OR shown in the
-    // Within/Between columns. Mirrors the on-screen rails as closely as a grid allows.
+    // A colored TABLE for CLIPBOARD (Google Sheets / Excel paste). To MATCH the downloaded Excel,
+    // it uses rowspan MERGES (Sheets honors rowspan as merged cells): the Group label + the
+    // within-group AND/OR rail are merged down each group; the between-groups rail is ONE cell
+    // merged (rowspan) across all condition rows + the gap rows so the OR bar stays continuous.
+    // Columns mirror the Excel: Group | Object | Object API | Field | Field API | Operator | Value
+    //                           | Logic (within rail) | Groups (between rail).
     function dsfTableHtml(model) {
       var B = "border:1px solid #d0d5de;";
-      var html = "", condNum = 0;
+      var esc = dsfEsc;
+      // total condition rows + interior gap rows → the between-rail rowspan
+      var totalCond = 0; model.groups.forEach(function (g) { totalCond += (g.conditions.length || 1); });
+      var gaps = Math.max(0, model.groups.length - 1);
+      var betweenSpan = totalCond + gaps;
+      var bColor = model.betweenOp ? (model.betweenOp.toUpperCase() === "OR" ? "#c55a11" : "#008000") : "#b45309";
+      var bText = model.betweenOp || "OR?";
+      var html = "", wroteBetween = false, condNum = 0;
       model.groups.forEach(function (g, gi) {
         var isOr = String(g.operator).toUpperCase() === "OR";
         var bg = isOr ? "#f3eeff" : "#eaf2ff";
-        var rail = isOr ? "#a78bfa" : "#93c5fd";
+        var railFill = isOr ? "#c55a11" : "#008000";
         var jc = isOr ? "#7c3aed" : "#0b5cab";
-        var between = (gi < model.groups.length - 1) ? (model.betweenOp || "OR?") : "";
-        g.conditions.forEach(function (c, ci) {
+        var nc = g.conditions.length || 1;
+        var conds = g.conditions.length ? g.conditions : [{ objectLabel: "", objectApi: "", fieldLabel: "(no conditions)", fieldApi: "", operator: "", value: "" }];
+        conds.forEach(function (c, ci) {
           condNum++;
-          var first = ci === 0;
           html += "<tr>";
-          html += "<td style='" + B + "border-left:4px solid " + rail + ";padding:4px 10px;background:" + bg + ";color:" + jc + ";font-weight:700;text-align:center;white-space:nowrap'>" + (first ? dsfEsc("Group " + (gi + 1)) : "") + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";color:" + jc + ";font-weight:700;text-align:center'>" + dsfEsc(g.operator) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";color:#b45309;font-weight:700;text-align:center'>" + (first ? dsfEsc(between) : "") + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + "'>" + dsfEsc(c.objectLabel) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px'>" + dsfEsc(c.objectApi) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + dsfEsc(c.fieldLabel) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px;color:#0b5cab'>" + dsfEsc(c.fieldApi) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-style:italic;color:#54698d;white-space:nowrap'>" + dsfEsc(c.operator) + "</td>";
-          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + dsfEsc(c.value) + "</td>";
+          // Group label — merged down the group (rowspan on first row)
+          if (ci === 0) html += "<td rowspan='" + nc + "' style='" + B + "background:" + bg + ";color:" + jc + ";font-weight:700;text-align:center;vertical-align:middle;padding:4px 10px;white-space:nowrap'>" + esc("Group " + (gi + 1)) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + "'>" + esc(c.objectLabel) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px'>" + esc(c.objectApi) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + esc(c.fieldLabel) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px;color:#0b5cab'>" + esc(c.fieldApi) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-style:italic;color:#54698d;white-space:nowrap'>" + esc(c.operator) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + esc(c.value) + "</td>";
+          // within-group rail — merged down the group, filled green/orange, white centered op
+          if (ci === 0) html += "<td rowspan='" + nc + "' style='" + B + "background:" + railFill + ";color:#fff;font-weight:700;text-align:center;vertical-align:middle;width:46px'>" + esc(g.operator) + "</td>";
+          // between-groups rail — ONE merged cell spanning everything, written once on the very first row
+          if (!wroteBetween && model.groups.length > 1) { html += "<td rowspan='" + betweenSpan + "' style='" + B + "background:" + bColor + ";color:#fff;font-weight:700;text-align:center;vertical-align:middle;width:54px'>" + esc(bText) + "</td>"; wroteBetween = true; }
           html += "</tr>\n";
         });
+        // gap row between groups: blank white cells for Group + Object..Value + within-rail (8
+        // cells). The between-groups rail is NOT emitted here — it's covered by its big rowspan,
+        // so the OR bar stays unbroken across the gap. Short height.
+        if (gi < model.groups.length - 1) {
+          html += "<tr style='height:6px'>";
+          for (var k = 0; k < 8; k++) html += "<td style='border:none;background:#fff;height:6px'></td>";
+          html += "</tr>\n";
+        }
       });
-      var TH = function (t) { return "<th style='" + B + "padding:6px 9px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + dsfEsc(t) + "</th>"; };
+      var HEADS = ["Group", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value", "Logic", "Groups"];
+      var TH = function (t) { return "<th style='" + B + "padding:6px 9px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + esc(t) + "</th>"; };
       return "<table style='border-collapse:collapse;font-family:-apple-system,Arial,sans-serif;font-size:12px'>" +
-        "<thead><tr>" + DSF_COLS.map(TH).join("") + "</tr></thead><tbody>\n" + html + "</tbody></table>";
+        "<thead><tr>" + HEADS.map(TH).join("") + "</tr></thead><tbody>\n" + html + "</tbody></table>";
     }
 
     // whole filter = groups stacked, with an OUTER tall rail carrying the between-groups operator.
@@ -20162,11 +20204,19 @@ processJSON();
             xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
           } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
         };
+        // Flat CSV — for QE / automation: every row fully populated (group#, group, within-op,
+        // between-op, condition#), NO merges → pandas/openpyxl read it directly.
+        var csvB = mkBtn("&#11015; CSV (flat)", "linear-gradient(135deg,#0ea5e9,#0369a1)");
+        csvB.title = "Flat CSV for scripts/automation — every row fully filled, no merged cells";
+        csvB.onclick = function () {
+          dsfDownload(dsfToCsv(dsfRowsFlat(model)), fn + "-filters.csv", "text/csv;charset=utf-8");
+          csvB.innerHTML = "&#10003; Saved"; setTimeout(function () { csvB.innerHTML = "&#11015; CSV (flat)"; }, 1200);
+        };
         var copyB = mkBtn("&#128203; Copy for Sheets", "linear-gradient(135deg,#6366f1,#4338ca)");
         copyB.onclick = function () {
           var done = function () { copyB.innerHTML = "&#10003; Copied"; setTimeout(function () { copyB.innerHTML = "&#128203; Copy for Sheets"; }, 1200); };
-          var tableHtml = dsfTableHtml(model);   // real TABLE cells → Sheets/Excel keep the colored grid
-          var tsv = dsfToTsv(rows);               // plain-text fallback
+          var tableHtml = dsfTableHtml(model);   // merged colored grid → Sheets keeps rails/bands
+          var tsv = dsfToTsv(dsfRowsFlat(model)); // plain-text fallback = the FLAT rows (script-safe)
           // execCommand('copy') on a real selection yields CF_HTML that Sheets + Excel understand.
           var okCopy = false;
           try {
@@ -20184,7 +20234,7 @@ processJSON();
           }
           try { navigator.clipboard.writeText(tsv).then(done, done); } catch (e) { done(); }
         };
-        ft.appendChild(xlsB); ft.appendChild(copyB);
+        ft.appendChild(xlsB); ft.appendChild(csvB); ft.appendChild(copyB);
         p.appendChild(ft);
       }
       document.body.appendChild(p);

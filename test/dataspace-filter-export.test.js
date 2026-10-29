@@ -147,6 +147,36 @@ console.log("\n3b. DYNAMIC structure — operators are per-group, not assumed; a
   ok("summary uses each group's own operator + the real between-op", /\bOR\b[\s\S]*\)  AND  \(/.test(dsfSummary(mixed)));
 }
 
+console.log("\n3c. FLAT rows for automation — every cell filled, no blanks (script-readable)");
+{
+  // Mirror dsfRowsFlat: group#, group label, within-op, between-op, condition# on EVERY row.
+  function rowsFlat(model) {
+    var H = ["Group #", "Group", "Within-group logic", "Between-groups logic", "Condition #", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value"];
+    var rows = [H], n = 0;
+    model.groups.forEach(function (g, gi) {
+      var between = model.betweenOp || "";
+      g.conditions.forEach(function (c) { n++; rows.push([gi + 1, "Group " + (gi + 1), g.operator, between, n, c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.value]); });
+    });
+    return rows;
+  }
+  var model = {
+    betweenOp: "OR",
+    groups: [
+      { operator: "AND", conditions: [{ objectLabel: "O", objectApi: "O__dll", fieldLabel: "a", fieldApi: "a__c", operator: "EQUALS", value: "true" }, { objectLabel: "O", objectApi: "O__dll", fieldLabel: "b", fieldApi: "b__c", operator: "IS NULL", value: "" }] },
+      { operator: "AND", conditions: [{ objectLabel: "O", objectApi: "O__dll", fieldLabel: "c", fieldApi: "c__c", operator: "EQUALS", value: "false" }] }
+    ]
+  };
+  var rows = rowsFlat(model);
+  eq("header + 3 condition rows", rows.length, 4);
+  // EVERY condition row must have group#, group label, within-op, between-op, condition# filled
+  var allFilled = true;
+  for (var i = 1; i < rows.length; i++) { var r = rows[i]; if (r[0] === "" || r[1] === "" || r[2] === "" || r[3] === "" || r[4] === "") allFilled = false; }
+  ok("every row has group#, group, within-op, between-op, condition# (no blanks for a script)", allFilled);
+  eq("row 1 condition# is 1", rows[1][4], 1);
+  eq("row 3 (group 2) still carries between-op OR", rows[3][3], "OR");
+  eq("row 3 group# is 2", rows[3][0], 2);
+}
+
 console.log("\n4. between-group operator picker (read from DOM, never guessed)");
 {
   eq("single OR → OR", pickBetween(["OR"]), "OR");
@@ -178,7 +208,11 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
     /var railStyle = isOr \? 9 : 8/.test(src) && /var band = isOr \? 5 : 4/.test(src) && /betweenStyle = model\.betweenOp \? \(model\.betweenOp\.toUpperCase\(\) === "OR" \? 9 : 8\) : 10/.test(src));
   ok("on-screen preview uses SF-style vertical AND/OR rails (per-group rail + outer rail)", /function dsfCardsHtml/.test(src) && /function dsfGroupHtml/.test(src) && /class='dsf-rail /.test(src) && /dsf-rail outer /.test(src));
   ok("rails colored like SF (AND green, OR orange)", /\.dsf-rail\.and\{--rc:#008000\}\.dsf-rail\.or\{--rc:#c55a11\}/.test(src));
-  ok("Copy-for-Sheets copies a real TABLE (cells, not flex) so Sheets/Excel keep the grid", /function dsfTableHtml/.test(src) && /var tableHtml = dsfTableHtml\(model\)/.test(src) && /document\.execCommand\("copy"\)/.test(src) && /function dsfToTsv/.test(src));
+  ok("Copy-for-Sheets copies a merged TABLE (rowspan rails/labels → Sheets merges, matches Excel)", /function dsfTableHtml/.test(src) && /var tableHtml = dsfTableHtml\(model\)/.test(src) && /rowspan='" \+ nc \+ "'/.test(src) && /rowspan='" \+ betweenSpan \+ "'/.test(src) && /document\.execCommand\("copy"\)/.test(src));
+  // FLAT CSV for automation: a 3rd button, every row fully populated, no merges, script-readable.
+  ok("FLAT CSV for automation (every row filled, no merges): dsfRowsFlat + CSV button", /function dsfRowsFlat/.test(src) && /var DSF_FLAT_COLS = \[/.test(src) && /"Group #"[\s\S]{0,120}"Condition #"/.test(src) && /CSV \(flat\)/.test(src) && /dsfToCsv\(dsfRowsFlat\(model\)\)/.test(src));
+  ok("three outputs offered: Excel + CSV(flat) + Copy", /ft\.appendChild\(xlsB\); ft\.appendChild\(csvB\); ft\.appendChild\(copyB\)/.test(src));
+  ok("Copy TSV fallback is the FLAT rows too (so a script that grabs plain text still gets every cell)", /var tsv = dsfToTsv\(dsfRowsFlat\(model\)\)/.test(src));
   // buildXlsx gained opt-in color styles + merges + column widths WITHOUT changing default output
   const bx = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("buildXlsx supports opt-in colored styles + merged cells + column widths (defaults unchanged)",
