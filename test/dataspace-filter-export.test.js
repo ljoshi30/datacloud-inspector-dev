@@ -147,6 +147,31 @@ console.log("\n3b. DYNAMIC structure — operators are per-group, not assumed; a
   ok("summary uses each group's own operator + the real between-op", /\bOR\b[\s\S]*\)  AND  \(/.test(dsfSummary(mixed)));
 }
 
+console.log("\n3bb. FLAT filter (no group wrapper) → one implicit group (the Loyalty OR case)");
+{
+  // Mirror the fallback: no filter-group elements, just standalone items → one group whose
+  // operator is the single on-screen join bar (OR for Loyalty). Each item.filter has the shape.
+  function readFlat(items, joinBar) {
+    var groups = [];           // pretend the group scan found nothing
+    if (!groups.length) {
+      var conds = items.map(function (f) { var o = f.object || {}, fl = f.field || {}, op = f.operator || {}; return { objectLabel: o.label, objectApi: o.devName, fieldLabel: fl.label, fieldApi: fl.devName, operator: op.label || op.devName, operatorDevName: op.devName, value: f.value == null ? "" : String(f.value) }; });
+      if (conds.length) groups = [{ id: "flat", operator: joinBar || "AND", conditions: conds }];
+    }
+    return { groups: groups, betweenOp: groups.length > 1 ? joinBar : "" };
+  }
+  var items = [
+    { object: { label: "Loyalty Promotion Table", devName: "Loyalty_Promotion_Table__dll" }, field: { label: "Line of Business", devName: "lob__c" }, operator: { label: "EQUALS", devName: "EQUALS" }, value: "TDI - GI" },
+    { object: { label: "Loyalty Promotion Table", devName: "Loyalty_Promotion_Table__dll" }, field: { label: "Line of Business", devName: "lob__c" }, operator: { label: "EQUALS", devName: "EQUALS" }, value: "TDI - L&H" },
+    { object: { label: "Loyalty Promotion Table", devName: "Loyalty_Promotion_Table__dll" }, field: { label: "Line of Business", devName: "lob__c" }, operator: { label: "EQUALS", devName: "EQUALS" }, value: "TDI - SBI" }
+  ];
+  var m = readFlat(items, "OR");
+  eq("flat filter → exactly ONE group (so the FAB's count > 0 and it shows)", m.groups.length, 1);
+  eq("the implicit group's operator is the on-screen OR bar", m.groups[0].operator, "OR");
+  eq("all 3 conditions captured", m.groups[0].conditions.length, 3);
+  eq("3rd condition value", m.groups[0].conditions[2].value, "TDI - SBI");
+  eq("single group → no between-op", m.betweenOp, "");
+}
+
 console.log("\n3c. FLAT rows for automation — every cell filled, no blanks (script-readable)");
 {
   // Mirror dsfRowsFlat: group#, group label, within-op, between-op, condition#, Operator label +
@@ -203,6 +228,8 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
   ok("within-group operator read from data (filterOperator)", /g\.filterOperator \|\| "AND"/.test(src));
   ok("between-group operator read from the DOM AND/OR bar (not invented)", /function dsfReadBetweenOp/.test(src) && /\^\(AND\|OR\)\$/.test(src) && /dcWithinTag2\(el, "runtime_cdp-data-spaces-table-filter-group"\)/.test(src));
   ok("top-level groups exclude nested child groups (no double-count)", /childIds\[sg\.id\] = true/.test(src) && /return !childIds\[id\]/.test(src));
+  ok("FLAT filter fallback: when NO group wrapper exists, read -filter-item elements directly as one implicit group (fixes the Loyalty 3-condition OR case)",
+    /if \(!groups\.length\)/.test(src) && /findByTag\("runtime_cdp-data-spaces-table-filter-item"\)/.test(src) && /dsfSafe\(el, "filter"\)/.test(src) && /id: "flat", operator: flatJoin/.test(src));
   ok("one row per condition + group/logic columns", /var DSF_COLS = \[/.test(src) && /"Within-group logic", "Between-groups logic"/.test(src) && /ci === 0 \? groupLabel : ""/.test(src));
   ok("ONE download (Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
     var i = src.indexOf("function dcDataSpaceFilterExport"); var j = src.indexOf("/* @strip:end */", i); var mod = src.slice(i, j);

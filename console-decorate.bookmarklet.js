@@ -19898,10 +19898,35 @@ processJSON();
         });
       } catch (e) {}
       var groups = order.filter(function (id) { return !childIds[id]; }).map(function (id) { return groupsById[id]; });
+
+      // FALLBACK — a FLAT filter has NO group wrapper: SF renders only standalone
+      // runtime_cdp-data-spaces-table-filter-item elements (proven on the Loyalty object, v43:
+      // "No filter-group element found"). When no groups were built, read those items DIRECTLY as
+      // ONE implicit group. Each item carries .filter = {object, field, operator, value} (v41).
+      // The join for a flat list is the single AND/OR bar on the right → use the between-op read.
+      var flatJoin = dsfReadBetweenOp([]);
+      if (!groups.length) {
+        var flatConds = [];
+        try {
+          findByTag("runtime_cdp-data-spaces-table-filter-item").forEach(function (el) {
+            var f = dsfSafe(el, "filter"); if (!f || !f.field) return;
+            var obj = f.object || {}, fld = f.field || {}, op = f.operator || {};
+            if (!objectLabel && obj.label) objectLabel = String(obj.label);
+            flatConds.push({
+              objectLabel: obj.label || "", objectApi: obj.devName || "",
+              fieldLabel: fld.label || "", fieldApi: fld.devName || "", fieldType: fld.type || "",
+              operator: op.label || op.devName || "", operatorDevName: op.devName || "",
+              value: (f.value === undefined || f.value === null) ? "" : String(f.value)
+            });
+          });
+        } catch (e) {}
+        if (flatConds.length) groups = [{ id: "flat", operator: flatJoin || "AND", conditions: flatConds }];
+      }
+
       // BETWEEN-group operator: read the rendered AND/OR bar(s) that sit OUTSIDE the group cards.
-      // The one that joins groups is the between-op; default to the common "OR" only if we can
-      // see one and it isn't the within-op. We surface whatever we read, never invent.
-      var betweenOp = dsfReadBetweenOp(groups);
+      // The one that joins groups is the between-op; we surface whatever we read, never invent. For
+      // a flat (single implicit group) filter there's nothing BETWEEN groups → leave it blank.
+      var betweenOp = groups.length > 1 ? dsfReadBetweenOp(groups) : "";
       return { objectDevName: objectDevName, objectLabel: objectLabel || objectDevName, groups: groups, betweenOp: betweenOp };
     }
 
