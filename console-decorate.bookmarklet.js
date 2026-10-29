@@ -20330,8 +20330,11 @@ processJSON();
       window.__dcDsFilterCount = function () { try { return dsfRead().groups.length; } catch (e) { return 0; } };
     } catch (e) {}
 
-    // Minimal FAB (the Data Space page has no detail launcher of its own). Appears only when a
-    // filter is actually present; polls briefly because the filter modal opens on demand.
+    // Launcher FAB — a round button on the BOTTOM-LEFT with an expanding menu (same look as the
+    // other launchers: close-× + an action row), so "Export Filters" lives inside the FAB rather
+    // than as a bare button. Left side so it doesn't collide with SF's own bottom-right help FAB.
+    // Appears only when a filter is actually present; polls briefly because the filter modal opens
+    // on demand (SF renders the groups only when Edit Filters is open).
     try {
       var _dsfFabTries = 0;
       var _dsfFabTimer = setInterval(function () {
@@ -20339,16 +20342,32 @@ processJSON();
         if (_dsfFabTries > 40) { clearInterval(_dsfFabTimer); return; }   // ~20s then stop
         if (document.getElementById("dc-dsf-bar")) return;
         var has = 0; try { has = window.__dcDsFilterCount(); } catch (e) {}
-        if (!has) return;
+        if (!has || typeof dcMakeMenuCloseX !== "function") return;
         clearInterval(_dsfFabTimer);
         var wrap = document.createElement("div"); wrap.id = "dc-dsf-bar";
-        wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;";
+        wrap.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
+        var menu = document.createElement("div");
+        menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s,transform .2s;opacity:0;transform:translateY(12px) scale(.95);";
+        var row = document.createElement("button");
+        row.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
+        row.onmouseenter = function () { row.style.background = "rgba(255,255,255,.07)"; };
+        row.onmouseleave = function () { row.style.background = "#111827"; };
+        var exIcon = "<svg width='15' height='15' viewBox='0 0 16 16' fill='none'><path d='M2 3h12M4 3v2.5L7 9v4l2-1V9l3-3.5V3' stroke='#fff' stroke-width='1.5' stroke-linejoin='round'/></svg>";
+        var nGroups = 0; try { nGroups = window.__dcDsFilterCount(); } catch (e) {}
+        row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#0ea5e9,#4338ca);display:flex;align-items:center;justify-content:center;'>" + exIcon + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>Export Filters</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + nGroups + " group" + (nGroups === 1 ? "" : "s") + " &rarr; Excel / CSV / Sheets</span></div>";
+        row.onclick = function (e) { e.stopPropagation(); closeDsf(); dsfOpen(); };
+        menu.appendChild(dcMakeMenuCloseX(function () { closeDsf(); }));
+        menu.appendChild(row);
         var fab = document.createElement("button");
         fab.title = "Export this object's filters";
-        fab.style.cssText = "display:flex;align-items:center;gap:8px;border:none;border-radius:24px;cursor:pointer;background:linear-gradient(135deg,#0ea5e9,#4338ca);color:#fff;font:700 13px -apple-system,sans-serif;padding:11px 18px;box-shadow:0 4px 18px rgba(67,56,202,.5);";
-        fab.innerHTML = "<svg width='16' height='16' viewBox='0 0 16 16' fill='none'><path d='M2 3h12M4 3v2.5L7 9v4l2-1V9l3-3.5V3' stroke='#fff' stroke-width='1.4' stroke-linejoin='round'/></svg> Export Filters";
-        fab.onclick = function (e) { e.stopPropagation(); dsfOpen(); };
-        wrap.appendChild(fab);
+        fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#0ea5e9,#4338ca);box-shadow:0 4px 18px rgba(67,56,202,.5);display:flex;align-items:center;justify-content:center;";
+        fab.innerHTML = "<svg width='20' height='20' viewBox='0 0 16 16' fill='none'><path d='M2 3h12M4 3v2.5L7 9v4l2-1V9l3-3.5V3' stroke='#fff' stroke-width='1.4' stroke-linejoin='round'/></svg>";
+        var mOpen = false;
+        function openDsf() { mOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.style.pointerEvents = "auto"; }
+        function closeDsf() { mOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.style.pointerEvents = "none"; }
+        fab.onclick = function (e) { e.stopPropagation(); mOpen ? closeDsf() : openDsf(); };
+        document.addEventListener("pointerdown", function (e) { if (mOpen && !wrap.contains(e.target)) closeDsf(); }, true);
+        wrap.appendChild(menu); wrap.appendChild(fab);
         (document.body || document.documentElement).appendChild(wrap);
       }, 500);
     } catch (e) {}

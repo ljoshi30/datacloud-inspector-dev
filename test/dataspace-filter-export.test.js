@@ -225,8 +225,9 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
   ok("buildXlsx supports opt-in colored styles + merged cells + column widths (defaults unchanged)",
     /sheet\.merges/.test(bx) && /<mergeCells count=/.test(bx) && /sheet\.cols/.test(bx) && /<cols>/.test(bx) && /cellXfs count=\\"11\\"/.test(bx) && /rail green \(AND\)/.test(bx));
   ok("warns when between-op unreadable (never shows a guessed operator)", /wasn.rsquo;t readable from the page/.test(src));
-  ok("exposes open + count; FAB only when a filter exists", /window\.__dcDsFilterExport/.test(src) && /window\.__dcDsFilterCount/.test(src) && /if \(!has\) return;/.test(src));
+  ok("exposes open + count; FAB only when a filter exists", /window\.__dcDsFilterExport/.test(src) && /window\.__dcDsFilterCount/.test(src) && /if \(!has \|\| typeof dcMakeMenuCloseX/.test(src));
   ok("FAB poll stops after a bounded number of tries (no infinite timer)", /_dsfFabTries > 40/.test(src));
+  ok("Export Filters lives inside a LEFT-side launcher FAB menu (round FAB + close-× + action row)", /bottom:24px;left:24px/.test(src) && /dcMakeMenuCloseX\(function \(\) \{ closeDsf\(\); \}\)/.test(src) && /row\.onclick = function \(e\) \{ e\.stopPropagation\(\); closeDsf\(\); dsfOpen\(\); \}/.test(src));
   ok("DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataSpaceFilterExport/.test(strip); })());
   ok("present in the FULL bookmarklet build (synced)", /function dcDataSpaceFilterExport\(\)/.test(bm));
 }
