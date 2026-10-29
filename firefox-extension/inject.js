@@ -19981,45 +19981,50 @@ processJSON();
     // Copy-for-Sheets payload (flex+absolute layout → browser/Sheets; Excel uses the banded sheet).
     function dsfCardCss() {
       return "<style>" +
-        ".dsf-root{font:13px/1.4 -apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#16325c}" +
+        ".dsf-root{font:13px/1.35 -apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#16325c}" +
         ".dsf-grp{display:flex;align-items:stretch;gap:2px}" +
-        ".dsf-body{flex:1;display:flex;flex-direction:column;gap:8px}" +
-        ".dsf-card{background:#fff;border:1px solid #d8dde6;border-left:5px solid #93c5fd;border-radius:5px;box-shadow:0 1px 1px rgba(0,0,0,.05);padding:9px 12px}" +
-        ".dsf-card .ln1{font-weight:700;color:#16325c}" +
-        ".dsf-card .dot{color:#b0b8c4;margin:0 6px}" +
-        ".dsf-card .op{color:#7a4; color:#54698d;font-style:italic;margin:0 7px}" +
-        ".dsf-card .val{font-weight:700;color:#16325c}" +
-        ".dsf-card .api{display:block;font:400 10px/1.3 Consolas,Menlo,monospace;color:#0b5cab;margin-top:1px}" +
-        ".dsf-rail{position:relative;width:62px;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-left:2px}" +
-        ".dsf-rail .line{position:absolute;left:10px;top:8px;bottom:8px;width:18px;border:2px solid var(--rc);border-left:none;border-radius:0 8px 8px 0}" +
-        ".dsf-rail .conn{position:relative;background:#fff;border:1px solid var(--rc);color:var(--rc);border-radius:10px;padding:3px 9px;font:700 11px/1 -apple-system,sans-serif;letter-spacing:.06em}" +
-        ".dsf-rail.outer{width:74px}" +
-        ".dsf-rail.outer .line{left:12px;width:24px;border-width:3px;top:4px;bottom:4px}" +
-        ".dsf-rail.outer .conn{font-size:12px;padding:4px 11px}" +
+        ".dsf-body{flex:1;display:flex;flex-direction:column;gap:4px}" +           // tighter gaps
+        // compact one-line condition chip: field · op · value on a single row
+        ".dsf-card{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;background:#fff;border:1px solid #e2e7ef;border-left:4px solid #93c5fd;border-radius:5px;padding:5px 10px}" +
+        ".dsf-card .fld{font-weight:700;color:#16325c}" +
+        ".dsf-card .api{font:400 10px/1 Consolas,Menlo,monospace;color:#0b5cab}" +
+        ".dsf-card .op{color:#54698d;font-style:italic}" +
+        ".dsf-card .val{font-weight:700;color:#0b5cab}" +
+        ".dsf-grplabel{display:flex;align-items:center;gap:7px;margin:0 0 4px}" +
+        ".dsf-grplabel .gtag{font:700 10px/1 -apple-system,sans-serif;color:#fff;background:#64748b;border-radius:4px;padding:2px 7px;letter-spacing:.04em}" +
+        ".dsf-grplabel .gsub{font:400 10px/1 -apple-system,sans-serif;color:#94a3b8}" +
+        ".dsf-rail{position:relative;width:46px;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-left:2px}" +
+        ".dsf-rail .line{position:absolute;left:7px;top:5px;bottom:5px;width:14px;border:2px solid var(--rc);border-left:none;border-radius:0 7px 7px 0}" +
+        ".dsf-rail .conn{position:relative;background:#fff;border:1px solid var(--rc);color:var(--rc);border-radius:9px;padding:2px 7px;font:700 10px/1 -apple-system,sans-serif;letter-spacing:.05em}" +
+        ".dsf-rail.outer{width:54px}" +
+        ".dsf-rail.outer .line{left:9px;width:18px;border-width:3px;top:3px;bottom:3px}" +
+        ".dsf-rail.outer .conn{font-size:11px;padding:3px 9px}" +
         ".dsf-rail.and{--rc:#008000}.dsf-rail.or{--rc:#c55a11}.dsf-rail.unk{--rc:#b45309}" +
-        ".dsf-grp.andg{--bg:#eaf2ff}.dsf-grp.org{--bg:#f3eeff}" +
         ".dsf-outer{display:flex;align-items:stretch;gap:2px}" +
-        ".dsf-outer-body{flex:1;display:flex;flex-direction:column;gap:14px}" +
+        ".dsf-outer-body{flex:1;display:flex;flex-direction:column;gap:10px}" +
         "</style>";
     }
+    // compact single-line chip: Field  api  OPERATOR  value. Object is shown ONCE in the modal
+    // header (a DLO filter is all one object), so it's not repeated on every card.
     function dsfConditionCard(c, isOr) {
-      var rail = isOr ? "#a78bfa" : "#93c5fd";
+      var rail = isOr ? "#c4b5fd" : "#93c5fd";
       return "<div class='dsf-card' style='border-left-color:" + rail + "'>" +
-        "<span class='ln1'>" + dsfEsc(c.fieldLabel) + "<span class='api'>" + dsfEsc(c.fieldApi) + "</span></span>" +
+        "<span class='fld'>" + dsfEsc(c.fieldLabel) + "</span>" +
+        (c.fieldApi ? "<span class='api'>" + dsfEsc(c.fieldApi) + "</span>" : "") +
         "<span class='op'>" + dsfEsc(c.operator) + "</span>" +
         (c.value !== "" ? "<span class='val'>" + dsfEsc(c.value) + "</span>" : "") +
-        "<div style='font:400 10px/1.3 Consolas,Menlo,monospace;color:#54698d;margin-top:3px'>" + dsfEsc(c.objectLabel) + " &middot; " + dsfEsc(c.objectApi) + "</div>" +
         "</div>";
     }
-    // one group = cards + a tall AND/OR rail on the right (only when >1 condition).
+    // one group = a labeled block of compact chips + a tall AND/OR rail (only when >1 condition).
     function dsfGroupHtml(g, gi) {
       var isOr = String(g.operator).toUpperCase() === "OR";
       var cards = g.conditions.map(function (c) { return dsfConditionCard(c, isOr); }).join("");
-      var label = "<div style='font:700 11px/1 -apple-system,sans-serif;color:#64748b;margin:0 0 6px;letter-spacing:.05em'>GROUP " + (gi + 1) + "</div>";
+      var n = g.conditions.length;
+      var label = "<div class='dsf-grplabel'><span class='gtag'>GROUP " + (gi + 1) + "</span><span class='gsub'>" + n + " condition" + (n === 1 ? "" : "s") + " &middot; joined by " + dsfEsc(g.operator) + "</span></div>";
       var body = "<div class='dsf-body'>" + cards + "</div>";
-      if (g.conditions.length <= 1) return "<div>" + label + body + "</div>";
+      if (n <= 1) return "<div>" + label + body + "</div>";
       var railCls = isOr ? "or" : "and";
-      return "<div>" + label + "<div class='dsf-grp " + (isOr ? "org" : "andg") + "'>" + body +
+      return "<div>" + label + "<div class='dsf-grp'>" + body +
         "<div class='dsf-rail " + railCls + "'><span class='line'></span><span class='conn'>" + dsfEsc(g.operator) + "</span></div></div></div>";
     }
     // A colored TABLE (for clipboard → Google Sheets / Excel paste, which need real cells, not
@@ -20105,12 +20110,19 @@ processJSON();
           warn.innerHTML = "The operator <b>between</b> groups wasn&rsquo;t readable from the page. Open the filter so its AND/OR bar is visible, then reopen this &mdash; within-group logic is shown either way.";
           body.appendChild(warn);
         }
-        // plain-English summary
-        var sum = document.createElement("div");
-        sum.style.cssText = "background:#f1f5f9;border-left:3px solid #0d6efd;border-radius:6px;padding:9px 12px;margin:0 0 14px;font:12px/1.6 'SF Mono',Menlo,Consolas,monospace;color:#334155;white-space:pre-wrap;word-break:break-word;";
-        sum.textContent = dsfSummary(model);
-        body.appendChild(sum);
-        // grouped, color-coded cards (segment-style)
+        // plain-English summary — LABELED + collapsible (collapsed by default) so it's clear what
+        // it is and it doesn't eat vertical space. (The old unlabeled box read as "what is that".)
+        var det = document.createElement("details");
+        det.style.cssText = "margin:0 0 12px;border:1px solid #dbe3ef;border-radius:8px;background:#f8fafc;overflow:hidden;";
+        var sm = document.createElement("summary");
+        sm.style.cssText = "cursor:pointer;list-style:none;padding:8px 12px;font:600 12px -apple-system,sans-serif;color:#0b5cab;user-select:none;";
+        sm.innerHTML = "&#9656; Logic summary <span style='color:#94a3b8;font-weight:400'>(the whole filter as one line)</span>";
+        var sumBody = document.createElement("div");
+        sumBody.style.cssText = "padding:0 12px 10px;font:12px/1.6 'SF Mono',Menlo,Consolas,monospace;color:#334155;white-space:pre-wrap;word-break:break-word;";
+        sumBody.textContent = dsfSummary(model);
+        det.appendChild(sm); det.appendChild(sumBody); body.appendChild(det);
+        try { sm.addEventListener("click", function () { setTimeout(function () { sm.innerHTML = (det.open ? "&#9662;" : "&#9656;") + " Logic summary <span style='color:#94a3b8;font-weight:400'>(the whole filter as one line)</span>"; }, 0); }); } catch (e) {}
+        // grouped, color-coded cards (SF-style rails)
         var wrap = document.createElement("div");
         wrap.style.cssText = "overflow:auto;";
         wrap.innerHTML = dsfCardsHtml(model);
