@@ -2,7 +2,8 @@
 //   node test/dataspace-filter-export.test.js
 //
 // Feature: on a Data Space page, export a member object's (DLO) membership filter — grouped
-// conditions, like a segment — to CSV / Excel / Sheets. SF lets you build it but not take it out.
+// conditions, like a segment — to a COLORED Excel (or Copy-for-Sheets). SF lets you build the
+// filter but not take it out.
 //
 // PROVEN DOM (DOM Probe v41/v42/v43 on the real org):
 //   <runtime_cdp-data-spaces-table-filter-group>.filterGroup =
@@ -139,7 +140,15 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
   ok("between-group operator read from the DOM AND/OR bar (not invented)", /function dsfReadBetweenOp/.test(src) && /\^\(AND\|OR\)\$/.test(src) && /dcWithinTag2\(el, "runtime_cdp-data-spaces-table-filter-group"\)/.test(src));
   ok("top-level groups exclude nested child groups (no double-count)", /childIds\[sg\.id\] = true/.test(src) && /return !childIds\[id\]/.test(src));
   ok("one row per condition + group/logic columns", /var DSF_COLS = \[/.test(src) && /"Within-group logic", "Between-groups logic"/.test(src) && /ci === 0 \? groupLabel : ""/.test(src));
-  ok("3 outputs: CSV + Excel(buildXlsx) + Copy-for-Sheets(TSV)", /function dsfToCsv/.test(src) && /buildXlsx\(\[\{ name: "Filters"/.test(src) && /function dsfToTsv/.test(src));
+  ok("ONE download (colored Excel) + Copy-for-Sheets in THIS module (no separate plain CSV button)", (function () {
+    var i = src.indexOf("function dcDataSpaceFilterExport"); var j = src.indexOf("/* @strip:end */", i); var mod = src.slice(i, j);
+    return /buildXlsx\(\[\{ name: "Filters"[\s\S]{0,90}styleFor: built\.styleFor/.test(mod) && /function dsfToTsv/.test(mod) && !/Download CSV/.test(mod);
+  })());
+  ok("Excel is colored/banded via a styleFor map (header dark+bold, groups tinted AND=blue/OR=purple)", /function dsfXlsxRowsAndStyle/.test(src) && /isOr \? \(alt \? 7 : 5\) : \(alt \? 6 : 4\)/.test(src) && /return col === 0 \? st\.label : st\.band/.test(src));
+  ok("Copy-for-Sheets copies the COLORED grid HTML (execCommand copy), TSV fallback", /dsfCardsHtml\(model\)/.test(src) && /document\.execCommand\("copy"\)/.test(src) && /function dsfToTsv/.test(src));
+  // buildXlsx gained opt-in color styles without changing default output for existing callers
+  const bx = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("buildXlsx supports opt-in colored header + band fills (styleFor), defaults unchanged", /opts\.styleFor/.test(bx) && /fontId=\\"2\\" fillId=\\"2\\"/.test(bx) && /cellXfs count=\\"12\\"/.test(bx));
   ok("warns when between-op unreadable (never shows a guessed operator)", /wasn.rsquo;t readable from the page/.test(src));
   ok("exposes open + count; FAB only when a filter exists", /window\.__dcDsFilterExport/.test(src) && /window\.__dcDsFilterCount/.test(src) && /if \(!has\) return;/.test(src));
   ok("FAB poll stops after a bounded number of tries (no infinite timer)", /_dsfFabTries > 40/.test(src));

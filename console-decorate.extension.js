@@ -2811,17 +2811,38 @@
     const xmlEsc = (s) => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     const colLetter = (n) => { let s=""; n++; while(n>0){s=String.fromCharCode(64+(n%26||26))+s;n=Math.floor((n-(n%26?0:26))/26);} return s; };
 
-    // Style IDs: 0=normal, 1=bold, 2=wrap (for meta cell)
+    // Style IDs: 0=normal, 1=bold, 2=wrap (for meta cell). 3+ are COLOR styles (opt-in via
+    // opts.styleFor) — a dark bold-white header + tinted group bands — so a caller can produce a
+    // segment-style colored sheet. Existing callers never reference 3+, so their output is
+    // unchanged. Fonts: 0 normal, 1 bold, 2 bold-white. Fills: 0 none, 1 gray125, 2 header(dark),
+    // 3 AND band, 4 OR band, 5 AND band(alt), 6 OR band(alt).
     const stylesXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
       "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
-      "<fonts count=\"2\"><font><sz val=\"11\"/></font><font><b/><sz val=\"11\"/></font></fonts>" +
-      "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>" +
+      "<fonts count=\"3\"><font><sz val=\"11\"/></font><font><b/><sz val=\"11\"/></font><font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/></font></fonts>" +
+      "<fills count=\"7\">" +
+        "<fill><patternFill patternType=\"none\"/></fill>" +
+        "<fill><patternFill patternType=\"gray125\"/></fill>" +
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF16325C\"/></patternFill></fill>" +   // 2 header dark
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFE8F4FD\"/></patternFill></fill>" +   // 3 AND band
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFF3EEFF\"/></patternFill></fill>" +   // 4 OR band
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFF0F6FF\"/></patternFill></fill>" +   // 5 AND band alt
+        "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFAF5FF\"/></patternFill></fill>" +   // 6 OR band alt
+      "</fills>" +
       "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>" +
       "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>" +
-      "<cellXfs count=\"3\">" +
+      "<cellXfs count=\"12\">" +
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +           // 0: normal
         "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>" +           // 1: bold
         "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"><alignment wrapText=\"1\"/></xf>" + // 2: wrap
+        "<xf numFmtId=\"0\" fontId=\"2\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"><alignment vertical=\"center\"/></xf>" + // 3: header bold-white on dark
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 4: AND band
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 5: OR band
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"5\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 6: AND band alt
+        "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"6\" borderId=\"0\" xfId=\"0\" applyFill=\"1\"/>" +   // 7: OR band alt
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 8: bold label on AND band
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"4\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 9: bold label on OR band
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"5\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 10: bold label AND alt
+        "<xf numFmtId=\"0\" fontId=\"1\" fillId=\"6\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/>" + // 11: bold label OR alt
       "</cellXfs>" +
       "</styleSheet>";
 
@@ -2838,7 +2859,12 @@
         return row.map((val, ci) => {
           const ref = colLetter(ci) + rowNum;
           let sAttr = "";
-          if (isBoldRow) sAttr = " s=\"1\"";
+          // opts.styleFor(rowNum1Based, colIndex0Based) → a style id (3..11) to COLOR a cell.
+          // Takes precedence so a caller can paint a header/band; falls back to bold/wrap/normal.
+          let styleId = null;
+          if (typeof opts.styleFor === "function") { try { const s = opts.styleFor(rowNum, ci); if (s != null) styleId = s; } catch (e) {} }
+          if (styleId != null) sAttr = " s=\"" + styleId + "\"";
+          else if (isBoldRow) sAttr = " s=\"1\"";
           else if (isLastRow && ci === 0 && opts.wrapLastRow) sAttr = " s=\"2\"";
           if (typeof val === "number" && isFinite(val)) return "<c r=\""+ref+"\""+sAttr+" t=\"n\"><v>"+val+"</v></c>";
           // For strings with newlines, use inline string <is> instead of shared string
@@ -19839,6 +19865,35 @@ processJSON();
       });
       return rows;
     }
+    // Build the Excel rows + a styleFor(rowNum,col) map that paints the colored, banded sheet:
+    //   row 1 = bold white-on-dark header (style 3)
+    //   each group = one tinted band — AND groups blue (4 / 6 alternating), OR groups purple
+    //   (5 / 7); the group-label cell (col 0) is the bold variant (8..11) so it stands out.
+    // Returns { rows, styleFor }. buildXlsx uses it via opts.styleFor.
+    function dsfXlsxRowsAndStyle(model) {
+      var rows = dsfRows(model);                 // header + one row per condition (same columns)
+      // map rowNum(1-based) → { fill:4|5|6|7, label:8|9|10|11 } for the condition rows
+      var rowStyle = {};                          // rowNum -> {band, labelBand}
+      var rn = 1;                                 // row 1 = header
+      model.groups.forEach(function (g, gi) {
+        var isOr = String(g.operator).toUpperCase() === "OR";
+        var alt = (gi % 2) === 1;
+        var band = isOr ? (alt ? 7 : 5) : (alt ? 6 : 4);
+        var labelBand = isOr ? (alt ? 11 : 9) : (alt ? 10 : 8);
+        var conds = g.conditions.length ? g.conditions : [null];
+        conds.forEach(function () { rn++; rowStyle[rn] = { band: band, label: labelBand }; });
+      });
+      var ncol = DSF_COLS.length;
+      function styleFor(rowNum, col) {
+        if (rowNum === 1) return 3;               // header
+        var st = rowStyle[rowNum];
+        if (!st) return null;                     // meta/blank rows → default
+        if (col >= ncol) return null;
+        return col === 0 ? st.label : st.band;    // group label cell bold, rest banded
+      }
+      return { rows: rows, styleFor: styleFor };
+    }
+
     // Plain-English one-liner, e.g. (A = true AND B IS EMPTY) OR (C = x)
     function dsfSummary(model) {
       var parts = model.groups.map(function (g) {
@@ -19848,10 +19903,61 @@ processJSON();
       return parts.join("  " + (model.betweenOp || "OR") + "  ");
     }
 
-    function dsfCsvEsc(s) { var t = String(s == null ? "" : s); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; }
-    function dsfToCsv(rows) { return rows.map(function (r) { return r.map(dsfCsvEsc).join(","); }).join("\n"); }
     function dsfToTsv(rows) { return rows.map(function (r) { return r.map(function (s) { return String(s == null ? "" : s).replace(/\t/g, " "); }).join("\t"); }).join("\n"); }
     function dsfSafeName(s) { return String(s || "data-space-filter").replace(/[^a-zA-Z0-9_-]/g, "_"); }
+    function dsfEsc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); }
+
+    // SEGMENT-STYLE grouped table (same visual language as the Segment export): a dark header,
+    // each group tinted with a colored LEFT RAIL (blue for AND groups, purple for OR), the group
+    // label in a merged-look first column, within-group AND/OR on a thin divider row, and a
+    // compact between-groups pill row. Used BOTH for the on-screen preview AND the Sheets/Excel
+    // clipboard, so what you see is what you paste. `esc` is dsfEsc.
+    function dsfCardsHtml(model) {
+      var B = "border:1px solid #d0d5de;";
+      var TOTAL = 6; // Group | # | Object | Field | Operator | Value
+      var AND_PAL = ["#f0f6ff", "#e8f4fd", "#f0f9ff", "#eaf2ff"];
+      var OR_PAL = ["#faf5ff", "#f3eeff", "#f8f4ff", "#f0ebff"];
+      function grpBg(i, isOr) { var p = isOr ? OR_PAL : AND_PAL; return p[i % p.length]; }
+      var html = "";
+      var condNum = 0;
+      model.groups.forEach(function (g, gi) {
+        var isOr = String(g.operator).toUpperCase() === "OR";
+        var bg = grpBg(gi, isOr);
+        var rail = isOr ? "#a78bfa" : "#93c5fd";
+        var jc = isOr ? "#7c3aed" : "#0b5cab";
+        var grpCell = "border:none;border-left:4px solid " + rail + ";padding:4px 10px;background:" + bg + ";color:" + jc + ";font-size:12px;font-weight:700;text-align:center;white-space:nowrap;vertical-align:middle;";
+        g.conditions.forEach(function (c, ci) {
+          condNum++;
+          html += "<tr>";
+          html += "<td style='" + grpCell + "'>" + (ci === 0 ? dsfEsc("Group " + (gi + 1)) : "") + "</td>";
+          html += "<td style='" + B + "padding:5px 8px;font-size:12px;color:#8a94ab;font-weight:700;background:" + bg + ";text-align:right;vertical-align:middle'>" + condNum + "</td>";
+          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + bg + ";vertical-align:middle'><span style='display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:6px;vertical-align:middle'></span>" + dsfEsc(c.fieldLabel) + "<div style='font:400 10px/1.3 Consolas,monospace;color:#0b5cab;margin-left:13px'>" + dsfEsc(c.fieldApi) + "</div></td>";
+          html += "<td style='" + B + "padding:5px 9px;font-size:12px;color:#16325c;background:" + bg + ";vertical-align:middle'>" + dsfEsc(c.objectLabel) + "<div style='font:400 10px/1.3 Consolas,monospace;color:#54698d'>" + dsfEsc(c.objectApi) + "</div></td>";
+          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-style:italic;color:#54698d;background:" + bg + ";vertical-align:middle;white-space:nowrap'>" + dsfEsc(c.operator) + "</td>";
+          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + bg + ";vertical-align:middle'>" + dsfEsc(c.value) + "</td>";
+          html += "</tr>\n";
+          // within-group AND/OR divider (not after the last condition)
+          if (ci < g.conditions.length - 1) {
+            html += "<tr style='height:16px'><td style='border:none;background:" + bg + ";border-left:4px solid " + rail + "'></td>";
+            for (var k = 1; k < TOTAL - 1; k++) html += "<td style='border:none;background:" + bg + "'></td>";
+            html += "<td style='border:none;background:" + bg + ";text-align:right;padding:1px 10px'><span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + (isOr ? "#f5f0ff" : "#edf4ff") + ";padding:1px 8px;border-radius:8px;border:1px solid " + jc + "40;letter-spacing:.07em'>" + dsfEsc(g.operator) + "</span></td></tr>\n";
+          }
+        });
+        // between-groups pill row
+        if (gi < model.groups.length - 1) {
+          var bop = model.betweenOp || "?";
+          var bIsOr = bop.toUpperCase() === "OR";
+          var bjc = bIsOr ? "#7c3aed" : (bop === "?" ? "#b45309" : "#0b5cab");
+          var bbg = bIsOr ? "#f5f0ff" : (bop === "?" ? "#fffbeb" : "#edf4ff");
+          html += "<tr style='height:20px'>";
+          for (var m = 0; m < TOTAL - 1; m++) html += "<td style='border:none;background:#f4f6fb'></td>";
+          html += "<td style='border:none;background:#f4f6fb;text-align:right;padding:2px 10px'><span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + bjc + ";background:" + bbg + ";padding:2px 10px;border-radius:10px;border:1px solid " + bjc + "55;letter-spacing:.07em'>" + dsfEsc(bop === "?" ? "OR (not readable — open filter)" : bop) + "</span></td></tr>\n";
+        }
+      });
+      var TH = function (t) { return "<th style='" + B + "padding:6px 9px;font-size:12px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + dsfEsc(t) + "</th>"; };
+      return "<table style='border-collapse:collapse;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif'>" +
+        "<thead><tr>" + TH("Group") + TH("#") + TH("Field") + TH("Object") + TH("Operator") + TH("Value") + "</tr></thead><tbody>\n" + html + "</tbody></table>";
+    }
     function dsfDownload(text, filename, mime) {
       try { var b = new Blob([text], { type: mime || "text/csv;charset=utf-8" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = filename; document.body.appendChild(a); a.click(); setTimeout(function () { try { a.remove(); URL.revokeObjectURL(a.href); } catch (e) {} }, 4000); } catch (e) {}
     }
@@ -19862,47 +19968,45 @@ processJSON();
     function dsfOpen() {
       var model = dsfRead();
       dsfClose();
-      var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+      var esc = dsfEsc;
       var rows = dsfRows(model);
       var nConds = rows.length - 1;
       var p = document.createElement("div");
       _dsfEl = p;
       p.id = "dc-dsf-export";
-      p.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);z-index:2147483647;width:min(960px,96vw);max-height:84vh;display:flex;flex-direction:column;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.5);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
+      // Resizable flex-column modal: header (fixed) · body (scrolls) · footer (fixed). Sized to a
+      // comfortable default, min bounds so it never collapses, resize handle added below.
+      p.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);z-index:2147483647;width:min(980px,96vw);height:min(80vh,760px);min-width:420px;min-height:300px;max-width:98vw;max-height:96vh;display:flex;flex-direction:column;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.5);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
       var hd = document.createElement("div");
       hd.className = "hd";
       hd.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;cursor:move;flex-shrink:0;";
-      hd.innerHTML = "<div><div style='font:700 15px -apple-system,sans-serif;color:#16325c;'>Export Filters &mdash; " + esc(model.objectLabel) + "</div><div style='font:400 11px -apple-system,sans-serif;color:#5c6b8a;margin-top:2px;'>" + esc(model.objectDevName) + " &middot; " + model.groups.length + " group" + (model.groups.length === 1 ? "" : "s") + " &middot; " + nConds + " condition" + (nConds === 1 ? "" : "s") + "</div></div>";
-      var xBtn = document.createElement("button"); xBtn.innerHTML = "&times;"; xBtn.title = "Close"; xBtn.style.cssText = "border:none;background:none;font-size:20px;color:#5c6b8a;cursor:pointer;line-height:1;"; xBtn.onclick = dsfClose;
+      hd.innerHTML = "<div><div style='font:700 15px -apple-system,sans-serif;color:#16325c;'>Data Space Filter &mdash; " + esc(model.objectLabel) + "</div><div style='font:400 11px -apple-system,sans-serif;color:#5c6b8a;margin-top:2px;'>" + esc(model.objectDevName) + " &middot; " + model.groups.length + " group" + (model.groups.length === 1 ? "" : "s") + " &middot; " + nConds + " condition" + (nConds === 1 ? "" : "s") + "</div></div>";
+      var xBtn = document.createElement("button"); xBtn.innerHTML = "&times;"; xBtn.title = "Close"; xBtn.style.cssText = "border:none;background:none;font-size:22px;color:#5c6b8a;cursor:pointer;line-height:1;flex-shrink:0;"; xBtn.onclick = dsfClose;
       hd.appendChild(xBtn); p.appendChild(hd);
 
       var body = document.createElement("div");
-      body.style.cssText = "padding:14px 16px;overflow:auto;";
+      body.style.cssText = "padding:14px 16px;overflow:auto;flex:1;min-height:0;";
       if (!model.groups.length) {
-        body.innerHTML = "<p style='color:#5c6b8a'>No filter found on this object. Open the object&rsquo;s <b>Edit Filters</b> so the conditions render, then try again.</p>";
+        body.innerHTML = "<p style='color:#5c6b8a;font-size:13px'>No filter found on this object. Open the object&rsquo;s <b>Edit Filters</b> (so the conditions render on the page), then click <b>Export Filters</b> again.</p>";
       } else {
-        // summary
-        var sum = document.createElement("div");
-        sum.style.cssText = "background:#f1f5f9;border-left:3px solid #0d6efd;border-radius:6px;padding:9px 12px;margin:0 0 12px;font:12px/1.5 'SF Mono',Menlo,monospace;color:#334155;white-space:pre-wrap;word-break:break-word;";
-        sum.textContent = dsfSummary(model);
+        // between-op warning (never show a guessed operator)
         if (!model.betweenOp && model.groups.length > 1) {
           var warn = document.createElement("div");
-          warn.style.cssText = "background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:7px 11px;margin:0 0 12px;font-size:11.5px;color:#78350f;";
-          warn.innerHTML = "The operator <b>between</b> groups wasn&rsquo;t readable from the page, so it&rsquo;s left blank. Within each group it&rsquo;s shown. (Open the filter so the AND/OR bar is visible, then reopen.)";
+          warn.style.cssText = "background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:12px;color:#78350f;";
+          warn.innerHTML = "The operator <b>between</b> groups wasn&rsquo;t readable from the page. Open the filter so its AND/OR bar is visible, then reopen this &mdash; within-group logic is shown either way.";
           body.appendChild(warn);
         }
+        // plain-English summary
+        var sum = document.createElement("div");
+        sum.style.cssText = "background:#f1f5f9;border-left:3px solid #0d6efd;border-radius:6px;padding:9px 12px;margin:0 0 14px;font:12px/1.6 'SF Mono',Menlo,Consolas,monospace;color:#334155;white-space:pre-wrap;word-break:break-word;";
+        sum.textContent = dsfSummary(model);
         body.appendChild(sum);
-        // preview table
-        var tbl = document.createElement("table");
-        tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
-        var html = "<thead><tr>" + DSF_COLS.map(function (c) { return "<th style='text-align:left;padding:6px 9px;background:#1f3864;color:#fff;font-weight:700;white-space:nowrap;position:sticky;top:0'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
-        for (var i = 1; i < rows.length; i++) {
-          var newGroup = rows[i][0] !== "";
-          html += "<tr style='" + (newGroup ? "border-top:2px solid #1f3864;" : "") + "'>" + rows[i].map(function (cell, ci) { return "<td style='padding:5px 9px;border-bottom:1px solid #e8edf5;" + (ci === 5 || ci === 6 ? "font-family:SF Mono,Consolas,monospace;" : "") + "'>" + esc(cell) + "</td>"; }).join("") + "</tr>";
-        }
-        html += "</tbody>";
-        tbl.innerHTML = html;
-        body.appendChild(tbl);
+        // grouped, color-coded cards (segment-style)
+        var wrap = document.createElement("div");
+        wrap.style.cssText = "overflow:auto;";
+        wrap.innerHTML = dsfCardsHtml(model);
+        var tEl = wrap.querySelector("table"); if (tEl) tEl.style.width = "100%";
+        body.appendChild(wrap);
       }
       p.appendChild(body);
 
@@ -19911,28 +20015,47 @@ processJSON();
         ft.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid #e0e5ee;background:#fafbfe;flex-shrink:0;";
         var mkBtn = function (label, grad) { var b = document.createElement("button"); b.innerHTML = label; b.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:" + grad + ";"; return b; };
         var fn = dsfSafeName(model.objectDevName);
-        var csvB = mkBtn("&#11015; Download CSV", "linear-gradient(135deg,#0ea5e9,#0369a1)");
-        csvB.onclick = function () { dsfDownload(dsfToCsv(rows), fn + "-filters.csv", "text/csv;charset=utf-8"); csvB.innerHTML = "&#10003; Saved"; setTimeout(function () { csvB.innerHTML = "&#11015; Download CSV"; }, 1200); };
+        // ONE download: a COLORED Excel that mirrors the on-screen grid (bold white-on-dark header,
+        // per-group tinted bands: blue for AND groups, purple for OR). Built on the shared buildXlsx
+        // with a styleFor map so the file looks like the Segment export.
         var xlsB = mkBtn("&#11015; Download Excel", "linear-gradient(135deg,#16a34a,#15803d)");
         xlsB.onclick = function () {
           try {
-            var meta = "Data Space filter\nObject: " + model.objectLabel + " (" + model.objectDevName + ")\nLogic: " + dsfSummary(model);
-            var sheetRows = rows.concat([["", ""], [meta]]);
-            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1 }], { wrapLastRow: true });
+            var built = dsfXlsxRowsAndStyle(model);
+            var metaLine = "Data Space filter · Object: " + model.objectLabel + " (" + model.objectDevName + ") · Logic: " + dsfSummary(model);
+            var sheetRows = built.rows.concat([new Array(DSF_COLS.length).fill(""), [metaLine]]);
+            var buf = buildXlsx([{ name: "Filters", rows: sheetRows, headerRow: 1 }], { wrapLastRow: true, styleFor: built.styleFor });
             dsfDownload(buf, fn + "-filters.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             xlsB.innerHTML = "&#10003; Saved"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1200);
           } catch (e) { xlsB.innerHTML = "Failed"; setTimeout(function () { xlsB.innerHTML = "&#11015; Download Excel"; }, 1400); }
         };
         var copyB = mkBtn("&#128203; Copy for Sheets", "linear-gradient(135deg,#6366f1,#4338ca)");
         copyB.onclick = function () {
-          var tsv = dsfToTsv(rows);
           var done = function () { copyB.innerHTML = "&#10003; Copied"; setTimeout(function () { copyB.innerHTML = "&#128203; Copy for Sheets"; }, 1200); };
-          try { navigator.clipboard.writeText(tsv).then(done, function () { try { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); } catch (e3) { done(); }
+          var tableHtml = dsfCardsHtml(model);   // colored grid → Sheets/Excel keep the look
+          var tsv = dsfToTsv(rows);               // plain-text fallback
+          // execCommand('copy') on a real selection yields CF_HTML that Sheets + Excel understand.
+          var okCopy = false;
+          try {
+            var div = document.createElement("div"); div.contentEditable = "true";
+            div.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;"; div.innerHTML = tableHtml;
+            document.body.appendChild(div);
+            var sel = window.getSelection(), rng = document.createRange(); rng.selectNodeContents(div);
+            sel.removeAllRanges(); sel.addRange(rng);
+            try { okCopy = document.execCommand("copy"); } catch (e) {}
+            sel.removeAllRanges(); div.remove();
+          } catch (e) {}
+          if (okCopy) { done(); return; }
+          if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+            try { navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([tableHtml], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })]).then(done, function () { navigator.clipboard.writeText(tsv).then(done, done); }); return; } catch (e) {}
+          }
+          try { navigator.clipboard.writeText(tsv).then(done, done); } catch (e) { done(); }
         };
-        ft.appendChild(csvB); ft.appendChild(xlsB); ft.appendChild(copyB);
+        ft.appendChild(xlsB); ft.appendChild(copyB);
         p.appendChild(ft);
       }
       document.body.appendChild(p);
+      try { if (typeof addResizeHandle === "function") addResizeHandle(p, 420, 300); } catch (e) {}
       // drag by header
       try {
         var dx = 0, dy = 0;

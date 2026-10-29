@@ -328,12 +328,12 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li><b>Export</b> the activation&rsquo;s included attributes with their object and field API names in one click.</li>" +
       "</ul>" +
       "<span class=\"gi\">API-name hints live on the wizard (where attributes exist). A finished activation&rsquo;s read-only page has no attributes to label, so it offers Export only.</span>") +
-    acc("&#128229;", "Data Space Filters", ["Export CSV", "Excel", "Sheets"],
+    acc("&#128229;", "Data Space Filters", ["Excel", "Sheets"],
       "<p><b>The gap:</b> a Data Space can filter which records of an object (DLO) belong to it &mdash; grouped conditions joined by AND/OR, just like a segment. Salesforce lets you build that filter but gives you no way to take it with you to document or review.</p>" +
       "<ul>" +
-      "<li>Open an object&rsquo;s <b>Edit Filters</b>, then click <b>Export Filters</b> &mdash; you get the whole filter as a table: one row per condition with its <b>object, field label, field API name, operator, and value</b>.</li>" +
-      "<li>The <b>grouping is preserved</b> &mdash; each condition carries its group number, the within-group logic (AND/OR), and the between-group logic &mdash; plus a plain-English summary like <code>(A = true AND B IS EMPTY) OR (C = x)</code>.</li>" +
-      "<li>Download as <b>CSV</b> or <b>Excel</b>, or <b>Copy for Sheets</b> &mdash; the same options the Segment export gives you.</li>" +
+      "<li>Open an object&rsquo;s <b>Edit Filters</b>, then click <b>Export Filters</b> &mdash; you see the whole filter as a colored, grouped grid (like the Segment export): one row per condition with its <b>object, field label, field API name, operator, and value</b>.</li>" +
+      "<li>The <b>grouping is preserved and color-coded</b> &mdash; each group is a tinted band (blue for AND groups, purple for OR) with its within-group and between-group logic shown &mdash; plus a plain-English summary like <code>(A = true AND B IS EMPTY) OR (C = x)</code>.</li>" +
+      "<li><b>Download Excel</b> (same colored layout, bold header) or <b>Copy for Sheets</b> to paste the grid straight into Google Sheets.</li>" +
       "</ul>" +
       "<span class=\"gi\">The operator <b>within</b> each group comes straight from the filter&rsquo;s data. The operator <b>between</b> groups is read from the on-screen AND/OR bar; if the filter isn&rsquo;t open so that bar is visible, the export marks it blank rather than guessing.</span>") +
     acc("&#9881;&#65039;", "Data Transform", ["Plain-English summary"],

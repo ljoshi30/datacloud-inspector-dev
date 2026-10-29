@@ -33,8 +33,8 @@ console.log("\n1. build.js enforces public-page accuracy on the fresh HTML");
 console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 {
   ok("devRows is gated by includeDev", /devRows\s*=\s*!includeDev\s*\?\s*""/.test(b));
-  ok("devRows carries the dev accordions (Data Graph / Formula / Data Explorer / Query Editor / Segment / Activation / Data Transform / ERD)",
-    /devRows[\s\S]{0,400}"Data Graph"[\s\S]{0,4000}"Data Explorer"[\s\S]{0,3000}qeAccordion[\s\S]{0,3000}"Segment"[\s\S]{0,2000}"Activation"[\s\S]{0,2000}"Data Transform"[\s\S]{0,2000}"Data Model \(ERD\)"/.test(b));
+  ok("devRows carries the dev accordions (Data Graph / Formula / Data Explorer / Query Editor / Segment / Activation / Data Space Filters / Data Transform / ERD)",
+    /devRows[\s\S]{0,400}"Data Graph"[\s\S]{0,4000}"Data Explorer"[\s\S]{0,3000}qeAccordion[\s\S]{0,3000}"Segment"[\s\S]{0,2000}"Activation"[\s\S]{0,3000}"Data Space Filters"[\s\S]{0,3000}"Data Transform"[\s\S]{0,2000}"Data Model \(ERD\)"/.test(b));
   ok("Query Editor is its OWN detailed accordion (qeAccordion) spliced into devRows",
     /const qeAccordion = acc\("[^"]*", "Query Editor"/.test(b) && /\n\s*qeAccordion \+\n/.test(b));
   ok("devRows includes the consolidated Open-in-New-Tab accordion (lists + nav) + Activation",
