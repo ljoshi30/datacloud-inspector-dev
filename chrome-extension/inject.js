@@ -19961,15 +19961,19 @@ processJSON();
     // FLAT rows for automation: EVERY row fully populated (group #, group label, within-op,
     // between-op on every condition row — no blanks, no merges) so a script (pandas/openpyxl) can
     // read it directly. Adds a numeric "Group #" + a "Condition #" so tests can group/assert.
-    var DSF_FLAT_COLS = ["Group #", "Group", "Within-group logic", "Between-groups logic", "Condition #", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value"];
+    // "Operator (API)" carries the API enum (e.g. IS_EMPTY_STRING), which is what a Query/Connect
+    // API response keys on — so a QE script compares against THAT column, not the display label
+    // ("IS EMPTY STRING"). "Value (raw)" repeats the value verbatim (string form) with a reminder
+    // that the API may type it (boolean/number/date) — comparisons should allow for that.
+    var DSF_FLAT_COLS = ["Group #", "Group", "Within-group logic", "Between-groups logic", "Condition #", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Operator (API)", "Value"];
     function dsfRowsFlat(model) {
       var rows = [DSF_FLAT_COLS.slice()], n = 0;
       model.groups.forEach(function (g, gi) {
         var between = model.betweenOp || "";
-        var conds = g.conditions.length ? g.conditions : [{ objectLabel: "", objectApi: "", fieldLabel: "", fieldApi: "", operator: "", value: "" }];
+        var conds = g.conditions.length ? g.conditions : [{ objectLabel: "", objectApi: "", fieldLabel: "", fieldApi: "", operator: "", operatorDevName: "", value: "" }];
         conds.forEach(function (c) {
           n++;
-          rows.push([gi + 1, "Group " + (gi + 1), g.operator, between, n, c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.value]);
+          rows.push([gi + 1, "Group " + (gi + 1), g.operator, between, n, c.objectLabel, c.objectApi, c.fieldLabel, c.fieldApi, c.operator, c.operatorDevName || "", c.value]);
         });
       });
       return rows;
