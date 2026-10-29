@@ -20333,19 +20333,19 @@ processJSON();
     // Launcher FAB — a round button on the BOTTOM-LEFT with an expanding menu (same look as the
     // other launchers: close-× + an action row), so "Export Filters" lives inside the FAB rather
     // than as a bare button. Left side so it doesn't collide with SF's own bottom-right help FAB.
-    // Appears only when a filter is actually present; polls briefly because the filter modal opens
-    // on demand (SF renders the groups only when Edit Filters is open).
+    //
+    // VISIBILITY: the Data Space "Edit Filters" is a MODAL that opens on demand, and SF only
+    // renders the filter-group components while it's open. The old 20s poll meant: click the
+    // bookmarklet, and if you hadn't opened Edit Filters within 20s the FAB never appeared (the
+    // reported "where is it"). FIX: build the FAB ONCE and show/hide it with a DEBOUNCED
+    // MutationObserver — it appears the moment filter conditions are on screen and hides when the
+    // modal closes, with NO time limit. Idle cost is zero (only reacts to real DOM changes).
     try {
-      var _dsfFabTries = 0;
-      var _dsfFabTimer = setInterval(function () {
-        _dsfFabTries++;
-        if (_dsfFabTries > 40) { clearInterval(_dsfFabTimer); return; }   // ~20s then stop
-        if (document.getElementById("dc-dsf-bar")) return;
-        var has = 0; try { has = window.__dcDsFilterCount(); } catch (e) {}
-        if (!has || typeof dcMakeMenuCloseX !== "function") return;
-        clearInterval(_dsfFabTimer);
+      var _dsfWrap = null, _dsfSub = null, _dsfCloseMenu = null;
+      function dsfBuildFab() {
+        if (_dsfWrap || typeof dcMakeMenuCloseX !== "function") return _dsfWrap;
         var wrap = document.createElement("div"); wrap.id = "dc-dsf-bar";
-        wrap.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-start;gap:8px;";
+        wrap.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483646;display:none;flex-direction:column;align-items:flex-start;gap:8px;";
         var menu = document.createElement("div");
         menu.style.cssText = "position:relative;width:230px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s,transform .2s;opacity:0;transform:translateY(12px) scale(.95);";
         var row = document.createElement("button");
@@ -20353,8 +20353,12 @@ processJSON();
         row.onmouseenter = function () { row.style.background = "rgba(255,255,255,.07)"; };
         row.onmouseleave = function () { row.style.background = "#111827"; };
         var exIcon = "<svg width='15' height='15' viewBox='0 0 16 16' fill='none'><path d='M2 3h12M4 3v2.5L7 9v4l2-1V9l3-3.5V3' stroke='#fff' stroke-width='1.5' stroke-linejoin='round'/></svg>";
-        var nGroups = 0; try { nGroups = window.__dcDsFilterCount(); } catch (e) {}
-        row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#0ea5e9,#4338ca);display:flex;align-items:center;justify-content:center;'>" + exIcon + "</div><div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>Export Filters</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + nGroups + " group" + (nGroups === 1 ? "" : "s") + " &rarr; Excel / CSV / Sheets</span></div>";
+        _dsfSub = document.createElement("span");   // subtitle updated with the live group count
+        row.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#0ea5e9,#4338ca);display:flex;align-items:center;justify-content:center;'>" + exIcon + "</div>";
+        var txtCol = document.createElement("div"); txtCol.style.cssText = "display:flex;flex-direction:column;gap:1px;";
+        var ttl = document.createElement("span"); ttl.style.cssText = "font:600 13px/1.2 -apple-system,sans-serif;color:#fff;"; ttl.textContent = "Export Filters";
+        _dsfSub.style.cssText = "font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;";
+        txtCol.appendChild(ttl); txtCol.appendChild(_dsfSub); row.appendChild(txtCol);
         row.onclick = function (e) { e.stopPropagation(); closeDsf(); dsfOpen(); };
         menu.appendChild(dcMakeMenuCloseX(function () { closeDsf(); }));
         menu.appendChild(row);
@@ -20365,11 +20369,30 @@ processJSON();
         var mOpen = false;
         function openDsf() { mOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.style.pointerEvents = "auto"; }
         function closeDsf() { mOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.style.pointerEvents = "none"; }
+        _dsfCloseMenu = closeDsf;
         fab.onclick = function (e) { e.stopPropagation(); mOpen ? closeDsf() : openDsf(); };
         document.addEventListener("pointerdown", function (e) { if (mOpen && !wrap.contains(e.target)) closeDsf(); }, true);
         wrap.appendChild(menu); wrap.appendChild(fab);
         (document.body || document.documentElement).appendChild(wrap);
-      }, 500);
+        _dsfWrap = wrap;
+        return wrap;
+      }
+      // show/hide based on whether a filter is currently on screen; update the group-count subtitle.
+      function dsfSyncFab() {
+        var n = 0; try { n = window.__dcDsFilterCount(); } catch (e) {}
+        if (n > 0) {
+          var w = dsfBuildFab(); if (!w) return;
+          if (_dsfSub) _dsfSub.innerHTML = n + " group" + (n === 1 ? "" : "s") + " &rarr; Excel / CSV / Sheets";
+          w.style.display = "flex";
+        } else if (_dsfWrap) {
+          if (_dsfCloseMenu) _dsfCloseMenu();
+          _dsfWrap.style.display = "none";
+        }
+      }
+      var _dsfT = null;
+      function dsfSchedule() { if (_dsfT) return; _dsfT = setTimeout(function () { _dsfT = null; dsfSyncFab(); }, 300); }
+      try { var mo = new MutationObserver(dsfSchedule); mo.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      dsfSyncFab();   // initial check (in case Edit Filters is already open)
     } catch (e) {}
   })();
   /* @strip:end */
