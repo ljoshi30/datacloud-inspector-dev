@@ -90,10 +90,14 @@ console.log("\n4. source presence — proven props, org-agnostic loop, VDI-safe 
   ok("ONE shadow crawl per pass (irCollect) — not a per-move scan (VDI-safe)",
     /function irCollect/.test(src) && /q\[i\]\.shadowRoot/.test(src) && /recon-rule-field/.test(src) && /recon-table-rules/.test(src));
   ok("unstackable dedup: tracked spans cleared by reference each pass", /var _irSpans = \[\]/.test(src) && /function irClear/.test(src) && /_irSpans\.push\(sp\)/.test(src));
-  ok("NO DOUBLE api: irClear also class-sweeps the doc (removes a PRIOR instance's spans) + one-time load sweep",
-    (src.match(/el\.classList\.contains\("dc-ir-api"\)/g) || []).length >= 2);
+  ok("NO DOUBLE api: ONE-TIME load sweep removes a prior instance's leftover spans (not a per-pass crawl)",
+    /One-time cleanup on load/.test(src) && /eachElement\(document, function \(el\) \{ if \(el\.classList && el\.classList\.contains\("dc-ir-api"\)\) \{ try \{ el\.remove/.test(src));
+  ok("VDI: irClear is reference-only (no full-doc crawl every pass — irRun already crawls once)",
+    /function irClear\(\)\s*\{[\s\S]{0,180}_irSpans\[i\]\.remove[\s\S]{0,120}_irSpans = \[\];\s*\}/.test(src) && !/function irClear[\s\S]{0,260}eachElement\(document/.test(src));
   ok("expanding a DMO section / opening a dropdown re-decorates (delegated click re-run, not just childList observer)",
-    /function irOnClick/.test(src) && /document\.addEventListener\("click", irOnClick, true\)/.test(src) && /if \(!IR_ON\) return; setTimeout\(function \(\) \{ irRun\(false\)/.test(src));
+    /function irOnClick/.test(src) && /document\.addEventListener\("click", irOnClick, true\)/.test(src));
+  ok("VDI: the click re-run is DEBOUNCED (rapid clicks collapse to one crawl, reuses _irT guard)",
+    /function irOnClick\(\) \{ if \(!IR_ON \|\| _irWriting \|\| _irT\) return; _irT = setTimeout/.test(src));
   ok("signature guard skips no-op redraws (no flicker/churn)", /function irSignature/.test(src) && /sig === _irSig/.test(src));
   ok("observer DISCONNECTS while writing (no feedback loop / VDI peg)",
     /_irWriting = true;/.test(src) && /if \(_irObs\) _irObs\.disconnect\(\);/.test(src) && /if \(_irWriting \|\| _irT\) return;/.test(src));

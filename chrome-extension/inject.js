@@ -19631,14 +19631,13 @@ processJSON();
 
     // One styled, click-to-copy grey api line (same look/behavior as Data Graph's).
     var _irSpans = [];
-    // Clear OUR spans by reference, THEN sweep the whole doc by class — so leftovers from a PRIOR
-    // module instance (re-clicking the bookmarklet starts a fresh closure with an empty _irSpans,
-    // which otherwise can't see the previous run's spans → the reported DOUBLE api names) are also
-    // removed. Belt-and-suspenders, same as Data Graph's dgClearAll.
+    // Clear OUR spans by direct reference — enough within this instance, and NO full-doc crawl
+    // (VDI: irRun already does one crawl via irCollect; a second sweep here every pass was wasteful).
+    // A PRIOR instance's leftover spans (re-click → fresh empty _irSpans) are handled ONCE by the
+    // load-time class sweep below, not on every pass.
     function irClear() {
       for (var i = 0; i < _irSpans.length; i++) { try { _irSpans[i].remove(); } catch (e) {} }
       _irSpans = [];
-      try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-ir-api")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
     }
     function irInject(host, apiText) {
       if (!host || !apiText) return;
@@ -19767,7 +19766,8 @@ processJSON();
     // covers it: any click while ON schedules a re-run a beat later (after SF finishes expanding).
     // Idle cost is ~zero — it only does anything on an actual click, and only while the feature's on.
     var _irClickWired = false;
-    function irOnClick() { if (!IR_ON) return; setTimeout(function () { irRun(false); }, 350); }
+    // DEBOUNCED: rapid clicks collapse to ONE re-run (no stacked crawls). Reuses irSchedule's guard.
+    function irOnClick() { if (!IR_ON || _irWriting || _irT) return; _irT = setTimeout(function () { _irT = null; irRun(false); }, 350); }
     function irStart() {
       IR_ON = true;
       if (!_irObs) { try { _irObs = new MutationObserver(irSchedule); } catch (e) {} }
