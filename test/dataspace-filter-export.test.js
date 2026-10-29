@@ -119,6 +119,34 @@ console.log("\n3. rows: one per condition + group columns; label+between only on
   ok("summary joins groups with between-op OR", /\)  OR  \(/.test(s));
 }
 
+console.log("\n3b. DYNAMIC structure — operators are per-group, not assumed; any shape renders");
+{
+  // Each org's filter can differ: a group can be AND or OR, the between-join can be OR or AND,
+  // group sizes vary. The reader stores g.operator per group and model.betweenOp once; the
+  // renderers read those — nothing is hardcoded to the sample. Prove a MIXED shape round-trips.
+  var mixed = {
+    objectLabel: "Loyalty Promotion Table", objectDevName: "Loyalty_Promotion_Table__dll", betweenOp: "AND",
+    groups: [
+      { operator: "OR", conditions: [
+        { objectLabel: "LPT", objectApi: "Loyalty_Promotion_Table__dll", fieldLabel: "Line of Business", fieldApi: "lob__c", operator: "EQUALS", value: "TDI - GI" },
+        { objectLabel: "LPT", objectApi: "Loyalty_Promotion_Table__dll", fieldLabel: "Line of Business", fieldApi: "lob__c", operator: "EQUALS", value: "TDI - L&H" }
+      ] },
+      { operator: "AND", conditions: [
+        { objectLabel: "LPT", objectApi: "Loyalty_Promotion_Table__dll", fieldLabel: "Active", fieldApi: "active__c", operator: "EQUALS", value: "true" }
+      ] }
+    ]
+  };
+  var r = dsfRows(mixed);
+  eq("group 1 within-op is OR (read per-group, not forced AND)", r[1][1], "OR");
+  eq("group 2 within-op is AND (different from group 1)", r[3][1], "AND");
+  eq("between-op is AND here (not forced OR)", r[1][2], "AND");
+  // single-condition OR group: within-op still recorded, just no inner divider needed
+  var oneCondOr = { groups: [{ operator: "OR", conditions: [{ fieldLabel: "x", fieldApi: "x__c", operator: "EQUALS", value: "1", objectLabel: "O", objectApi: "O__dll" }] }], betweenOp: "" };
+  eq("single-condition group still carries its operator", dsfRows(oneCondOr)[1][1], "OR");
+  // summary reflects the real operators
+  ok("summary uses each group's own operator + the real between-op", /\bOR\b[\s\S]*\)  AND  \(/.test(dsfSummary(mixed)));
+}
+
 console.log("\n4. between-group operator picker (read from DOM, never guessed)");
 {
   eq("single OR → OR", pickBetween(["OR"]), "OR");
@@ -145,7 +173,9 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
     return /buildXlsx\(\[\{ name: "Filters"[\s\S]{0,90}styleFor: built\.styleFor/.test(mod) && /function dsfToTsv/.test(mod) && !/Download CSV/.test(mod);
   })());
   ok("Excel is colored/banded via a styleFor map (header dark+bold, groups tinted AND=blue/OR=purple)", /function dsfXlsxRowsAndStyle/.test(src) && /isOr \? \(alt \? 7 : 5\) : \(alt \? 6 : 4\)/.test(src) && /return col === 0 \? st\.label : st\.band/.test(src));
-  ok("Copy-for-Sheets copies the COLORED grid HTML (execCommand copy), TSV fallback", /dsfCardsHtml\(model\)/.test(src) && /document\.execCommand\("copy"\)/.test(src) && /function dsfToTsv/.test(src));
+  ok("on-screen preview uses SF-style vertical AND/OR rails (per-group rail + outer rail)", /function dsfCardsHtml/.test(src) && /function dsfGroupHtml/.test(src) && /class='dsf-rail /.test(src) && /dsf-rail outer /.test(src));
+  ok("rails colored like SF (AND green, OR orange)", /\.dsf-rail\.and\{--rc:#008000\}\.dsf-rail\.or\{--rc:#c55a11\}/.test(src));
+  ok("Copy-for-Sheets copies a real TABLE (cells, not flex) so Sheets/Excel keep the grid", /function dsfTableHtml/.test(src) && /var tableHtml = dsfTableHtml\(model\)/.test(src) && /document\.execCommand\("copy"\)/.test(src) && /function dsfToTsv/.test(src));
   // buildXlsx gained opt-in color styles without changing default output for existing callers
   const bx = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("buildXlsx supports opt-in colored header + band fills (styleFor), defaults unchanged", /opts\.styleFor/.test(bx) && /fontId=\\"2\\" fillId=\\"2\\"/.test(bx) && /cellXfs count=\\"12\\"/.test(bx));

@@ -19907,56 +19907,98 @@ processJSON();
     function dsfSafeName(s) { return String(s || "data-space-filter").replace(/[^a-zA-Z0-9_-]/g, "_"); }
     function dsfEsc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); }
 
-    // SEGMENT-STYLE grouped table (same visual language as the Segment export): a dark header,
-    // each group tinted with a colored LEFT RAIL (blue for AND groups, purple for OR), the group
-    // label in a merged-look first column, within-group AND/OR on a thin divider row, and a
-    // compact between-groups pill row. Used BOTH for the on-screen preview AND the Sheets/Excel
-    // clipboard, so what you see is what you paste. `esc` is dsfEsc.
-    function dsfCardsHtml(model) {
+    // SF-CANVAS LAYOUT (same as the Segment export's blueprint): each condition is a card; a
+    // group's cards stack with a tall vertical AND/OR rail (bracket + pill) on the RIGHT spanning
+    // the whole group; then an OUTER taller rail spans ALL groups with the between-groups
+    // operator. AND = green, OR = orange — exactly like SF. This is the on-screen preview AND the
+    // Copy-for-Sheets payload (flex+absolute layout → browser/Sheets; Excel uses the banded sheet).
+    function dsfCardCss() {
+      return "<style>" +
+        ".dsf-root{font:13px/1.4 -apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#16325c}" +
+        ".dsf-grp{display:flex;align-items:stretch;gap:2px}" +
+        ".dsf-body{flex:1;display:flex;flex-direction:column;gap:8px}" +
+        ".dsf-card{background:#fff;border:1px solid #d8dde6;border-left:5px solid #93c5fd;border-radius:5px;box-shadow:0 1px 1px rgba(0,0,0,.05);padding:9px 12px}" +
+        ".dsf-card .ln1{font-weight:700;color:#16325c}" +
+        ".dsf-card .dot{color:#b0b8c4;margin:0 6px}" +
+        ".dsf-card .op{color:#7a4; color:#54698d;font-style:italic;margin:0 7px}" +
+        ".dsf-card .val{font-weight:700;color:#16325c}" +
+        ".dsf-card .api{display:block;font:400 10px/1.3 Consolas,Menlo,monospace;color:#0b5cab;margin-top:1px}" +
+        ".dsf-rail{position:relative;width:62px;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-left:2px}" +
+        ".dsf-rail .line{position:absolute;left:10px;top:8px;bottom:8px;width:18px;border:2px solid var(--rc);border-left:none;border-radius:0 8px 8px 0}" +
+        ".dsf-rail .conn{position:relative;background:#fff;border:1px solid var(--rc);color:var(--rc);border-radius:10px;padding:3px 9px;font:700 11px/1 -apple-system,sans-serif;letter-spacing:.06em}" +
+        ".dsf-rail.outer{width:74px}" +
+        ".dsf-rail.outer .line{left:12px;width:24px;border-width:3px;top:4px;bottom:4px}" +
+        ".dsf-rail.outer .conn{font-size:12px;padding:4px 11px}" +
+        ".dsf-rail.and{--rc:#008000}.dsf-rail.or{--rc:#c55a11}.dsf-rail.unk{--rc:#b45309}" +
+        ".dsf-grp.andg{--bg:#eaf2ff}.dsf-grp.org{--bg:#f3eeff}" +
+        ".dsf-outer{display:flex;align-items:stretch;gap:2px}" +
+        ".dsf-outer-body{flex:1;display:flex;flex-direction:column;gap:14px}" +
+        "</style>";
+    }
+    function dsfConditionCard(c, isOr) {
+      var rail = isOr ? "#a78bfa" : "#93c5fd";
+      return "<div class='dsf-card' style='border-left-color:" + rail + "'>" +
+        "<span class='ln1'>" + dsfEsc(c.fieldLabel) + "<span class='api'>" + dsfEsc(c.fieldApi) + "</span></span>" +
+        "<span class='op'>" + dsfEsc(c.operator) + "</span>" +
+        (c.value !== "" ? "<span class='val'>" + dsfEsc(c.value) + "</span>" : "") +
+        "<div style='font:400 10px/1.3 Consolas,Menlo,monospace;color:#54698d;margin-top:3px'>" + dsfEsc(c.objectLabel) + " &middot; " + dsfEsc(c.objectApi) + "</div>" +
+        "</div>";
+    }
+    // one group = cards + a tall AND/OR rail on the right (only when >1 condition).
+    function dsfGroupHtml(g, gi) {
+      var isOr = String(g.operator).toUpperCase() === "OR";
+      var cards = g.conditions.map(function (c) { return dsfConditionCard(c, isOr); }).join("");
+      var label = "<div style='font:700 11px/1 -apple-system,sans-serif;color:#64748b;margin:0 0 6px;letter-spacing:.05em'>GROUP " + (gi + 1) + "</div>";
+      var body = "<div class='dsf-body'>" + cards + "</div>";
+      if (g.conditions.length <= 1) return "<div>" + label + body + "</div>";
+      var railCls = isOr ? "or" : "and";
+      return "<div>" + label + "<div class='dsf-grp " + (isOr ? "org" : "andg") + "'>" + body +
+        "<div class='dsf-rail " + railCls + "'><span class='line'></span><span class='conn'>" + dsfEsc(g.operator) + "</span></div></div></div>";
+    }
+    // A colored TABLE (for clipboard → Google Sheets / Excel paste, which need real cells, not
+    // flex): dark bold header, per-group tinted band with a colored left edge, AND/OR shown in the
+    // Within/Between columns. Mirrors the on-screen rails as closely as a grid allows.
+    function dsfTableHtml(model) {
       var B = "border:1px solid #d0d5de;";
-      var TOTAL = 6; // Group | # | Object | Field | Operator | Value
-      var AND_PAL = ["#f0f6ff", "#e8f4fd", "#f0f9ff", "#eaf2ff"];
-      var OR_PAL = ["#faf5ff", "#f3eeff", "#f8f4ff", "#f0ebff"];
-      function grpBg(i, isOr) { var p = isOr ? OR_PAL : AND_PAL; return p[i % p.length]; }
-      var html = "";
-      var condNum = 0;
+      var html = "", condNum = 0;
       model.groups.forEach(function (g, gi) {
         var isOr = String(g.operator).toUpperCase() === "OR";
-        var bg = grpBg(gi, isOr);
+        var bg = isOr ? "#f3eeff" : "#eaf2ff";
         var rail = isOr ? "#a78bfa" : "#93c5fd";
         var jc = isOr ? "#7c3aed" : "#0b5cab";
-        var grpCell = "border:none;border-left:4px solid " + rail + ";padding:4px 10px;background:" + bg + ";color:" + jc + ";font-size:12px;font-weight:700;text-align:center;white-space:nowrap;vertical-align:middle;";
+        var between = (gi < model.groups.length - 1) ? (model.betweenOp || "OR?") : "";
         g.conditions.forEach(function (c, ci) {
           condNum++;
+          var first = ci === 0;
           html += "<tr>";
-          html += "<td style='" + grpCell + "'>" + (ci === 0 ? dsfEsc("Group " + (gi + 1)) : "") + "</td>";
-          html += "<td style='" + B + "padding:5px 8px;font-size:12px;color:#8a94ab;font-weight:700;background:" + bg + ";text-align:right;vertical-align:middle'>" + condNum + "</td>";
-          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + bg + ";vertical-align:middle'><span style='display:inline-block;width:7px;height:7px;border-radius:50%;background:#3b82f6;margin-right:6px;vertical-align:middle'></span>" + dsfEsc(c.fieldLabel) + "<div style='font:400 10px/1.3 Consolas,monospace;color:#0b5cab;margin-left:13px'>" + dsfEsc(c.fieldApi) + "</div></td>";
-          html += "<td style='" + B + "padding:5px 9px;font-size:12px;color:#16325c;background:" + bg + ";vertical-align:middle'>" + dsfEsc(c.objectLabel) + "<div style='font:400 10px/1.3 Consolas,monospace;color:#54698d'>" + dsfEsc(c.objectApi) + "</div></td>";
-          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-style:italic;color:#54698d;background:" + bg + ";vertical-align:middle;white-space:nowrap'>" + dsfEsc(c.operator) + "</td>";
-          html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + bg + ";vertical-align:middle'>" + dsfEsc(c.value) + "</td>";
+          html += "<td style='" + B + "border-left:4px solid " + rail + ";padding:4px 10px;background:" + bg + ";color:" + jc + ";font-weight:700;text-align:center;white-space:nowrap'>" + (first ? dsfEsc("Group " + (gi + 1)) : "") + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";color:" + jc + ";font-weight:700;text-align:center'>" + dsfEsc(g.operator) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";color:#b45309;font-weight:700;text-align:center'>" + (first ? dsfEsc(between) : "") + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + "'>" + dsfEsc(c.objectLabel) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px'>" + dsfEsc(c.objectApi) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + dsfEsc(c.fieldLabel) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-family:Consolas,monospace;font-size:11px;color:#0b5cab'>" + dsfEsc(c.fieldApi) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-style:italic;color:#54698d;white-space:nowrap'>" + dsfEsc(c.operator) + "</td>";
+          html += "<td style='" + B + "padding:4px 9px;background:" + bg + ";font-weight:700'>" + dsfEsc(c.value) + "</td>";
           html += "</tr>\n";
-          // within-group AND/OR divider (not after the last condition)
-          if (ci < g.conditions.length - 1) {
-            html += "<tr style='height:16px'><td style='border:none;background:" + bg + ";border-left:4px solid " + rail + "'></td>";
-            for (var k = 1; k < TOTAL - 1; k++) html += "<td style='border:none;background:" + bg + "'></td>";
-            html += "<td style='border:none;background:" + bg + ";text-align:right;padding:1px 10px'><span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + (isOr ? "#f5f0ff" : "#edf4ff") + ";padding:1px 8px;border-radius:8px;border:1px solid " + jc + "40;letter-spacing:.07em'>" + dsfEsc(g.operator) + "</span></td></tr>\n";
-          }
         });
-        // between-groups pill row
-        if (gi < model.groups.length - 1) {
-          var bop = model.betweenOp || "?";
-          var bIsOr = bop.toUpperCase() === "OR";
-          var bjc = bIsOr ? "#7c3aed" : (bop === "?" ? "#b45309" : "#0b5cab");
-          var bbg = bIsOr ? "#f5f0ff" : (bop === "?" ? "#fffbeb" : "#edf4ff");
-          html += "<tr style='height:20px'>";
-          for (var m = 0; m < TOTAL - 1; m++) html += "<td style='border:none;background:#f4f6fb'></td>";
-          html += "<td style='border:none;background:#f4f6fb;text-align:right;padding:2px 10px'><span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + bjc + ";background:" + bbg + ";padding:2px 10px;border-radius:10px;border:1px solid " + bjc + "55;letter-spacing:.07em'>" + dsfEsc(bop === "?" ? "OR (not readable — open filter)" : bop) + "</span></td></tr>\n";
-        }
       });
-      var TH = function (t) { return "<th style='" + B + "padding:6px 9px;font-size:12px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + dsfEsc(t) + "</th>"; };
-      return "<table style='border-collapse:collapse;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif'>" +
-        "<thead><tr>" + TH("Group") + TH("#") + TH("Field") + TH("Object") + TH("Operator") + TH("Value") + "</tr></thead><tbody>\n" + html + "</tbody></table>";
+      var TH = function (t) { return "<th style='" + B + "padding:6px 9px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + dsfEsc(t) + "</th>"; };
+      return "<table style='border-collapse:collapse;font-family:-apple-system,Arial,sans-serif;font-size:12px'>" +
+        "<thead><tr>" + DSF_COLS.map(TH).join("") + "</tr></thead><tbody>\n" + html + "</tbody></table>";
+    }
+
+    // whole filter = groups stacked, with an OUTER tall rail carrying the between-groups operator.
+    function dsfCardsHtml(model) {
+      var groupsHtml = model.groups.map(function (g, gi) { return dsfGroupHtml(g, gi); }).join("");
+      if (model.groups.length <= 1) return "<div class='dsf-root'>" + dsfCardCss() + groupsHtml + "</div>";
+      var bop = model.betweenOp || "";
+      var bIsOr = bop.toUpperCase() === "OR";
+      var railCls = bop ? (bIsOr ? "or" : "and") : "unk";
+      var railText = bop || "OR?";
+      return "<div class='dsf-root'>" + dsfCardCss() +
+        "<div class='dsf-outer'><div class='dsf-outer-body'>" + groupsHtml + "</div>" +
+        "<div class='dsf-rail outer " + railCls + "'><span class='line'></span><span class='conn'>" + dsfEsc(railText) + "</span></div></div></div>";
     }
     function dsfDownload(text, filename, mime) {
       try { var b = new Blob([text], { type: mime || "text/csv;charset=utf-8" }); var a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = filename; document.body.appendChild(a); a.click(); setTimeout(function () { try { a.remove(); URL.revokeObjectURL(a.href); } catch (e) {} }, 4000); } catch (e) {}
@@ -20032,7 +20074,7 @@ processJSON();
         var copyB = mkBtn("&#128203; Copy for Sheets", "linear-gradient(135deg,#6366f1,#4338ca)");
         copyB.onclick = function () {
           var done = function () { copyB.innerHTML = "&#10003; Copied"; setTimeout(function () { copyB.innerHTML = "&#128203; Copy for Sheets"; }, 1200); };
-          var tableHtml = dsfCardsHtml(model);   // colored grid → Sheets/Excel keep the look
+          var tableHtml = dsfTableHtml(model);   // real TABLE cells → Sheets/Excel keep the colored grid
           var tsv = dsfToTsv(rows);               // plain-text fallback
           // execCommand('copy') on a real selection yields CF_HTML that Sheets + Excel understand.
           var okCopy = false;
