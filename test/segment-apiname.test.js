@@ -1048,5 +1048,57 @@ console.log("\n6j. Data Graph API-name decorator (left node.objectApiName + righ
   ok("Data Graph module present in the FULL bookmarklet build (synced)", /function dcDataGraphApiModule\(\)/.test(bm6j));
 }
 
+// ── 6k. Segment FLAT CSV export (for QE / automation) ────────────────────────────────
+// The colored Excel + copy-grid are for humans; QE automation needs a flat, every-cell-filled
+// table. This mirrors segFlatRows over the segment tree + locks the button/handler presence.
+console.log("\n6k. segment flat CSV: every row fully populated for scripts");
+{
+  const fs6k = require("fs"), path6k = require("path");
+  const src6k = fs6k.readFileSync(path6k.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+
+  // Mirror of segFlatRows: top-level groups → leaves, every row carries tab/group#/join/cond#/apis.
+  function flat(tree, tab) {
+    var out = [];
+    if (!tree || !tree.items) return out;
+    var top = [], batch = [];
+    tree.items.forEach(function (it) { if (it.type === "set") { if (batch.length) { top.push({ join: tree.join, items: batch }); batch = []; } top.push(it); } else batch.push(it); });
+    if (batch.length) top.push({ join: tree.join, items: batch });
+    var cn = 0;
+    var typeOf = function (t) { return t === "aggregation" ? "Aggregation" : t === "ci" ? "Calculated Insight" : t === "nested-segment" ? "Nested Segment" : "Simple"; };
+    function emit(gi, gjoin, item) {
+      cn++;
+      out.push([tab, gi + 1, gjoin || "", cn, typeOf(item.type), item.objectLabel || "", item.objApi || "", item.fieldLabel || "", item.fieldApi || "", item.operator || "", item.values || "", ""]);
+      if (item.type === "aggregation" && item.subFilters) item.subFilters.forEach(function (sf) { cn++; out.push([tab, gi + 1, gjoin || "", cn, "Sub-filter", sf.objectLabel || "", sf.objApi || "", sf.fieldLabel || "", sf.fieldApi || "", sf.operator || "", sf.values || "", item.fieldLabel || ""]); });
+    }
+    function walk(gi, node, gjoin) { (node.items || []).forEach(function (it) { if (it.type === "set") walk(gi, it, it.join); else emit(gi, node.join || gjoin, it); }); }
+    top.forEach(function (g, gi) { walk(gi, g, g.join); });
+    return out;
+  }
+  // tree: group A (OR of 2 simple) then group B (1 simple) — the classic shape
+  var tree = { type: "set", join: "OR", items: [
+    { type: "set", join: "OR", items: [
+      { type: "simple", objectLabel: "Account Multiline", fieldLabel: "State", operator: "Equals", values: "CA", objApi: "TDI_Account__dlm", fieldApi: "State__c" },
+      { type: "simple", objectLabel: "Account Multiline", fieldLabel: "State", operator: "Equals", values: "NY", objApi: "TDI_Account__dlm", fieldApi: "State__c" }
+    ] },
+    { type: "simple", objectLabel: "Individual", fieldLabel: "Age", operator: "Greater Than", values: "18", objApi: "ssot__Individual__dlm", fieldApi: "Age__c" }
+  ] };
+  var rows = flat(tree, "Include");
+  eq("3 leaf rows", rows.length, 3);
+  // every row fully populated with the grouping keys a script needs
+  var allFilled = rows.every(function (r) { return r[0] !== "" && r[1] !== "" && r[3] !== "" && r[4] !== "" && r[6] !== "" && r[8] !== ""; });
+  ok("every row has tab, group#, condition#, type, object API, field API (no blanks for a script)", allFilled);
+  eq("group 1 rows carry its OR join", rows[0][2] + "|" + rows[1][2], "OR|OR");
+  eq("row 1 object API", rows[0][6], "TDI_Account__dlm");
+  eq("row 1 field API", rows[0][8], "State__c");
+  eq("group 2 is group # 2", rows[2][1], 2);
+  eq("condition numbers are sequential", rows[0][3] + "," + rows[1][3] + "," + rows[2][3], "1,2,3");
+
+  // source presence — button + handler + flat-csv helpers wired, exported per tab
+  ok("segment flat-CSV helpers present (segFlatRows + toFlatCsv + FLAT_COLS with API columns)",
+    /function segFlatRows\(tree, tab\)/.test(src6k) && /const toFlatCsv/.test(src6k) && /const FLAT_COLS = \[/.test(src6k) && /"Object API Name", "Field", "Field API Name"/.test(src6k));
+  ok("CSV (flat) button + handler present, loads all tabs then writes ONE csv", /id='dc-d-flatcsv'/.test(src6k) && /#dc-d-flatcsv/.test(src6k) && /out = out\.concat\(segFlatRows\(t, name\)\)/.test(src6k) && /-rules\.csv/.test(src6k));
+  ok("flat rows carry aggregation sub-filters with a Sub-of back-reference", /"Sub-filter"[\s\S]{0,120}item\.fieldLabel \|\| item\.objectLabel/.test(src6k));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

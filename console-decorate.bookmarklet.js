@@ -5613,6 +5613,45 @@
       return lines.join("\n");
     };
 
+    // ── FLAT CSV for QE / automation ────────────────────────────────────────────────
+    // The colored Excel + copy-grid are for HUMANS (merged cells → scripts read blanks). This
+    // emits a flat table a script can read directly: EVERY row fully populated with Tab, Group #,
+    // Group join (AND/OR), Condition #, Type, Object label + API, Field label + API, Operator,
+    // Value, and Sub-of (for aggregation sub-filters). No merges, no blanks for grouping keys.
+    // Walks the SAME tree the canvas/Excel use, so it can't drift from what's shown.
+    const FLAT_COLS = ["Tab", "Group #", "Group join", "Condition #", "Type", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value(s)", "Sub-of"];
+    function segFlatRows(tree, tab) {
+      const out = [];
+      if (!tree || !tree.items) return out;
+      // top-level groups: a run of non-set items is one implicit group; a "set" item is a group.
+      const topGroups = [];
+      let batch = [];
+      tree.items.forEach(item => {
+        if (item.type === "set") { if (batch.length) { topGroups.push({ join: tree.join, items: batch }); batch = []; } topGroups.push(item); }
+        else batch.push(item);
+      });
+      if (batch.length) topGroups.push({ join: tree.join, items: batch });
+      let cn = 0;
+      const typeOf = (t) => t === "aggregation" ? "Aggregation" : t === "ci" ? "Calculated Insight" : t === "nested-segment" ? "Nested Segment" : "Simple";
+      function emitLeaf(gi, gjoin, item) {
+        cn++;
+        out.push([tab, gi + 1, gjoin || "", cn, typeOf(item.type), item.objectLabel || "", item.objApi || "", item.fieldLabel || "", item.fieldApi || "", item.operator || "", item.values || "", ""]);
+        if (item.type === "aggregation" && item.subFilters && item.subFilters.length) {
+          item.subFilters.forEach(sf => {
+            cn++;
+            out.push([tab, gi + 1, gjoin || "", cn, "Sub-filter", sf.objectLabel || "", sf.objApi || "", sf.fieldLabel || "", sf.fieldApi || "", sf.operator || "", sf.values || "", item.fieldLabel || item.objectLabel || ""]);
+          });
+        }
+      }
+      function walk(gi, node, gjoin) {
+        (node.items || []).forEach(it => { if (it.type === "set") walk(gi, it, it.join); else emitLeaf(gi, node.join || gjoin, it); });
+      }
+      topGroups.forEach((g, gi) => walk(gi, g, g.join));
+      return out;
+    }
+    const csvEscS = (s) => { const t = String(s == null ? "" : s); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const toFlatCsv = (rowsArr) => rowsArr.map(r => r.map(csvEscS).join(",")).join("\r\n");
+
     // Renders one condition row exactly as SF shows it:
     // [dot] ObjectLabel · FieldLabel  Operator  Value
     // Nested-segment row — segment icon + bold name + publish behavior subtitle
@@ -5927,6 +5966,7 @@
         "<button id='dc-d-copy' title='Copies the current tab only, as a grid you can paste into Google Sheets or Excel'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy tab for Sheets</button>" +
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
         "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
+        "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
@@ -6125,6 +6165,33 @@
       } catch (e) {
         btn.textContent = "Failed"; restore();
       }
+    };
+
+    // Download FLAT CSV (for scripts/automation) — loads every tab, then emits ONE flat CSV with a
+    // Tab column, every row fully populated, no merges. Mirrors the Data Space filter flat CSV.
+    const flatBtn = detailExportEl.querySelector("#dc-d-flatcsv");
+    if (flatBtn) flatBtn.onclick = async () => {
+      const btn = flatBtn;
+      const restore = () => setTimeout(() => (btn.innerHTML = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)"), 1600);
+      try {
+        for (const name of availableTabs) {
+          if (!tabData[name]) {
+            btn.textContent = "Loading " + name + "…";
+            try { const r = await readConditionsForTab(name, activeTab); tabData[name] = { tree: r.tree, flat: r.flat }; applyTabData(name, r.tree, r.flat); } catch (e) {}
+          }
+        }
+        let out = [FLAT_COLS.slice()];
+        for (const name of availableTabs) {
+          const t = tabData[name] && tabData[name].tree;
+          if (t && t.items && t.items.length) out = out.concat(segFlatRows(t, name));
+        }
+        if (out.length <= 1) { btn.textContent = "No criteria"; restore(); return; }
+        const blob = new Blob([toFlatCsv(out)], { type: "text/csv;charset=utf-8" });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = safeFilename(segName || "segment") + "-rules.csv";
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 8000);
+        btn.textContent = "✓ CSV"; restore();
+      } catch (e) { btn.textContent = "Failed"; restore(); }
     };
 
     // Drag by header

@@ -317,7 +317,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<p><b>The gap:</b> the segment builder shows rules by friendly <b>label</b> &mdash; but the same label can mean different fields on different objects, so you can&rsquo;t be sure which field a rule actually targets. The <b>API name</b> makes it exact &mdash; and there&rsquo;s no way to take the rules with you.</p>" +
       "<ul>" +
       "<li><b>Hover</b> any attribute or rule for its object and field API name; press <kbd>C</kbd> to copy.</li>" +
-      "<li><b>Export</b> every condition &mdash; Include, Exclude, Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters intact, plus object and field API-name columns. To Google Sheets, HTML, or Excel.</li>" +
+      "<li><b>Export</b> every condition &mdash; Include, Exclude, Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters intact, plus object and field API-name columns. Colored <b>Excel</b> or <b>Copy for Sheets</b> for review, or a flat <b>CSV</b> built for scripts/automation (every row fully filled &mdash; tab, group #, join, condition #, API names &mdash; no merged cells).</li>" +
       "<li><b>Container Path</b> shows which related record a rule actually points at, read straight from the open edit panel.</li>" +
       "</ul>" +
       "<span class=\"gi\">Everything is read from what&rsquo;s on screen &mdash; the Container Path is never reconstructed or guessed; if Data Cloud doesn&rsquo;t show it, neither does the tool.</span>") +
