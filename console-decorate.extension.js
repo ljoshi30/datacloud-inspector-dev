@@ -19760,8 +19760,45 @@ processJSON();
         if (!/^(data model object|field|match field)$/i.test(lbl)) return;
         var val = ""; try { val = String(cb.value || ""); } catch (e) {}
         if (!val || !/__/.test(val)) return;                             // api-looking only (skips EXACT etc.)
-        irInject(cb.parentElement || cb, val);                           // line under the dropdown
+        // Anchor the chip to the combobox's OWN column so it sits directly UNDER ITS dropdown — not
+        // under a shared parent (the Cross-Field "Match to" row shares one parent for the DMO +
+        // Match Field dropdowns, so cb.parentElement stacked BOTH chips under the left column — the
+        // reported bug). We wrap cb in a per-combobox column div once and drop the chip there.
+        irInjectUnderCombo(cb, val);
       });
+    }
+    // Put the api chip directly UNDER ITS OWN dropdown, aligned to that combobox's left edge —
+    // regardless of whether the two dropdowns share a flex row or sit in separate columns. We use
+    // ABSOLUTE positioning so the chip is OUT OF FLOW: it can never reflow the row or push the
+    // sibling dropdown onto a new line (the bug with a full-width in-flow block). The chip is
+    // positioned at the combobox's own offset within its (relatively-positioned) parent, so each
+    // dropdown gets its own chip beneath it. One wrapper per combobox (unstackable, tracked).
+    function irInjectUnderCombo(cb, val) {
+      try {
+        var parent = cb.parentElement; if (!parent) return;
+        // make the parent the positioning context (offsetParent) for our absolute chip
+        try { var pos = (window.getComputedStyle && getComputedStyle(parent).position) || "static"; if (pos === "static") parent.style.setProperty("position", "relative", "important"); } catch (e) {}
+        var wrap = document.createElement("div");
+        wrap.className = "dc-ir-api";          // tracked + swept by the same class as other chips
+        var left = 0, top = 0;
+        try { left = cb.offsetLeft; top = cb.offsetTop + cb.offsetHeight; } catch (e) {}
+        var s = function (p, v) { try { wrap.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("position", "absolute"); s("left", left + "px"); s("top", (top + 2) + "px");
+        s("font-family", "'SF Mono',Menlo,Consolas,monospace"); s("font-size", "12px"); s("line-height", "1.3");
+        s("color", "#475569"); s("white-space", "nowrap"); s("cursor", "pointer"); s("user-select", "text");
+        s("max-width", "100%"); s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("z-index", "1");
+        wrap._irApi = String(val); wrap.textContent = String(val);
+        try { wrap.setAttribute("title", val + "  ·  click to copy"); } catch (e) {}
+        wrap.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
+        wrap.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          var t = wrap._irApi, restore = t;
+          function flash() { wrap.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { wrap.textContent = restore; s("color", "#475569"); }, 900); }
+          try { navigator.clipboard.writeText(t).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+          catch (e3) { flash(); }
+        }, true);
+        parent.appendChild(wrap); _irSpans.push(wrap);
+      } catch (e) {}
     }
     // signature = the api names currently present → skip redraw when nothing changed (no flicker/churn)
     function irSignature() {

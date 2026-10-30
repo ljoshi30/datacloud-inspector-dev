@@ -92,6 +92,10 @@ console.log("\n4. source presence — proven props, org-agnostic loop, VDI-safe 
     /_irBuckets\.rows\.forEach/.test(src) && /_irBuckets\.sections\.forEach/.test(src));
   ok("MATCH CRITERIA + ADVANCED: reads combobox .value as api for DMO / Field / Match Field, skips (Scheduled) Match Method",
     /_irBuckets\.combos\.forEach/.test(src) && /\^\(data model object\|field\|match field\)\$/i.test(src) && /match method\/i\.test\(lbl\)/.test(src) && /!\/__\/.test\(val\)/.test(src) && /lightning-combobox/.test(src));
+  ok("combo api chip sits UNDER ITS OWN dropdown (abs-positioned per-combobox, not stacked under a shared parent)",
+    /function irInjectUnderCombo/.test(src) && /irInjectUnderCombo\(cb, val\)/.test(src) && /s\("position", "absolute"\)/.test(src) && /cb\.offsetLeft/.test(src) && /cb\.offsetTop \+ cb\.offsetHeight/.test(src));
+  ok("abs chip can't reflow the row (out of flow) + parent made position:relative as its offset context",
+    /if \(pos === "static"\) parent\.style\.setProperty\("position", "relative"/.test(src) && /wrap\.className = "dc-ir-api"/.test(src));
   ok("ONE shadow crawl per pass (irCollect) — not a per-move scan (VDI-safe)",
     /function irCollect/.test(src) && /q\[i\]\.shadowRoot/.test(src) && /recon-rule-field/.test(src) && /recon-table-rules/.test(src));
   ok("unstackable dedup: tracked spans cleared by reference each pass", /var _irSpans = \[\]/.test(src) && /function irClear/.test(src) && /_irSpans\.push\(sp\)/.test(src));
