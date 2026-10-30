@@ -146,10 +146,12 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("module present", /function dcUsagePingModule\(\)/.test(src));
   ok("endpoint set to the Cloudflare Worker", /var PING_ENDPOINT = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/ping";/.test(src));
   ok("auto-ping DISABLED (CSP-blocked — documented, not pretended to work)", /var PING_ENABLED\s+= false;/.test(src) && /AUTO-PING DISABLED/.test(src) && /CSP/.test(src));
-  ok("CAPTURE CHANNEL = user-click navigation (window.open to /beacon) — survives CSP",
-    /function reportUsage/.test(src) && /window\.open\(base \+ "\?" \+ qs/.test(src) && /\/ping\$\/, "\/beacon"/.test(src));
-  ok("mark-sent ONLY when the tab actually opened (popup-blocked → retries, doesn't lose the day)",
-    /if \(w\) \{ try \{ markSent\(feature\); \} catch \(e\) \{\} return true; \}/.test(src) && /return false;\s*\/\/ popup-blocked/.test(src));
+  ok("CAPTURE CHANNEL = user-gesture window.open to /beacon — survives CSP",
+    /function reportUsage/.test(src) && /window\.open\(base \+ "\?" \+ qs, "dc_usage_beacon", feats\)/.test(src) && /\/ping\$\/, "\/beacon"/.test(src));
+  ok("UX: TINY OFF-SCREEN popup window (not a readable tab) + blur back to SF page + ~400ms backstop close",
+    /width=1,height=1,left=-10000,top=-10000/.test(src) && /w\.blur\(\); window\.focus\(\);/.test(src) && /setTimeout\(function \(\) \{ try \{ w\.close\(\); \} catch \(e\) \{\} \}, 400\)/.test(src));
+  ok("mark-sent ONLY when it actually opened (popup-blocked → retries, doesn't lose the day)",
+    /if \(w\) \{[\s\S]{0,260}markSent\(feature\);[\s\S]{0,40}return true;/.test(src) && /return false;\s*\/\/ popup-blocked/.test(src));
   ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
     /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
@@ -162,7 +164,7 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
   ok("capture globals exposed (manual + auto-on-fab)", /window\.__dcReportUsage\b/.test(src) && /window\.__dcReportUsageOnFabOpen/.test(src));
   ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
-  ok("disclosure wording honest (anonymous, no record/field/personal/org data, brief tab) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /brief tab/i.test(src) && /Turn off/.test(src));
+  ok("disclosure wording honest (anonymous, no record/field/personal/org data, small window flicker) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /small window flicker/i.test(src) && /Turn off/.test(src));
   ok("PER-FEATURE/day throttle (namespaced key feature+day → different features each ping)",
     /function throttleKey\(feature\)/.test(src) && /LS_LAST \+ "::" \+ \(feature \|\| "other"\) \+ "::" \+ todayStamp\(\)/.test(src) && /function sentToday\(feature\)/.test(src) && /function markSent\(feature\)/.test(src));
   ok("page detector covers ALL feature surfaces (QueryEditor/Transform/Activation/Explorer/MappingCanvas/ERD, not just DMO)",
