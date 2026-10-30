@@ -20134,6 +20134,15 @@ processJSON();
     // ONE crawl per pass → the field table(s). (Usually one; handle more defensively.)
     var _doTables = [];
     function doCollect() {
+      // VDI FAST PATH: the full-document shadow crawl is the single most expensive op here, and the
+      // page-wide observer would otherwise trigger it on every Salesforce re-render. If we already
+      // found the field table(s) and they're STILL in the DOM, reuse them — no re-crawl. We only pay
+      // the full crawl on the first pass and after the table is actually removed/replaced (nav).
+      if (_doTables.length) {
+        var allLive = true;
+        for (var j = 0; j < _doTables.length; j++) { try { if (!_doTables[j].isConnected) { allLive = false; break; } } catch (e) { allLive = false; break; } }
+        if (allLive) { try { if (window.__dcPerf) window.__dcPerf.crawl("dmo-origin", 0); } catch (e) {} return; }  // 0 nodes = reused cache
+      }
       var out = [];
       var visited = 0;   // VDI perf: nodes walked this crawl (guarded report below)
       try {
@@ -20950,13 +20959,24 @@ processJSON();
           typeof window.__dcToggleDmoOrigin === "function" &&
           typeof window.__dcDmoOriginCount === "function" && window.__dcDmoOriginCount() > 0) {
         const tagIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M2 2h6l6 6-6 6-6-6V2z' fill='none' stroke='white' stroke-width='1.4' stroke-linejoin='round'/><circle cx='5' cy='5' r='1.1' fill='white'/></svg>";
-        const doOnNow = (typeof window.__dcDmoOriginIsOn === "function") && window.__dcDmoOriginIsOn();
-        dmoOriginRow = mkBtn("dc-dmo-origin-row", "Field origin", "Badge each field as Standard (product-given), Custom (created manually), or System (internal)", "linear-gradient(135deg,#f97316,#c2410c)", tagIconSvg, doOnNow ? "On — Standard / Custom / System" : "Off — show each field's origin");
+        dmoOriginRow = mkBtn("dc-dmo-origin-row", "Field origin", "Badge each field as Standard (product-given), Custom (created manually), or System (internal)", "linear-gradient(135deg,#f97316,#c2410c)", tagIconSvg, "");
+        const doTitleEl = dmoOriginRow.querySelector("span:first-child");
         const doSub = dmoOriginRow.querySelector("span:last-child");
+        // Clear ON indicator — green "● ON" on the title + active tint on the row, so it's obvious
+        // the badges are showing (matches the IR module). Paint reflects the live module state.
+        const doPaint = () => {
+          let on = false; try { on = (typeof window.__dcDmoOriginIsOn === "function") && window.__dcDmoOriginIsOn(); } catch (e) {}
+          if (doTitleEl) doTitleEl.innerHTML = "Field origin" + (on ? " <span style='color:#34d399;font-size:11px;font-weight:700'>● ON</span>" : "");
+          if (doSub) doSub.textContent = on ? "On — Standard / Custom / System" : "Off — show each field's origin";
+          dmoOriginRow.style.background = on ? "rgba(52,211,153,.12)" : "#111827";
+        };
+        doPaint();
+        dmoOriginRow.onmouseenter = () => { dmoOriginRow.style.background = "rgba(255,255,255,.07)"; };
+        dmoOriginRow.onmouseleave = () => { doPaint(); };
         dmoOriginRow.onclick = (e) => {
           e.stopPropagation();
-          let on = false; try { on = window.__dcToggleDmoOrigin(); } catch (err) {}
-          if (doSub) doSub.textContent = on ? "On — Standard / Custom / System" : "Off — show each field's origin";
+          try { window.__dcToggleDmoOrigin(); } catch (err) {}
+          doPaint();
         };
       }
 

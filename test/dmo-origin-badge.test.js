@@ -148,6 +148,10 @@ console.log("\n7. source presence — proven props, org-agnostic, VDI-safe scaff
     /function doLabelCell/.test(src) && /field label/i.test(src));
   ok("ONE shadow crawl per pass (doCollect) — not per-move (VDI-safe)",
     /function doCollect/.test(src) && /q\[i\]\.shadowRoot/.test(src) && /runtime_cdp-custom-datatable/.test(src));
+  ok("VDI FAST PATH: reuse cached table if still connected (no full re-crawl on every SF re-render)",
+    /VDI FAST PATH/.test(src) && /if \(_doTables\.length\)/.test(src) && /\.isConnected/.test(src) && /0 nodes = reused cache/.test(src));
+  ok("FAB row shows a clear ON indicator (green ● ON + active tint) so the active state is visible",
+    /const doPaint = \(\) =>/.test(src) && /● ON/.test(src) && /rgba\(52,211,153,\.12\)/.test(src) && /dmoOriginRow\.onclick =[\s\S]{0,160}doPaint\(\);/.test(src));
   ok("unstackable dedup: tracked badges cleared by reference each pass", /var _doSpans = \[\]/.test(src) && /function doClear/.test(src) && /_doSpans\.push\(sp\)/.test(src));
   ok("VDI: doClear is reference-only (no full-doc crawl every pass — doRun already crawls once)",
     /function doClear\(\)\s*\{[\s\S]{0,160}_doSpans\[i\]\.remove[\s\S]{0,80}_doSpans = \[\];\s*\}/.test(src) && !/function doClear[\s\S]{0,220}eachElement\(document/.test(src));
