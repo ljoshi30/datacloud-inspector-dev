@@ -20200,6 +20200,272 @@ processJSON();
   /* @strip:end */
 
   /* @strip:start dev
+   * ── VDI PERF HARNESS (dev-only) — measure, don't guess ──────────────────────────────────────
+   * The someday codebase optimization pass needs NUMBERS, not hunches. Our real bottleneck is
+   * DOM crawls + retained nodes (not algorithmic big-O — our data sets are tiny). This counts
+   * shadow-DOM crawls (+ nodes visited) and times decorate passes per module. ZERO cost unless
+   * turned on (window.__dcPerf.on()). Inspect with window.__dcPerf.report() (console.table).
+   * Modules opt in by calling __dcPerf.crawl('id', nodes) / __dcPerf.pass('id', fn) — guarded so
+   * they no-op (and cost nothing) when the harness is off or absent in the public build.
+   */
+  (function dcPerfHarness() {
+    var ON = false, stats = {};
+    function slot(label) { return stats[label] || (stats[label] = { crawls: 0, nodes: 0, passes: 0, totalMs: 0, maxMs: 0 }); }
+    function now() { try { return (window.performance && performance.now) ? performance.now() : Date.now(); } catch (e) { return 0; } }
+    var api = {
+      on: function () { ON = true; try { console.log("[dcPerf] ON — interact, then __dcPerf.report()"); } catch (e) {} return true; },
+      off: function () { ON = false; return false; },
+      isOn: function () { return ON; },
+      reset: function () { stats = {}; return true; },
+      crawl: function (label, nodes) { if (!ON) return; var s = slot(label); s.crawls++; if (typeof nodes === "number") s.nodes += nodes; },
+      // time one decorate pass:  __dcPerf.pass('ir', function(){ …decorate… })
+      pass: function (label, fn) { if (!ON) return fn(); var t = now(); try { return fn(); } finally { var d = now() - t; var s = slot(label); s.passes++; s.totalMs += d; if (d > s.maxMs) s.maxMs = d; } },
+      report: function () {
+        var rows = Object.keys(stats).map(function (k) { var s = stats[k]; return { module: k, crawls: s.crawls, nodesVisited: s.nodes, passes: s.passes, avgMs: s.passes ? +(s.totalMs / s.passes).toFixed(2) : 0, maxMs: +s.maxMs.toFixed(2) }; });
+        try { console.table(rows); } catch (e) { try { console.log(rows); } catch (e2) {} }
+        return rows;
+      }
+    };
+    try { window.__dcPerf = api; } catch (e) {}
+  })();
+  /* @strip:end */
+
+  /* @strip:start dev
+   * ── UNIVERSAL "API names" (dev-only PROTOTYPE) — one button, two tiers ──────────────────────
+   * Answers the "show API names everywhere without a probe" idea. Honest tension: every surface
+   * stores the api in a DIFFERENT prop, so exact-everywhere-no-probe can't fully exist. Design:
+   *   TIER 1 (curated): a REGISTRY over the EXACT probed readers already in this file — it just
+   *     references their public toggles (Data Graph / Identity Resolution / Segment). One button
+   *     drives whichever fits the current page. Exact, zero guessing, reuses shipped code.
+   *   TIER 2 (generic best-effort): on pages we've NEVER probed, crawl ONCE and read a UNION
+   *     VOCABULARY of the prop names our curated readers proved exist across SF's component
+   *     library (objectApiName / fieldApiName / developerName / value / fieldId / node.* / entity.*
+   *     …). SF reuses these names, so un-probed pages built from the same components light up —
+   *     genuinely "without a probe". Marked "best-effort — verify" (dashed chip) because without a
+   *     probe we can't guarantee which prop is authoritative (the duplicate-label trap). The probe
+   *     stays the UPGRADE PATH: if a generic page proves useful, probe it once → promote to curated.
+   * ONE controller: window.__dcToggleUniversalApi() delegates to curated readers if any match the
+   *   page, else runs the generic decorator. A single left-edge button (distinct teal, so it never
+   *   collides with the purple detail FAB bottom-right or the filter launcher bottom-left).
+   * VDI-safe: default OFF; bounded single crawl (node cap, logged if capped — no silent truncation);
+   *   signature dirty-check; observer disconnect-while-writing + debounce; reference-tracked chips;
+   *   decorate only visible; teardown clears everything; on-demand only. Uses __dcPerf when on.
+   */
+  (function dcUniversalApiModule() {
+    function onDataCloud() {
+      try {
+        var h = location.href;
+        return /lightning\/(n|r|o|cmp)\//i.test(h) && (
+          /standard-(DataModel|DataStream|DataLakeObject|Segment|CdpDataSpace|IdentityResolution|DataCloud)/i.test(h) ||
+          /\/r\/(DataModelObject|DataLakeObjectInstance|DataStream|Segment|IdentityResolution|DataSpace|MktSegment)\//i.test(h) ||
+          /c__objectApiName=/i.test(h)
+        );
+      } catch (e) { return false; }
+    }
+    try { if (!onDataCloud()) return; } catch (e) { return; }
+
+    function uSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // ── TIER 1: registry over the EXISTING curated readers (reference their toggles; never redefine) ──
+    // `available` = the reader's module actually loaded on this page (its toggle global exists).
+    var REG = [
+      { id: "dg",  label: "Data Graph",          matches: function (h) { return /standard-DataModel/i.test(h) && /displayType=graph|c__displayType=graph/i.test(h); }, toggleName: "__dcToggleDgApi", isOnName: "__dcDgApiIsOn" },
+      { id: "ir",  label: "Identity Resolution", matches: function (h) { return /\/r\/IdentityResolution\//i.test(h); }, toggleName: "__dcToggleIrApi", isOnName: "__dcIrApiIsOn" },
+      { id: "seg", label: "Segment",             matches: function (h) { return /\/r\/Segment\//i.test(h) || /segmentWizard/i.test(h); }, toggleName: "__dcToggleSegApi", isOnName: "__dcSegApiIsOn" }
+    ];
+    function curatedActive() {
+      var h = location.href;
+      return REG.filter(function (r) { try { return r.matches(h) && typeof window[r.toggleName] === "function"; } catch (e) { return false; } });
+    }
+    function curatedIsOn(list) { return list.some(function (r) { try { return typeof window[r.isOnName] === "function" && window[r.isOnName](); } catch (e) { return false; } }); }
+
+    // ── TIER 2: generic best-effort decorator ───────────────────────────────────────────────────
+    // "Looks like an API name": no spaces, identifier-ish, and either a known Data Cloud suffix or
+    // contains "__". Conservative on length to avoid chipping GUIDs/sentences.
+    var API_SUFFIX = /__(c|dlm|dll|dls|cio|e|mdt|r|b|x|hd|s)$/i;
+    function looksApi(v) {
+      if (typeof v !== "string") return false;
+      var s = v.trim();
+      if (s.length < 3 || s.length > 120) return false;
+      if (/\s/.test(s)) return false;
+      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)?$/.test(s)) return false;
+      return API_SUFFIX.test(s) || /__/.test(s);
+    }
+    function preferApi(a, b) {
+      if (!a) return b; if (!b) return a;
+      var aw = API_SUFFIX.test(a), bw = API_SUFFIX.test(b);
+      if (aw !== bw) return aw ? a : b;          // a recognized suffix beats a bare "__"
+      return b.length > a.length ? b : a;        // else the more specific (longer) one
+    }
+    // The UNION VOCABULARY — the exact prop names our curated readers proved exist across surfaces.
+    var DIRECT = ["objectApiName", "fieldApiName", "developerName", "apiName", "fullName", "devName", "fieldDeveloperName", "entityApiName", "fieldId", "value"];
+    var OBJS = ["node", "attributeNode", "groupNode", "entity", "subject", "filter", "filterGroup"];
+    var SUB = ["objectApiName", "fieldApiName", "apiName", "developerName", "devName", "id", "value", "name"];
+    function bestApiOn(el) {
+      var best = null, i, v;
+      for (i = 0; i < DIRECT.length; i++) { v = uSafe(el, DIRECT[i]); if (looksApi(v)) best = preferApi(best, String(v)); }
+      for (i = 0; i < OBJS.length; i++) {
+        var o = uSafe(el, OBJS[i]);
+        if (o && typeof o === "object" && o.nodeType === undefined) {   // a data object, not a DOM node
+          for (var j = 0; j < SUB.length; j++) { v = uSafe(o, SUB[j]); if (looksApi(v)) best = preferApi(best, String(v)); }
+        }
+      }
+      return best;
+    }
+    // First short visible text leaf inside the element (its label), to anchor the chip next to.
+    // Returns null if none → we SKIP (don't spray chips onto containers with no label).
+    function genLabelHost(el) {
+      var hit = null;
+      try {
+        (function walk(r, d) {
+          if (hit || !r || d > 6 || !r.querySelectorAll) return;
+          var els = r.querySelectorAll("*");
+          for (var i = 0; i < els.length && !hit; i++) {
+            var e = els[i];
+            if (e.classList && e.classList.contains("dc-uni-api")) continue;
+            var cn = e.childNodes || [];
+            for (var k = 0; k < cn.length; k++) {
+              if (cn[k].nodeType === 3) { var txt = (cn[k].nodeValue || "").trim(); if (txt.length >= 1 && txt.length <= 60 && !looksApi(txt)) { hit = e; break; } }
+            }
+            var sr = null; try { sr = e.shadowRoot; } catch (ex) {}
+            if (sr && !hit) walk(sr, d + 1);
+          }
+        })(el.shadowRoot || el, 0);
+      } catch (e) {}
+      return hit;
+    }
+
+    var GEN_ON = false, _genSpans = [], _genSig = null, _genObs = null, _genT = null, _genWriting = false, _genCapped = false;
+    var GEN_MAX_NODES = 8000, GEN_MAX_CHIPS = 250;
+    function genClear() { for (var i = 0; i < _genSpans.length; i++) { try { _genSpans[i].remove(); } catch (e) {} } _genSpans = []; }
+    function genInject(host, api) {
+      if (!host || !api) return;
+      try {
+        var sp = document.createElement("span");
+        sp.className = "dc-uni-api";
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "baseline");
+        s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace"); s("color", "#0f766e");
+        s("background", "#f0fdfa"); s("border", "1px dashed #5eead4"); s("border-radius", "4px");
+        s("padding", "0 5px"); s("white-space", "nowrap"); s("max-width", "320px"); s("overflow", "hidden");
+        s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text"); s("vertical-align", "middle");
+        sp._uApi = String(api); sp.textContent = String(api);
+        try { sp.setAttribute("title", api + "  ·  best-effort (unverified) — click to copy"); } catch (e) {}
+        sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
+        sp.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          var t = sp._uApi, restore = t;
+          function flash() { sp.textContent = "✓ Copied"; setTimeout(function () { sp.textContent = restore; }, 900); }
+          try { navigator.clipboard.writeText(t).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+          catch (e3) { flash(); }
+        }, true);
+        host.appendChild(sp); _genSpans.push(sp);
+      } catch (e) {}
+    }
+    // ONE bounded crawl → list of {host, api}. Caps node visits + chips; records both for honesty.
+    function genCollect() {
+      var cands = [], seenHost = [], visited = 0; _genCapped = false;
+      (function walk(root, d) {
+        if (!root || d > 25 || visited > GEN_MAX_NODES) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length; i++) {
+          if (visited++ > GEN_MAX_NODES) { _genCapped = true; return; }
+          var el = q[i], tg = ""; try { tg = (el.tagName || "").toLowerCase(); } catch (e) {}
+          if (tg.indexOf("-") > 0 && isVisible(el)) {
+            var api = bestApiOn(el);
+            if (api) {
+              var host = genLabelHost(el);
+              if (host && seenHost.indexOf(host) < 0 && !(host.querySelector && host.querySelector(".dc-uni-api"))) {
+                if (cands.length < GEN_MAX_CHIPS) { cands.push({ host: host, api: api }); seenHost.push(host); }
+                else _genCapped = true;
+              }
+            }
+          }
+          var sr = null; try { sr = el.shadowRoot; } catch (e) {}
+          if (sr) walk(sr, d + 1);
+        }
+      })(document, 0);
+      try { if (window.__dcPerf) window.__dcPerf.crawl("universal-generic", visited); } catch (e) {}
+      if (_genCapped) { try { console.warn("[dcUniversal] generic scan hit a cap (" + GEN_MAX_NODES + " nodes / " + GEN_MAX_CHIPS + " chips) — results are PARTIAL on this page."); } catch (e) {} }
+      return cands;
+    }
+    function genSignature(cands) { var p = []; for (var i = 0; i < cands.length; i++) p.push(cands[i].api); p.sort(); return p.join("|"); }
+    function genRun(force) {
+      if (!GEN_ON) return;
+      var cands = genCollect();
+      var sig = genSignature(cands);
+      if (!force && sig === _genSig && _genSpans.length) return;
+      _genSig = sig;
+      _genWriting = true;
+      try { if (_genObs) _genObs.disconnect(); } catch (e) {}
+      try {
+        genClear();
+        if (window.__dcPerf) window.__dcPerf.pass("universal-generic", function () { for (var i = 0; i < cands.length; i++) genInject(cands[i].host, cands[i].api); });
+        else for (var i = 0; i < cands.length; i++) genInject(cands[i].host, cands[i].api);
+      } catch (e) {}
+      try { if (_genObs && GEN_ON) _genObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _genWriting = false;
+    }
+    function genSchedule() { if (_genWriting || _genT) return; _genT = setTimeout(function () { _genT = null; genRun(false); }, 350); }
+    function genStart() {
+      GEN_ON = true;
+      if (!_genObs) { try { _genObs = new MutationObserver(genSchedule); } catch (e) {} }
+      genRun(true);
+    }
+    function genStop() { GEN_ON = false; try { if (_genObs) _genObs.disconnect(); } catch (e) {} _genSig = null; genClear(); }
+
+    // ── ONE controller: curated if the page has one, else generic best-effort ────────────────────
+    function uniIsOn() { var cur = curatedActive(); return cur.length ? curatedIsOn(cur) : GEN_ON; }
+    function uniToggle() {
+      var cur = curatedActive();
+      if (cur.length) {
+        var turnOn = !curatedIsOn(cur);     // drive ALL curated readers on the page to the same state
+        cur.forEach(function (r) { try { var on = window[r.isOnName] && window[r.isOnName](); if (on !== turnOn) window[r.toggleName](); } catch (e) {} });
+        return turnOn;
+      }
+      if (GEN_ON) genStop(); else genStart();
+      return GEN_ON;
+    }
+    try {
+      window.__dcToggleUniversalApi = function () { return uniToggle(); };
+      window.__dcUniversalApiIsOn = function () { return uniIsOn(); };
+      window.__dcApiRegistry = function () { return REG.map(function (r) { return { id: r.id, label: r.label, active: (r.matches(location.href) && typeof window[r.toggleName] === "function") }; }); };
+      window.__dcUniversalMode = function () { return curatedActive().length ? "curated" : "generic"; };
+    } catch (e) {}
+
+    // One-time cleanup on load (a prior instance's leftover generic chips).
+    try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-uni-api")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+
+    // ── Left-edge launcher (teal) — distinct position/colour, never collides with other FABs ─────
+    try {
+      if (!document.getElementById("dc-uni-bar")) {
+        var cur0 = curatedActive();
+        var mode = cur0.length ? "curated" : "generic";
+        var wrap = document.createElement("div"); wrap.id = "dc-uni-bar";
+        wrap.style.cssText = "position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:2147483646;display:flex;align-items:center;gap:0;";
+        var tab = document.createElement("button");
+        tab.title = mode === "curated"
+          ? "API names — show the exact (probed) API names for this page's fields/objects"
+          : "API names (best-effort) — this page isn't probed; show likely API names read from component data. Verify before relying on them.";
+        tab.style.cssText = "border:none;cursor:pointer;background:linear-gradient(135deg,#0d9488,#0f766e);color:#fff;font:600 11px/1 -apple-system,sans-serif;padding:12px 8px;border-radius:0 10px 10px 0;box-shadow:0 4px 18px rgba(13,148,136,.45);writing-mode:vertical-rl;letter-spacing:.4px;";
+        function uniLabel() {
+          var on = uniIsOn();
+          tab.textContent = (mode === "generic" ? "API ±" : "API") + (on ? "  ●" : "");
+        }
+        uniLabel();
+        tab.onclick = function (e) {
+          e.stopPropagation();
+          try { uniToggle(); } catch (er) {}
+          uniLabel();
+        };
+        wrap.appendChild(tab);
+        (document.body || document.documentElement).appendChild(wrap);
+      }
+    } catch (e) {}
+  })();
+  /* @strip:end */
+
+  /* @strip:start dev
    * ── DATA SPACE: export a DLO's membership filters to CSV / Excel / Sheets (dev-only) ────────
    * On a Data Space page, each member object (DLO) can have a membership filter — grouped
    * conditions, exactly like a segment. SF lets you build it but NOT take it with you. This
