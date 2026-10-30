@@ -19645,16 +19645,20 @@ processJSON();
         var sp = document.createElement("span");
         sp.className = "dc-ir-api";
         var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
-        // BELOW the label on its OWN line (reported: inline-right looked bad when a label wraps to
-        // two lines — the chip floated mid-height beside it). display:block breaks it under the
-        // label; a small margin-top is the only gap (no extra spacing). font-size:INHERIT matches
-        // the label's size exactly (per request); width:max-content so the pill hugs the api text
-        // instead of stretching across the row. Monospace + readable slate so it reads as code.
-        s("display", "block"); s("margin", "2px 0 0 0"); s("width", "max-content"); s("max-width", "100%");
+        // BELOW the label on its OWN line. The label cell is a FLEX container, so display:block
+        // alone did NOT drop the chip under the label — a block child just becomes another flex
+        // item sitting IN the row (that's why it stayed beside, vertically centred, on wrapped
+        // labels). The reliable cross-layout break: flex-basis:100% + width:100% forces a wrap in a
+        // FLEX row, and display:block handles a normal/inline host — plus we set the host to
+        // flex-wrap:wrap (ignored when the host isn't flex). font-size:INHERIT matches the label
+        // size (per request); a 2px top margin is the only gap (no extra spacing).
+        s("display", "block"); s("flex", "0 0 100%"); s("flex-basis", "100%"); s("width", "100%"); s("margin", "2px 0 0 0");
         s("font-family", "'SF Mono',Menlo,Consolas,monospace"); s("font-size", "inherit"); s("line-height", "1.3");
-        s("color", "#475569"); s("background", "#eef2f8"); s("border", "1px solid #dfe5ef"); s("border-radius", "4px");
-        s("padding", "0 5px"); s("white-space", "nowrap"); s("overflow", "hidden");
+        s("color", "#475569"); s("background", "transparent"); s("border", "0");
+        s("padding", "0"); s("white-space", "nowrap"); s("overflow", "hidden");
         s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
+        // make the chip land under the label whether the host is flex (wrap) or normal flow
+        try { host.style.setProperty("flex-wrap", "wrap", "important"); } catch (e) {}
         sp._irApi = String(apiText); sp.textContent = String(apiText);
         try { sp.setAttribute("title", apiText + "  ·  click to copy"); } catch (e) {}
         sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
