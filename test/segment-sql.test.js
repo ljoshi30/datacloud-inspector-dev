@@ -70,7 +70,7 @@ function segmentTreeToSql(tree, segName, activeTab, primaryObj) {
       var n = (String(node.values || "").match(/\d+/) || ["1"])[0];
       return "( SELECT COUNT(*) FROM " + obj + inner + innerPad + "/* TODO: correlate to primary */ ) " + aggCmp(node.operator) + " " + n;
     }
-    if (node.type === "nested-segment") return "EXISTS (/* member of segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */)";
+    if (node.type === "nested-segment") { flags.hasNested = true; return "EXISTS (/* member of segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */)"; }
     return "/* unsupported condition */";
   }
   function walk(node, depth) {
@@ -84,30 +84,53 @@ function segmentTreeToSql(tree, segName, activeTab, primaryObj) {
     }
     return condSql(node, "  ".repeat(depth));
   }
-  var where = walk(tree, 0);
-  var objList = Object.keys(flags.objs).filter(Boolean);
+  var tabKind = /rank/i.test(String(activeTab || "")) ? "rank" : (/exclude/i.test(String(activeTab || "")) ? "exclude" : "include");
   function firstSimpleObj(node) {
     if (!node) return "";
     if (node.type === "simple") return node.objApi || "";
     if (node.type === "set") { for (var i = 0; i < (node.items || []).length; i++) { var o = firstSimpleObj(node.items[i]); if (o) return o; } }
     return "";
   }
+  if (tabKind === "rank") {
+    var rankLines = (tree && tree.items || []).map(function (it) {
+      var obj = it.objApi || it.objectLabel || "/* object */";
+      var rankField = it.fieldApi || it.operator || it.fieldLabel || "/* rank field */";
+      var rankType = it.fieldLabel || "";
+      var dir = /low|asc|bottom|smallest/i.test(rankType) ? "ASC" : "DESC";
+      var lim = (String(it.values || "").match(/\d+/) || [""])[0];
+      return "-- " + obj + ": rank by " + rankField + " (" + (rankType || dir) + ")" + (lim ? ", keep " + lim : "") + "\n" +
+             "SELECT * FROM " + obj + "\nORDER BY " + rankField + " " + dir + (lim ? "\nLIMIT " + lim : "") + ";";
+    });
+    var rankHdr = "-- ⚠️ RANK & LIMIT — not a filter. Each ruleset picks top/bottom N by a field,\n" +
+                  "-- applied SEQUENTIALLY (each over the previous ruleset's results). Illustrative only.\n" +
+                  "-- Segment: " + (segName || "") + "  (tab: Rank and Limit)\n";
+    return rankLines.length ? rankHdr + rankLines.join("\n\n") : rankHdr + "-- (no rank/limit rulesets)";
+  }
+  var where = walk(tree, 0);
+  var objList = Object.keys(flags.objs).filter(Boolean);
   var primeObj = primaryObj || firstSimpleObj(tree) || objList[0] || null;
   var multiObject = objList.filter(function (o) { return o !== primeObj; }).length > 0;
-  var isComplex = flags.hasAgg || flags.hasCi || multiObject;
+  var isComplex = flags.hasAgg || flags.hasCi || flags.hasNested || multiObject;
   var fromObj = primeObj;
+  var whereClause = (tabKind === "exclude") ? "NOT (\n  " + where + "\n)" : where;
+  var reasons = [];
+  if (multiObject) reasons.push("multiple objects");
+  if (flags.hasAgg) reasons.push("aggregations");
+  if (flags.hasCi) reasons.push("calculated insights");
+  if (flags.hasNested) reasons.push("nested segment references");
   var banner = isComplex
-    ? ("-- ⚠️ LOGIC VIEW — NOT runnable as-is. This segment spans multiple objects/aggregations/\n" +
-       "-- calculated insights, whose JOIN relationships are NOT part of the segment criteria, so a\n" +
-       "-- single runnable SQL can't be reconstructed. Use this to READ the logic, not to execute.\n")
+    ? ("-- ⚠️ LOGIC VIEW — NOT runnable as-is (" + reasons.join(", ") + "). The join relationships /\n" +
+       "-- nested-segment / CI definitions are NOT part of the segment criteria, so a single runnable\n" +
+       "-- SQL can't be reconstructed. Use this to READ the logic, not to execute.\n")
     : ("-- APPROXIMATE SQL — single-object segment; verify before running.\n");
   var header = banner +
-               "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") + "\n" +
+               "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") +
+               (tabKind === "exclude" ? "  [EXCLUDE → condition is NEGATED]" : "") + "\n" +
                "-- Real API names used where available; [Label] = unresolved label (not an API).\n" +
                (objList.length ? "-- Objects referenced: " + objList.join(", ") + "\n" : "");
   if (!where) return header + "-- (no conditions on this tab)";
   var fromLine = fromObj ? ("FROM " + fromObj) : "FROM /* segment's primary object (Segment On) */";
-  return header + "SELECT *\n" + fromLine + "\nWHERE " + where + ";";
+  return header + "SELECT *\n" + fromLine + "\nWHERE " + whereClause + ";";
 }
 
 console.log("\n1. SINGLE-OBJECT segment → ~runnable, real FROM, no logic-view banner");
@@ -165,6 +188,40 @@ console.log("\n5. honesty + safety: labels, quoting, empty");
   ok("empty tree → honest 'no conditions'", /no conditions on this tab/.test(segmentTreeToSql({ type:"set", items:[] }, "s")));
 }
 
+console.log("\n5b. nested-segment forces LOGIC VIEW (NOT 'single-object runnable') — the reported mislabel");
+{
+  var tree = { type: "set", join: "AND", items: [
+    { type: "simple", objApi: "TDI_UnifiedIndividualApp6__dlm", fieldApi: "TDI_Account_Multiline__c", operator: "is equal to", values: "M" },
+    { type: "simple", objApi: "TDI_UnifiedIndividualApp6__dlm", fieldApi: "TDI_Is_Active_Customer__c", operator: "is true", values: "" },
+    { type: "nested-segment", objectLabel: "SF_PM_GI_TRGT__Cust Mkt Contact Ind", fieldLabel: "Use Last Published Membership" }
+  ] };
+  var sql = segmentTreeToSql(tree, "SF_PM_GI_TRGT__Multiline", "Include");
+  ok("a nested-segment reference → LOGIC VIEW banner (no longer mislabeled 'single-object; verify')",
+    /LOGIC VIEW — NOT runnable as-is \(nested segment references\)/.test(sql) && !/single-object segment; verify/.test(sql));
+  ok("still shows the EXISTS nested marker", /EXISTS \(\/\* member of segment: SF_PM_GI_TRGT__Cust Mkt Contact Ind/.test(sql));
+}
+
+console.log("\n5c. EXCLUDE tab negates the condition (remove-these semantics)");
+{
+  var tree = { type: "set", items: [{ type: "simple", objApi: "P__dlm", fieldApi: "x__c", operator: "is true", values: "" }] };
+  var inc = segmentTreeToSql(tree, "s", "Include");
+  var exc = segmentTreeToSql(tree, "s", "Exclude");
+  ok("Include → plain WHERE", /WHERE P__dlm\.x__c = TRUE/.test(inc) && !/NOT \(/.test(inc));
+  ok("Exclude → WHERE NOT ( … ) + [EXCLUDE → condition is NEGATED] note", /WHERE NOT \(/.test(exc) && /\[EXCLUDE → condition is NEGATED\]/.test(exc));
+}
+
+console.log("\n5d. RANK AND LIMIT is ORDER BY / LIMIT, NOT a WHERE filter (was producing garbage)");
+{
+  // rank rows: fieldLabel = rank direction, operator = rank field, values = "Limit: N"
+  var tree = { type: "set", join: "SEQ", items: [
+    { type: "simple", objApi: "TDI_Ind__dlm", fieldApi: "Score__c", fieldLabel: "Highest", operator: "", values: "Limit: 1000", subFilters: [] }
+  ] };
+  var sql = segmentTreeToSql(tree, "s", "Rank and Limit");
+  ok("renders ORDER BY + LIMIT, not WHERE", /ORDER BY Score__c DESC/.test(sql) && /LIMIT 1000/.test(sql) && !/WHERE/.test(sql));
+  ok("clearly flagged RANK & LIMIT — not a filter", /RANK & LIMIT — not a filter/.test(sql));
+  ok("'Lowest' direction → ASC", /ORDER BY .* ASC/.test(segmentTreeToSql({ type:"set", items:[{type:"simple",objApi:"O__dlm",fieldApi:"V__c",fieldLabel:"Lowest",values:"Limit: 5"}] }, "s", "Rank and Limit")));
+}
+
 console.log("\n6. source presence — fixed function wired dev-only into the segment export");
 {
   const fs = require("fs"), path = require("path");
@@ -174,7 +231,9 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
   ok("segmentTreeToSql present (takes primaryObj)", /function segmentTreeToSql\(tree, segName, activeTab, primaryObj\)/.test(src));
   ok("REAL FROM table (no '/* primary segmented object */' placeholder anymore)", /FROM " \+ fromObj/.test(src) && !/FROM \/\* primary segmented object \*\//.test(src));
   ok("aggregation = COUNT(*) subquery + threshold op (fixes 'Count(table WHERE) At Least N')", /SELECT COUNT\(\*\) FROM " \+ obj/.test(src) && /function aggCmp/.test(src) && /at least/.test(src) && /return ">="/.test(src));
-  ok("complexity detection → LOGIC VIEW banner for multi-object/agg/CI", /var isComplex = flags\.hasAgg \|\| flags\.hasCi \|\| multiObject/.test(src) && /LOGIC VIEW — NOT runnable as-is/.test(src));
+  ok("complexity detection → LOGIC VIEW banner for multi-object/agg/CI/NESTED", /var isComplex = flags\.hasAgg \|\| flags\.hasCi \|\| flags\.hasNested \|\| multiObject/.test(src) && /LOGIC VIEW — NOT runnable as-is/.test(src));
+  ok("EXCLUDE tab negates (WHERE NOT (...))", /tabKind === "exclude"\) \? "NOT \(/.test(src) && /\[EXCLUDE → condition is NEGATED\]/.test(src));
+  ok("RANK & LIMIT handled as ORDER BY/LIMIT, not WHERE", /tabKind === "rank"/.test(src) && /ORDER BY " \+ rankField/.test(src) && /RANK & LIMIT — not a filter/.test(src));
   ok("primary object derived from first top-level simple condition when not passed", /function firstSimpleObj/.test(src));
   ok("never fakes an api — [Label] fallback", /"\[" \+ node\.objectLabel \+ "\]"/.test(src) && /not an API/.test(src));
   ok("caller passes a primary-object hint only when 'Segment On' looks like an api", /primaryHint = \(meta && \/__\(dlm\|dll\|dls\|c\|cio\)\$\/i\.test/.test(src) && /segmentTreeToSql\(d\.tree, segName, currentModalTab, primaryHint\)/.test(src));

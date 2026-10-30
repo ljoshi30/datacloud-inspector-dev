@@ -5488,7 +5488,7 @@
         var n = (String(node.values || "").match(/\d+/) || ["1"])[0];
         return "( SELECT COUNT(*) FROM " + obj + inner + innerPad + "/* TODO: correlate to primary */ ) " + aggCmp(node.operator) + " " + n;
       }
-      if (node.type === "nested-segment") return "EXISTS (/* member of segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */)";
+      if (node.type === "nested-segment") { flags.hasNested = true; return "EXISTS (/* member of segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */)"; }
       return "/* unsupported condition */";
     }
     function walk(node, depth) {
@@ -5502,35 +5502,63 @@
       }
       return condSql(node, "  ".repeat(depth));
     }
-    var where = walk(tree, 0);
+    var tabKind = /rank/i.test(String(activeTab || "")) ? "rank" : (/exclude/i.test(String(activeTab || "")) ? "exclude" : "include");
 
-    // Decide runnability HONESTLY. The primary object = the one the TOP-LEVEL simple conditions sit
-    // on (passed in as primaryObj when known, else the first simple condition's objApi). Only itself
-    // referenced + no agg/CI → reasonably runnable. Else it's a logic view (joins/CIs unknowable).
-    var objList = Object.keys(flags.objs).filter(Boolean);
     function firstSimpleObj(node) {
       if (!node) return "";
       if (node.type === "simple") return node.objApi || "";
       if (node.type === "set") { for (var i = 0; i < (node.items || []).length; i++) { var o = firstSimpleObj(node.items[i]); if (o) return o; } }
       return "";
     }
+
+    // ── RANK & LIMIT is a DIFFERENT shape (rank type / rank field / "Limit: N", joined SEQ) — NOT a
+    //    WHERE clause. Render it as ORDER BY … LIMIT N per ruleset, clearly marked, never as filters.
+    if (tabKind === "rank") {
+      var rankLines = (tree && tree.items || []).map(function (it) {
+        var obj = it.objApi || it.objectLabel || "/* object */";
+        var rankField = it.fieldApi || it.operator || it.fieldLabel || "/* rank field */";
+        var rankType = it.fieldLabel || "";   // e.g. "Highest"/"Lowest" (direction)
+        var dir = /low|asc|bottom|smallest/i.test(rankType) ? "ASC" : "DESC";
+        var lim = (String(it.values || "").match(/\d+/) || [""])[0];
+        return "-- " + obj + ": rank by " + rankField + " (" + (rankType || dir) + ")" + (lim ? ", keep " + lim : "") + "\n" +
+               "SELECT * FROM " + obj + "\nORDER BY " + rankField + " " + dir + (lim ? "\nLIMIT " + lim : "") + ";";
+      });
+      var rankHdr = "-- ⚠️ RANK & LIMIT — not a filter. Each ruleset picks top/bottom N by a field,\n" +
+                    "-- applied SEQUENTIALLY (each over the previous ruleset's results). Illustrative only.\n" +
+                    "-- Segment: " + (segName || "") + "  (tab: Rank and Limit)\n";
+      return rankLines.length ? rankHdr + rankLines.join("\n\n") : rankHdr + "-- (no rank/limit rulesets)";
+    }
+
+    var where = walk(tree, 0);
+
+    // Decide runnability HONESTLY. nested-segment / aggregation / CI / multi-object → NOT runnable.
+    var objList = Object.keys(flags.objs).filter(Boolean);
     var primeObj = primaryObj || firstSimpleObj(tree) || objList[0] || null;
     var multiObject = objList.filter(function (o) { return o !== primeObj; }).length > 0;
-    var isComplex = flags.hasAgg || flags.hasCi || multiObject;
+    var isComplex = flags.hasAgg || flags.hasCi || flags.hasNested || multiObject;
     var fromObj = primeObj;
 
+    // EXCLUDE tab = people to REMOVE → the condition must be NEGATED (NOT (...)).
+    var whereClause = (tabKind === "exclude") ? "NOT (\n  " + where + "\n)" : where;
+
+    var reasons = [];
+    if (multiObject) reasons.push("multiple objects");
+    if (flags.hasAgg) reasons.push("aggregations");
+    if (flags.hasCi) reasons.push("calculated insights");
+    if (flags.hasNested) reasons.push("nested segment references");
     var banner = isComplex
-      ? ("-- ⚠️ LOGIC VIEW — NOT runnable as-is. This segment spans multiple objects/aggregations/\n" +
-         "-- calculated insights, whose JOIN relationships are NOT part of the segment criteria, so a\n" +
-         "-- single runnable SQL can't be reconstructed. Use this to READ the logic, not to execute.\n")
+      ? ("-- ⚠️ LOGIC VIEW — NOT runnable as-is (" + reasons.join(", ") + "). The join relationships /\n" +
+         "-- nested-segment / CI definitions are NOT part of the segment criteria, so a single runnable\n" +
+         "-- SQL can't be reconstructed. Use this to READ the logic, not to execute.\n")
       : ("-- APPROXIMATE SQL — single-object segment; verify before running.\n");
     var header = banner +
-                 "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") + "\n" +
+                 "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") +
+                 (tabKind === "exclude" ? "  [EXCLUDE → condition is NEGATED]" : "") + "\n" +
                  "-- Real API names used where available; [Label] = unresolved label (not an API).\n" +
                  (objList.length ? "-- Objects referenced: " + objList.join(", ") + "\n" : "");
     if (!where) return header + "-- (no conditions on this tab)";
     var fromLine = fromObj ? ("FROM " + fromObj) : "FROM /* segment's primary object (Segment On) */";
-    return header + "SELECT *\n" + fromLine + "\nWHERE " + where + ";";
+    return header + "SELECT *\n" + fromLine + "\nWHERE " + whereClause + ";";
   }
 
   // ── Segment export modal ──────────────────────────────────────────────────
@@ -21446,7 +21474,7 @@ processJSON();
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.645"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.647"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
