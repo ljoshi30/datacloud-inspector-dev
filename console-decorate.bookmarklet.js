@@ -19745,13 +19745,19 @@ processJSON();
         var host = irLabelHost(sec, ent.label) ; if (!host) return;   // only when the header label is on screen
         irInject(host, String(ent.id));
       });
-      // MATCH CRITERIA modal: each criterion row has "Data Model Object" + "Field" comboboxes whose
-      // .value IS the api (TDI_ContactPointEmail__dlm / EmailAddress__c) — proven by probe v50. The
-      // "Match Method" combobox's value (EXACT/FUZZY) is NOT an api → skipped via the __ check.
+      // MATCH CRITERIA + ADVANCED (Cross-Field Match) modals: each row has api-bearing comboboxes —
+      // "Data Model Object", "Field", and (advanced "Match to" section) "Match Field". Their .value
+      // IS the api (TDI_ContactPointEmail__dlm / EmailAddress__c / BirthDtYr__c) — proven probe v50.
+      // The "Match Method"/"Scheduled Match Method" combobox's value (EXACT/FUZZY) is NOT an api →
+      // skipped by BOTH the label whitelist (method excluded) AND the __ value check (belt+braces).
       _irBuckets.combos.forEach(function (cb) {
         if (!isVisible(cb)) return;
         var lbl = ""; try { lbl = String(cb.label || ""); } catch (e) {}
-        if (!/^(data model object|field)$/i.test(lbl.trim())) return;   // only the api-bearing dropdowns
+        lbl = lbl.trim();
+        // api-bearing dropdowns only: DMO object, plain Field, or the advanced "Match Field".
+        // Explicitly EXCLUDE any "…Match Method" (Scheduled Match Method / Match Method) label.
+        if (/match method/i.test(lbl)) return;
+        if (!/^(data model object|field|match field)$/i.test(lbl)) return;
         var val = ""; try { val = String(cb.value || ""); } catch (e) {}
         if (!val || !/__/.test(val)) return;                             // api-looking only (skips EXACT etc.)
         irInject(cb.parentElement || cb, val);                           // line under the dropdown
