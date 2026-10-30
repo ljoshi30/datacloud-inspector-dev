@@ -5939,7 +5939,7 @@ processJSON();
   (function dcUsagePingModule() {
     var PING_ENDPOINT = "https://d360-usage.ljoshi30-d360.workers.dev/ping";  // live receiver (Cloudflare Worker + D1)
     var PING_ENABLED  = true;      // LIVE (sign-off + CSP verified). Opt-out + throttle + anonymity still apply.
-    var PING_VERSION  = "1.2.614"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.615"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
