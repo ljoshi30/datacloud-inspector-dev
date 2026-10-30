@@ -1,66 +1,89 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * DOM PROBE v51 — DMO detail Fields table: row rendering, for a VISIBLE
- * Standard/Custom badge. We already read creationType off data[] (readDmoFields),
- * but to anchor a badge on the RIGHT row we must confirm: does rendered <tr> count
- * == data.length (align by index)? is there a stable row key? where is the label
- * cell? and are creationType values actually present per row? Never guess the row
- * mapping — a wrong badge ("Custom" on a standard field) would be a silent bug.
+ * DOM PROBE v52 — Segment condition OPERATOR: find the API ENUM behind the label
+ * ---------------------------------------------------------------------------
+ * The Segment export today writes the operator as the DISPLAYED text ("is equal
+ * to"). The QE team compares exports against the API, which returns an ENUM
+ * ("IS_EQUAL_TO" / "CONTAINS" / "IS_EMPTY_STRING" …). We need to find WHERE that
+ * enum lives on the condition element so we can add an "Operator (API)" column
+ * (like the Data Space export already has). NEVER guess this — read it live.
  *
- * RUN on a DMO detail page with the FIELDS tab showing. Read-only; copies JSON.
+ * Suspect (from an old code comment): a SingleFilterCondition component with
+ *   .comparison._ruleType  (the enum).  We'll look for that AND dump any prop on
+ *   the condition / comparison objects whose value looks like an ENUM.
+ *
+ * RUN on a Segment builder page that HAS at least one condition (ideally one with
+ * a multi-word operator like "is empty" / "is equal to"). Read-only; copies JSON.
  * ═══════════════════════════════════════════════════════════════════════════ */
-(function DomProbe51() {
+(function DomProbe52() {
   "use strict";
   var PANEL_ID = "dc-dom-probe-panel";
   var ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
 
-  var out = { probe: "v51", href: location.href, fieldTables: [], notes: [] };
+  var out = { probe: "v52", href: location.href, conditionTags: {}, conditions: [], notes: [] };
 
-  function eachEl(root, d, fn) { if (!root || d > 24) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i], d); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
+  function eachEl(root, d, fn) { if (!root || d > 26) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { fn(q[i], d); var sr = null; try { sr = q[i].shadowRoot; } catch (e) {} if (sr) eachEl(sr, d + 1, fn); } }
   function tag(el) { return (el.tagName || "").toLowerCase(); }
-  function attrsOf(el) { var o = {}; try { var a = el.attributes; for (var i = 0; i < a.length; i++) o[a[i].name] = String(a[i].value).slice(0, 50); } catch (e) {} return o; }
-
-  function byTag(t) { var o = []; eachEl(document, 0, function (el) { if (tag(el) === t) o.push(el); }); return o; }
-
-  byTag("runtime_cdp-custom-datatable").forEach(function (dt, idx) {
-    var cols = []; try { cols = (dt.columns || []).map(function (c) { return c && (c.fieldName || c.label); }); } catch (e) {}
-    var isFieldTable = false; try { isFieldTable = cols.indexOf("isMapped") >= 0; } catch (e) {}
-    if (!isFieldTable) return;
-    var data = null, keyField = null; try { data = dt.data; } catch (e) {} try { keyField = dt.keyField; } catch (e) {}
-    // rendered data rows
-    var sr = dt.shadowRoot || dt, trs = [], dataTrs = [];
-    try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
-    for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) dataTrs.push(trs[i]); }
-    // first 2 rows: tr attrs (row key?) + each cell's data-label + whether it holds the label text
-    var sample = dataTrs.slice(0, 2).map(function (tr, ri) {
-      var cells = [];
-      try { var cs = tr.querySelectorAll("th,td"); for (var k = 0; k < cs.length; k++) { var c = cs[k]; var dl = ""; try { dl = c.getAttribute("data-label") || ""; } catch (e) {} var t2 = ""; try { t2 = (c.textContent || "").replace(/\s+/g, " ").trim().slice(0, 30); } catch (e) {} cells.push({ i: k, dataLabel: dl, text: t2 }); } } catch (e) {}
-      return { trAttrs: attrsOf(tr), cells: cells, dataAtIndex: (Array.isArray(data) && data[ri]) ? { label: data[ri].label, name: data[ri].name, creationType: data[ri].creationType } : null };
+  function safe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+  // Does a string look like an API enum?  UPPER_SNAKE, or clearly code-ish (no spaces).
+  function looksEnum(v) { return typeof v === "string" && v.length >= 2 && v.length <= 60 && /^[A-Z][A-Z0-9_]+$/.test(v); }
+  // Shallow dump of own-enumerable + a few known getters, capturing enum-looking values.
+  function dumpEnumish(obj, depth) {
+    var found = {};
+    if (!obj || typeof obj !== "object" || depth > 2) return found;
+    var keys = [];
+    try { keys = Object.keys(obj); } catch (e) {}
+    // also probe a few named props our comment/suspicions point at (getters won't show in keys)
+    ["_ruleType", "ruleType", "operator", "operatorType", "comparisonOperator", "comparison", "filterOperator", "type", "_operator"].forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+    keys.forEach(function (k) {
+      var v = safe(obj, k);
+      if (looksEnum(v)) found[k] = v;
+      else if (v && typeof v === "object" && depth < 2 && (k === "comparison" || k === "_comparison" || k === "rule" || k === "condition")) {
+        var sub = dumpEnumish(v, depth + 1);
+        if (Object.keys(sub).length) found[k] = sub;
+      }
     });
-    var creationTypes = {};
-    try { if (Array.isArray(data)) data.forEach(function (r) { if (r) { var ct = String(r.creationType || "(blank)"); creationTypes[ct] = (creationTypes[ct] || 0) + 1; } }); } catch (e) {}
-    out.fieldTables.push({
-      index: idx, keyField: keyField, columns: cols,
-      dataLen: Array.isArray(data) ? data.length : 0,
-      renderedRowCount: dataTrs.length,
-      ALIGNED: (Array.isArray(data) && dataTrs.length > 0 && dataTrs.length === data.length),
-      creationTypeValues: creationTypes,
-      sampleRows: sample
-    });
+    return found;
+  }
+
+  // Tag census — which condition-ish components are on the page (helps if the tag differs per org).
+  eachEl(document, 0, function (el) {
+    var t = tag(el);
+    if (/condition|comparison|filter|single.*rule|rule.*single/.test(t) && t.indexOf("-") > 0) out.conditionTags[t] = (out.conditionTags[t] || 0) + 1;
   });
 
-  out.notes.push("field tables (isMapped col): " + out.fieldTables.length);
-  var ft = out.fieldTables[0];
-  if (!ft) out.notes.push("No DMO field table found — open a DMO detail page on the FIELDS tab, then re-run.");
-  else {
-    out.notes.push(ft.ALIGNED ? "✓ rendered rows == data length → align by INDEX." : "✗ rendered != data (virtualized?) — need a row key; see sampleRows.trAttrs.");
-    out.notes.push("creationType values seen: " + JSON.stringify(ft.creationTypeValues));
-  }
+  // Likely condition components to inspect for an operator enum.
+  var CAND = ["runtime_cdp-segment-builder-single-filter-condition", "runtime_cdp-segment-builder-condition", "runtime_cdp-segment-builder-comparison-summary", "runtime_cdp-segment-builder-comparison"];
+  var seen = [];
+  eachEl(document, 0, function (el) {
+    var t = tag(el);
+    var isCand = CAND.indexOf(t) >= 0 || /single-filter-condition|comparison-summary|segment-builder-condition/.test(t);
+    if (!isCand) return;
+    if (seen.length >= 6) return;                      // cap: first few conditions is enough
+    seen.push(el);
+    var rec = { tag: t, enumish: {}, displayedText: "" };
+    // displayed operator text (what the export currently captures) for cross-reference
+    try { rec.displayedText = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80); } catch (e) {}
+    // dump enum-looking props off the element itself + common data holders
+    rec.enumish = dumpEnumish(el, 0);
+    ["comparison", "_comparison", "condition", "_condition", "rule", "_rule", "subject", "value"].forEach(function (holder) {
+      var h = safe(el, holder);
+      if (h && typeof h === "object") { var d = dumpEnumish(h, 1); if (Object.keys(d).length) rec.enumish[holder] = d; }
+    });
+    out.conditions.push(rec);
+  });
+
+  out.notes.push("condition-ish tags seen: " + JSON.stringify(out.conditionTags));
+  out.notes.push("conditions inspected: " + out.conditions.length);
+  var anyEnum = out.conditions.some(function (c) { return Object.keys(c.enumish).length > 0; });
+  out.notes.push(anyEnum
+    ? "✓ enum-looking value(s) found — see conditions[].enumish (that prop path is the Operator API enum)."
+    : "✗ no enum prop found on these elements. The enum may not be in the DOM (operator is label-only) → we'd DERIVE the enum from the label with a lookup map, and SAY it's derived. Send this either way.");
 
   var p = document.createElement("div");
   p.id = PANEL_ID;
-  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(840px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
+  p.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;width:min(860px,96vw);max-height:88vh;overflow:auto;background:#0b1020;color:#d7e0f5;border:1px solid #334;border-radius:10px;padding:14px 16px;font:11px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap;box-shadow:0 20px 60px rgba(0,0,0,.6);";
   var json = JSON.stringify(out, null, 2);
-  p.textContent = "DOM PROBE v51 — DMO field table rows (Standard/Custom badge)\n(copied to clipboard — paste it back)\n\n" + json;
+  p.textContent = "DOM PROBE v52 — Segment operator API enum\n(copied to clipboard — paste it back)\n\n" + json;
   var x = document.createElement("button"); x.textContent = "×"; x.style.cssText = "position:absolute;top:8px;right:10px;background:none;border:none;color:#9fb0c6;font-size:18px;cursor:pointer;"; x.onclick = function () { p.remove(); }; p.appendChild(x);
   document.body.appendChild(p);
   try { navigator.clipboard.writeText(json); } catch (e) {}
