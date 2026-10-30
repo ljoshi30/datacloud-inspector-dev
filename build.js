@@ -31,7 +31,7 @@ const dir = __dirname;
 // One file per feature area (kept separate on purpose — Data Explorer and Query
 // Editor must stay independent, so their test suites stay independent too).
 (function runTests() {
-  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js", "dataspace-filter-export.test.js", "identity-resolution-api.test.js", "dmo-origin-badge.test.js", "vdi-perf-instrumentation.test.js"].forEach(function (name) {
+  ["explorer-logic.test.js", "query-editor-templates.test.js", "mapping-canvas-target-api.test.js", "mapping-canvas-source-api.test.js", "mapping-canvas-ui.test.js", "ext-only-strip.test.js", "ext-autoload.test.js", "bookmarklet-size.test.js", "install-page-public.test.js", "canvas-focus-dmo.test.js", "qe-json-view.test.js", "qe-snapshot-diff.test.js", "qe-fetch-materialize.test.js", "qe-fetch-paging.test.js", "segment-apiname.test.js", "ds-formula-hover.test.js", "dataspace-filter-export.test.js", "identity-resolution-api.test.js", "dmo-origin-badge.test.js", "vdi-perf-instrumentation.test.js", "usage-ping.test.js"].forEach(function (name) {
     const testFile = path.join(dir, "test", name);
     if (!fs.existsSync(testFile)) { console.warn("WARN: test/" + name + " missing — skipping."); return; }
     try {

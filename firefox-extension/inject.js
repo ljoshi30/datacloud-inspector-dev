@@ -21076,6 +21076,83 @@ processJSON();
   // buttons carry titles; the ⧉ open-in-new-tab button carries its own tooltip; API-name/formula
   // hints appear on hover). No global popup on activation.
 
+  /* @strip:start dev
+   * ── USAGE PING (dev-only, INERT by default) — measure REAL active users ─────────────────────
+   * Cloudflare on the install page only counts first-time VISITORS; it can NEVER see people who
+   * already installed and just use the tool (they never revisit that page). This fires ONE
+   * anonymous ping when the tool actually RUNS on a Data Cloud page, so you can count real usage
+   * (incl. returning users) + which features exist — the actual "impact" number.
+   *
+   * ⚠️ SHIPS DISABLED. It transmits NOTHING until ALL of these are cleared by the user:
+   *   1. PING_ENDPOINT is set to a real receiver (empty string now → hard no-op).
+   *   2. PING_ENABLED flipped true (master switch, false now).
+   *   3. Privacy/security sign-off — this phones home from inside a BANK's Salesforce session;
+   *      corporate Netskope/CASB may flag it and it needs disclosure + an opt-out. Do NOT enable
+   *      without that OK.
+   *   4. Salesforce CSP tested against the real endpoint (the same CSP that blocks our loader may
+   *      block this) — must degrade silently if blocked.
+   * ANONYMITY (by construction, even once enabled): sends ONLY a random local install id (not the
+   * org, not the hostname, no PII, no page data), the tool version, and the page TYPE bucket
+   * (e.g. "DMO"/"Segment") — never a record id or URL. Throttled to ONCE PER DAY per browser via
+   * localStorage. Uses sendBeacon/no-cors so it can't read any response. Fully fire-and-forget.
+   * This block is DEV-ONLY (@strip) so it is PHYSICALLY ABSENT from the public build for now; it
+   * moves to public ONLY after the 4 gates above + explicit approval ([[dev-only-release-rule]]).
+   */
+  (function dcUsagePingModule() {
+    var PING_ENDPOINT = "";        // GATE 1: empty → transmits nothing. Set to the receiver URL later.
+    var PING_ENABLED  = false;     // GATE 2: master off. Flip true only after privacy + CSP sign-off.
+    var PING_VERSION  = "dev";     // stamped per build when we wire it; coarse, not identifying.
+    var LS_ID   = "dc_usage_iid";  // random per-browser install id (anonymous)
+    var LS_LAST = "dc_usage_last"; // last-sent day stamp (throttle)
+
+    // Coarse page-type bucket — NEVER a record id or full URL. Mirrors our page gates.
+    function pingPageType() {
+      try {
+        var h = location.href;
+        if (/\/r\/DataStream\//i.test(h)) return "DataStream";
+        if (/\/r\/DataLakeObjectInstance\//i.test(h)) return "DLO";
+        if (/c__objectApiName=/i.test(h) && /standard-DataModel/i.test(h)) return "DMO";
+        if (/standard-DataModel/i.test(h) && /displayType=graph/i.test(h)) return "DataGraph";
+        if (/\/r\/Segment\//i.test(h) || /segmentWizard/i.test(h)) return "Segment";
+        if (/\/r\/IdentityResolution\//i.test(h)) return "IdentityResolution";
+        if (/\/r\/DataSpace\//i.test(h)) return "DataSpace";
+        if (/standard-DataModel/i.test(h)) return "DataModel";
+        return "other";
+      } catch (e) { return "other"; }
+    }
+    function randId() {
+      try { if (window.crypto && crypto.getRandomValues) { var a = new Uint32Array(4); crypto.getRandomValues(a); return "i" + a[0].toString(36) + a[1].toString(36) + a[2].toString(36) + a[3].toString(36); } } catch (e) {}
+      // NOTE: Math.random fallback only in the live browser — this file never runs Math.random in tests.
+      try { return "i" + String(Date.now()) + "_" + Math.floor(Math.random() * 1e9).toString(36); } catch (e) { return "i_anon"; }
+    }
+    function installId() {
+      try { var v = localStorage.getItem(LS_ID); if (!v) { v = randId(); localStorage.setItem(LS_ID, v); } return v; } catch (e) { return "i_nostore"; }
+    }
+    function todayStamp() { try { return new Date().toISOString().slice(0, 10); } catch (e) { return ""; } }
+    function sentToday() { try { return localStorage.getItem(LS_LAST) === todayStamp(); } catch (e) { return true; } } // on error, assume sent → don't spam
+    function markSent() { try { localStorage.setItem(LS_LAST, todayStamp()); } catch (e) {} }
+
+    // The actual send — guarded six ways; a single missing gate makes it a hard no-op.
+    function sendPing() {
+      if (!PING_ENABLED || !PING_ENDPOINT) return false;   // GATES 1+2: inert by default
+      if (sentToday()) return false;                        // once/day throttle
+      var payload = { iid: installId(), v: PING_VERSION, page: pingPageType(), day: todayStamp() };
+      var ok = false;
+      try {
+        var body = JSON.stringify(payload);
+        if (navigator.sendBeacon) { ok = navigator.sendBeacon(PING_ENDPOINT, body); }      // preferred: fire-and-forget, no response readable
+        else { fetch(PING_ENDPOINT, { method: "POST", mode: "no-cors", keepalive: true, body: body }).catch(function () {}); ok = true; } // can't read response (no-cors)
+      } catch (e) { ok = false; }
+      if (ok) markSent();
+      return ok;
+    }
+    // expose for a future controlled test/flip; calling it today is a no-op (gates off).
+    try { window.__dcUsagePing = function () { return sendPing(); }; } catch (e) {}
+    // Attempt on load — inert until the gates are cleared.
+    try { sendPing(); } catch (e) {}
+  })();
+  /* @strip:end */
+
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
   // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll
   // tears the FAB down the instant the URL changes, ending its scope. Idempotent — the
