@@ -1,12 +1,15 @@
-// Usage ping (LIVE) — pure logic + source-presence + safety gates.
+// Usage tracking — pure logic + source-presence + safety gates.
 //   node test/usage-ping.test.js
 //
-// Measures REAL active users (fires when the tool RUNS), unlike Cloudflare which only sees first-time
-// install-page visitors. LIVE since 2026-10-30 (sign-off + Salesforce-CSP verified): endpoint set,
-// PING_ENABLED true, ships in BOTH builds. Each ping is tagged build="public"|"dev" so the endpoint
-// stores them in SEPARATE tables. Still anonymous by construction (random local id, version, page-type
-// bucket, build tag — never org/hostname/record/URL/PII), throttled once/day, honors opt-out. This test
-// LOCKS those safety properties (anonymity, throttle, opt-out, build tag) so a regression fails the build.
+// CSP REALITY (2026-10-30): Salesforce page CSP blocks ALL silent in-page transports to our domain
+// (fetch/sendBeacon via connect-src, image via img-src, iframe via frame-src/sandbox — all tested,
+// all blocked). So the silent auto-ping is DISABLED. The ONLY channel that survives CSP is a
+// USER-INITIATED navigation (window.open → our /beacon page, which runs under OUR origin). So usage
+// is captured: (a) automatically on the user's FIRST FAB-open each day (throttled once/day), and
+// (b) via a manual "Report usage" FAB row. Each capture is tagged build="public"|"dev" → separate
+// tables. Anonymous by construction (random local id, version, page-type bucket, build — never
+// org/host/record/URL/PII), honors opt-out. This test LOCKS those safety properties.
+// NOTE: section 2's makePinger mirror still exercises the generic gate/throttle/opt-out LOGIC.
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra) { if (cond) { pass++; console.log("  ✓ " + name); } else { fail++; console.log("  ✗ " + name + (extra ? "  → " + extra : "")); } }
@@ -35,10 +38,10 @@ function makePinger(opts) {
   return { sendPing, sent, store };
 }
 
-console.log("\n1. GATES still hold defensively — a missing endpoint/switch is a hard no-op");
+console.log("\n1. GATES hold defensively — a missing endpoint/switch is a hard no-op");
 {
-  // Even though the shipped config is now LIVE, the gate logic must still protect against a
-  // half-config (e.g. a future edit that blanks the endpoint): no endpoint/switch → no send.
+  // The generic gate logic must protect against a half-config (e.g. a future edit that blanks the
+  // endpoint): no endpoint/switch → no send. (Mirrors the shared gate used by both capture paths.)
   var p2 = makePinger({ enabled: true, endpoint: "" });
   eq("enabled but NO endpoint → no-op (gate holds)", p2.sendPing(), false);
   eq("nothing transmitted", p2.sent.length, 0);
@@ -116,13 +119,21 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
 
   ok("module present", /function dcUsagePingModule\(\)/.test(src));
-  ok("LIVE: endpoint set to the Cloudflare Worker", /var PING_ENDPOINT = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/ping";/.test(src));
-  ok("LIVE: master switch TRUE", /var PING_ENABLED\s+= true;/.test(src));
-  ok("GATE: still checks enabled+endpoint before send (defensive)", /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return false;/.test(src));
-  ok("GATE 3: opt-out checked before send (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
+  ok("endpoint set to the Cloudflare Worker", /var PING_ENDPOINT = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/ping";/.test(src));
+  ok("auto-ping DISABLED (CSP-blocked — documented, not pretended to work)", /var PING_ENABLED\s+= false;/.test(src) && /AUTO-PING DISABLED/.test(src) && /CSP/.test(src));
+  ok("CAPTURE CHANNEL = user-click navigation (window.open to /beacon) — survives CSP",
+    /function reportUsage/.test(src) && /window\.open\(base \+ "\?" \+ qs/.test(src) && /\/ping\$\/, "\/beacon"/.test(src));
+  ok("AUTO-CAPTURE on FAB open, once/day (maybeReportOnFabOpen → throttled + opt-out)",
+    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
+  ok("ONE global FAB-click listener covers all FABs (not per-handler)",
+    /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
+  ok("manual 'Report usage' FAB row wired, hidden when opted out",
+    /dc-report-usage-row/.test(src) && /typeof window\.__dcReportUsage === "function"/.test(src) && /window\.__dcUsageIsOptedOut\(\)/.test(src));
+  ok("GATE 3: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
   ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
-  ok("ONE-TIME disclosure notice, shown only when LIVE + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
-  ok("disclosure wording is honest (anonymous, no data/PII) + offers Turn off", /anonymous<\/b> usage counts/i.test(src) && /no personal or org info/i.test(src) && /Turn off/.test(src));
+  ok("capture globals exposed (manual + auto-on-fab)", /window\.__dcReportUsage\b/.test(src) && /window\.__dcReportUsageOnFabOpen/.test(src));
+  ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
+  ok("disclosure wording honest (anonymous, no record/field/personal/org data, brief tab) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /brief tab/i.test(src) && /Turn off/.test(src));
   ok("once-per-day throttle via localStorage day stamp", /function sentToday/.test(src) && /function markSent/.test(src) && /todayStamp\(\)/.test(src));
   ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
     /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
@@ -131,9 +142,6 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));
-  ok("fire-and-forget: sendBeacon preferred, no-cors fetch fallback (cannot read a response)",
-    /navigator\.sendBeacon\(PING_ENDPOINT/.test(src) && /mode: "no-cors"/.test(src));
-  ok("fails silently (never throws into the page)", /catch \(e\) \{ ok = false; \}/.test(src) && /\.catch\(function \(\) \{\}\)/.test(src));
 
   // SHIPS IN BOTH builds now (no longer dev-only), but the BUILD TAG differs per build:
   const strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");

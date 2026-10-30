@@ -74,6 +74,41 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
     if (url.pathname === "/health") return new Response("ok", { headers: cors() });
 
+    // ── BEACON PAGE (for the hidden-iframe transport) ─────────────────────────
+    // The tool injects <iframe src=".../beacon?iid=…&build=…&page=…&day=…">. Because this HTML is
+    // served from OUR origin, the fetch below runs under OUR (permissive) CSP — NOT Salesforce's
+    // page CSP (which blocks connect-src to us). Governed by the host page's frame-src/child-src
+    // directive instead. The iframe self-pings same-origin /ping. Framing is allowed below via
+    // Content-Security-Policy: frame-ancestors * (so SF can embed us).
+    if (url.pathname === "/beacon") {
+      const q = url.search || "";   // pass the query straight through to the same-origin ping
+      const html = `<!doctype html><meta charset=utf-8><title>Usage recorded</title>
+<style>body{font:15px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:420px;margin:60px auto;padding:0 24px;color:#1e293b;text-align:center}
+.chk{font-size:40px;color:#0d9488}.muted{color:#64748b;font-size:13px}</style>
+<div class=chk>✓</div>
+<h2>Thanks — usage recorded</h2>
+<p class=muted>Anonymous: a random id + the tool version + page type only. No personal or org data.
+This tab closes automatically.</p>
+<script>
+(function(){
+  function tell(m){try{if(window.opener)window.opener.postMessage("dc-beacon:"+m,"*");parent.postMessage("dc-beacon:"+m,"*");}catch(e){}}
+  try{
+    var p=new URLSearchParams(location.search);
+    var body=JSON.stringify({iid:p.get("iid"),v:p.get("v"),page:p.get("page"),day:p.get("day"),build:p.get("build")});
+    // same-origin fetch → OUR CSP, not Salesforce's. Records the ping, then auto-closes the tab.
+    fetch("/ping",{method:"POST",headers:{"Content-Type":"application/json"},body:body})
+      .then(function(){tell("ok");setTimeout(function(){try{window.close()}catch(e){}},1200);})
+      .catch(function(e){tell("fail:"+e);});
+  }catch(e){tell("threw:"+e)}
+})();
+<\/script>`;
+      return new Response(html, { headers: cors({
+        "Content-Type": "text/html",
+        "Content-Security-Policy": "frame-ancestors *",   // allow SF pages to embed this beacon
+        "Cache-Control": "no-store"
+      }) });
+    }
+
     // ── INGEST ──────────────────────────────────────────────────────────────
     // Accepts BOTH transports, because Salesforce page CSP differs by request type:
     //   • POST + JSON body  → used by sendBeacon/fetch (governed by CSP connect-src)
