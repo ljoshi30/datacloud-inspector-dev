@@ -5418,14 +5418,19 @@
    * we use the real objApi/fieldApi when present, else fall back to the LABEL in [brackets] so the
    * reader can see it's a label, not a resolved API. Operators map from the UI label vocabulary.
    */
-  function segmentTreeToSql(tree, segName, activeTab) {
-    // UI operator label → SQL. Unknown operators are passed through as a comment marker.
+  function segmentTreeToSql(tree, segName, activeTab, primaryObj) {
+    // Track complexity so we can HONESTLY tell the user whether this is runnable. A segment that
+    // touches a second object (aggregation/CI/different DMO) needs join metadata we don't have →
+    // it's a LOGIC VIEW only, not runnable. Single-object/no-agg/no-CI segments are ~runnable.
+    var flags = { hasAgg: false, hasCi: false, objs: {} };
+    function noteObj(o) { if (o) flags.objs[o] = true; }
+
+    // UI operator label → SQL comparison. Returns { cmp } used as "<col> <cmp>".
     function opToSql(opRaw, valuesRaw) {
       var op = String(opRaw || "").trim().toLowerCase();
       var vals = String(valuesRaw == null ? "" : valuesRaw).trim();
-      // split multi values (the reader joins with ", ")
       var list = vals ? vals.split(/\s*,\s*/).filter(Boolean) : [];
-      function q(v) { // quote a value unless it's clearly numeric or boolean
+      function q(v) {
         if (/^-?\d+(\.\d+)?$/.test(v)) return v;
         if (/^(true|false)$/i.test(v)) return v.toUpperCase();
         return "'" + v.replace(/'/g, "''") + "'";
@@ -5447,45 +5452,85 @@
         case "has no value": case "is null": return "IS NULL";
         case "is true": return "= TRUE";
         case "is false": return "= FALSE";
-        default: return (op ? "/* " + opRaw + " */ " + (list.length ? q(list[0]) : "") : "/* no operator */");
+        default: return (op ? "/* " + opRaw + " */ " + (list.length ? q(list[0]) : "") : "/* ? */");
       }
     }
-    // Column reference: prefer real APIs (Object.Field), else [Label] to show it's unresolved.
+    // The aggregation threshold operator ("At Least"/"At Most"/"Exactly N") → a real comparison op.
+    function aggCmp(opRaw) {
+      var op = String(opRaw || "").trim().toLowerCase();
+      if (/at least/.test(op)) return ">=";
+      if (/at most/.test(op)) return "<=";
+      if (/exactly|equal/.test(op)) return "=";
+      if (/greater/.test(op)) return ">";
+      if (/less|fewer/.test(op)) return "<";
+      return ">=";  // SF default for population counts
+    }
     function colRef(node) {
       var o = node.objApi || (node.objectLabel ? "[" + node.objectLabel + "]" : "");
       var f = node.fieldApi || (node.fieldLabel ? "[" + node.fieldLabel + "]" : "");
+      if (node.objApi) noteObj(node.objApi);
       if (o && f) return o + "." + f;
       return f || o || "/* field? */";
     }
-    function condSql(node) {
-      if (node.type === "simple") return colRef(node) + " " + opToSql(node.operator, node.values);
-      if (node.type === "ci") return "/* calculated insight */ " + colRef(node) + " " + opToSql(node.operator, node.values);
+    function condSql(node, indent) {
+      if (node.type === "simple") { if (node.objApi) noteObj(node.objApi); return colRef(node) + " " + opToSql(node.operator, node.values); }
+      if (node.type === "ci") { flags.hasCi = true; if (node.objApi) noteObj(node.objApi); return "EXISTS (/* calculated insight " + (node.objApi || node.objectLabel || "") + " */ " + colRef(node) + " " + opToSql(node.operator, node.values) + ")"; }
       if (node.type === "aggregation") {
-        // aggregation: e.g. COUNT/SUM over a sub-filtered object → HAVING-style; illustrative only
+        flags.hasAgg = true;
+        var obj = node.objApi || node.objectLabel || "/* object */";
+        noteObj(node.objApi || "");
+        var innerPad = "\n" + indent + "    ";
         var inner = (node.subFilters && node.subFilters.length)
-          ? " WHERE " + node.subFilters.map(function (s) { return colRef(s) + " " + opToSql(s.operator, s.values); }).join(" " + (node.subJoin || "AND") + " ")
+          ? innerPad + "WHERE " + node.subFilters.map(function (s) { return colRef(s) + " " + opToSql(s.operator, s.values); }).join(innerPad + "  " + (node.subJoin || "AND") + " ")
           : "";
-        return "/* aggregation */ " + (node.fieldLabel || "AGG") + "(" + (node.objApi || node.objectLabel || "") + inner + ") " + opToSql(node.operator, node.values);
+        // COUNT(*) subquery with the real threshold operator. Correlation join to the primary is
+        // NOT known from criteria → left as an explicit TODO so it's obviously not blindly runnable.
+        var n = (String(node.values || "").match(/\d+/) || ["1"])[0];
+        return "( SELECT COUNT(*) FROM " + obj + inner + innerPad + "/* TODO: correlate to primary */ ) " + aggCmp(node.operator) + " " + n;
       }
-      if (node.type === "nested-segment") return "/* references segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */";
+      if (node.type === "nested-segment") return "EXISTS (/* member of segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */)";
       return "/* unsupported condition */";
     }
     function walk(node, depth) {
       if (!node) return "";
       if (node.type === "set") {
+        var pad = "  ".repeat(depth + 1);
         var parts = (node.items || []).map(function (it) { return walk(it, depth + 1); }).filter(Boolean);
         if (!parts.length) return "";
-        var joined = parts.join("\n" + "  ".repeat(depth + 1) + (node.join || "AND") + " ");
+        var joined = parts.join("\n" + pad + (node.join || "AND") + " ");
         return depth === 0 ? joined : "(" + joined + ")";
       }
-      return condSql(node);
+      return condSql(node, "  ".repeat(depth));
     }
     var where = walk(tree, 0);
-    var header = "-- APPROXIMATE SQL — illustrative, verify before running.\n" +
+
+    // Decide runnability HONESTLY. The primary object = the one the TOP-LEVEL simple conditions sit
+    // on (passed in as primaryObj when known, else the first simple condition's objApi). Only itself
+    // referenced + no agg/CI → reasonably runnable. Else it's a logic view (joins/CIs unknowable).
+    var objList = Object.keys(flags.objs).filter(Boolean);
+    function firstSimpleObj(node) {
+      if (!node) return "";
+      if (node.type === "simple") return node.objApi || "";
+      if (node.type === "set") { for (var i = 0; i < (node.items || []).length; i++) { var o = firstSimpleObj(node.items[i]); if (o) return o; } }
+      return "";
+    }
+    var primeObj = primaryObj || firstSimpleObj(tree) || objList[0] || null;
+    var multiObject = objList.filter(function (o) { return o !== primeObj; }).length > 0;
+    var isComplex = flags.hasAgg || flags.hasCi || multiObject;
+    var fromObj = primeObj;
+
+    var banner = isComplex
+      ? ("-- ⚠️ LOGIC VIEW — NOT runnable as-is. This segment spans multiple objects/aggregations/\n" +
+         "-- calculated insights, whose JOIN relationships are NOT part of the segment criteria, so a\n" +
+         "-- single runnable SQL can't be reconstructed. Use this to READ the logic, not to execute.\n")
+      : ("-- APPROXIMATE SQL — single-object segment; verify before running.\n");
+    var header = banner +
                  "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") + "\n" +
-                 "-- Real field API names used where available; [Label] = unresolved label, not an API.\n";
+                 "-- Real API names used where available; [Label] = unresolved label (not an API).\n" +
+                 (objList.length ? "-- Objects referenced: " + objList.join(", ") + "\n" : "");
     if (!where) return header + "-- (no conditions on this tab)";
-    return header + "SELECT *\nFROM /* primary segmented object */\nWHERE " + where + ";";
+    var fromLine = fromObj ? ("FROM " + fromObj) : "FROM /* segment's primary object (Segment On) */";
+    return header + "SELECT *\n" + fromLine + "\nWHERE " + where + ";";
   }
 
   // ── Segment export modal ──────────────────────────────────────────────────
@@ -6139,7 +6184,10 @@
         var hasCriteria = d.tree && d.tree.items && d.tree.items.length;
         if (!hasCriteria) { btn.textContent = "Nothing to convert on this tab"; restore(); return; }
         var sql = "";
-        try { sql = segmentTreeToSql(d.tree, segName, currentModalTab); } catch (er) { sql = ""; }
+        // pass the primary object API only if "Segment On" already looks like an api (__dlm/__dll/__c);
+        // otherwise let segmentTreeToSql derive it from the tree's first top-level condition.
+        var primaryHint = (meta && /__(dlm|dll|dls|c|cio)$/i.test(String(meta.segmentOn || ""))) ? meta.segmentOn : "";
+        try { sql = segmentTreeToSql(d.tree, segName, currentModalTab, primaryHint); } catch (er) { sql = ""; }
         if (!sql) { btn.textContent = "Couldn't build SQL"; restore(); return; }
         var done = function () { btn.textContent = "✓ SQL copied!"; restore(); };
         try { navigator.clipboard.writeText(sql).then(done, function () { try { var ta = document.createElement("textarea"); ta.value = sql; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); }
@@ -21398,7 +21446,7 @@ processJSON();
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.643"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.645"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
