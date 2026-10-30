@@ -75,9 +75,15 @@ export default {
     if (url.pathname === "/health") return new Response("ok", { headers: cors() });
 
     // ── INGEST ──────────────────────────────────────────────────────────────
-    if (request.method === "POST" && url.pathname === "/ping") {
+    // Accepts BOTH transports, because Salesforce page CSP differs by request type:
+    //   • POST + JSON body  → used by sendBeacon/fetch (governed by CSP connect-src)
+    //   • GET + query params → used by an <img> beacon (governed by CSP img-src — a DIFFERENT
+    //     directive that some SF pages allow even when connect-src blocks us). GET returns a
+    //     transparent 1×1 GIF so the Image() onload fires cleanly (no false onerror).
+    if (url.pathname === "/ping" && (request.method === "POST" || request.method === "GET")) {
       let p = {};
-      try { p = await request.json(); } catch (e) { p = {}; }
+      if (request.method === "POST") { try { p = await request.json(); } catch (e) { p = {}; } }
+      else { p = Object.fromEntries(url.searchParams.entries()); }   // GET: read from query string
       const iid = clean(p.iid, 40);
       const v = clean(p.v, 20);
       let page = clean(p.page, 24);
@@ -85,12 +91,18 @@ export default {
       const day = clean(p.day, 10);
       let build = clean(p.build, 10);
       const table = TABLE[build] || TABLE.public;          // unknown/missing build → public bucket
-      if (!iid || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return new Response(null, { status: 204, headers: cors() });
-      try {
-        await env.DB.prepare(`INSERT INTO ${table} (iid, v, page, day, ts) VALUES (?, ?, ?, ?, ?)`)
-          .bind(iid, v, page, day, new Date().toISOString()).run();
-      } catch (e) { /* fire-and-forget */ }
-      return new Response(null, { status: 204, headers: cors() });
+      if (iid && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        try {
+          await env.DB.prepare(`INSERT INTO ${table} (iid, v, page, day, ts) VALUES (?, ?, ?, ?, ?)`)
+            .bind(iid, v, page, day, new Date().toISOString()).run();
+        } catch (e) { /* fire-and-forget */ }
+      }
+      if (request.method === "GET") {
+        // 1×1 transparent GIF — makes the <img> beacon load successfully.
+        const gif = Uint8Array.from([0x47,0x49,0x46,0x38,0x39,0x61,1,0,1,0,0x80,0,0,0,0,0,0,0,0,0x21,0xf9,4,1,0,0,0,0,0x2c,0,0,0,0,1,0,1,0,0,2,2,0x44,1,0,0x3b]);
+        return new Response(gif, { headers: cors({ "Content-Type": "image/gif", "Cache-Control": "no-store" }) });
+      }
+      return new Response(null, { status: 204, headers: cors() });   // POST: fire-and-forget
     }
 
     // ── REPORT (password-gated) ───────────────────────────────────────────────
