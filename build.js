@@ -451,6 +451,8 @@ function makeHtml(hrefSafe, includeDev, buildId) {
   tr:last-child td{border-bottom:none}
   @media(max-width:600px){.feat-grid{grid-template-columns:1fr}}
 </style>
+${includeDev ? "" : `<!-- Cloudflare Web Analytics (PUBLIC install page ONLY — privacy-first: no cookies, no fingerprinting). Measures who's using the tool / impact. Omitted from the FULL (internal) build. -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "0d6d64614a494f34a06fb61145f59228"}'></script>`}
 </head>
 <body>
 <div class="wrap">
