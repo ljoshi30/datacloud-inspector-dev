@@ -1,14 +1,14 @@
 // Usage tracking — pure logic + source-presence + safety gates.
 //   node test/usage-ping.test.js
 //
-// CSP REALITY (2026-10-30): Salesforce page CSP blocks ALL silent in-page transports to our domain
-// (fetch/sendBeacon via connect-src, image via img-src, iframe via frame-src/sandbox — all tested,
-// all blocked). So the silent auto-ping is DISABLED. The ONLY channel that survives CSP is a
-// USER-INITIATED navigation (window.open → our /beacon page, which runs under OUR origin). So usage
-// is captured: (a) automatically on the user's FIRST FAB-open each day (throttled once/day), and
-// (b) via a manual "Report usage" FAB row. Each capture is tagged build="public"|"dev" → separate
-// tables. Anonymous by construction (random local id, version, page-type bucket, build — never
-// org/host/record/URL/PII), honors opt-out. This test LOCKS those safety properties.
+// CSP BREAKTHROUGH (2026-10-30): SF page CSP blocks our own domain on every transport AND
+// window.open opens a visible tab — BUT the CSP allow-list includes *.googleapis.com, and Firestore's
+// REST API lives there. So a normal CORS+JSON fetch to firestore.googleapis.com writes SILENTLY (no
+// tab, automatic, works for the bookmarklet) — proven HTTP 200 from a real SF page. Capture fires on
+// the first FAB-open per feature per day (silent Firestore write) + a manual "Report usage" row. Each
+// doc is tagged build="public"|"dev". Anonymous (random local id, version, page-type bucket, build —
+// never org/host/record/URL/PII), honors opt-out. GOTCHA: this project's Firestore DB id is literally
+// "default" (NOT "(default)" with parens) — the REST path uses /databases/default/.
 // NOTE: section 2's makePinger mirror still exercises the generic gate/throttle/opt-out LOGIC.
 
 let pass = 0, fail = 0;
@@ -144,14 +144,17 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
 
   ok("module present", /function dcUsagePingModule\(\)/.test(src));
-  ok("endpoint set to the Cloudflare Worker", /var PING_ENDPOINT = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/ping";/.test(src));
-  ok("auto-ping DISABLED (CSP-blocked — documented, not pretended to work)", /var PING_ENABLED\s+= false;/.test(src) && /AUTO-PING DISABLED/.test(src) && /CSP/.test(src));
-  ok("CAPTURE CHANNEL = user-gesture window.open to /beacon — survives CSP",
-    /function reportUsage/.test(src) && /window\.open\(base \+ "\?" \+ qs, "dc_usage_beacon", feats\)/.test(src) && /\/ping\$\/, "\/beacon"/.test(src));
-  ok("UX: TINY OFF-SCREEN popup window (not a readable tab) + blur back to SF page + ~400ms backstop close",
-    /width=1,height=1,left=-10000,top=-10000/.test(src) && /w\.blur\(\); window\.focus\(\);/.test(src) && /setTimeout\(function \(\) \{ try \{ w\.close\(\); \} catch \(e\) \{\} \}, 400\)/.test(src));
-  ok("mark-sent ONLY when it actually opened (popup-blocked → retries, doesn't lose the day)",
-    /if \(w\) \{[\s\S]{0,260}markSent\(feature\);[\s\S]{0,40}return true;/.test(src) && /return false;\s*\/\/ popup-blocked/.test(src));
+  ok("SILENT CHANNEL: writes to Firestore REST on the CSP-allowed *.googleapis.com (no tab)",
+    /var FS_PROJECT = "d360-usage"/.test(src) && /firestore\.googleapis\.com\/v1\/projects\/" \+ FS_PROJECT \+ "\/databases\/" \+ FS_DB \+ "\/documents\/usage\?key=" \+ FS_KEY/.test(src));
+  ok("DB id is literally 'default' (NOT '(default)' — the confirmed gotcha)", /var FS_DB\s+= "default";/.test(src) && !/databases\/\(default\)/.test(src));
+  ok("LIVE (silent write, no tab)", /var PING_ENABLED\s+= true;/.test(src) && /SILENT AUTO-CAPTURE via FIRESTORE/.test(src));
+  ok("CAPTURE = normal CORS+JSON fetch to Firestore (fire-and-forget), NOT window.open/tab",
+    /function reportUsage/.test(src) && /fetch\(FS_URL, \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(payload\)/.test(src) && !/window\.open\(base/.test(src));
+  ok("NO tab/beacon/window.open left in the capture path (fully silent now)",
+    !/dc_usage_beacon/.test(src) && !/\/beacon/.test(src) && !/function sendPing/.test(src));
+  ok("Firestore payload is the typed-field shape (fields.*.stringValue)",
+    /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src));
+  ok("mark-sent after dispatching the write (one per feature/day)", /fetch\(FS_URL[\s\S]{0,260}markSent\(feature\);/.test(src));
   ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
     /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
@@ -160,11 +163,11 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /\/\^dc-\(\[a-z0-9\]\+-\)\?bar\$\//.test(src) && /\/\^dc-\(\[a-z0-9\]\+-\)\?fab\$\//.test(src));
   ok("manual 'Report usage' FAB row wired, hidden when opted out",
     /dc-report-usage-row/.test(src) && /typeof window\.__dcReportUsage === "function"/.test(src) && /window\.__dcUsageIsOptedOut\(\)/.test(src));
-  ok("GATE 3: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
+  ok("GATE: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
   ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
   ok("capture globals exposed (manual + auto-on-fab)", /window\.__dcReportUsage\b/.test(src) && /window\.__dcReportUsageOnFabOpen/.test(src));
-  ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
-  ok("disclosure wording honest (anonymous, no record/field/personal/org data, small window flicker) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /small window flicker/i.test(src) && /Turn off/.test(src));
+  ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!FS_URL\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
+  ok("disclosure wording honest (anonymous, no record/field/personal/org data, silent) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /silent — nothing opens/i.test(src) && /Turn off/.test(src));
   ok("PER-FEATURE/day throttle (namespaced key feature+day → different features each ping)",
     /function throttleKey\(feature\)/.test(src) && /LS_LAST \+ "::" \+ \(feature \|\| "other"\) \+ "::" \+ todayStamp\(\)/.test(src) && /function sentToday\(feature\)/.test(src) && /function markSent\(feature\)/.test(src));
   ok("page detector covers ALL feature surfaces (QueryEditor/Transform/Activation/Explorer/MappingCanvas/ERD, not just DMO)",
@@ -174,7 +177,7 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
     /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
   ok("ANON payload = iid + version + feature(page) + day + build (no org/host/record/url)",
-    /iid: installId\(\), v: PING_VERSION, page: feature, day: todayStamp\(\), build: PING_BUILD/.test(src) && /var feature = pingPageType\(\);/.test(src));
+    /stringValue: String\(installId\(\)\)/.test(src) && /stringValue: String\(feature\)/.test(src) && /stringValue: String\(PING_BUILD\)/.test(src) && /var feature = pingPageType\(\);/.test(src));
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));

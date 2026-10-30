@@ -116,14 +116,21 @@ This tab closes automatically.</p>
     }
 
     // ── INGEST ──────────────────────────────────────────────────────────────
-    // Accepts BOTH transports, because Salesforce page CSP differs by request type:
-    //   • POST + JSON body  → used by sendBeacon/fetch (governed by CSP connect-src)
-    //   • GET + query params → used by an <img> beacon (governed by CSP img-src — a DIFFERENT
-    //     directive that some SF pages allow even when connect-src blocks us). GET returns a
-    //     transparent 1×1 GIF so the Image() onload fires cleanly (no false onerror).
-    if (url.pathname === "/ping" && (request.method === "POST" || request.method === "GET")) {
+    // Accepts MULTIPLE transports, because Salesforce page CSP governs each differently:
+    //   • POST + JSON body   → sendBeacon/fetch (CSP connect-src — BLOCKED on SF pages)
+    //   • GET  + query params → <img> beacon (CSP img-src — BLOCKED on SF pages)
+    //   • POST + QUERY params → the <a ping="…"> hyperlink auditing beacon. Its POST body is just
+    //     "PING", and OUR params ride in the URL. <a ping> is NOT governed by connect-src/img-src —
+    //     it's a separate browser beacon mechanism, so it MAY get through where the others don't.
+    //     That's the whole out-of-the-box bet. We read params from the query string in that case.
+    if ((url.pathname === "/ping" || url.pathname === "/collect") && (request.method === "POST" || request.method === "GET")) {
       let p = {};
-      if (request.method === "POST") { try { p = await request.json(); } catch (e) { p = {}; } }
+      if (request.method === "POST") {
+        // try JSON first (sendBeacon/fetch); if there's no JSON (an <a ping> "PING" body), fall
+        // back to the query string so the <a ping> transport still carries our params.
+        try { p = await request.json(); } catch (e) { p = {}; }
+        if (!p || !p.iid) { try { p = Object.fromEntries(url.searchParams.entries()); } catch (e2) {} }
+      }
       else { p = Object.fromEntries(url.searchParams.entries()); }   // GET: read from query string
       const iid = clean(p.iid, 40);
       const v = clean(p.v, 20);
