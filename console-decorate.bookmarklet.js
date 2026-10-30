@@ -21391,13 +21391,11 @@ processJSON();
       } catch (e) {}
     }
 
-    // ── USER-CLICKED "Report usage" — the ONLY channel that survives Salesforce CSP ──────────
-    // A silent send is CSP-blocked (connect/img/iframe all locked). The only channel is a
-    // USER-GESTURE window.open() to our beacon page (loads under OUR origin, records, self-closes).
-    // SILENT Firestore write — NO tab, NO navigation, fully automatic. A normal CORS+JSON fetch to
-    // firestore.googleapis.com (CSP-allowed via *.googleapis.com). Writes one doc to the `usage`
-    // collection. Fire-and-forget: we don't need the response. Respects opt-out + per-feature/day
-    // throttle (marked sent only once the request is dispatched; Firestore rules reject malformed).
+    // ── SILENT usage capture — NO tab, NO navigation, fully automatic ─────────────────────────
+    // Our own domain is CSP-blocked on every transport, and window.open always opens a visible tab.
+    // The working channel is a normal CORS+JSON fetch to firestore.googleapis.com (CSP-allowed via
+    // *.googleapis.com) → writes one doc to the `usage` collection, silently. Fire-and-forget: we
+    // don't read the response. Respects opt-out + per-feature/day throttle.
     function reportUsage() {
       if (optedOut()) return false;
       if (!FS_URL) return false;
