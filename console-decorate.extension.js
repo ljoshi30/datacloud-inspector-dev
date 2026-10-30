@@ -5408,6 +5408,86 @@
   })();
 
 
+  /* ── Segment criteria → APPROXIMATE Data Cloud SQL (dev-only; already inside the dev-gated segment
+   *    region, so NO own @strip markers — nesting @strip blocks breaks the non-greedy stripper) ──
+   * Translates the captured condition TREE (the same {type:set|simple|aggregation|ci|nested-segment}
+   * structure the export reads) into an illustrative SQL WHERE clause. HONEST LABEL: this is
+   * APPROXIMATE / illustrative — Data Cloud compiles segments its own way (nested-segment references,
+   * aggregations, CIs, and some operators don't map 1:1 to runnable SQL). It's for reading/learning
+   * the logic and as a starting point, NOT guaranteed to run verbatim. We never invent field APIs:
+   * we use the real objApi/fieldApi when present, else fall back to the LABEL in [brackets] so the
+   * reader can see it's a label, not a resolved API. Operators map from the UI label vocabulary.
+   */
+  function segmentTreeToSql(tree, segName, activeTab) {
+    // UI operator label → SQL. Unknown operators are passed through as a comment marker.
+    function opToSql(opRaw, valuesRaw) {
+      var op = String(opRaw || "").trim().toLowerCase();
+      var vals = String(valuesRaw == null ? "" : valuesRaw).trim();
+      // split multi values (the reader joins with ", ")
+      var list = vals ? vals.split(/\s*,\s*/).filter(Boolean) : [];
+      function q(v) { // quote a value unless it's clearly numeric or boolean
+        if (/^-?\d+(\.\d+)?$/.test(v)) return v;
+        if (/^(true|false)$/i.test(v)) return v.toUpperCase();
+        return "'" + v.replace(/'/g, "''") + "'";
+      }
+      switch (op) {
+        case "is equal to": case "equals": return "= " + (list[0] != null ? q(list[0]) : "''");
+        case "is not equal to": case "does not equal": return "<> " + (list[0] != null ? q(list[0]) : "''");
+        case "contains": return "LIKE " + q("%" + (list[0] || "") + "%");
+        case "does not contain": return "NOT LIKE " + q("%" + (list[0] || "") + "%");
+        case "starts with": return "LIKE " + q((list[0] || "") + "%");
+        case "ends with": return "LIKE " + q("%" + (list[0] || ""));
+        case "is in": return "IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
+        case "is not in": return "NOT IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
+        case "is between": return "BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
+        case "is not between": return "NOT BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
+        case "greater than": case "is greater than": return "> " + (list[0] != null ? q(list[0]) : "''");
+        case "less than": case "is less than": return "< " + (list[0] != null ? q(list[0]) : "''");
+        case "has value": case "is not null": return "IS NOT NULL";
+        case "has no value": case "is null": return "IS NULL";
+        case "is true": return "= TRUE";
+        case "is false": return "= FALSE";
+        default: return (op ? "/* " + opRaw + " */ " + (list.length ? q(list[0]) : "") : "/* no operator */");
+      }
+    }
+    // Column reference: prefer real APIs (Object.Field), else [Label] to show it's unresolved.
+    function colRef(node) {
+      var o = node.objApi || (node.objectLabel ? "[" + node.objectLabel + "]" : "");
+      var f = node.fieldApi || (node.fieldLabel ? "[" + node.fieldLabel + "]" : "");
+      if (o && f) return o + "." + f;
+      return f || o || "/* field? */";
+    }
+    function condSql(node) {
+      if (node.type === "simple") return colRef(node) + " " + opToSql(node.operator, node.values);
+      if (node.type === "ci") return "/* calculated insight */ " + colRef(node) + " " + opToSql(node.operator, node.values);
+      if (node.type === "aggregation") {
+        // aggregation: e.g. COUNT/SUM over a sub-filtered object → HAVING-style; illustrative only
+        var inner = (node.subFilters && node.subFilters.length)
+          ? " WHERE " + node.subFilters.map(function (s) { return colRef(s) + " " + opToSql(s.operator, s.values); }).join(" " + (node.subJoin || "AND") + " ")
+          : "";
+        return "/* aggregation */ " + (node.fieldLabel || "AGG") + "(" + (node.objApi || node.objectLabel || "") + inner + ") " + opToSql(node.operator, node.values);
+      }
+      if (node.type === "nested-segment") return "/* references segment: " + (node.objectLabel || "") + " (" + (node.fieldLabel || "") + ") — expand separately */";
+      return "/* unsupported condition */";
+    }
+    function walk(node, depth) {
+      if (!node) return "";
+      if (node.type === "set") {
+        var parts = (node.items || []).map(function (it) { return walk(it, depth + 1); }).filter(Boolean);
+        if (!parts.length) return "";
+        var joined = parts.join("\n" + "  ".repeat(depth + 1) + (node.join || "AND") + " ");
+        return depth === 0 ? joined : "(" + joined + ")";
+      }
+      return condSql(node);
+    }
+    var where = walk(tree, 0);
+    var header = "-- APPROXIMATE SQL — illustrative, verify before running.\n" +
+                 "-- Segment: " + (segName || "") + (activeTab ? "  (tab: " + activeTab + ")" : "") + "\n" +
+                 "-- Real field API names used where available; [Label] = unresolved label, not an API.\n";
+    if (!where) return header + "-- (no conditions on this tab)";
+    return header + "SELECT *\nFROM /* primary segmented object */\nWHERE " + where + ";";
+  }
+
   // ── Segment export modal ──────────────────────────────────────────────────
 
   function openSegmentExport() {
@@ -5967,6 +6047,7 @@
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
         "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
         "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
+        "<button class='sec' id='dc-d-sql' title='Copy the current tab&apos;s criteria as APPROXIMATE Data Cloud SQL (illustrative — verify before running)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL (approx)</button>" +
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
@@ -6043,6 +6124,27 @@
           applyTabData(name, t2, f2);
         } catch(e) {}
       }
+    })();
+
+    // Copy APPROXIMATE SQL for the CURRENT tab's criteria tree (illustrative — verify before running).
+    // (dev-only via the enclosing segment region — no own @strip marker; nesting @strip breaks the stripper.)
+    (function () {
+      var sqlBtn = detailExportEl.querySelector("#dc-d-sql");
+      if (!sqlBtn || typeof segmentTreeToSql !== "function") return;
+      sqlBtn.onclick = function (e) {
+        var btn = e.currentTarget || e.target;
+        var d = tabData[currentModalTab] || {};
+        var SQL_ICON = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>";
+        var restore = function () { setTimeout(function () { btn.innerHTML = SQL_ICON + "Copy SQL (approx)"; }, 1400); };
+        var hasCriteria = d.tree && d.tree.items && d.tree.items.length;
+        if (!hasCriteria) { btn.textContent = "Nothing to convert on this tab"; restore(); return; }
+        var sql = "";
+        try { sql = segmentTreeToSql(d.tree, segName, currentModalTab); } catch (er) { sql = ""; }
+        if (!sql) { btn.textContent = "Couldn't build SQL"; restore(); return; }
+        var done = function () { btn.textContent = "✓ SQL copied!"; restore(); };
+        try { navigator.clipboard.writeText(sql).then(done, function () { try { var ta = document.createElement("textarea"); ta.value = sql; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); }
+        catch (e3) { done(); }
+      };
     })();
 
     detailExportEl.querySelector("#dc-d-copy").onclick = (e) => {
