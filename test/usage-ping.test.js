@@ -1,11 +1,12 @@
-// Usage ping (dev-only, INERT by default) — pure logic + source-presence + dev-only + safety gates.
+// Usage ping (LIVE) — pure logic + source-presence + safety gates.
 //   node test/usage-ping.test.js
 //
 // Measures REAL active users (fires when the tool RUNS), unlike Cloudflare which only sees first-time
-// install-page visitors. SHIPS DISABLED: transmits nothing until endpoint set + master switch on +
-// privacy/CSP sign-off. Anonymous by construction (random local id, version, page-type bucket — never
-// org/hostname/record/URL/PII). Throttled once/day. This test LOCKS those safety properties so an
-// accidental enable (or a lost gate) fails the build.
+// install-page visitors. LIVE since 2026-10-30 (sign-off + Salesforce-CSP verified): endpoint set,
+// PING_ENABLED true, ships in BOTH builds. Each ping is tagged build="public"|"dev" so the endpoint
+// stores them in SEPARATE tables. Still anonymous by construction (random local id, version, page-type
+// bucket, build tag — never org/hostname/record/URL/PII), throttled once/day, honors opt-out. This test
+// LOCKS those safety properties (anonymity, throttle, opt-out, build tag) so a regression fails the build.
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra) { if (cond) { pass++; console.log("  ✓ " + name); } else { fail++; console.log("  ✗ " + name + (extra ? "  → " + extra : "")); } }
@@ -26,7 +27,7 @@ function makePinger(opts) {
     if (!PING_ENABLED || !PING_ENDPOINT) return false;   // gates 1+2
     if (optedOut()) return false;                         // gate 3: user choice
     if (sentToday()) return false;                        // throttle
-    var payload = { iid: installId(), v: opts.version || "dev", page: pageType(), day: today };
+    var payload = { iid: installId(), v: opts.version || "dev", page: pageType(), day: today, build: opts.build || "public" };
     sent.push(payload);
     markSent();
     return true;
@@ -34,18 +35,15 @@ function makePinger(opts) {
   return { sendPing, sent, store };
 }
 
-console.log("\n1. INERT BY DEFAULT — the shipped config (disabled, no endpoint) transmits NOTHING");
+console.log("\n1. GATES still hold defensively — a missing endpoint/switch is a hard no-op");
 {
-  var p = makePinger({ enabled: false, endpoint: "" });
-  eq("disabled + no endpoint → sendPing returns false", p.sendPing(), false);
-  eq("nothing transmitted", p.sent.length, 0);
-  // even if the master switch were flipped but endpoint still empty (gate 1 alone holds):
+  // Even though the shipped config is now LIVE, the gate logic must still protect against a
+  // half-config (e.g. a future edit that blanks the endpoint): no endpoint/switch → no send.
   var p2 = makePinger({ enabled: true, endpoint: "" });
-  eq("enabled but NO endpoint → still no-op (gate 1 holds)", p2.sendPing(), false);
-  eq("still nothing transmitted", p2.sent.length, 0);
-  // and endpoint set but master off (gate 2 alone holds):
+  eq("enabled but NO endpoint → no-op (gate holds)", p2.sendPing(), false);
+  eq("nothing transmitted", p2.sent.length, 0);
   var p3 = makePinger({ enabled: false, endpoint: "https://x" });
-  eq("endpoint set but master OFF → still no-op (gate 2 holds)", p3.sendPing(), false);
+  eq("endpoint set but master OFF → no-op (gate holds)", p3.sendPing(), false);
 }
 
 console.log("\n2. WHEN fully enabled (both gates cleared) it sends ONCE, then throttles for the day");
@@ -76,7 +74,8 @@ console.log("\n3. ANONYMOUS BY CONSTRUCTION — payload carries no org / host / 
   p.sendPing();
   var payload = p.sent[0];
   var keys = Object.keys(payload).sort();
-  eq("payload keys are EXACTLY {day,iid,page,v}", keys.join(","), "day,iid,page,v");
+  eq("payload keys are EXACTLY {build,day,iid,page,v}", keys.join(","), "build,day,iid,page,v");
+  ok("build tag is the coarse audience bucket only", payload.build === "public" || payload.build === "dev");
   ok("install id is a random local token, not an org/hostname", /^i_/.test(payload.iid));
   ok("page is a coarse bucket, not a url/record", payload.page === "DMO" && !/https?:|\/r\/|[0-9]{15}/.test(payload.page));
   // negative: no field smells like org/host/record/email/url
@@ -117,27 +116,31 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
 
   ok("module present", /function dcUsagePingModule\(\)/.test(src));
-  ok("GATE 1: endpoint EMPTY in source (ships with no receiver)", /var PING_ENDPOINT = "";/.test(src));
-  ok("GATE 2: master switch FALSE in source (ships disabled)", /var PING_ENABLED\s+= false;/.test(src));
-  ok("both gates checked before any send", /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return false;/.test(src));
+  ok("LIVE: endpoint set to the Cloudflare Worker", /var PING_ENDPOINT = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/ping";/.test(src));
+  ok("LIVE: master switch TRUE", /var PING_ENABLED\s+= true;/.test(src));
+  ok("GATE: still checks enabled+endpoint before send (defensive)", /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return false;/.test(src));
   ok("GATE 3: opt-out checked before send (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
   ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
   ok("ONE-TIME disclosure notice, shown only when LIVE + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
-  ok("disclosure wording is honest (anonymous, no data/PII) + offers Turn off", /anonymous.{0,40}usage counts/i.test(src) && /no personal or org info/i.test(src) && /Turn off/.test(src));
+  ok("disclosure wording is honest (anonymous, no data/PII) + offers Turn off", /anonymous<\/b> usage counts/i.test(src) && /no personal or org info/i.test(src) && /Turn off/.test(src));
   ok("once-per-day throttle via localStorage day stamp", /function sentToday/.test(src) && /function markSent/.test(src) && /todayStamp\(\)/.test(src));
-  ok("ANON payload = only iid + version + coarse page bucket + day (no org/host/record/url)",
-    /iid: installId\(\), v: PING_VERSION, page: pingPageType\(\), day: todayStamp\(\)/.test(src));
+  ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
+    /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
+  ok("ANON payload = iid + version + page bucket + day + build (no org/host/record/url)",
+    /iid: installId\(\), v: PING_VERSION, page: pingPageType\(\), day: todayStamp\(\), build: PING_BUILD/.test(src));
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));
   ok("fire-and-forget: sendBeacon preferred, no-cors fetch fallback (cannot read a response)",
     /navigator\.sendBeacon\(PING_ENDPOINT/.test(src) && /mode: "no-cors"/.test(src));
   ok("fails silently (never throws into the page)", /catch \(e\) \{ ok = false; \}/.test(src) && /\.catch\(function \(\) \{\}\)/.test(src));
-  ok("the ⚠️ privacy/CSP/endpoint gates are documented at the call site", /SHIPS DISABLED/.test(src) && /Netskope\/CASB/.test(src) && /Salesforce CSP tested/.test(src));
 
-  // DEV-ONLY — the whole thing must be physically absent from the public build right now
-  ok("DEV-ONLY: module stripped from the public bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcUsagePingModule/.test(strip) && !/__dcUsagePing/.test(strip) && !/PING_ENDPOINT/.test(strip); })());
-  ok("DEV-ONLY: no cloudflareinsights or ping endpoint leaks into the stripped build", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/sendBeacon\(PING_ENDPOINT/.test(strip); })());
+  // SHIPS IN BOTH builds now (no longer dev-only), but the BUILD TAG differs per build:
+  const strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
+  ok("PUBLIC build INCLUDES the module (ships to all users now)", /function dcUsagePingModule\(\)/.test(strip));
+  ok("PUBLIC build tag stays 'public' (the dev override is stripped out)",
+    /var PING_BUILD\s+= "public";/.test(strip) && !/PING_BUILD = "dev";/.test(strip));
+  ok("FULL/dev build tag becomes 'dev' (override present)", /PING_BUILD = "dev";/.test(bm));
   ok("present in the FULL bookmarklet build (synced)", /function dcUsagePingModule\(\)/.test(bm));
 }
 

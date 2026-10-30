@@ -78,12 +78,15 @@ function minifyForBookmarklet(code, label) {
 // silently diverging.
 const extSourcePath = path.join(dir, "console-decorate.extension.js");
 const bmSourcePath  = path.join(dir, "console-decorate.bookmarklet.js");
-const extCode = fs.readFileSync(extSourcePath, "utf8");   // extension source (superset)
-const bmSource = fs.readFileSync(bmSourcePath, "utf8");   // bookmarklet source
+// Read current version from manifest (used in install page display + usage-ping version stamp)
+const _mfVer = (function() { try { return JSON.parse(fs.readFileSync(path.join(dir, "chrome-extension/manifest.json"), "utf8")).version; } catch(e) { return "dev"; } })();
+// Stamp the usage-ping version placeholder in BOTH sources identically (keeps the drift check
+// valid — same substitution on both). Coarse version only; not identifying.
+const _stampVer = (s) => s.split("__DC_BUILD_ID__").join(_mfVer);
+const extCode = _stampVer(fs.readFileSync(extSourcePath, "utf8"));   // extension source (superset)
+const bmSource = _stampVer(fs.readFileSync(bmSourcePath, "utf8"));   // bookmarklet source
 // `fullCode` name kept for the rest of the script = the EXTENSION source (drives inject.js).
 const fullCode = extCode;
-// Read current version from manifest (used in install page display)
-const _mfVer = (function() { try { return JSON.parse(fs.readFileSync(path.join(dir, "chrome-extension/manifest.json"), "utf8")).version; } catch(e) { return "dev"; } })();
 
 // Short build id = hash of a payload string. Embedded in install pages so the page
 // can tell the user (via localStorage) when the code actually changed → re-drag needed.

@@ -21076,32 +21076,33 @@ processJSON();
   // buttons carry titles; the ⧉ open-in-new-tab button carries its own tooltip; API-name/formula
   // hints appear on hover). No global popup on activation.
 
-  /* @strip:start dev
-   * ── USAGE PING (dev-only, INERT by default) — measure REAL active users ─────────────────────
+  /* ── USAGE PING (LIVE) — measure REAL active users ──────────────────────────────────────────
    * Cloudflare on the install page only counts first-time VISITORS; it can NEVER see people who
    * already installed and just use the tool (they never revisit that page). This fires ONE
    * anonymous ping when the tool actually RUNS on a Data Cloud page, so you can count real usage
    * (incl. returning users) + which features exist — the actual "impact" number.
    *
-   * ⚠️ SHIPS DISABLED. It transmits NOTHING until ALL of these are cleared by the user:
-   *   1. PING_ENDPOINT is set to a real receiver (empty string now → hard no-op).
-   *   2. PING_ENABLED flipped true (master switch, false now).
-   *   3. Privacy/security sign-off — this phones home from inside a BANK's Salesforce session;
-   *      corporate Netskope/CASB may flag it and it needs disclosure + an opt-out. Do NOT enable
-   *      without that OK.
-   *   4. Salesforce CSP tested against the real endpoint (the same CSP that blocks our loader may
-   *      block this) — must degrade silently if blocked.
-   * ANONYMITY (by construction, even once enabled): sends ONLY a random local install id (not the
-   * org, not the hostname, no PII, no page data), the tool version, and the page TYPE bucket
-   * (e.g. "DMO"/"Segment") — never a record id or URL. Throttled to ONCE PER DAY per browser via
+   * ENABLED 2026-10-30 after: user sign-off + Salesforce-CSP verified on a real DC page (ping
+   * allowed) + endpoint deployed & proven. Ships in BOTH builds; each ping is tagged with its
+   * BUILD ("public" | "dev") so the endpoint stores them in SEPARATE tables → public vs dev usage
+   * can be seen independently (user request).
+   * ANONYMITY (by construction): sends ONLY a random local install id (not the org, not the
+   * hostname, no PII, no page data), the tool version, the page TYPE bucket (e.g. "DMO"/"Segment")
+   * and the build tag — never a record id or URL. Throttled to ONCE PER DAY per browser via
    * localStorage. Uses sendBeacon/no-cors so it can't read any response. Fully fire-and-forget.
-   * This block is DEV-ONLY (@strip) so it is PHYSICALLY ABSENT from the public build for now; it
-   * moves to public ONLY after the 4 gates above + explicit approval ([[dev-only-release-rule]]).
+   * USER CONTROL: a one-time disclosure notice + opt-out (__dcUsageOptOut()); opted-out browsers
+   * never ping. Disclosed on the install page too.
    */
   (function dcUsagePingModule() {
-    var PING_ENDPOINT = "";        // GATE 1: empty → transmits nothing. Set to the receiver URL later.
-    var PING_ENABLED  = false;     // GATE 2: master off. Flip true only after privacy + CSP sign-off.
-    var PING_VERSION  = "dev";     // stamped per build when we wire it; coarse, not identifying.
+    var PING_ENDPOINT = "https://d360-usage.ljoshi30-d360.workers.dev/ping";  // live receiver (Cloudflare Worker + D1)
+    var PING_ENABLED  = true;      // LIVE (sign-off + CSP verified). Opt-out + throttle + anonymity still apply.
+    var PING_VERSION  = "__DC_BUILD_ID__"; // replaced per build by build.js (coarse, not identifying)
+    // Which build is this ping coming from? Public build keeps "public"; the @strip block below
+    // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
+    var PING_BUILD    = "public";
+    /* @strip:start dev */
+    PING_BUILD = "dev";
+    /* @strip:end */
     var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
     var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle)
     var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
@@ -21148,7 +21149,7 @@ processJSON();
       if (!PING_ENABLED || !PING_ENDPOINT) return false;   // GATES 1+2: inert by default
       if (optedOut()) return false;                         // GATE 3: user opted out → never ping
       if (sentToday()) return false;                        // once/day throttle
-      var payload = { iid: installId(), v: PING_VERSION, page: pingPageType(), day: todayStamp() };
+      var payload = { iid: installId(), v: PING_VERSION, page: pingPageType(), day: todayStamp(), build: PING_BUILD };
       var ok = false;
       try {
         var body = JSON.stringify(payload);
@@ -21191,7 +21192,6 @@ processJSON();
     try { showDisclosureOnce(); } catch (e) {}
     try { sendPing(); } catch (e) {}
   })();
-  /* @strip:end */
 
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which
   // launcher path ran (or if the FAB was created by a delayed retry/observer). The poll

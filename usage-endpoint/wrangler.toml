@@ -7,7 +7,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"                 # worker.js reads env.DB
 database_name = "d360_usage"
-database_id = "PASTE_DATABASE_ID_HERE_AFTER_wrangler_d1_create"
+database_id = "d4dac815-7312-4fc0-b4d3-9ab16b165ce1"
 
 # REPORT_TOKEN is a SECRET, not set here. Set it with:
 #   wrangler secret put REPORT_TOKEN
