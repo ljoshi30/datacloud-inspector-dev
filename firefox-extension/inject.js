@@ -19663,6 +19663,10 @@ processJSON();
         s("color", "#475569"); s("background", "transparent"); s("border", "0");
         s("padding", "0"); s("white-space", "nowrap"); s("overflow", "hidden");
         s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
+        // LEFT-ALIGN the chip. The label cell centers its text, and our full-width block inherits
+        // that centering — which pushed longer api names right (reported). Force left so every api
+        // lines up under its label's left edge regardless of the host's text-align.
+        s("text-align", "left");
         // make the chip land under the label whether the host is flex (wrap) or normal flow
         try { host.style.setProperty("flex-wrap", "wrap", "important"); } catch (e) {}
         sp._irApi = String(apiText); sp.textContent = String(apiText);
