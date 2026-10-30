@@ -112,6 +112,22 @@ console.log("\n4. page-type bucketing never leaks a record id or full url (mirro
   });
 }
 
+console.log("\n4b. FAB matcher (mirror of isFabClick) — every dc FAB counts, non-FABs don't");
+{
+  // mirror the two patterns in isFabClick
+  function isFabId(id) { return /^dc-([a-z0-9]+-)?bar$/.test(id) || /^dc-([a-z0-9]+-)?fab$/.test(id); }
+  // real FAB launcher ids that EXIST in the code → must all count
+  ["dc-bar","dc-fab","dc-dg-bar","dc-ir-bar","dc-dsf-bar","dc-act-bar","dc-act-fab","dc-erd-bar"].forEach(function (id) {
+    ok("FAB id '" + id + "' triggers capture", isFabId(id) === true);
+  });
+  // non-FAB dc ids → must NOT count (no false captures on unrelated UI)
+  ["dc-decor-diag","dc-fab-menu","dc-detail-btn","dc-report-usage-row","dc-usage-notice","dc-do-badge","dc-ir-api"].forEach(function (id) {
+    ok("non-FAB id '" + id + "' does NOT trigger capture", isFabId(id) === false);
+  });
+  // future-proof: a brand-new FAB following the convention is caught automatically
+  ok("a FUTURE 'dc-xyz-bar' / 'dc-xyz-fab' is caught with no code change", isFabId("dc-xyz-bar") && isFabId("dc-xyz-fab"));
+}
+
 console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DEV-ONLY");
 {
   const fs = require("fs"), path = require("path");
@@ -127,6 +143,8 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
+  ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
+    /\/\^dc-\(\[a-z0-9\]\+-\)\?bar\$\//.test(src) && /\/\^dc-\(\[a-z0-9\]\+-\)\?fab\$\//.test(src));
   ok("manual 'Report usage' FAB row wired, hidden when opted out",
     /dc-report-usage-row/.test(src) && /typeof window\.__dcReportUsage === "function"/.test(src) && /window\.__dcUsageIsOptedOut\(\)/.test(src));
   ok("GATE 3: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));

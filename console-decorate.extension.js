@@ -21254,15 +21254,18 @@ processJSON();
     // It fires only on a genuine click of a dc FAB launcher button — which is a user gesture, so
     // window.open isn't popup-blocked — and maybeReportOnFabOpen() throttles to once/day + honors
     // opt-out, so it's at most one brief tab per user per day. Idle cost ≈ zero (only acts on a click).
+    // Robust match: EVERY dc FAB lives in a launcher container whose id is `dc-bar` or `dc-<x>-bar`
+    // (dc-bar, dc-dg-bar, dc-ir-bar, dc-dsf-bar, dc-act-bar, dc-erd-bar, …) — and the round launch
+    // button is `dc-fab` or `dc-<x>-fab` when it has an id at all. Matching those two patterns (not a
+    // hand-maintained id list) catches ALL current FABs AND any future one, incl. ERD. Walk up a few
+    // ancestors so a click on an inner icon/svg still resolves to the FAB. (A click INSIDE the open
+    // menu also matches its bar — fine: capture is once/day + opt-out, so at most one tab/day anyway.)
     function isFabClick(target) {
       try {
         var el = target;
         for (var i = 0; el && i < 8; i++) {
-          var id = el.id || "";
-          // dc FAB launcher buttons / bars (round buttons that open a menu)
-          if (id === "dc-fab" || id === "dc-dg-fab" || id === "dc-ir-fab" || id === "dc-dsf-fab" ||
-              id === "dc-explore-fab" || id === "dc-act-fab" ||
-              (el.getAttribute && /^dc-(dg|ir|dsf|uni)-bar$/.test(id))) return true;
+          var id = (el.id || "");
+          if (/^dc-([a-z0-9]+-)?bar$/.test(id) || /^dc-([a-z0-9]+-)?fab$/.test(id)) return true;
           el = el.parentElement;
         }
       } catch (e) {}
