@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Usage-Ping Sandbox — test active-user tracking</title>
+<style>
+  body{font:14px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:860px;margin:30px auto;padding:0 20px;color:#1e293b}
+  h1{font-size:20px} h2{font-size:15px;margin-top:28px;border-bottom:1px solid #e2e8f0;padding-bottom:6px}
+  .card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin:14px 0}
+  button{font:600 13px/1 -apple-system,sans-serif;padding:9px 14px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer;margin:4px 6px 4px 0}
+  button.primary{background:#0d9488;border-color:#0d9488;color:#fff}
+  button:hover{filter:brightness(.97)}
+  code{background:#eef2f8;padding:1px 5px;border-radius:4px;font:12px/1.4 'SF Mono',Menlo,monospace}
+  pre{background:#0b1020;color:#d7e0f5;padding:12px 14px;border-radius:8px;overflow:auto;font:12px/1.5 'SF Mono',Menlo,monospace;white-space:pre-wrap}
+  .ok{color:#059669;font-weight:700}.no{color:#b45309;font-weight:700}
+  .stat{font-size:34px;font-weight:800;color:#0d9488}
+  .muted{color:#64748b;font-size:12px}
+  .row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-end}
+</style>
+</head>
+<body>
+<h1>🧪 Usage-Ping Sandbox</h1>
+<p class="muted">Tests the <b>exact</b> ping logic from <code>console-decorate.extension.js</code>, with the two
+gates flipped ON and the endpoint pointed at <code>http://localhost:8787</code>. This never touches Salesforce.
+Start the receiver first: <code>node usage-ping-sandbox/receiver.js</code></p>
+
+<div class="card">
+  <b>Receiver status:</b> <span id="recv" class="no">checking…</span>
+  <div class="muted">If this says offline, run <code>node usage-ping-sandbox/receiver.js</code> in a terminal, then reload.</div>
+</div>
+
+<h2>1 · Simulate the tool running on a page</h2>
+<p class="muted">Each button pretends the tool loaded on that kind of Data Cloud page, then calls the real <code>sendPing()</code>.</p>
+<button class="primary" data-url="https://trailsignup.lightning.force.com/lightning/n/standard-DataModel?c__objectApiName=TDI_Secret__dlm">DMO page</button>
+<button class="primary" data-url="https://trailsignup.lightning.force.com/lightning/r/Segment/1sgKh0000010wObIAI/view">Segment page</button>
+<button class="primary" data-url="https://trailsignup.lightning.force.com/lightning/r/IdentityResolution/abc123def456ghi/view">Identity Resolution page</button>
+<button class="primary" data-url="https://trailsignup.lightning.force.com/lightning/page/home">Unknown page (→ "other")</button>
+
+<h2>2 · Prove key behaviors</h2>
+<button id="again">Ping again today (should THROTTLE — once/day)</button>
+<button id="returning">Simulate RETURNING tomorrow (same browser = same user)</button>
+<button id="newuser">Simulate a NEW user (fresh browser/install id)</button>
+<button id="reset">Reset my local install id + throttle</button>
+
+<h2>3 · What happened</h2>
+<pre id="out">(click a button above)</pre>
+
+<h2>4 · Live tally from the receiver</h2>
+<div class="row">
+  <div><div class="stat" id="au">—</div><div class="muted">ACTIVE USERS (unique)</div></div>
+  <div><div class="stat" id="tot">—</div><div class="muted">total pings</div></div>
+</div>
+<pre id="stats">(waiting…)</pre>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// The REAL ping logic, copied verbatim from console-decorate.extension.js, with
+// ONLY the two gates flipped and a settable "current url" + "day" so we can
+// simulate pages and a returning-tomorrow scenario. Nothing else changed.
+// ─────────────────────────────────────────────────────────────────────────────
+var PING_ENDPOINT = "http://localhost:8787/ping";   // GATE 1 (sandbox): local receiver
+var PING_ENABLED  = true;                            // GATE 2 (sandbox): ON
+var PING_VERSION  = "sandbox-1";
+var LS_ID   = "dc_usage_iid";
+var LS_LAST = "dc_usage_last";
+
+var FAKE_URL = "https://trailsignup.lightning.force.com/lightning/page/home";  // set by buttons
+var FAKE_DAY = null;  // null → real today; set to simulate "tomorrow"
+
+function pingPageType() {
+  try {
+    var h = FAKE_URL;
+    if (/\/r\/DataStream\//i.test(h)) return "DataStream";
+    if (/\/r\/DataLakeObjectInstance\//i.test(h)) return "DLO";
+    if (/c__objectApiName=/i.test(h) && /standard-DataModel/i.test(h)) return "DMO";
+    if (/standard-DataModel/i.test(h) && /displayType=graph/i.test(h)) return "DataGraph";
+    if (/\/r\/Segment\//i.test(h) || /segmentWizard/i.test(h)) return "Segment";
+    if (/\/r\/IdentityResolution\//i.test(h)) return "IdentityResolution";
+    if (/\/r\/DataSpace\//i.test(h)) return "DataSpace";
+    if (/standard-DataModel/i.test(h)) return "DataModel";
+    return "other";
+  } catch (e) { return "other"; }
+}
+function randId() {
+  try { if (window.crypto && crypto.getRandomValues) { var a = new Uint32Array(4); crypto.getRandomValues(a); return "i" + a[0].toString(36) + a[1].toString(36) + a[2].toString(36) + a[3].toString(36); } } catch (e) {}
+  try { return "i" + String(Date.now()) + "_" + Math.floor(Math.random() * 1e9).toString(36); } catch (e) { return "i_anon"; }
+}
+function installId() {
+  try { var v = localStorage.getItem(LS_ID); if (!v) { v = randId(); localStorage.setItem(LS_ID, v); } return v; } catch (e) { return "i_nostore"; }
+}
+function todayStamp() { if (FAKE_DAY) return FAKE_DAY; try { return new Date().toISOString().slice(0, 10); } catch (e) { return ""; } }
+function sentToday() { try { return localStorage.getItem(LS_LAST) === todayStamp(); } catch (e) { return true; } }
+function markSent() { try { localStorage.setItem(LS_LAST, todayStamp()); } catch (e) {} }
+
+function sendPing() {
+  if (!PING_ENABLED || !PING_ENDPOINT) return { sent: false, reason: "gate off (endpoint/master) — this is the SHIPPED state" };
+  if (sentToday()) return { sent: false, reason: "throttled — already pinged today from this browser" };
+  var payload = { iid: installId(), v: PING_VERSION, page: pingPageType(), day: todayStamp() };
+  try {
+    var body = JSON.stringify(payload);
+    // sandbox uses fetch so we get a clear success/fail; the tool prefers sendBeacon (same packet)
+    fetch(PING_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: body }).then(refreshStats).catch(function(){});
+  } catch (e) { return { sent: false, reason: "send threw: " + e }; }
+  markSent();
+  return { sent: true, payload: payload };
+}
+
+// ── UI wiring ──
+var out = document.getElementById("out");
+function show(obj) { out.textContent = JSON.stringify(obj, null, 2); }
+
+document.querySelectorAll("button[data-url]").forEach(function (b) {
+  b.onclick = function () { FAKE_URL = b.getAttribute("data-url"); FAKE_DAY = null; show(sendPing()); setTimeout(refreshStats, 200); };
+});
+document.getElementById("again").onclick = function () { FAKE_DAY = null; show(sendPing()); };
+document.getElementById("returning").onclick = function () {
+  // same install id, next day → counts as the SAME active user returning (DAU++, unique stays)
+  var d = new Date(); d.setDate(d.getDate() + 1); FAKE_DAY = d.toISOString().slice(0, 10);
+  show(sendPing()); setTimeout(refreshStats, 200);
+};
+document.getElementById("newuser").onclick = function () {
+  localStorage.removeItem(LS_ID); localStorage.removeItem(LS_LAST); FAKE_DAY = null;   // fresh browser = new user
+  var r = sendPing(); r.note = "new random install id minted → unique active-user count goes up"; show(r); setTimeout(refreshStats, 200);
+};
+document.getElementById("reset").onclick = function () {
+  localStorage.removeItem(LS_ID); localStorage.removeItem(LS_LAST); FAKE_DAY = null;
+  show({ reset: true, note: "local install id + throttle cleared" });
+};
+
+function refreshStats() {
+  fetch("http://localhost:8787/stats").then(function (r) { return r.json(); }).then(function (s) {
+    document.getElementById("recv").textContent = "online ✓"; document.getElementById("recv").className = "ok";
+    document.getElementById("au").textContent = s.activeUsers;
+    document.getElementById("tot").textContent = s.total;
+    document.getElementById("stats").textContent = JSON.stringify(s, null, 2);
+  }).catch(function () {
+    document.getElementById("recv").textContent = "offline ✗ — start the receiver"; document.getElementById("recv").className = "no";
+  });
+}
+refreshStats();
+setInterval(refreshStats, 3000);
+</script>
+</body>
+</html>

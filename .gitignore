@@ -24,3 +24,6 @@ preflight-research/
 
 # esbuild bookmarklet-minify temp files
 .bm-min-*.tmp.js
+
+# usage-ping sandbox test output (local only)
+usage-ping-sandbox/pings.log
