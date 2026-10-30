@@ -21227,8 +21227,10 @@ processJSON();
                  "&t=" + todayStamp();
         var base = PING_ENDPOINT.replace(/\/ping$/, "/beacon");
         var w = window.open(base + "?" + qs, "_blank");       // user-gesture navigation → not CSP-blocked
-        try { markSent(); } catch (e) {}
-        return !!w;                                           // false if a popup blocker stopped it
+        // Only mark "sent today" if the tab ACTUALLY opened. If a popup blocker stopped it (w is
+        // null), do NOT mark sent → the next FAB-open retries instead of silently losing the day.
+        if (w) { try { markSent(); } catch (e) {} return true; }
+        return false;                                         // popup-blocked → will retry
       } catch (e) { return false; }
     }
 
