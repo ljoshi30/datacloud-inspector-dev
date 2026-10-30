@@ -15,24 +15,26 @@ let pass = 0, fail = 0;
 function ok(name, cond, extra) { if (cond) { pass++; console.log("  ✓ " + name); } else { fail++; console.log("  ✗ " + name + (extra ? "  → " + extra : "")); } }
 function eq(name, got, want) { ok(name, got === want, "got " + JSON.stringify(got) + " want " + JSON.stringify(want)); }
 
-// ── Mirror of sendPing's gate logic (the safety-critical core) ──
+// ── Mirror of the capture gate logic (the safety-critical core), now PER-FEATURE throttled ──
 function makePinger(opts) {
   var PING_ENABLED = opts.enabled, PING_ENDPOINT = opts.endpoint;
   var sent = []; // records payloads that would have been transmitted
   var store = opts.store || {};
   var today = opts.today || "2026-10-30";
   function optedOut() { try { return store.dc_usage_optout === "1"; } catch (e) { return false; } }
-  function sentToday() { try { return store.dc_usage_last === today; } catch (e) { return true; } }
-  function markSent() { store.dc_usage_last = today; }
-  function pageType() { return opts.page || "DMO"; }
+  function key(feature) { return "dc_usage_last::" + (feature || "other") + "::" + today; }
+  function sentToday(feature) { try { return store[key(feature)] === "1"; } catch (e) { return true; } }
+  function markSent(feature) { store[key(feature)] = "1"; }
   function installId() { if (!store.dc_usage_iid) store.dc_usage_iid = "i_rand"; return store.dc_usage_iid; }
-  function sendPing() {
+  // sendPing now takes the feature (defaults to opts.page) so one browser can ping once PER feature/day
+  function sendPing(feature) {
+    feature = feature || opts.page || "DMO";
     if (!PING_ENABLED || !PING_ENDPOINT) return false;   // gates 1+2
     if (optedOut()) return false;                         // gate 3: user choice
-    if (sentToday()) return false;                        // throttle
-    var payload = { iid: installId(), v: opts.version || "dev", page: pageType(), day: today, build: opts.build || "public" };
+    if (sentToday(feature)) return false;                 // per-feature/day throttle
+    var payload = { iid: installId(), v: opts.version || "dev", page: feature, day: today, build: opts.build || "public" };
     sent.push(payload);
-    markSent();
+    markSent(feature);
     return true;
   }
   return { sendPing, sent, store };
@@ -49,13 +51,20 @@ console.log("\n1. GATES hold defensively — a missing endpoint/switch is a hard
   eq("endpoint set but master OFF → no-op (gate holds)", p3.sendPing(), false);
 }
 
-console.log("\n2. WHEN fully enabled (both gates cleared) it sends ONCE, then throttles for the day");
+console.log("\n2. PER-FEATURE throttle: same feature once/day, but DIFFERENT features each send a ping");
 {
-  var p = makePinger({ enabled: true, endpoint: "https://x", page: "Segment", version: "1.2.3" });
-  eq("first call sends", p.sendPing(), true);
-  eq("one payload", p.sent.length, 1);
-  eq("second call same day → throttled", p.sendPing(), false);
-  eq("still one payload (once/day)", p.sent.length, 1);
+  var p = makePinger({ enabled: true, endpoint: "https://x", version: "1.2.3" });
+  eq("DMO first open → sends", p.sendPing("DMO"), true);
+  eq("DMO again same day → throttled", p.sendPing("DMO"), false);
+  eq("Segment (different feature) → sends (your requirement!)", p.sendPing("Segment"), true);
+  eq("QueryEditor (another feature) → sends", p.sendPing("QueryEditor"), true);
+  eq("Segment again → throttled", p.sendPing("Segment"), false);
+  eq("3 distinct-feature pings total", p.sent.length, 3);
+  // SAME browser → still ONE unique user regardless of how many features it pinged from
+  var uniqueIids = Array.from(new Set(p.sent.map(function (x) { return x.iid; })));
+  eq("unique users = 1 (same iid across all features)", uniqueIids.length, 1);
+  var features = p.sent.map(function (x) { return x.page; }).sort();
+  eq("features captured = DMO, QueryEditor, Segment", features.join(","), "DMO,QueryEditor,Segment");
 }
 
 console.log("\n2b. OPT-OUT (gate 3) — user's choice always wins, even when fully live");
@@ -140,9 +149,9 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("CAPTURE CHANNEL = user-click navigation (window.open to /beacon) — survives CSP",
     /function reportUsage/.test(src) && /window\.open\(base \+ "\?" \+ qs/.test(src) && /\/ping\$\/, "\/beacon"/.test(src));
   ok("mark-sent ONLY when the tab actually opened (popup-blocked → retries, doesn't lose the day)",
-    /if \(w\) \{ try \{ markSent\(\); \} catch \(e\) \{\} return true; \}/.test(src) && /return false;\s*\/\/ popup-blocked/.test(src));
-  ok("AUTO-CAPTURE on FAB open, once/day (maybeReportOnFabOpen → throttled + opt-out)",
-    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
+    /if \(w\) \{ try \{ markSent\(feature\); \} catch \(e\) \{\} return true; \}/.test(src) && /return false;\s*\/\/ popup-blocked/.test(src));
+  ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
+    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
   ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
@@ -154,11 +163,16 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("capture globals exposed (manual + auto-on-fab)", /window\.__dcReportUsage\b/.test(src) && /window\.__dcReportUsageOnFabOpen/.test(src));
   ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
   ok("disclosure wording honest (anonymous, no record/field/personal/org data, brief tab) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /brief tab/i.test(src) && /Turn off/.test(src));
-  ok("once-per-day throttle via localStorage day stamp", /function sentToday/.test(src) && /function markSent/.test(src) && /todayStamp\(\)/.test(src));
+  ok("PER-FEATURE/day throttle (namespaced key feature+day → different features each ping)",
+    /function throttleKey\(feature\)/.test(src) && /LS_LAST \+ "::" \+ \(feature \|\| "other"\) \+ "::" \+ todayStamp\(\)/.test(src) && /function sentToday\(feature\)/.test(src) && /function markSent\(feature\)/.test(src));
+  ok("page detector covers ALL feature surfaces (QueryEditor/Transform/Activation/Explorer/MappingCanvas/ERD, not just DMO)",
+    /return "QueryEditor"/.test(src) && /return "DataTransform"/.test(src) && /return "Activation"/.test(src) && /return "DataExplorer"/.test(src) && /return "MappingCanvas"/.test(src) && /return "DataModelERD"/.test(src));
+  ok("detector reuses the tool's OWN page functions (authoritative) with try/typeof guards",
+    /function _is\(fn\)/.test(src) && /isQueryEditorPage/.test(src) && /isActivationPage/.test(src) && /findByTag\(TAGGING_CMP\)/.test(src));
   ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
     /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
-  ok("ANON payload = iid + version + page bucket + day + build (no org/host/record/url)",
-    /iid: installId\(\), v: PING_VERSION, page: pingPageType\(\), day: todayStamp\(\), build: PING_BUILD/.test(src));
+  ok("ANON payload = iid + version + feature(page) + day + build (no org/host/record/url)",
+    /iid: installId\(\), v: PING_VERSION, page: feature, day: todayStamp\(\), build: PING_BUILD/.test(src) && /var feature = pingPageType\(\);/.test(src));
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));

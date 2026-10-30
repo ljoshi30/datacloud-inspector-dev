@@ -24,7 +24,13 @@
  *   wrangler deploy
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-const VALID_PAGES = new Set(["DataStream", "DLO", "DMO", "DataGraph", "Segment", "IdentityResolution", "DataSpace", "DataModel", "other"]);
+// Feature/page buckets the ping may report. Kept in sync with pingPageType() in the tool.
+const VALID_PAGES = new Set([
+  "DataStream", "DLO", "DMO", "DataGraph", "DataModel", "DataModelERD",
+  "Segment", "IdentityResolution", "DataSpace",
+  "QueryEditor", "DataTransform", "Activation", "DataExplorer", "MappingCanvas",
+  "other"
+]);
 const TABLE = { public: "pings_public", dev: "pings_dev" };
 
 function cors(h = {}) {
