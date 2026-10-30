@@ -20037,6 +20037,169 @@ processJSON();
   /* @strip:end */
 
   /* @strip:start dev
+   * ── DMO detail: badge each field as Standard / Custom / System (dev-only) ───────────────────
+   * The Fields tab never tells you whether a field is product-given or hand-created. SF's own
+   * component data carries it per field as `creationType` — exactly the value our export already
+   * writes as the "Creation Type" column. This surfaces it on-screen as a small badge so you can
+   * verify origin without exporting. Three real values exist (probe v51 on the live org):
+   *   Standard = product-given · Custom = manually created · System = internal/managed.
+   * PROVEN DOM (DOM Probe v51):
+   *   <runtime_cdp-custom-datatable> whose columns include "isMapped" is the DMO field table.
+   *     .keyField = "name"   .data[] = { name:"X__c", label, creationType:"Standard"|"Custom"|"System", … }
+   *     rendered <tr> carries data-row-key-value = the field's `name` (the keyField value).
+   *   So we map name→creationType and anchor each badge by the row's OWN key — exact, dup-label-
+   *   proof, and virtualization-safe (never align blindly by index → never a wrong badge).
+   * VDI-safe (same shape as the IR module): default OFF; ONE shadow crawl per pass; signature
+   * dirty-check skips no-op redraws; observer DISCONNECTS while writing + debounced; injected
+   * badges tracked by reference (unstackable); decorate only visible rows; teardown clears all.
+   */
+  (function dcDmoOriginModule() {
+    try { if (!/c__objectApiName=[a-zA-Z0-9_]+/i.test(location.href) || !/standard-DataModel/i.test(location.href)) return; } catch (e) { return; }
+    var DO_ON = false;
+    function doSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // Visual language for the three origins. Custom (hand-made) is the one you usually want to
+    // spot, so it gets the warm/standout color; Standard is neutral; System is a muted purple.
+    function doStyleFor(ct) {
+      var c = String(ct || "").toLowerCase();
+      if (c === "custom") return { label: "Custom", bg: "#fff7ed", fg: "#c2410c", bd: "#fed7aa", tip: "Custom — created manually in this org" };
+      if (c === "standard") return { label: "Standard", bg: "#eef2f8", fg: "#5f6b85", bd: "#dfe5ef", tip: "Standard — product-given field" };
+      if (c === "system") return { label: "System", bg: "#f3e8ff", fg: "#7e22ce", bd: "#e9d5ff", tip: "System — internal / managed field" };
+      if (!c) return null;                                   // blank → show nothing (never guess)
+      // any other value SF might add later: show it verbatim, neutral styling (forward-safe)
+      return { label: String(ct), bg: "#eef2f8", fg: "#5f6b85", bd: "#dfe5ef", tip: String(ct) };
+    }
+
+    var _doSpans = [];
+    // Reference-only clear (VDI: doRun already crawls once via doCollect — no second full sweep here).
+    function doClear() { for (var i = 0; i < _doSpans.length; i++) { try { _doSpans[i].remove(); } catch (e) {} } _doSpans = []; }
+    function doInject(host, ct) {
+      var st = doStyleFor(ct); if (!host || !st) return;
+      try {
+        var sp = document.createElement("span");
+        sp.className = "dc-do-badge";
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "baseline");
+        s("font", "600 10px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif");
+        s("color", st.fg); s("background", st.bg); s("border", "1px solid " + st.bd);
+        s("border-radius", "9px"); s("padding", "0 7px"); s("white-space", "nowrap");
+        s("letter-spacing", ".2px"); s("vertical-align", "middle");
+        sp.textContent = st.label;
+        try { sp.setAttribute("title", st.tip); } catch (e) {}
+        host.appendChild(sp); _doSpans.push(sp);
+      } catch (e) {}
+    }
+
+    // The DMO field table (columns include "isMapped"), its keyField, and name→creationType map.
+    function doIsFieldTable(dt) {
+      try { var cols = doSafe(dt, "columns"); if (!Array.isArray(cols)) return false; return cols.some(function (c) { return doSafe(c, "fieldName") === "isMapped"; }); } catch (e) { return false; }
+    }
+    function doKeyField(dt) { var k = doSafe(dt, "keyField"); return (typeof k === "string" && k) ? k : "name"; }
+    // Rendered data <tr>s (those with a th/td cell), in render order.
+    function doDataRows(dt) {
+      var sr = dt.shadowRoot || dt, trs = [], out = [];
+      try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
+      for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) out.push(trs[i]); }
+      return out;
+    }
+    function doRowKey(row) { try { return row.getAttribute && (row.getAttribute("data-row-key-value") || row.getAttribute("data-row-key") || row.getAttribute("data-key-value")); } catch (e) { return null; } }
+    // The "Field Label" cell of a row (anchor the badge there); fall back to the first cell.
+    function doLabelCell(row) {
+      try {
+        var cs = row.querySelectorAll("th,td");
+        for (var i = 0; i < cs.length; i++) { var dl = ""; try { dl = cs[i].getAttribute("data-label") || ""; } catch (e) {} if (/field label/i.test(dl)) return cs[i]; }
+        return cs[0] || null;
+      } catch (e) { return null; }
+    }
+
+    // ONE crawl per pass → the field table(s). (Usually one; handle more defensively.)
+    var _doTables = [];
+    function doCollect() {
+      var out = [];
+      try {
+        (function walk(root, d) {
+          if (!root || d > 25) return;
+          var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+          for (var i = 0; i < q.length; i++) {
+            var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
+            if (t === "runtime_cdp-custom-datatable" && doIsFieldTable(q[i])) out.push(q[i]);
+            var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
+            if (sr) walk(sr, d + 1);
+          }
+        })(document, 0);
+      } catch (e) {}
+      _doTables = out;
+    }
+    function doDecorate() {
+      _doTables.forEach(function (dt) {
+        if (!isVisible(dt)) return;
+        var data = doSafe(dt, "data"); if (!Array.isArray(data) || !data.length) return;
+        var kf = doKeyField(dt);
+        // map the row key (data[].<keyField>) → its creationType — exact per-field, no index guess
+        var map = {};
+        for (var i = 0; i < data.length; i++) { var r = data[i]; if (r) { var k = doSafe(r, kf); if (k != null) map[String(k)] = doSafe(r, "creationType"); } }
+        doDataRows(dt).forEach(function (row) {
+          if (!isVisible(row)) return;
+          var key = doRowKey(row); if (key == null) return;         // no key → skip (never guess the row)
+          if (!Object.prototype.hasOwnProperty.call(map, String(key))) return;
+          var cell = doLabelCell(row); if (!cell) return;
+          doInject(cell, map[String(key)]);
+        });
+      });
+    }
+    // signature = visible row keys + their origin → skip redraw when nothing changed (no churn)
+    function doSignature() {
+      var parts = [];
+      try {
+        _doTables.forEach(function (dt) {
+          if (!isVisible(dt)) return;
+          var data = doSafe(dt, "data"); var kf = doKeyField(dt); var map = {};
+          if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r) { var k = doSafe(r, kf); if (k != null) map[String(k)] = doSafe(r, "creationType"); } }
+          doDataRows(dt).forEach(function (row) { if (!isVisible(row)) return; var key = doRowKey(row); if (key != null && map.hasOwnProperty(String(key))) parts.push(key + "=" + map[String(key)]); });
+        });
+      } catch (e) {}
+      return parts.join("|");
+    }
+    var _doSig = null, _doObs = null, _doT = null, _doWriting = false;
+    function doRun(force) {
+      if (!DO_ON) return;
+      doCollect();
+      var sig = doSignature();
+      if (!force && sig === _doSig && _doSpans.length) return;
+      _doSig = sig;
+      _doWriting = true;
+      try { if (_doObs) _doObs.disconnect(); } catch (e) {}
+      try { doClear(); doDecorate(); } catch (e) {}
+      try { if (_doObs && DO_ON) _doObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _doWriting = false;
+    }
+    // DEBOUNCED: virtual-scroll row swaps / search fire bursts of childList mutations → collapse to one.
+    function doSchedule() { if (_doWriting || _doT) return; _doT = setTimeout(function () { _doT = null; doRun(false); }, 300); }
+    function doStart() {
+      DO_ON = true;
+      if (!_doObs) { try { _doObs = new MutationObserver(doSchedule); } catch (e) {} }
+      doRun(true);
+    }
+    function doStop() { DO_ON = false; try { if (_doObs) _doObs.disconnect(); } catch (e) {} _doSig = null; doClear(); }
+    try {
+      window.__dcToggleDmoOrigin = function () { if (DO_ON) doStop(); else doStart(); return DO_ON; };
+      window.__dcDmoOriginIsOn = function () { return DO_ON; };
+      // How many fields carry an origin (so the FAB offers the toggle only when there's data).
+      // Read on demand (menu open) — one crawl, not polled.
+      window.__dcDmoOriginCount = function () {
+        var n = 0;
+        try { findVisibleByTag("runtime_cdp-custom-datatable").filter(doIsFieldTable).forEach(function (dt) { var data = doSafe(dt, "data"); if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && doStyleFor(doSafe(r, "creationType"))) n++; } }); } catch (e) {}
+        return n;
+      };
+    } catch (e) {}
+
+    // One-time cleanup on load: a prior build/instance may have left .dc-do-badge spans — sweep
+    // them once so a re-toggle/reload never shows two badges per field (not a per-pass crawl).
+    try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-do-badge")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+  })();
+  /* @strip:end */
+
+  /* @strip:start dev
    * ── DATA SPACE: export a DLO's membership filters to CSV / Excel / Sheets (dev-only) ────────
    * On a Data Space page, each member object (DLO) can have a membership filter — grouped
    * conditions, exactly like a segment. SF lets you build it but NOT take it with you. This
@@ -20725,9 +20888,29 @@ processJSON();
         };
       }
 
+      // DMO-only "Field origin" entry — TOGGLES the Standard/Custom/System badges (no panel).
+      // Shown ONLY when the page actually has fields carrying an origin (count>0); dev-gated at
+      // runtime because the toggle fn only exists when the dev-only origin module loaded. The
+      // export's "Creation Type" column is unaffected either way.
+      let dmoOriginRow = null;
+      if (detailPageType === "DMO" &&
+          typeof window.__dcToggleDmoOrigin === "function" &&
+          typeof window.__dcDmoOriginCount === "function" && window.__dcDmoOriginCount() > 0) {
+        const tagIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M2 2h6l6 6-6 6-6-6V2z' fill='none' stroke='white' stroke-width='1.4' stroke-linejoin='round'/><circle cx='5' cy='5' r='1.1' fill='white'/></svg>";
+        const doOnNow = (typeof window.__dcDmoOriginIsOn === "function") && window.__dcDmoOriginIsOn();
+        dmoOriginRow = mkBtn("dc-dmo-origin-row", "Field origin", "Badge each field as Standard (product-given), Custom (created manually), or System (internal)", "linear-gradient(135deg,#f97316,#c2410c)", tagIconSvg, doOnNow ? "On — Standard / Custom / System" : "Off — show each field's origin");
+        const doSub = dmoOriginRow.querySelector("span:last-child");
+        dmoOriginRow.onclick = (e) => {
+          e.stopPropagation();
+          let on = false; try { on = window.__dcToggleDmoOrigin(); } catch (err) {}
+          if (doSub) doSub.textContent = on ? "On — Standard / Custom / System" : "Off — show each field's origin";
+        };
+      }
+
       menu.appendChild(dl);
       if (segApiRow) menu.appendChild(segApiRow);
       if (fmRow) menu.appendChild(fmRow);
+      if (dmoOriginRow) menu.appendChild(dmoOriginRow);
 
       const fab = document.createElement("button");
       fab.id = "dc-fab";
