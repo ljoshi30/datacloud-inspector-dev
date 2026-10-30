@@ -1,0 +1,14 @@
+# Cloudflare Worker config for the Data 360 Inspector usage endpoint.
+# Fill in database_id after:  wrangler d1 create d360_usage
+name = "d360-usage"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"                 # worker.js reads env.DB
+database_name = "d360_usage"
+database_id = "PASTE_DATABASE_ID_HERE_AFTER_wrangler_d1_create"
+
+# REPORT_TOKEN is a SECRET, not set here. Set it with:
+#   wrangler secret put REPORT_TOKEN
+# Then view the dashboard at:  https://<your-worker-url>/report?token=THAT_TOKEN

@@ -21102,8 +21102,19 @@ processJSON();
     var PING_ENDPOINT = "";        // GATE 1: empty → transmits nothing. Set to the receiver URL later.
     var PING_ENABLED  = false;     // GATE 2: master off. Flip true only after privacy + CSP sign-off.
     var PING_VERSION  = "dev";     // stamped per build when we wire it; coarse, not identifying.
-    var LS_ID   = "dc_usage_iid";  // random per-browser install id (anonymous)
-    var LS_LAST = "dc_usage_last"; // last-sent day stamp (throttle)
+    var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
+    var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle)
+    var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
+    var LS_NOTICE = "dc_usage_noticed"; // "1" = the one-time disclosure notice has been shown
+
+    // GATE 3 — the user's choice always wins, even when the tool is fully live.
+    function optedOut() { try { return localStorage.getItem(LS_OPTOUT) === "1"; } catch (e) { return false; } }
+    // public controls so a user (or the install page) can opt out / back in and check state.
+    try {
+      window.__dcUsageOptOut = function () { try { localStorage.setItem(LS_OPTOUT, "1"); } catch (e) {} return true; };
+      window.__dcUsageOptIn  = function () { try { localStorage.removeItem(LS_OPTOUT); } catch (e) {} return false; };
+      window.__dcUsageIsOptedOut = function () { return optedOut(); };
+    } catch (e) {}
 
     // Coarse page-type bucket — NEVER a record id or full URL. Mirrors our page gates.
     function pingPageType() {
@@ -21132,9 +21143,10 @@ processJSON();
     function sentToday() { try { return localStorage.getItem(LS_LAST) === todayStamp(); } catch (e) { return true; } } // on error, assume sent → don't spam
     function markSent() { try { localStorage.setItem(LS_LAST, todayStamp()); } catch (e) {} }
 
-    // The actual send — guarded six ways; a single missing gate makes it a hard no-op.
+    // The actual send — guarded; a single missing gate makes it a hard no-op.
     function sendPing() {
       if (!PING_ENABLED || !PING_ENDPOINT) return false;   // GATES 1+2: inert by default
+      if (optedOut()) return false;                         // GATE 3: user opted out → never ping
       if (sentToday()) return false;                        // once/day throttle
       var payload = { iid: installId(), v: PING_VERSION, page: pingPageType(), day: todayStamp() };
       var ok = false;
@@ -21146,9 +21158,37 @@ processJSON();
       if (ok) markSent();
       return ok;
     }
+
+    // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
+    // (no point disclosing something that's off), only once (LS_NOTICE), and never if already
+    // opted out. A small dismissible banner with a one-click "Turn off" (opt-out). Zero cost today
+    // because PING_ENABLED is false → this never renders in the shipped build.
+    function showDisclosureOnce() {
+      try {
+        if (!PING_ENABLED || !PING_ENDPOINT) return;        // not live → say nothing
+        if (optedOut()) return;                             // respect an existing opt-out
+        if (localStorage.getItem(LS_NOTICE) === "1") return; // already shown
+        if (!document.body) { return; }
+        var bar = document.createElement("div");
+        bar.id = "dc-usage-notice";
+        bar.style.cssText = "position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483647;max-width:460px;background:#111827;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.5);padding:12px 14px;font:12px/1.5 -apple-system,sans-serif;";
+        bar.innerHTML = "<div style='display:flex;gap:10px;align-items:flex-start;'>" +
+          "<span style='font-size:15px;'>&#9432;</span><div>" +
+          "<b>Data 360 Inspector</b> reports <b>anonymous</b> usage counts (no data, no record/field values, no personal or org info) so the team can measure adoption. " +
+          "<a href='#' id='dc-usage-off' style='color:#5eead4;'>Turn off</a> &middot; " +
+          "<a href='#' id='dc-usage-ok' style='color:#94a3b8;'>Dismiss</a></div></div>";
+        document.body.appendChild(bar);
+        var done = function () { try { localStorage.setItem(LS_NOTICE, "1"); } catch (e) {} try { bar.remove(); } catch (e) {} };
+        var off = bar.querySelector("#dc-usage-off"), okb = bar.querySelector("#dc-usage-ok");
+        if (off) off.onclick = function (e) { e.preventDefault(); try { window.__dcUsageOptOut(); } catch (er) {} done(); };
+        if (okb) okb.onclick = function (e) { e.preventDefault(); done(); };
+      } catch (e) {}
+    }
+
     // expose for a future controlled test/flip; calling it today is a no-op (gates off).
     try { window.__dcUsagePing = function () { return sendPing(); }; } catch (e) {}
-    // Attempt on load — inert until the gates are cleared.
+    // On load: show the one-time notice (only if live), then attempt the ping (inert until gates clear).
+    try { showDisclosureOnce(); } catch (e) {}
     try { sendPing(); } catch (e) {}
   })();
   /* @strip:end */

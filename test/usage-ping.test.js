@@ -17,13 +17,15 @@ function makePinger(opts) {
   var sent = []; // records payloads that would have been transmitted
   var store = opts.store || {};
   var today = opts.today || "2026-10-30";
+  function optedOut() { try { return store.dc_usage_optout === "1"; } catch (e) { return false; } }
   function sentToday() { try { return store.dc_usage_last === today; } catch (e) { return true; } }
   function markSent() { store.dc_usage_last = today; }
   function pageType() { return opts.page || "DMO"; }
   function installId() { if (!store.dc_usage_iid) store.dc_usage_iid = "i_rand"; return store.dc_usage_iid; }
   function sendPing() {
-    if (!PING_ENABLED || !PING_ENDPOINT) return false;
-    if (sentToday()) return false;
+    if (!PING_ENABLED || !PING_ENDPOINT) return false;   // gates 1+2
+    if (optedOut()) return false;                         // gate 3: user choice
+    if (sentToday()) return false;                        // throttle
     var payload = { iid: installId(), v: opts.version || "dev", page: pageType(), day: today };
     sent.push(payload);
     markSent();
@@ -53,6 +55,19 @@ console.log("\n2. WHEN fully enabled (both gates cleared) it sends ONCE, then th
   eq("one payload", p.sent.length, 1);
   eq("second call same day → throttled", p.sendPing(), false);
   eq("still one payload (once/day)", p.sent.length, 1);
+}
+
+console.log("\n2b. OPT-OUT (gate 3) — user's choice always wins, even when fully live");
+{
+  var p = makePinger({ enabled: true, endpoint: "https://x", store: { dc_usage_optout: "1" } });
+  eq("opted-out user → no ping even with both gates cleared", p.sendPing(), false);
+  eq("nothing transmitted for an opted-out user", p.sent.length, 0);
+  // opting back in re-enables
+  var store = { dc_usage_optout: "1" };
+  var p2 = makePinger({ enabled: true, endpoint: "https://x", store: store });
+  eq("still opted out → no send", p2.sendPing(), false);
+  delete store.dc_usage_optout;                 // user opts back in
+  eq("after opt back in → sends", p2.sendPing(), true);
 }
 
 console.log("\n3. ANONYMOUS BY CONSTRUCTION — payload carries no org / host / record / url / PII");
@@ -105,6 +120,10 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("GATE 1: endpoint EMPTY in source (ships with no receiver)", /var PING_ENDPOINT = "";/.test(src));
   ok("GATE 2: master switch FALSE in source (ships disabled)", /var PING_ENABLED\s+= false;/.test(src));
   ok("both gates checked before any send", /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return false;/.test(src));
+  ok("GATE 3: opt-out checked before send (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
+  ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
+  ok("ONE-TIME disclosure notice, shown only when LIVE + not opted out", /function showDisclosureOnce/.test(src) && /if \(!PING_ENABLED \|\| !PING_ENDPOINT\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
+  ok("disclosure wording is honest (anonymous, no data/PII) + offers Turn off", /anonymous.{0,40}usage counts/i.test(src) && /no personal or org info/i.test(src) && /Turn off/.test(src));
   ok("once-per-day throttle via localStorage day stamp", /function sentToday/.test(src) && /function markSent/.test(src) && /todayStamp\(\)/.test(src));
   ok("ANON payload = only iid + version + coarse page bucket + day (no org/host/record/url)",
     /iid: installId\(\), v: PING_VERSION, page: pingPageType\(\), day: todayStamp\(\)/.test(src));
