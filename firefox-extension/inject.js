@@ -19645,21 +19645,23 @@ processJSON();
         var sp = document.createElement("span");
         sp.className = "dc-ir-api";
         var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
-        // inline-block with a clear LEFT GAP (the label is an <a>, so a block span collapsed right
-        // against it — "Account MultilineTDI_…"). A little pill-ish chip reads as a separate
-        // annotation; title carries the full api so a truncated one is still readable on hover.
-        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "baseline");
-        s("font", "10px/1.3 'SF Mono',Menlo,Consolas,monospace"); s("color", "#5f6b85");
-        s("background", "#eef2f8"); s("border", "1px solid #dfe5ef"); s("border-radius", "4px");
-        s("padding", "0 5px"); s("white-space", "nowrap"); s("max-width", "320px");
-        s("overflow", "hidden"); s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
+        // BELOW the label on its OWN line (reported: inline-right looked bad when a label wraps to
+        // two lines — the chip floated mid-height beside it). display:block breaks it under the
+        // label; a small margin-top is the only gap (no extra spacing). font-size:INHERIT matches
+        // the label's size exactly (per request); width:max-content so the pill hugs the api text
+        // instead of stretching across the row. Monospace + readable slate so it reads as code.
+        s("display", "block"); s("margin", "2px 0 0 0"); s("width", "max-content"); s("max-width", "100%");
+        s("font-family", "'SF Mono',Menlo,Consolas,monospace"); s("font-size", "inherit"); s("line-height", "1.3");
+        s("color", "#475569"); s("background", "#eef2f8"); s("border", "1px solid #dfe5ef"); s("border-radius", "4px");
+        s("padding", "0 5px"); s("white-space", "nowrap"); s("overflow", "hidden");
+        s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
         sp._irApi = String(apiText); sp.textContent = String(apiText);
         try { sp.setAttribute("title", apiText + "  ·  click to copy"); } catch (e) {}
         sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
         sp.addEventListener("click", function (e) {
           e.stopPropagation(); e.preventDefault();
           var t = sp._irApi, restore = t;
-          function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#4a6fa5"); }, 900); }
+          function flash() { sp.textContent = "✓ Copied"; s("color", "#059669"); setTimeout(function () { sp.textContent = restore; s("color", "#475569"); }, 900); }
           try { navigator.clipboard.writeText(t).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
           catch (e3) { flash(); }
         }, true);
