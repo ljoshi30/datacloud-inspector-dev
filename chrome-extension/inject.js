@@ -20811,10 +20811,99 @@ processJSON();
       } catch (e) {}
     }
 
+    // ── LIVE on-screen API-name decorator for the filter items (dev-only, VDI-safe) ─────────────
+    // Each condition renders as <runtime_cdp-data-spaces-table-filter-item> exposing
+    // .filter.field.devName (the api) + .filter.field.label (proven DOM Probe v54). We show the api
+    // as a small chip in the item's row. Same VDI-safe shape as the IR/DMO decorators: default OFF,
+    // ONE crawl per pass, signature dirty-check, observer disconnect-while-writing + debounce,
+    // reference-tracked spans (unstackable), visible-only, teardown clears everything.
+    var DFA_ON = false, _dfaSpans = [], _dfaItems = [], _dfaSig = null, _dfaObs = null, _dfaT = null, _dfaWriting = false;
+    function dfaClear() { for (var i = 0; i < _dfaSpans.length; i++) { try { _dfaSpans[i].remove(); } catch (e) {} } _dfaSpans = []; }
+    function dfaInject(host, api) {
+      if (!host || !api) return;
+      try {
+        var sp = document.createElement("span");
+        sp.className = "dc-dfa-api";
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "middle");
+        s("font", "10px/1.4 'SF Mono',Menlo,Consolas,monospace"); s("color", "#0f766e");
+        s("background", "#f0fdfa"); s("border", "1px solid #99f6e4"); s("border-radius", "4px");
+        s("padding", "0 5px"); s("white-space", "nowrap"); s("max-width", "320px"); s("overflow", "hidden");
+        s("text-overflow", "ellipsis"); s("cursor", "pointer"); s("user-select", "text");
+        sp._dfaApi = String(api); sp.textContent = String(api);
+        try { sp.setAttribute("title", api + "  ·  click to copy"); } catch (e) {}
+        sp.addEventListener("mousedown", function (e) { e.stopPropagation(); }, true);
+        sp.addEventListener("click", function (e) {
+          e.stopPropagation(); e.preventDefault();
+          var t = sp._dfaApi, restore = t;
+          function flash() { sp.textContent = "✓ Copied"; setTimeout(function () { sp.textContent = restore; }, 900); }
+          try { navigator.clipboard.writeText(t).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+          catch (e3) { flash(); }
+        }, true);
+        host.appendChild(sp); _dfaSpans.push(sp);
+      } catch (e) {}
+    }
+    // ONE crawl → the filter-item components (reuse dsfCrawl; it walks the full shadow tree once).
+    function dfaCollect() {
+      var items = [];
+      try { dsfCrawl(function (el) { try { if ((el.tagName || "").toLowerCase() === "runtime_cdp-data-spaces-table-filter-item") items.push(el); } catch (e) {} }); } catch (e) {}
+      _dfaItems = items;
+    }
+    // the on-screen text leaf showing "Obj > field" (or the field label) → anchor the chip after it.
+    function dfaAnchor(item, fieldLabel) {
+      var want = String(fieldLabel || "").trim().toLowerCase(), hit = null;
+      if (!want) return item;
+      try {
+        (function walk(r, d) {
+          if (hit || !r || d > 8 || !r.querySelectorAll) return;
+          var els = r.querySelectorAll("*");
+          for (var i = 0; i < els.length && !hit; i++) {
+            var el = els[i];
+            if (el.classList && el.classList.contains("dc-dfa-api")) continue;
+            var cn = el.childNodes || [];
+            for (var j = 0; j < cn.length; j++) { var tx = cn[j]; if (tx.nodeType === 3 && tx.nodeValue) { var v = tx.nodeValue.replace(/\s+/g, " ").trim().toLowerCase(); if (v === want || v.indexOf("> " + want) >= 0 || v.indexOf(want) >= 0 && v.length <= want.length + 40) { hit = el; break; } } }
+            var sr = null; try { sr = el.shadowRoot; } catch (e) {}
+            if (sr && !hit) walk(sr, d + 1);
+          }
+        })(item.shadowRoot || item, 0);
+      } catch (e) {}
+      return hit || item;
+    }
+    function dfaDecorate() {
+      _dfaItems.forEach(function (item) {
+        if (!isVisible(item)) return;
+        var f = dsfSafe(item, "filter"); if (!f) return;
+        var fld = f.field || {}; var api = fld.devName || "";
+        if (!api || !/__/.test(String(api))) return;        // api-looking only
+        var host = dfaAnchor(item, fld.label);
+        dfaInject(host, String(api));
+      });
+    }
+    function dfaSignature() { var p = []; try { _dfaItems.forEach(function (it) { if (!isVisible(it)) return; var f = dsfSafe(it, "filter"); var api = f && f.field && f.field.devName; if (api) p.push(api); }); } catch (e) {} return p.join("|"); }
+    function dfaRun(force) {
+      if (!DFA_ON) return;
+      dfaCollect();
+      var sig = dfaSignature();
+      if (!force && sig === _dfaSig && _dfaSpans.length) return;
+      _dfaSig = sig;
+      _dfaWriting = true;
+      try { if (_dfaObs) _dfaObs.disconnect(); } catch (e) {}
+      try { dfaClear(); dfaDecorate(); } catch (e) {}
+      try { if (_dfaObs && DFA_ON) _dfaObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _dfaWriting = false;
+    }
+    function dfaSchedule() { if (_dfaWriting || _dfaT) return; _dfaT = setTimeout(function () { _dfaT = null; dfaRun(false); }, 300); }
+    function dfaStart() { DFA_ON = true; if (!_dfaObs) { try { _dfaObs = new MutationObserver(dfaSchedule); } catch (e) {} } dfaRun(true); }
+    function dfaStop() { DFA_ON = false; try { if (_dfaObs) _dfaObs.disconnect(); } catch (e) {} _dfaSig = null; dfaClear(); }
+    // One-time load sweep for a prior instance's leftover chips.
+    try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-dfa-api")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+
     // expose + count (for a launcher that only shows when a filter is present)
     try {
       window.__dcDsFilterExport = dsfOpen;
       window.__dcDsFilterCount = function () { try { return dsfRead().groups.length; } catch (e) { return 0; } };
+      window.__dcToggleDsFilterApi = function () { if (DFA_ON) dfaStop(); else dfaStart(); return DFA_ON; };
+      window.__dcDsFilterApiIsOn = function () { return DFA_ON; };
     } catch (e) {}
 
     // Launcher FAB — a round button on the BOTTOM-LEFT with an expanding menu (same look as the
@@ -20849,6 +20938,27 @@ processJSON();
         row.onclick = function (e) { e.stopPropagation(); closeDsf(); dsfOpen(); };
         menu.appendChild(dcMakeMenuCloseX(function () { closeDsf(); }));
         menu.appendChild(row);
+
+        // "API names" toggle — shows each filter field's API name inline on the Edit-Filters modal.
+        var apiRow = document.createElement("button");
+        apiRow.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;";
+        var apiIcon = "<svg width='15' height='15' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+        apiRow.innerHTML = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:linear-gradient(135deg,#0d9488,#0f766e);display:flex;align-items:center;justify-content:center;'>" + apiIcon + "</div>";
+        var apiCol = document.createElement("div"); apiCol.style.cssText = "display:flex;flex-direction:column;gap:1px;";
+        var apiTtl = document.createElement("span"); apiTtl.style.cssText = "font:600 13px/1.2 -apple-system,sans-serif;color:#fff;";
+        var apiSub = document.createElement("span"); apiSub.style.cssText = "font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;";
+        apiCol.appendChild(apiTtl); apiCol.appendChild(apiSub); apiRow.appendChild(apiCol);
+        function apiPaint() {
+          var on = false; try { on = (typeof window.__dcDsFilterApiIsOn === "function") && window.__dcDsFilterApiIsOn(); } catch (e) {}
+          apiTtl.innerHTML = "API names" + (on ? " <span style='color:#34d399;font-size:11px;font-weight:700'>● ON</span>" : "");
+          apiSub.textContent = on ? "Shown on each filter field · click to copy" : "Show API name on each filter field";
+          apiRow.style.background = on ? "rgba(52,211,153,.12)" : "#111827";
+        }
+        apiPaint();
+        apiRow.onmouseenter = function () { apiRow.style.background = "rgba(255,255,255,.07)"; };
+        apiRow.onmouseleave = function () { apiPaint(); };
+        apiRow.onclick = function (e) { e.stopPropagation(); try { window.__dcToggleDsFilterApi(); } catch (er) {} apiPaint(); };
+        menu.appendChild(apiRow);
         var fab = document.createElement("button");
         fab.title = "Export this object's filters";
         fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;background:linear-gradient(135deg,#0ea5e9,#4338ca);box-shadow:0 4px 18px rgba(67,56,202,.5);display:flex;align-items:center;justify-content:center;";
@@ -21145,7 +21255,7 @@ processJSON();
     // measured instead via (a) the install-page Cloudflare analytics and (b) a USER-CLICKED
     // "Report usage" action (a user navigation, which CSP does not block). See dcReportUsage below.
     var PING_ENABLED  = false;     // auto-ping off (CSP-blocked). The manual Report-usage button still works.
-    var PING_VERSION  = "1.2.625"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.627"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

@@ -263,6 +263,17 @@ console.log("\n5. source presence — reader reads proven props, export is 3-for
     /function dsfSyncFab/.test(src) && /new MutationObserver\(dsfSchedule\)/.test(src) && /w\.style\.display = "flex"/.test(src) && /_dsfWrap\.style\.display = "none"/.test(src) && !/_dsfFabTries/.test(src));
   ok("Export Filters lives inside a LEFT-side launcher FAB menu (round FAB + close-× + action row)", /bottom:24px;left:24px/.test(src) && /dcMakeMenuCloseX\(function \(\) \{ closeDsf\(\); \}\)/.test(src) && /row\.onclick = function \(e\) \{ e\.stopPropagation\(\); closeDsf\(\); dsfOpen\(\); \}/.test(src));
   ok("FAB subtitle shows the live group count, updated on each sync", /_dsfSub\.innerHTML = n \+ " group"/.test(src));
+  // LIVE on-screen API-name decorator for filter fields (probe v54: item.filter.field.devName)
+  ok("LIVE API-name decorator reads item.filter.field.devName (proven v54) + requires __",
+    /function dfaDecorate/.test(src) && /dsfSafe\(item, "filter"\)/.test(src) && /fld\.devName/.test(src) && /!\/__\/.test\(String\(api\)\)/.test(src));
+  ok("decorator crawls filter-item components once (reuses dsfCrawl) — VDI-safe",
+    /function dfaCollect/.test(src) && /runtime_cdp-data-spaces-table-filter-item/.test(src) && /dsfCrawl\(function \(el\)/.test(src));
+  ok("decorator VDI shape: signature guard + observer disconnect-while-writing + debounce + ref-tracked spans",
+    /function dfaSignature/.test(src) && /sig === _dfaSig/.test(src) && /_dfaWriting = true;/.test(src) && /if \(_dfaObs\) _dfaObs\.disconnect\(\);/.test(src) && /function dfaSchedule\(\) \{ if \(_dfaWriting \|\| _dfaT\) return;/.test(src) && /var DFA_ON = false/.test(src) && /function dfaClear/.test(src));
+  ok("decorator default OFF + toggle + stop clears; chips click-to-copy; one-time load sweep",
+    /window\.__dcToggleDsFilterApi/.test(src) && /window\.__dcDsFilterApiIsOn/.test(src) && /function dfaStop/.test(src) && /dfaClear\(\);/.test(src) && /dc-dfa-api/.test(src) && /navigator\.clipboard\.writeText/.test(src));
+  ok("FAB has an 'API names' toggle row with a green ● ON active indicator", /function apiPaint/.test(src) && /API names/.test(src) && /● ON/.test(src) && /window\.__dcToggleDsFilterApi\(\)/.test(src));
+  ok("decorator decorates only VISIBLE items (skip stale DOM)", /_dfaItems\.forEach\(function \(item\) \{\s*if \(!isVisible\(item\)\) return;/.test(src));
   ok("DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDataSpaceFilterExport/.test(strip); })());
   ok("present in the FULL bookmarklet build (synced)", /function dcDataSpaceFilterExport\(\)/.test(bm));
 }
