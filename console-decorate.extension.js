@@ -19317,8 +19317,10 @@ processJSON();
     var _dgBuckets = { rows: [], tables: [], panels: [], controls: [], conditions: [] };
     function dgCollect() {
       var b = { rows: [], tables: [], panels: [], controls: [], conditions: [] };
+      var visited = 0;   // VDI perf: nodes walked this crawl (guarded report below)
       try {
         eachElement(document, function (el) {
+          visited++;
           var t = ""; try { t = (el.tagName || "").toLowerCase(); } catch (e) {}
           if (t === "runtime_cdp-tree-grid-row") { b.rows.push(el); return; }
           if (t === "runtime_cdp-custom-datatable") { b.tables.push(el); return; }
@@ -19329,6 +19331,7 @@ processJSON();
         });
       } catch (e) {}
       _dgBuckets = b;
+      try { if (window.__dcPerf) window.__dcPerf.crawl("data-graph", visited); } catch (e) {}
     }
 
     function dgDecorateLeft() {
@@ -19546,10 +19549,13 @@ processJSON();
       var sig = dgSignature();
       if (!force && sig === _dgSig && _dgSpans.length) return;   // nothing changed → no flicker
       _dgSig = sig;
-      dgClearInjected();          // remove ALL our spans by reference FIRST → cannot ever stack
-      dgDecorateLeft();
-      dgDecorateRight();
-      dgDecorateFilters();
+      var _dgWrite = function () {
+        dgClearInjected();        // remove ALL our spans by reference FIRST → cannot ever stack
+        dgDecorateLeft();
+        dgDecorateRight();
+        dgDecorateFilters();
+      };
+      try { if (window.__dcPerf) window.__dcPerf.pass("data-graph", _dgWrite); else _dgWrite(); } catch (e) { _dgWrite(); }
     }
 
     // Re-decorate on DOM change. Two triggers: (1) a MutationObserver for the light DOM, and (2) a
@@ -19699,11 +19705,13 @@ processJSON();
     var _irBuckets = { rows: [], sections: [], combos: [] };
     function irCollect() {
       var b = { rows: [], sections: [], combos: [] };
+      var visited = 0;   // VDI perf: how many nodes this crawl walked (guarded report below)
       try {
         (function walk(root, d) {
           if (!root || d > 25) return;
           var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
           for (var i = 0; i < q.length; i++) {
+            visited++;
             var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
             if (t === "runtime_cdp-identity-resolution-recon-rule-field") b.rows.push(q[i]);
             else if (t === "runtime_cdp-identity-resolution-recon-table-rules") b.sections.push(q[i]);
@@ -19714,6 +19722,7 @@ processJSON();
         })(document, 0);
       } catch (e) {}
       _irBuckets = b;
+      try { if (window.__dcPerf) window.__dcPerf.crawl("ir", visited); } catch (e) {}
     }
     function irDecorate() {
       // FIELD rows: fieldId read DIRECTLY off the row (exact — no label matching). Anchor under the
@@ -19761,7 +19770,7 @@ processJSON();
       _irSig = sig;
       _irWriting = true;
       try { if (_irObs) _irObs.disconnect(); } catch (e) {}
-      try { irClear(); irDecorate(); } catch (e) {}
+      try { if (window.__dcPerf) window.__dcPerf.pass("ir", function () { irClear(); irDecorate(); }); else { irClear(); irDecorate(); } } catch (e) {}
       try { if (_irObs && IR_ON) _irObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
       _irWriting = false;
     }
@@ -20122,11 +20131,13 @@ processJSON();
     var _doTables = [];
     function doCollect() {
       var out = [];
+      var visited = 0;   // VDI perf: nodes walked this crawl (guarded report below)
       try {
         (function walk(root, d) {
           if (!root || d > 25) return;
           var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
           for (var i = 0; i < q.length; i++) {
+            visited++;
             var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
             if (t === "runtime_cdp-custom-datatable" && doIsFieldTable(q[i])) out.push(q[i]);
             var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
@@ -20135,6 +20146,7 @@ processJSON();
         })(document, 0);
       } catch (e) {}
       _doTables = out;
+      try { if (window.__dcPerf) window.__dcPerf.crawl("dmo-origin", visited); } catch (e) {}
     }
     function doDecorate() {
       _doTables.forEach(function (dt) {
@@ -20175,7 +20187,7 @@ processJSON();
       _doSig = sig;
       _doWriting = true;
       try { if (_doObs) _doObs.disconnect(); } catch (e) {}
-      try { doClear(); doDecorate(); } catch (e) {}
+      try { if (window.__dcPerf) window.__dcPerf.pass("dmo-origin", function () { doClear(); doDecorate(); }); else { doClear(); doDecorate(); } } catch (e) {}
       try { if (_doObs && DO_ON) _doObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
       _doWriting = false;
     }

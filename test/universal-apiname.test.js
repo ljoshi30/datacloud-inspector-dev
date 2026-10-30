@@ -181,6 +181,23 @@ console.log("\n8. source presence — registry, generic vocab, VDI-safety, one c
   ok("VDI: decorates only VISIBLE custom elements", /isVisible\(el\)/.test(src) && /tg\.indexOf\("-"\) > 0/.test(src));
   ok("VDI: default OFF; teardown clears + disconnects", /var GEN_ON = false/.test(src) && /function genStop/.test(src) && /genClear\(\);/.test(src));
   ok("VDI: generic crawl + pass are INSTRUMENTED via __dcPerf (guarded)", /window\.__dcPerf\.crawl\("universal-generic"/.test(src) && /window\.__dcPerf\.pass\("universal-generic"/.test(src));
+
+  // The real hot modules are wired for the measurement pass (guarded so zero-cost off / stripped public)
+  ok("INSTRUMENTED: IR crawl + decorate pass report to __dcPerf (guarded)",
+    /window\.__dcPerf\.crawl\("ir"/.test(src) && /window\.__dcPerf\.pass\("ir", function \(\) \{ irClear\(\); irDecorate\(\); \}\)/.test(src));
+  ok("INSTRUMENTED: Data Graph crawl + decorate pass report to __dcPerf (guarded)",
+    /window\.__dcPerf\.crawl\("data-graph"/.test(src) && /window\.__dcPerf\.pass\("data-graph", _dgWrite\)/.test(src));
+  ok("INSTRUMENTED: DMO origin crawl + decorate pass report to __dcPerf (guarded)",
+    /window\.__dcPerf\.crawl\("dmo-origin"/.test(src) && /window\.__dcPerf\.pass\("dmo-origin", function \(\) \{ doClear\(\); doDecorate\(\); \}\)/.test(src));
+  ok("INSTRUMENTATION IS GUARDED: every window.__dcPerf call site sits behind `if (window.__dcPerf)` (no hard dependency)",
+    (function () {
+      // real call sites use `window.__dcPerf.crawl(` / `window.__dcPerf.pass(` (the harness's own
+      // method DEFINITIONS and the doc comment use a bare `__dcPerf.` form → excluded).
+      var lines = src.split("\n").filter(function (l) { return /window\.__dcPerf\.(crawl|pass)\(/.test(l); });
+      return lines.length >= 4 && lines.every(function (l) { return /if \(window\.__dcPerf\)/.test(l); });
+    })());
+  ok("INSTRUMENTATION STRIPPED FROM PUBLIC with the modules (no __dcPerf refs survive strip)",
+    (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/__dcPerf/.test(strip); })());
   ok("one-time load sweep removes a prior instance's generic chips", /el\.classList\.contains\("dc-uni-api"\)/.test(src));
   ok("launcher is a LEFT-edge teal tab (never collides with bottom-right FAB / bottom-left filter)", /id="dc-uni-bar"/.test(src) === false && /wrap\.id = "dc-uni-bar"/.test(src) && /left:0;top:50%/.test(src) && /#0d9488/.test(src));
   ok("best-effort pages advertise themselves (generic tab shows ± and 'verify' tooltip)", /API ±/.test(src) && /Verify before relying/.test(src));
