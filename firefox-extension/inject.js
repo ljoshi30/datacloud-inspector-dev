@@ -21296,7 +21296,7 @@ processJSON();
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.637"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.639"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -21410,7 +21410,10 @@ processJSON();
           ts:    { stringValue: new Date().toISOString() }
         }};
         fetch(FS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true })
-          .catch(function () {});                  // fire-and-forget; silent on any error
+          /* @strip:start dev */
+          .then(function (r) { try { console.log("%c[dc usage] captured '" + feature + "' → HTTP " + r.status, r.ok ? "color:#0d9488" : "color:#b45309"); } catch (e) {} })
+          /* @strip:end */
+          .catch(function () {});                  // fire-and-forget; silent on any error (public build: no logging)
         try { markSent(feature); } catch (e) {}    // one write per feature/day
         return true;
       } catch (e) { return false; }
@@ -21421,7 +21424,10 @@ processJSON();
     function maybeReportOnFabOpen() {
       try {
         if (optedOut()) return false;              // user choice wins
-        if (sentToday(pingPageType())) return false; // THIS feature already captured today
+        if (sentToday(pingPageType())) {           // THIS feature already captured today
+          /* @strip:start dev */ try { console.log("%c[dc usage] '" + pingPageType() + "' already captured today (throttled) — no re-send", "color:#64748b"); } catch (e) {} /* @strip:end */
+          return false;
+        }
         return reportUsage();                      // silent write + marks sent for this feature
       } catch (e) { return false; }
     }

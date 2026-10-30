@@ -154,9 +154,13 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     !/dc_usage_beacon/.test(src) && !/\/beacon/.test(src) && !/function sendPing/.test(src));
   ok("Firestore payload is the typed-field shape (fields.*.stringValue)",
     /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src));
-  ok("mark-sent after dispatching the write (one per feature/day)", /fetch\(FS_URL[\s\S]{0,260}markSent\(feature\);/.test(src));
+  ok("mark-sent after dispatching the write (one per feature/day)", /fetch\(FS_URL[\s\S]{0,600}markSent\(feature\);/.test(src));
+  ok("DEV-ONLY visibility: logs '[dc usage] captured …' on write + 'throttled' on skip (so you can SEE it in dev)",
+    /\[dc usage\] captured/.test(src) && /already captured today \(throttled\)/.test(src));
+  ok("DEV-ONLY: the usage console logs are STRIPPED from the public build (silent for real users)",
+    (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/\[dc usage\]/.test(strip); })());
   ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
-    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) return false;/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
+    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
   ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
