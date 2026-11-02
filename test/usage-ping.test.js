@@ -153,7 +153,8 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("NO tab/beacon/window.open left in the capture path (fully silent now)",
     !/dc_usage_beacon/.test(src) && !/\/beacon/.test(src) && !/function sendPing/.test(src));
   ok("Firestore payload is the typed-field shape (fields.*.stringValue)",
-    /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src));
+    /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src) && /org:   \{ stringValue: org \}/.test(src));
+  ok("org = my-domain host only (semi-identifying; NOT username/PII)", /var org = ""; try \{ org = String\(location\.hostname/.test(src) && !/username|userId|user_id/i.test(src.slice(src.indexOf("var org ="), src.indexOf("var org =") + 200)));
   ok("mark-sent after dispatching the write (one per feature/day)", /fetch\(FS_URL[\s\S]{0,600}markSent\(feature\);/.test(src));
   ok("DEV-ONLY visibility: logs '[dc usage] captured …' on write + 'throttled' on skip (so you can SEE it in dev)",
     /\[dc usage\] captured/.test(src) && /already captured today \(throttled\)/.test(src));
@@ -165,13 +166,12 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
   ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
     /\/\^dc-\(\[a-z0-9\]\+-\)\?bar\$\//.test(src) && /\/\^dc-\(\[a-z0-9\]\+-\)\?fab\$\//.test(src));
-  ok("manual 'Report usage' FAB row wired, hidden when opted out",
-    /dc-report-usage-row/.test(src) && /typeof window\.__dcReportUsage === "function"/.test(src) && /window\.__dcUsageIsOptedOut\(\)/.test(src));
+  ok("NO visible 'Report usage' FAB row (capture is silent/automatic — row removed)", !/dc-report-usage-row/.test(src));
   ok("GATE: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
-  ok("opt-out/opt-in controls exposed for the user", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
-  ok("capture globals exposed (manual + auto-on-fab)", /window\.__dcReportUsage\b/.test(src) && /window\.__dcReportUsageOnFabOpen/.test(src));
-  ok("ONE-TIME disclosure notice, shown when endpoint set + not opted out", /function showDisclosureOnce/.test(src) && /if \(!FS_URL\) return;/.test(src) && /if \(optedOut\(\)\) return;/.test(src) && /dc_usage_noticed/.test(src));
-  ok("disclosure wording honest (anonymous, no record/field/personal/org data, silent) + Turn off", /anonymous<\/b> usage count/i.test(src) && /no record, field, personal, or org data/i.test(src) && /silent — nothing opens/i.test(src) && /Turn off/.test(src));
+  ok("opt-out/opt-in controls STILL exposed (hidden opt-out retained)", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
+  ok("capture global exposed (auto-on-fab)", /window\.__dcReportUsageOnFabOpen/.test(src));
+  ok("in-tool disclosure popup NOT shown on load (silent in-tool; disclosure lives on install page)",
+    !/try \{ showDisclosureOnce\(\); \} catch/.test(src) && /intentionally NOT called/.test(src));
   ok("PER-FEATURE/day throttle (namespaced key feature+day → different features each ping)",
     /function throttleKey\(feature\)/.test(src) && /LS_LAST \+ "::" \+ \(feature \|\| "other"\) \+ "::" \+ todayStamp\(\)/.test(src) && /function sentToday\(feature\)/.test(src) && /function markSent\(feature\)/.test(src));
   ok("page detector covers ALL feature surfaces (QueryEditor/Transform/Activation/Explorer/MappingCanvas/ERD, not just DMO)",
@@ -181,7 +181,7 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
     /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
   ok("ANON payload = iid + version + feature(page) + day + build (no org/host/record/url)",
-    /stringValue: String\(installId\(\)\)/.test(src) && /stringValue: String\(feature\)/.test(src) && /stringValue: String\(PING_BUILD\)/.test(src) && /var feature = pingPageType\(\);/.test(src));
+    /stringValue: String\(installId\(\)\)/.test(src) && /stringValue: String\(feature\)/.test(src) && /stringValue: String\(PING_BUILD\)/.test(src) && /org:   \{ stringValue: org \}/.test(src) && /var feature = pingPageType\(\);/.test(src));
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));

@@ -39,27 +39,59 @@ function cors(h = {}) {
 function clean(v, max) { return (typeof v === "string" ? v : "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, max); }
 
 async function tallyFor(db, table) {
-  const users = (await db.prepare(`SELECT COUNT(DISTINCT iid) n FROM ${table}`).first())?.n || 0;
-  const total = (await db.prepare(`SELECT COUNT(*) n FROM ${table}`).first())?.n || 0;
-  const wau = (await db.prepare(`SELECT COUNT(DISTINCT iid) n FROM ${table} WHERE day >= date('now','-7 day')`).first())?.n || 0;
-  const mau = (await db.prepare(`SELECT COUNT(DISTINCT iid) n FROM ${table} WHERE day >= date('now','-30 day')`).first())?.n || 0;
-  const byPage = (await db.prepare(`SELECT page, COUNT(DISTINCT iid) users, COUNT(*) hits FROM ${table} GROUP BY page ORDER BY users DESC`).all())?.results || [];
-  const byDay = (await db.prepare(`SELECT day, COUNT(DISTINCT iid) dau FROM ${table} GROUP BY day ORDER BY day DESC LIMIT 60`).all())?.results || [];
-  return { users, total, wau, mau, byPage, byDay };
+  const one = async (sql) => { try { return (await db.prepare(sql).first())?.n || 0; } catch (e) { return 0; } };
+  const all = async (sql) => { try { return (await db.prepare(sql).all())?.results || []; } catch (e) { return []; } };
+  const users = await one(`SELECT COUNT(DISTINCT iid) n FROM ${table}`);
+  const total = await one(`SELECT COUNT(*) n FROM ${table}`);
+  const wau = await one(`SELECT COUNT(DISTINCT iid) n FROM ${table} WHERE day >= date('now','-7 day')`);
+  const mau = await one(`SELECT COUNT(DISTINCT iid) n FROM ${table} WHERE day >= date('now','-30 day')`);
+  // returning = users seen on >1 distinct day (real retention signal). orgs = distinct org hosts.
+  const returning = await one(`SELECT COUNT(*) n FROM (SELECT iid FROM ${table} GROUP BY iid HAVING COUNT(DISTINCT day) > 1)`);
+  const orgs = await one(`SELECT COUNT(DISTINCT org) n FROM ${table} WHERE org IS NOT NULL AND org <> ''`);
+  const byPage = await all(`SELECT page, COUNT(DISTINCT iid) users, COUNT(*) hits FROM ${table} GROUP BY page ORDER BY users DESC`);
+  const byDay = await all(`SELECT day, COUNT(DISTINCT iid) dau FROM ${table} GROUP BY day ORDER BY day DESC LIMIT 60`);
+  const byOrg = await all(`SELECT org, COUNT(DISTINCT iid) users, COUNT(*) hits, MAX(day) lastDay FROM ${table} WHERE org IS NOT NULL AND org <> '' GROUP BY org ORDER BY users DESC LIMIT 100`);
+  const byVersion = await all(`SELECT v, COUNT(DISTINCT iid) users FROM ${table} GROUP BY v ORDER BY users DESC`);
+  // per-user roster: first/last seen, days active, distinct features, total pings, recency bucket
+  const perUser = await all(
+    `SELECT iid,
+       MIN(day) firstSeen, MAX(day) lastSeen,
+       COUNT(DISTINCT day) daysActive,
+       COUNT(DISTINCT page) features,
+       COUNT(*) pings,
+       MAX(v) version, MAX(org) org,
+       CASE WHEN MAX(day) >= date('now','-7 day') THEN 'active (≤7d)'
+            WHEN MAX(day) >= date('now','-30 day') THEN 'recent (8–30d)'
+            ELSE 'dormant (>30d)' END recency
+     FROM ${table} GROUP BY iid ORDER BY lastSeen DESC LIMIT 500`);
+  return { users, total, wau, mau, returning, orgs, byPage, byDay, byOrg, byVersion, perUser };
 }
 
 function sectionHtml(title, t) {
-  const rows = t.byPage.map(r => `<tr><td>${r.page}</td><td>${r.users}</td><td>${r.hits}</td></tr>`).join("");
-  const days = t.byDay.map(r => `<tr><td>${r.day}</td><td>${r.dau}</td></tr>`).join("");
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const rows = t.byPage.map(r => `<tr><td>${esc(r.page)}</td><td>${r.users}</td><td>${r.hits}</td></tr>`).join("");
+  const days = t.byDay.map(r => `<tr><td>${esc(r.day)}</td><td>${r.dau}</td></tr>`).join("");
+  const orgRows = (t.byOrg || []).map(r => `<tr><td>${esc(r.org)}</td><td>${r.users}</td><td>${r.hits}</td><td>${esc(r.lastDay)}</td></tr>`).join("");
+  const verRows = (t.byVersion || []).map(r => `<tr><td>${esc(r.v)}</td><td>${r.users}</td></tr>`).join("");
+  const userRows = (t.perUser || []).map(r => `<tr><td style="font-family:monospace;font-size:11px">${esc(r.iid)}</td><td>${esc(r.org)}</td><td>${esc(r.firstSeen)}</td><td>${esc(r.lastSeen)}</td><td>${r.daysActive}</td><td>${r.features}</td><td>${r.pings}</td><td>${esc(r.version)}</td><td>${esc(r.recency)}</td></tr>`).join("");
   return `<section style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px;margin:16px 0">
 <h2 style="margin:0 0 6px;font-size:16px">${title}</h2>
 <div class=big>
   <div><div class=stat>${t.users}</div><div class=muted>ACTIVE USERS (all time)</div></div>
   <div><div class=stat>${t.wau}</div><div class=muted>WEEKLY (7d)</div></div>
   <div><div class=stat>${t.mau}</div><div class=muted>MONTHLY (30d)</div></div>
+  <div><div class=stat>${t.returning}</div><div class=muted>RETURNING (&gt;1 day)</div></div>
+  <div><div class=stat>${t.orgs}</div><div class=muted>ORGS</div></div>
   <div><div class=stat>${t.total}</div><div class=muted>total pings</div></div>
 </div>
+<h3>By feature</h3>
 <table><tr><th>Page</th><th>Users</th><th>Hits</th></tr>${rows || "<tr><td colspan=3>no data yet</td></tr>"}</table>
+<details><summary class=muted>By org (${(t.byOrg || []).length})</summary>
+<table><tr><th>Org</th><th>Users</th><th>Hits</th><th>Last day</th></tr>${orgRows || "<tr><td colspan=4>no org data</td></tr>"}</table></details>
+<details><summary class=muted>By version</summary>
+<table><tr><th>Version</th><th>Users</th></tr>${verRows || "<tr><td colspan=2>—</td></tr>"}</table></details>
+<details><summary class=muted>Per-user roster (${(t.perUser || []).length}) — first/last seen, days active, feature breadth, recency</summary>
+<table><tr><th>User (anon id)</th><th>Org</th><th>First seen</th><th>Last seen</th><th>Days active</th><th>Features</th><th>Pings</th><th>Version</th><th>Recency</th></tr>${userRows || "<tr><td colspan=9>no data yet</td></tr>"}</table></details>
 <details><summary class=muted>Daily active users (last 60 days)</summary>
 <table><tr><th>Day</th><th>DAU</th></tr>${days || "<tr><td colspan=2>no data yet</td></tr>"}</table></details>
 </section>`;
@@ -138,11 +170,12 @@ This tab closes automatically.</p>
       if (!VALID_PAGES.has(page)) page = "other";
       const day = clean(p.day, 10);
       let build = clean(p.build, 10);
+      const org = clean(p.org, 80);                        // org my-domain host (semi-identifying, not PII)
       const table = TABLE[build] || TABLE.public;          // unknown/missing build → public bucket
       if (iid && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
         try {
-          await env.DB.prepare(`INSERT INTO ${table} (iid, v, page, day, ts) VALUES (?, ?, ?, ?, ?)`)
-            .bind(iid, v, page, day, new Date().toISOString()).run();
+          await env.DB.prepare(`INSERT INTO ${table} (iid, v, page, day, org, ts) VALUES (?, ?, ?, ?, ?, ?)`)
+            .bind(iid, v, page, day, org, new Date().toISOString()).run();
         } catch (e) { /* fire-and-forget */ }
       }
       if (request.method === "GET") {

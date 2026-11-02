@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS pings_public (
   v     TEXT,            -- tool version (coarse)
   page  TEXT,            -- coarse page bucket: DMO / Segment / IdentityResolution / … / other
   day   TEXT NOT NULL,   -- YYYY-MM-DD (the usage day, from the client)
+  org   TEXT,            -- org my-domain host (semi-identifying: an org, NOT a person)
   ts    TEXT             -- server receive timestamp (ISO)
 );
 CREATE TABLE IF NOT EXISTS pings_dev (
@@ -18,8 +19,12 @@ CREATE TABLE IF NOT EXISTS pings_dev (
   v     TEXT,
   page  TEXT,
   day   TEXT NOT NULL,
+  org   TEXT,
   ts    TEXT
 );
+-- If the tables already exist from before, add the column (safe to run; ignore "duplicate column"):
+--   ALTER TABLE pings_public ADD COLUMN org TEXT;
+--   ALTER TABLE pings_dev    ADD COLUMN org TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_public_day  ON pings_public (day);
 CREATE INDEX IF NOT EXISTS idx_public_page ON pings_public (page);
