@@ -15884,8 +15884,8 @@
       window.addEventListener("message", onMsg, false);
       window.postMessage({ __dcReq: "dc-segment-def", id: id, segmentApiNameOrId: segmentApiNameOrId, dataspace: dataspace || "", apiVersion: "v63.0" }, "*");
       setTimeout(function () {
-        if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout — is the extension loaded? (bookmarklet can't do this)")); }
-      }, 20000);
+        if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("timed out after 45s (the API or background was slow; the bridge itself is fine if other calls work)")); }
+      }, 45000);
     });
   }
   try {
