@@ -25,8 +25,10 @@ function segmentTreeToSql(tree, segName, activeTab, primaryObj) {
       case "is not equal to": case "does not equal": return "<> " + (list[0] != null ? q(list[0]) : "''");
       case "contains": return "LIKE " + q("%" + (list[0] || "") + "%");
       case "does not contain": return "NOT LIKE " + q("%" + (list[0] || "") + "%");
-      case "starts with": return "LIKE " + q((list[0] || "") + "%");
+      case "starts with": case "begins with": return "LIKE " + q((list[0] || "") + "%");
+      case "does not begin with": case "does not start with": return "NOT LIKE " + q((list[0] || "") + "%");
       case "ends with": return "LIKE " + q("%" + (list[0] || ""));
+      case "does not end with": return "NOT LIKE " + q("%" + (list[0] || ""));
       case "is in": return "IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
       case "is not in": return "NOT IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
       case "is between": return "BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
@@ -188,6 +190,17 @@ console.log("\n5. honesty + safety: labels, quoting, empty");
   ok("empty tree → honest 'no conditions'", /no conditions on this tab/.test(segmentTreeToSql({ type:"set", items:[] }, "s")));
 }
 
+console.log("\n5e. string operators incl. SF's actual labels (Begins With) — the reported /* Begins With */ bug");
+{
+  function w(op, v) { return segmentTreeToSql({ type:"set", items:[ {type:"simple",objApi:"P__dlm",fieldApi:"F__c",operator:op,values:v} ] }, "s"); }
+  ok("'Begins With' → LIKE 'x%' (was rendered as an unhandled /* Begins With */ comment)", /F__c LIKE 'x%'/.test(w("begins with", "x")) && !/\/\* Begins With \*\//i.test(w("begins with", "x")));
+  ok("'starts with' still → LIKE 'x%'", /F__c LIKE 'x%'/.test(w("starts with", "x")));
+  ok("'ends with' → LIKE '%x'", /F__c LIKE '%x'/.test(w("ends with", "x")));
+  ok("'does not begin with' → NOT LIKE 'x%'", /F__c NOT LIKE 'x%'/.test(w("does not begin with", "x")));
+  ok("'does not end with' → NOT LIKE '%x'", /F__c NOT LIKE '%x'/.test(w("does not end with", "x")));
+  ok("'contains' → LIKE '%x%'", /F__c LIKE '%x%'/.test(w("contains", "x")));
+}
+
 console.log("\n5b. nested-segment forces LOGIC VIEW (NOT 'single-object runnable') — the reported mislabel");
 {
   var tree = { type: "set", join: "AND", items: [
@@ -231,6 +244,8 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
   ok("segmentTreeToSql present (takes primaryObj)", /function segmentTreeToSql\(tree, segName, activeTab, primaryObj\)/.test(src));
   ok("REAL FROM table (no '/* primary segmented object */' placeholder anymore)", /FROM " \+ fromObj/.test(src) && !/FROM \/\* primary segmented object \*\//.test(src));
   ok("aggregation = COUNT(*) subquery + threshold op (fixes 'Count(table WHERE) At Least N')", /SELECT COUNT\(\*\) FROM " \+ obj/.test(src) && /function aggCmp/.test(src) && /at least/.test(src) && /return ">="/.test(src));
+  ok("string operators include SF's 'begins with' / 'does not begin with' / 'does not end with'", /case "starts with": case "begins with"/.test(src) && /case "does not begin with"/.test(src) && /case "does not end with"/.test(src));
+  ok("reader OP_RE recognizes 'begins with' (so it's captured, not dropped)", /begins with\|ends with\|does not begin with/.test(src));
   ok("complexity detection → LOGIC VIEW banner for multi-object/agg/CI/NESTED", /var isComplex = flags\.hasAgg \|\| flags\.hasCi \|\| flags\.hasNested \|\| multiObject/.test(src) && /LOGIC VIEW — NOT runnable as-is/.test(src));
   ok("EXCLUDE tab negates (WHERE NOT (...))", /tabKind === "exclude"\) \? "NOT \(/.test(src) && /\[EXCLUDE → condition is NEGATED\]/.test(src));
   ok("RANK & LIMIT handled as ORDER BY/LIMIT, not WHERE", /tabKind === "rank"/.test(src) && /ORDER BY " \+ rankField/.test(src) && /RANK & LIMIT — not a filter/.test(src));

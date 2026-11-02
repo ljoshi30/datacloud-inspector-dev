@@ -3705,7 +3705,7 @@
       return null;
     }
 
-    const OP_RE = /^(is equal to|is not equal to|contains|does not contain|starts with|ends with|is between|is not between|has value|has no value|is true|is false|is null|is not null|at least|at most|exactly|greater than|less than|is greater than|is less than|is in|is not in)$/i;
+    const OP_RE = /^(is equal to|is not equal to|contains|does not contain|starts with|begins with|ends with|does not begin with|does not end with|is between|is not between|has value|has no value|is true|is false|is null|is not null|at least|at most|exactly|greater than|less than|is greater than|is less than|is in|is not in)$/i;
     const NO_VAL_RE = /^(has value|has no value|is true|is false|is null|is not null)$/i;
     // Noise tokens that appear in shadow text but are not labels/operators/values
     const NOISE_RE = /^(and|or|drag and drop|edit|delete|add|remove|filter|condition)$/i;
@@ -5440,8 +5440,10 @@
         case "is not equal to": case "does not equal": return "<> " + (list[0] != null ? q(list[0]) : "''");
         case "contains": return "LIKE " + q("%" + (list[0] || "") + "%");
         case "does not contain": return "NOT LIKE " + q("%" + (list[0] || "") + "%");
-        case "starts with": return "LIKE " + q((list[0] || "") + "%");
+        case "starts with": case "begins with": return "LIKE " + q((list[0] || "") + "%");
+        case "does not begin with": case "does not start with": return "NOT LIKE " + q((list[0] || "") + "%");
         case "ends with": return "LIKE " + q("%" + (list[0] || ""));
+        case "does not end with": return "NOT LIKE " + q("%" + (list[0] || ""));
         case "is in": return "IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
         case "is not in": return "NOT IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
         case "is between": return "BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
