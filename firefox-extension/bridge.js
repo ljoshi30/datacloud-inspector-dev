@@ -143,6 +143,17 @@
         );
         return;
       }
+      // (g) Segment definition read relay (GET /ssot/segments/{apiNameOrId}) — real includeCriteria
+      if (d.__dcReq === "dc-segment-def") {
+        api.runtime.sendMessage(
+          { type: "dcSegmentDef", segmentApiNameOrId: d.segmentApiNameOrId, dataspace: d.dataspace, apiVersion: d.apiVersion, host: location.host },
+          function (resp) {
+            var err = api.runtime.lastError ? api.runtime.lastError.message : null;
+            window.postMessage({ __dcRes: "dc-segment-def", id: d.id, ok: !err && resp && resp.ok, resp: resp && resp.data, error: err || (resp && resp.error) }, location.origin);
+          }
+        );
+        return;
+      }
       if (d.__dcReq === "dc-dmo-list") {
         api.runtime.sendMessage(
           { type: "dcDmoList", dataspace: d.dataspace, host: location.host },

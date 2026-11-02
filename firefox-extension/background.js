@@ -319,6 +319,31 @@ async function runDcActivation(req) {
   } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 
+// Read a Segment definition (documented GET, sid-cookie auth). READ-only. The response includes
+// the REAL stored includeCriteria / excludeCriteria (Salesforce's own criteria, not a DOM rebuild)
+// — the authoritative source for rendering clean, accurate segment logic/SQL.
+async function runDcSegmentDef(req) {
+  try {
+    const host = (req && req.host) || "";
+    if (!host) return { ok: false, error: "no host" };
+    const got = await readSid(host);
+    if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
+    var apiV = (req && req.apiVersion) || "v63.0";
+    var url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/segments/" + encodeURIComponent(req.segmentApiNameOrId || "");
+    if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
+    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    const txt = await r.text();
+    let j = null; try { j = JSON.parse(txt); } catch (e) {}
+    if (r.status !== 200) {
+      if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
+        return { ok: false, sessionExpired: true, error: "Your Salesforce session has expired — refresh the Salesforce tab, then retry." };
+      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em, status: r.status };
+    }
+    return { ok: true, data: j };
+  } catch (e) { return { ok: false, error: safeError(e) }; }
+}
+
 // ── AI Explain: call LLM API to explain a Data Transform ────────────────────
 var AI_PROMPT = "You are a Salesforce Data Cloud expert. Analyze this Data Transform definition JSON and explain it in plain English.\n\nProvide:\n1. A one-paragraph overview of what this transform does (business purpose)\n2. For each output branch, explain the data flow: source → transformations → filters → output\n3. Highlight key business logic (rankings, calculated fields, joins, deduplication)\n4. Mention the write mode and any important field mappings\n\nKeep it concise but thorough. Use bullet points for branch breakdowns. Don't list every field — focus on what the transform DOES.\n\nTransform JSON:\n";
 
@@ -489,6 +514,10 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "dcActivation") {
     runDcActivation({ activationId: msg.activationId, host: tabHost || msg.host }).then(sendResponse);
+    return true;
+  }
+  if (msg && msg.type === "dcSegmentDef") {
+    runDcSegmentDef({ segmentApiNameOrId: msg.segmentApiNameOrId, dataspace: msg.dataspace, apiVersion: msg.apiVersion, host: tabHost || msg.host }).then(sendResponse);
     return true;
   }
   if (msg && msg.type === "dcDmoList") {

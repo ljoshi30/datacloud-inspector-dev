@@ -15858,6 +15858,43 @@
     });
   }
 
+  /* @strip:start dev
+   * Fetch a Segment's REAL stored definition (includeCriteria/excludeCriteria) via the extension
+   * bridge → background → GET /ssot/segments/{apiNameOrId}. This is the authoritative criteria
+   * Salesforce compiled (not a DOM rebuild). Extension-only (bridge present). Resolves the raw JSON
+   * so we can see the actual shape before building a clean renderer. Exposed as __dcGetSegmentDef
+   * for a one-off console inspection today.
+   */
+  function fetchSegmentDefViaExtension(segmentApiNameOrId, dataspace) {
+    return new Promise(function (resolve, reject) {
+      var id = "dcseg-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-segment-def" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return;
+        done = true;
+        if (d.ok && d.resp) resolve(d.resp);
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "segment read failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-segment-def", id: id, segmentApiNameOrId: segmentApiNameOrId, dataspace: dataspace || "", apiVersion: "v63.0" }, "*");
+      setTimeout(function () {
+        if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout — is the extension loaded? (bookmarklet can't do this)")); }
+      }, 20000);
+    });
+  }
+  try {
+    window.__dcGetSegmentDef = function (segmentApiNameOrId, dataspace) {
+      return fetchSegmentDefViaExtension(segmentApiNameOrId, dataspace)
+        .then(function (r) { try { console.log("%c[dc segment-def] ok", "color:#0d9488"); console.log(JSON.stringify(r, null, 2)); } catch (e) {} return r; })
+        .catch(function (e) { try { console.log("%c[dc segment-def] ERROR: " + e.message, "color:#b45309"); } catch (_) {} throw e; });
+    };
+  } catch (e) {}
+  /* @strip:end */
+
   // Show activation data in a modal
   function renderActivationValue(val, depth) {
     depth = depth || 0;
