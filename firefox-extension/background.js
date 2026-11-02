@@ -331,14 +331,27 @@ async function runDcSegmentDef(req) {
     var apiV = (req && req.apiVersion) || "v63.0";
     var url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/segments/" + encodeURIComponent(req.segmentApiNameOrId || "");
     if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
-    const r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" } });
+    try { console.log("[dcSegmentDef] GET " + url); } catch (e) {}
+    // abort after 30s so a stalled request returns a real error instead of hanging forever.
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
+    let r;
+    try {
+      r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" }, signal: ctrl ? ctrl.signal : undefined });
+    } catch (fe) {
+      if (to) clearTimeout(to);
+      try { console.log("[dcSegmentDef] fetch failed: " + (fe && fe.name) + " " + (fe && fe.message)); } catch (e) {}
+      return { ok: false, error: "fetch " + (fe && fe.name === "AbortError" ? "timed out (30s) — endpoint didn't respond" : ("failed: " + safeError(fe))) };
+    }
+    if (to) clearTimeout(to);
     const txt = await r.text();
+    try { console.log("[dcSegmentDef] HTTP " + r.status + " (" + txt.length + " bytes)"); } catch (e) {}
     let j = null; try { j = JSON.parse(txt); } catch (e) {}
     if (r.status !== 200) {
       if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
         return { ok: false, sessionExpired: true, error: "Your Salesforce session has expired — refresh the Salesforce tab, then retry." };
       let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
-      return { ok: false, error: em, status: r.status };
+      return { ok: false, error: em + " — " + txt.slice(0, 200), status: r.status };
     }
     return { ok: true, data: j };
   } catch (e) { return { ok: false, error: safeError(e) }; }
