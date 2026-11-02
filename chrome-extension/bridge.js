@@ -52,7 +52,8 @@
   var ALLOWED_REQ_TYPES = {
     "dc-sql-query": 1, "dc-fetch-page": 1, "dc-ai-explain": 1,
     "dc-save-ai-settings": 1, "dc-get-ai-settings": 1,
-    "dc-transform": 1, "dc-activation": 1, "dc-dmo-list": 1, "dc-dmo-fields": 1
+    "dc-transform": 1, "dc-activation": 1, "dc-dmo-list": 1, "dc-dmo-fields": 1,
+    "dc-segment-def": 1
   };
 
   // 2) relay page → background → page, correlated by a request id
