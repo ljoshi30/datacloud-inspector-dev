@@ -1,60 +1,46 @@
-# Data 360 Inspector — Usage Endpoint (Cloudflare Worker + D1)
+# Data 360 Inspector — Usage Report (Cloudflare Worker → reads Firestore)
 
-The production receiver that answers your questions:
-- **Where is the data stored?** → Cloudflare **D1** (a small SQLite database) in *your* Cloudflare account.
-- **How is it pulled off?** → a password-protected **`/report`** page + **`/report.csv`** download.
-- **How do I share impact?** → open `/report?token=…` for live numbers, or hand out the CSV.
+## How it fits together
+- **The tool writes pings DIRECTLY to Firestore** (`firestore.googleapis.com` — the only cross-origin
+  host Salesforce page CSP allows; our own Worker domain is blocked, which is why writes don't come here).
+  Each ping: `{ iid, v, page, day, build, org, ts }` — anonymous (random browser id + org my-domain host;
+  no username / record / field data). Stored in the Firestore `usage` collection.
+- **This Worker is READ-ONLY.** It authenticates to Firestore with a Firebase **service-account** key,
+  queries `usage`, computes adoption metrics, and serves a **password-gated** `/report`. Firestore stays
+  read-locked to the public (security rule: public *create* only, **no public read**) — only this Worker
+  can read.
 
-Nothing here touches Salesforce. It only receives the anonymous `{ iid, v, page, day }` packet.
+## Report shows (PUBLIC vs DEV, from the `build` tag)
+Active users (all-time / weekly / monthly), **returning** (seen >1 day), **orgs**, per-feature, per-org,
+per-version, **per-user roster** (first-seen, last-seen, days-active, feature breadth, recency bucket),
+and daily-active trend. CSV export too.
 
-## Files
-- `worker.js`      — the Worker (POST /ping, GET /report, GET /report.csv, GET /health)
-- `schema.sql`     — the one D1 table + indexes
-- `wrangler.toml`  — Cloudflare config (paste your database_id)
-
-## Deploy (one time, ~10 min)
-```bash
-npm i -g wrangler
-wrangler login
-
-# 1. create the database, copy the printed database_id into wrangler.toml
-wrangler d1 create d360_usage
-
-# 2. create the table
-wrangler d1 execute d360_usage --file=./schema.sql --remote
-
-# 3. set the report password (any strong string)
-wrangler secret put REPORT_TOKEN
-
-# 4. ship it
-wrangler deploy
+## Firestore security rule (set in Firebase console → Firestore → Rules → Publish)
 ```
-Wrangler prints a URL like `https://d360-usage.<you>.workers.dev`.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /usage/{doc} {
+      allow create: if request.resource.data.keys().hasOnly(['iid','v','page','day','build','org','ts'])
+                    && request.resource.data.iid is string
+                    && request.resource.data.iid.size() < 50;
+      allow read, update, delete: if false;   // public cannot read; the Worker reads via service account
+    }
+  }
+}
+```
+NOTE: `org` is now in the allow-list. Until you publish this, pings that include `org` are REJECTED.
 
-## Wire the tool to it (still gated — see below)
-In `console-decorate.extension.js`, module `dcUsagePingModule`:
-- set `PING_ENDPOINT = "https://d360-usage.<you>.workers.dev/ping"`
-- set `PING_ENABLED = true`
-- set `PING_VERSION` to the build version
-Then rebuild. **Do this only after** privacy/security sign-off + a Salesforce-CSP test (the ping is
-inside a corporate SF session). Until then leave the gates as shipped (empty + false) → it sends nothing.
+## Deploy the report Worker (one time)
+1. Firebase console → **Project settings → Service accounts → Generate new private key** → download JSON.
+2. `cd usage-endpoint`
+3. `wrangler secret put FIREBASE_SA`   → paste the ENTIRE service-account JSON when prompted
+4. `wrangler secret put REPORT_TOKEN`  → any strong password
+5. `wrangler deploy`
+6. View: `https://<your-worker-url>/report?token=YOUR_REPORT_TOKEN`
 
-## See the numbers
-- Dashboard: `https://d360-usage.<you>.workers.dev/report?token=YOUR_REPORT_TOKEN`
-  → Active users (unique), Weekly/Monthly active, total pings, by-page, daily-active trend.
-- CSV: `.../report.csv?token=YOUR_REPORT_TOKEN` → drop into Excel / a slide.
-
-## What's stored (and what is NOT)
-Stored: `iid` (random browser id), `v` (version), `page` (coarse bucket like `DMO`/`Segment`), `day`,
-server timestamp. **Not stored:** IP (the Worker never reads it), names, org, hostname, URLs, record ids,
-field values — anything identifying. `page` is whitelisted to a fixed vocabulary server-side, so even a
-malformed ping can't store free-form content.
-
-## Users are told
-The install page discloses anonymous usage counting, and when the ping is live the tool shows a one-time
-notice with a **Turn off** (opt-out) link. Opt-out is honored as a hard gate (`__dcUsageOptOut()`), so an
-opted-out browser never pings even when fully enabled.
-
-## Housekeeping
-Retention is yours to set — e.g. periodically run
-`DELETE FROM pings WHERE day < date('now','-365 day');` (see the note in `schema.sql`).
+## Notes
+- No D1 anymore (the old D1 path was CSP-dead for writes and is retired).
+- Reads are paged (pageSize 300). The Worker tries both `/databases/(default)/` and `/databases/default/`
+  REST paths since this project's db id is literally `default`.
+- Delete data anytime in the Firebase console → Firestore → Data.

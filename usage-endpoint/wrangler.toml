@@ -1,14 +1,12 @@
-# Cloudflare Worker config for the Data 360 Inspector usage endpoint.
-# Fill in database_id after:  wrangler d1 create d360_usage
+# Cloudflare Worker config — Data 360 Inspector USAGE REPORT (reads Firestore).
+# The Worker no longer uses D1; it reads the Firestore `usage` collection with a
+# Firebase service-account key and serves a password-gated report.
 name = "d360-usage"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
-[[d1_databases]]
-binding = "DB"                 # worker.js reads env.DB
-database_name = "d360_usage"
-database_id = "d4dac815-7312-4fc0-b4d3-9ab16b165ce1"
-
-# REPORT_TOKEN is a SECRET, not set here. Set it with:
-#   wrangler secret put REPORT_TOKEN
-# Then view the dashboard at:  https://<your-worker-url>/report?token=THAT_TOKEN
+# No d1_databases binding anymore. Two SECRETS instead (not stored here):
+#   wrangler secret put FIREBASE_SA     ← paste the whole service-account JSON (Firebase console →
+#                                          Project settings → Service accounts → Generate new private key)
+#   wrangler secret put REPORT_TOKEN    ← any strong password
+# Then view:  https://<your-worker-url>/report?token=THAT_TOKEN
