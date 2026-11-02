@@ -314,15 +314,38 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
   ok("never fakes an api — [Label] fallback", /"\[" \+ node\.objectLabel \+ "\]"/.test(src) && /not an API/.test(src));
   ok("caller passes a primary-object hint only when 'Segment On' looks like an api", /primaryHint = \(meta && \/__\(dlm\|dll\|dls\|c\|cio\)\$\/i\.test/.test(src) && /segmentTreeToSql\(d\.tree, segName, currentModalTab, primaryHint\)/.test(src));
   ok("'Copy SQL' button present, guarded on the fn", /id='dc-d-sql'/.test(src) && /typeof segmentTreeToSql !== "function"/.test(src));
-  ok("API-criteria renderer present (authoritative tree → clean SQL)", /function segmentApiCriteriaToSql\(criteria, segName, tabLabel\)/.test(src));
-  ok("renderer handles the real node grammar: LogicalComparison / CalculatedInsight / *Comparison / {filter} unwrap",
-    /t === "LogicalComparison"/.test(src) && /t === "CalculatedInsight"/.test(src) && /\/Comparison\$\/\.test\(t\)/.test(src) && /node\.filter && typeof node\.filter === "object"\) return walk\(node\.filter/.test(src));
+  ok("API-criteria renderer present (authoritative tree → clean SQL, with fromObj + nested resolver)", /function segmentApiCriteriaToSql\(criteria, segName, tabLabel, fromObj, segResolver\)/.test(src));
+  ok("renderer handles the real node grammar: LogicalComparison / CalculatedInsight / NumberAggregation / NestedSegment / *Comparison / {filter} unwrap",
+    /t === "LogicalComparison"/.test(src) && /t === "CalculatedInsight"/.test(src) && /t === "NumberAggregation"/.test(src) && /t === "NestedSegment"/.test(src) && /\/Comparison\$\/\.test\(t\)/.test(src) && /node\.filter && typeof node\.filter === "object"\) return walk\(node\.filter/.test(src));
+  ok("aggregation handled BEFORE the {filter} unwrap (so count≥N is never silently dropped)",
+    src.indexOf('t === "NumberAggregation"') < src.indexOf("node.filter && typeof node.filter === \"object\") return walk(node.filter"));
+  ok("operand read as values[] OR scalar value (Boolean/Number leaves)", /function operandOf\(cmp\)/.test(src) && /cmp\.values != null/.test(src) && /cmp\.value != null/.test(src));
+  ok("operator normalizer strips spaces/underscores (real phrases: 'has value', 'greater than or equal')", /replace\(\/\[\\s_\]\+\/g, ""\)/.test(src) && /case "hasvalue": return "IS NOT NULL"/.test(src));
+  ok("NestedSegment INLINES the referenced segment's own criteria (recursive, cycle-guarded) before any membership fallback",
+    /function nestedSql\(node, depth\)/.test(src) && /resolved && resolved\.criteria/.test(src) && /seenSegs\[key\]/.test(src) && /MAX_NEST_DEPTH/.test(src) && /walk\(critObj, \(depth \|\| 0\) \+ 1\)/.test(src));
+  ok("NestedSegment falls back to membership IN(SELECT…) only when criteria aren't inlinable", /resolved\.membershipTable/.test(src) && /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src));
+  ok("resolver provides the nested segment's own criteria (decoded) for inlining", /criteria = the nested segment's OWN include criteria/.test(src) && /crit = JSON\.parse\(dsEsc\(raw\)\)/.test(src));
   ok("renderer maps REAL operator enums (equal/contains/in/greaterThanOrEqual/between/isTrue…)",
     /case "equal":/.test(src) && /case "contains":/.test(src) && /case "greaterthanorequal":/.test(src) && /case "between":/.test(src) && /case "istrue":/.test(src));
   ok("renderer captures JOIN keys from path[] (the thing the DOM lacked)", /function notePath\(path\)/.test(src) && /Join keys \(from the criteria's path\)/.test(src));
-  ok("renderer marks UNHANDLED nodes (never silently wrong)", /UNHANDLED: " \+ \(t \|\| "unknown node"\)/.test(src));
+  ok("renderer marks UNHANDLED nodes as a VALID placeholder predicate + blocks runnability (never silently wrong, never dangling AND)",
+    /UNSUPPORTED_NODE\('/.test(src) && /flags\.blockers\.push\("unsupported criteria node/.test(src));
+  ok("renderer NEVER emits a bare comment as a predicate (no dangling-AND syntax error)",
+    /IS_MEMBER_OF_SEGMENT\('/.test(src) && !/return "\/\* " \+ facts/.test(src));
+  ok("runnability is tracked honestly (blockers → LOGIC VIEW, else ✅ runnable)",
+    /var flags = \{ blockers: \[\], verify: \[\] \}/.test(src) && /LOGIC VIEW — NOT directly runnable/.test(src) && /Intended to be runnable as-is/.test(src));
+  ok("nested membership uses the VERIFIED schema (Id__c member key + Segment_Id__c filter, 15-char id)",
+    /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src) && /Segment_Id__c = " \+ q\(segId15\)/.test(src) && /segId\.slice\(0, 15\)/.test(src));
   ok("Copy SQL PREFERS API criteria when extension present, DOM fallback otherwise",
-    /typeof window\.__dcGetSegmentDef === "function" && segId/.test(src) && /segmentApiCriteriaToSql\(crit, segName, currentModalTab\)/.test(src) && /var domFallback = function/.test(src));
+    /typeof window\.__dcGetSegmentDef !== "function"/.test(src) && /segmentApiCriteriaToSql\(crit, segName, currentModalTab, fromObj, resolver\)/.test(src) && /var domFallback = function/.test(src));
+  ok("caller threads real FROM (seg.segmentOnApiName) + nested resolver into the renderer",
+    /var fromObj = \(seg && seg\.segmentOnApiName\)/.test(src) && /var makeResolver = function/.test(src) && /segmentMembershipTable/.test(src));
+  ok("Copy SQL tries BY-ID then falls back to LIST+match-by-name (rescues the wizard 404 case)",
+    /var tryById = function/.test(src) && /var tryList = function/.test(src) && /window\.__dcGetSegmentDef\(""\)/.test(src) && /var pickSeg = function/.test(src));
+  ok("pickSeg matches the viewed segment by any of its names (apiName/developerName/name/displayName/masterLabel)",
+    /s\.apiName, s\.developerName, s\.name, s\.displayName, s\.masterLabel/.test(src) && /exact \|\| contains \|\| null/.test(src));
+  ok("only drops to DOM when BOTH by-id and list fail (new/unsaved segment hinted)",
+    /couldn't fetch the saved criteria/.test(src) && /NEW, unsaved segment/.test(src));
   ok("reads segment id from URL (runtime_cdp__record_id) + decodes HTML entities before JSON.parse",
     /runtime_cdp__record_id/.test(src) && /ta\.innerHTML = String\(s \|\| ""\); return ta\.value/.test(src) && /JSON\.parse\(dsEsc\(raw\)\)/.test(src));
   ok("DEV-ONLY: absent from the public/stripped bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/function segmentTreeToSql/.test(strip) && !/dc-d-sql/.test(strip); })());

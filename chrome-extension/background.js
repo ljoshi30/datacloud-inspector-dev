@@ -329,31 +329,68 @@ async function runDcSegmentDef(req) {
     const got = await readSid(host);
     if (!got) return { ok: false, error: "No Salesforce session cookie found (are you logged in?)" };
     var apiV = (req && req.apiVersion) || "v63.0";
-    var url = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/segments/" + encodeURIComponent(req.segmentApiNameOrId || "");
-    if (req.dataspace) url += "?dataspace=" + encodeURIComponent(req.dataspace);
-    try { console.log("[dcSegmentDef] GET " + url); } catch (e) {}
-    // abort after 30s so a stalled request returns a real error instead of hanging forever.
-    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var to = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
-    let r;
-    try {
-      r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" }, signal: ctrl ? ctrl.signal : undefined });
-    } catch (fe) {
-      if (to) clearTimeout(to);
-      try { console.log("[dcSegmentDef] fetch failed: " + (fe && fe.name) + " " + (fe && fe.message)); } catch (e) {}
-      return { ok: false, error: "fetch " + (fe && fe.name === "AbortError" ? "timed out (30s) — endpoint didn't respond" : ("failed: " + safeError(fe))) };
+    var base = "https://" + got.coreHost + "/services/data/" + apiV + "/ssot/segments/";
+    var idOrName = req.segmentApiNameOrId || "";
+    var isList = !idOrName;   // empty → LIST all segments (this is the path we page)
+
+    // one authenticated GET with a 30s abort; returns {status, txt, j} or {err}
+    async function getJson(url) {
+      var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var to = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
+      try {
+        var r = await fetch(url, { headers: { "Authorization": "Bearer " + got.sid, "Accept": "application/json" }, signal: ctrl ? ctrl.signal : undefined });
+        if (to) clearTimeout(to);
+        var txt = await r.text();
+        var j = null; try { j = JSON.parse(txt); } catch (e) {}
+        return { status: r.status, txt: txt, j: j };
+      } catch (fe) {
+        if (to) clearTimeout(to);
+        return { err: fe && fe.name === "AbortError" ? "timed out (30s) — endpoint didn't respond" : ("fetch failed: " + safeError(fe)) };
+      }
     }
-    if (to) clearTimeout(to);
-    const txt = await r.text();
-    try { console.log("[dcSegmentDef] HTTP " + r.status + " (" + txt.length + " bytes)"); } catch (e) {}
-    let j = null; try { j = JSON.parse(txt); } catch (e) {}
-    if (r.status !== 200) {
-      if (r.status === 401 || /INVALID_SESSION_ID|session expired/i.test(txt))
+    function httpError(res) {
+      if (res.status === 401 || /INVALID_SESSION_ID|session expired/i.test(res.txt || ""))
         return { ok: false, sessionExpired: true, error: "Your Salesforce session has expired — refresh the Salesforce tab, then retry." };
-      let em = "HTTP " + r.status; try { em = (j && (j[0] ? j[0].message : (j.message || j.errorMessage))) || em; } catch (e) {}
-      return { ok: false, error: em + " — " + txt.slice(0, 200), status: r.status };
+      var em = "HTTP " + res.status; try { em = (res.j && (res.j[0] ? res.j[0].message : (res.j.message || res.j.errorMessage))) || em; } catch (e) {}
+      return { ok: false, error: em + " — " + (res.txt || "").slice(0, 200), status: res.status };
     }
-    return { ok: true, data: j };
+
+    // ── BY-ID / BY-NAME: single GET, no paging ──
+    if (!isList) {
+      var one = base + encodeURIComponent(idOrName) + (req.dataspace ? "?dataspace=" + encodeURIComponent(req.dataspace) : "");
+      try { console.log("[dcSegmentDef] GET " + one); } catch (e) {}
+      var res1 = await getJson(one);
+      if (res1.err) return { ok: false, error: "fetch " + res1.err };
+      if (res1.status !== 200) return httpError(res1);
+      return { ok: true, data: res1.j };
+    }
+
+    // ── LIST: page through ALL segments (the API returns batchSize:20 at a time + totalSize). ──
+    // Earlier this did a single fetch, so only the first 20 segments came back and any segment past
+    // offset 20 (e.g. in large orgs) was "not found". Loop offset += batchSize until we've read
+    // totalSize (or a page comes back empty). Hard cap at 100 pages as a runaway backstop.
+    var qs = function (off) { return "?offset=" + off + "&batchSize=200" + (req.dataspace ? "&dataspace=" + encodeURIComponent(req.dataspace) : ""); };
+    var all = [], offset = 0, total = null, first = null, pages = 0;
+    for (; pages < 100; pages++) {
+      var u = base + qs(offset);
+      try { console.log("[dcSegmentDef] GET " + u); } catch (e) {}
+      var res = await getJson(u);
+      if (res.err) { if (all.length) break; return { ok: false, error: "fetch " + res.err }; }   // keep what we have
+      if (res.status !== 200) { if (all.length) break; return httpError(res); }
+      if (!first) first = res.j;
+      var segs = (res.j && res.j.segments) || [];
+      all = all.concat(segs);
+      if (total == null && res.j && typeof res.j.totalSize === "number") total = res.j.totalSize;
+      var step = (res.j && typeof res.j.batchSize === "number" && res.j.batchSize > 0) ? res.j.batchSize : (segs.length || 20);
+      offset += step;
+      if (!segs.length) break;                       // empty page → done
+      if (total != null && offset >= total) break;   // read everything
+      if (segs.length < step) break;                 // short page → last page
+    }
+    try { console.log("[dcSegmentDef] LIST paged: " + all.length + " segments over " + (pages + 1) + " page(s)" + (total != null ? " (totalSize " + total + ")" : "")); } catch (e) {}
+    // Return the same shape callers expect ({segments:[...]}), but with the FULL set.
+    var merged = first ? Object.assign({}, first, { segments: all, offset: 0, batchSize: all.length }) : { segments: all };
+    return { ok: true, data: merged };
   } catch (e) { return { ok: false, error: safeError(e) }; }
 }
 

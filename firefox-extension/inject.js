@@ -5578,25 +5578,48 @@
    * Anything unrecognized is emitted as a clearly-marked /* UNHANDLED: <type> *​/ comment (never
    * silently wrong). Operator enums map to SQL; joins from `path` become explicit JOIN notes.
    */
-  function segmentApiCriteriaToSql(criteria, segName, tabLabel) {
+  // Render Salesforce's STORED segment criteria JSON → clean SQL. Handles the full real node grammar
+  // (verified against live /ssot/segments includeCriteria): LogicalComparison (and/or groups),
+  // Text/Number/Boolean/DateTime Comparison leaves (values[] OR scalar value), NumberAggregation
+  // (count-of-related ≥ N), CalculatedInsight, NestedSegment (member of another segment), and bare
+  // {filter:…} wrappers. Operators are the REAL space-separated phrases ("has value",
+  // "greater than or equal"). fromObj = segmentOnApiName (the real FROM). segResolver(devNameOrApi) →
+  // { membershipTable } optionally resolves a nested segment to its published-membership table.
+  function segmentApiCriteriaToSql(criteria, segName, tabLabel, fromObj, segResolver) {
     var joins = {};     // de-duped join notes gathered from every node's path
+    var notes = [];     // caveats surfaced in the header (aggregations, nested segments)
+    // Runnability tracking — we NEVER claim a query runs when it doesn't, and we NEVER emit a bare
+    // comment into a predicate slot (that leaves a dangling AND → syntax error). `blockers` = reasons
+    // the query is a non-executable LOGIC VIEW; `verify` = it runs but an assumption should be checked.
+    var flags = { blockers: [], verify: [] };
+    var seenSegs = {};            // cycle guard for recursive nested-segment inlining
+    var MAX_NEST_DEPTH = 6;       // runaway-recursion backstop
     function q(v) {
       var s = String(v == null ? "" : v);
       if (/^-?\d+(\.\d+)?$/.test(s)) return s;
       if (/^(true|false)$/i.test(s)) return s.toUpperCase();
       return "'" + s.replace(/'/g, "''") + "'";
     }
-    // operator enum → { fn(col,vals) → sql fragment }
+    // A comparison carries its operand as either values:[...] (text/in) or a scalar value (number/bool).
+    function operandOf(cmp) {
+      if (cmp == null) return [];
+      if (cmp.values != null) return cmp.values;
+      if (cmp.value != null) return cmp.value;
+      return [];
+    }
+    // operator enum → sql fragment. Normalizes the REAL phrases by stripping spaces/underscores.
     function opSql(opRaw, vals) {
-      var op = String(opRaw || "").trim().toLowerCase();
+      var op = String(opRaw || "").trim().toLowerCase().replace(/[\s_]+/g, "");
       var list = Array.isArray(vals) ? vals.slice() : (vals == null ? [] : [vals]);
       switch (op) {
         case "equal": case "equals": return "= " + (list.length ? q(list[0]) : "''");
-        case "notequal": case "notequals": case "not_equal": return "<> " + (list.length ? q(list[0]) : "''");
+        case "notequal": case "notequals": return "<> " + (list.length ? q(list[0]) : "''");
         case "contains": return "LIKE " + q("%" + (list[0] || "") + "%");
         case "notcontains": case "doesnotcontain": return "NOT LIKE " + q("%" + (list[0] || "") + "%");
         case "startswith": case "beginswith": return "LIKE " + q((list[0] || "") + "%");
+        case "doesnotbeginwith": case "doesnotstartwith": return "NOT LIKE " + q((list[0] || "") + "%");
         case "endswith": return "LIKE " + q("%" + (list[0] || ""));
+        case "doesnotendwith": return "NOT LIKE " + q("%" + (list[0] || ""));
         case "in": case "includes": return "IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
         case "notin": case "excludes": return "NOT IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
         case "greaterthan": case "greater": return "> " + (list.length ? q(list[0]) : "0");
@@ -5605,25 +5628,30 @@
         case "lessthanorequal": case "lessorequal": return "<= " + (list.length ? q(list[0]) : "0");
         case "between": return "BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
         case "notbetween": return "NOT BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
-        case "isnull": case "null": case "empty": return "IS NULL";
+        case "isnull": case "null": case "empty": case "hasnovalue": return "IS NULL";
         case "isnotnull": case "notnull": case "hasvalue": return "IS NOT NULL";
         case "istrue": return "= TRUE";
         case "isfalse": return "= FALSE";
-        default: return "/* op:" + opRaw + " */ " + (list.length ? q(list[0]) : "");
+        // Unknown operator: produce a VALID (if conservative) predicate rather than a bare comment,
+        // and flag it so the query can't be mistaken for exact. "= <val>" keeps the AND/OR chain legal.
+        // The original operator string is recorded in the header VERIFY block — NOT inline in the SQL.
+        default:
+          flags.verify.push("unrecognized operator \"" + opRaw + "\" — rendered as a literal \"= value\" comparison; verify its meaning");
+          return (list.length ? "= " + q(list[0]) : "IS NOT NULL");
       }
     }
     function col(subject) {
-      if (!subject) return "/* field? */";
+      if (!subject) { flags.blockers.push("a condition is missing its field reference"); return "UNKNOWN_FIELD"; }
       var o = subject.objectApiName || "", f = subject.fieldApiName || "";
-      return (o && f) ? (o + "." + f) : (f || o || "/* field? */");
+      if (!o && !f) { flags.blockers.push("a condition is missing its field reference"); return "UNKNOWN_FIELD"; }
+      return (o && f) ? (o + "." + f) : (f || o);
     }
     // record join hops from a node's path (array of [{obj,field},{obj,field}] pairs)
     function notePath(path) {
       if (!Array.isArray(path)) return;
       path.forEach(function (hop) {
         if (Array.isArray(hop) && hop.length === 2 && hop[0] && hop[1]) {
-          var key = col(hop[0]) + " = " + col(hop[1]);
-          joins[key] = true;
+          joins[col(hop[0]) + " = " + col(hop[1])] = true;
         }
       });
     }
@@ -5631,12 +5659,98 @@
       notePath(node.path);
       if (node.comparison) notePath(node.comparison.path);
       var cmp = node.comparison || node;   // CI wraps its leaf in .comparison
-      return col(cmp.subject) + " " + opSql(cmp.operator, cmp.values);
+      return col(cmp.subject) + " " + opSql(cmp.operator, operandOf(cmp));
+    }
+    // NumberAggregation: "individuals having <aggFn> of <container rows matching inner filter> <op> N".
+    // Real shape: { aggregateFunction:"count", filter:{inner condition}, comparison:{op,value},
+    // containerObjectApiName, path:[join hops] }. Rendered as a correlated COUNT(*) subquery vs a threshold.
+    function aggSql(node) {
+      notePath(node.path);
+      var fn = String(node.aggregateFunction || "count").toUpperCase();
+      var container = node.containerObjectApiName ||
+        (node.filter && node.filter.subject && node.filter.subject.objectApiName) ||
+        (node.comparison && node.comparison.subject && node.comparison.subject.objectApiName) || "";
+      if (!container) { flags.blockers.push("an aggregation is missing its container object"); container = "UNKNOWN_OBJECT"; }
+      var innerWhere = node.filter ? walk(node.filter, 1) : "";
+      var thr = node.comparison ? opSql(node.comparison.operator, operandOf(node.comparison)) : ">= 1";
+      var selectExpr = fn === "COUNT" ? "COUNT(*)" : (fn + "(" + col(node.comparison && node.comparison.subject) + ")");
+      notes.push("aggregation: " + fn + " of " + container + (innerWhere ? " where " + innerWhere : "") + " " + thr + " (correlated to each individual via the join keys)");
+      return "(SELECT " + selectExpr + " FROM " + container + (innerWhere ? " WHERE " + innerWhere : "") + ") " + thr;
+    }
+    // NestedSegment: this individual is a MEMBER of another segment. We INLINE that segment's actual
+    // criteria (recursively) so the SQL shows the real conditions, not an opaque id. Resolution order:
+    //   1) If the referenced segment's own criteria are available → inline them as a parenthesized group
+    //      (recursive, with a cycle guard + depth cap). This is what the user wants: real conditions.
+    //   2) Else, if only a published-membership table is available (e.g. the nested segment is itself
+    //      membership-only, or uses useLastPublishedMembership) → the truthful SQL is the membership
+    //      subquery `Id__c IN (SELECT Id__c FROM <table> WHERE Segment_Id__c = <15-char id>)`.
+    //   3) Else → valid named placeholder + mark the whole query a non-runnable LOGIC VIEW.
+    // We ALWAYS emit a syntactically VALID predicate (never a bare comment that would dangle the AND).
+    function nestedSql(node, depth) {
+      var subj = node.subject || {};
+      var devName = node.segmentId || subj.segmentDevName || "";
+      var label = subj.fieldApiName || devName || "(segment)";
+      var behavior = subj.nestedPublishBehavior || "";
+      var mc = subj.memberCount;
+      notes.push("nested segment \"" + label + "\"" + (devName ? " [devName: " + devName + "]" : "") +
+        (mc != null ? " (~" + mc + " members)" : "") + (behavior ? " — " + behavior : ""));
+
+      var resolved = (typeof segResolver === "function" && devName) ? segResolver(devName) : null;
+      // the FROM object's PK: standard unified individual uses ssot__Id__c; custom unified DMOs use Id__c.
+      var pk = /^ssot__/i.test(String(fromObj || "")) ? "ssot__Id__c" : "Id__c";
+
+      // (1) INLINE the referenced segment's real criteria — recursive, cycle-guarded, depth-capped.
+      var nestedCrit = resolved && resolved.criteria;   // the other segment's parsed includeCriteria (object) or raw string
+      if (nestedCrit) {
+        var key = (devName || label).toLowerCase();
+        if (seenSegs[key]) {
+          flags.blockers.push("nested segment \"" + label + "\" forms a CYCLE (it eventually references itself) — can't inline");
+          return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
+        }
+        if ((depth || 0) >= MAX_NEST_DEPTH) {
+          flags.blockers.push("nested segment \"" + label + "\" exceeds the inline depth limit (" + MAX_NEST_DEPTH + ") — expand it separately");
+          return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
+        }
+        var critObj = nestedCrit;
+        if (typeof critObj === "string") { try { critObj = JSON.parse(critObj); } catch (e) { critObj = null; } }
+        if (critObj && typeof critObj === "object") {
+          seenSegs[key] = true;
+          var sub = walk(critObj, (depth || 0) + 1);
+          delete seenSegs[key];
+          if (sub) {
+            flags.verify.push("nested segment \"" + label + "\" was INLINED below as a parenthesized group (its own criteria)" +
+              (behavior === "useLastPublishedMembership" ? ". NOTE: it's set to '" + behavior + "' (a PUBLISHED SNAPSHOT), so the inlined LIVE criteria may differ slightly from the actual last-published membership." : "."));
+            return "(" + sub + ")";   // clean parenthesized group — no inline comment (facts are in the header)
+          }
+        }
+      }
+
+      // (2) Membership-table fallback — VERIFIED: Segment_Id__c stores the 15-CHAR id (18-char → 0 rows).
+      if (resolved && resolved.membershipTable) {
+        var segId = String(resolved.segmentId || "");
+        var segId15 = /^[A-Za-z0-9]{18}$/.test(segId) ? segId.slice(0, 15) : segId;
+        if (segId15) {
+          flags.verify.push("nested segment \"" + label + "\": its own criteria weren't available to inline, so members are read " +
+            "from its published membership table " + resolved.membershipTable + " (Segment_Id__c = " + segId15 + ", 15-char).");
+          return (fromObj || "Individual") + "." + pk + " IN (SELECT Id__c FROM " + resolved.membershipTable + " WHERE Segment_Id__c = " + q(segId15) + ")";
+        }
+        flags.blockers.push("nested segment \"" + label + "\": membership table " + resolved.membershipTable +
+          " is shared across segments and its Segment_Id__c couldn't be resolved — can't filter to this segment");
+        return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
+      }
+
+      // (3) Nothing resolvable → valid placeholder + non-runnable flag.
+      flags.blockers.push("references nested segment \"" + label + "\" (" + (devName || label) + ") whose criteria/membership couldn't be resolved here — expand that segment separately");
+      return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
     }
     function walk(node, depth) {
       if (!node || typeof node !== "object") return "";
-      if (node.filter && typeof node.filter === "object") return walk(node.filter, depth);  // unwrap
       var t = String(node.type || "");
+      // Order matters: NumberAggregation ALSO has a .filter, so it must be handled BEFORE the bare
+      // {filter:…} unwrap below — otherwise the aggregation (count ≥ N) is silently discarded.
+      if (t === "NumberAggregation" || t === "NumberAggregationComparison") return aggSql(node);
+      if (t === "NestedSegment") return nestedSql(node, depth);
+      if (t === "CalculatedInsight") { notePath(node.path); notes.push("calculated insight condition on " + col((node.comparison || node).subject)); return leafSql(node); }
       if (t === "LogicalComparison") {
         var join = String(node.operator || "AND").toUpperCase();
         var parts = (node.filters || []).map(function (f) { return walk(f, depth + 1); }).filter(Boolean);
@@ -5645,19 +5759,47 @@
         var body = parts.join(pad);
         return depth === 0 ? body : "(" + body + ")";
       }
-      if (t === "CalculatedInsight") { notePath(node.path); return "/* calculated insight */ " + leafSql(node); }
       if (/Comparison$/.test(t)) return leafSql(node);
-      return "/* UNHANDLED: " + (t || "unknown node") + " */";
+      if (node.filter && typeof node.filter === "object") return walk(node.filter, depth);  // bare wrapper (last)
+      // Unknown node: emit a VALID placeholder predicate (never a bare comment that dangles the AND)
+      // and block runnability so it's never mistaken for exact. Reason goes in the header, not inline.
+      flags.blockers.push("unsupported criteria node \"" + (t || "unknown") + "\" — couldn't be translated to SQL");
+      return "UNSUPPORTED_NODE('" + String(t || "unknown").replace(/'/g, "''") + "')";
+    }
+    // Fallback FROM: if the caller didn't pass segmentOnApiName, use the first subject's object.
+    function firstObj(node, seen) {
+      if (!node || typeof node !== "object" || (seen = seen || 0) > 30) return "";
+      if (node.subject && node.subject.objectApiName) return node.subject.objectApiName;
+      var kids = node.filters || (node.filter ? [node.filter] : []);
+      for (var i = 0; i < kids.length; i++) { var r = firstObj(kids[i], seen + 1); if (r) return r; }
+      if (node.comparison) return firstObj(node.comparison, seen + 1);
+      return "";
     }
     var where = walk(criteria, 0);
+    var from = fromObj || firstObj(criteria) || "";
+    if (!from) { flags.blockers.push("the segment's primary object (Segment On / FROM) couldn't be determined"); from = "UNKNOWN_OBJECT"; }
     var joinList = Object.keys(joins);
-    var header = "-- CLEAN SQL from Salesforce's stored segment criteria (authoritative — via API).\n" +
-                 "-- Segment: " + (segName || "") + (tabLabel ? "  (tab: " + tabLabel + ")" : "") + "\n" +
-                 (joinList.length ? "-- Join keys (from the criteria's path):\n" + joinList.map(function (j) { return "--   " + j; }).join("\n") + "\n" : "") +
-                 "-- Note: a segment resolves to UNIFIED individuals; a raw SELECT may differ from the\n" +
-                 "-- published population, but the logic/joins/operators below are the real ones.\n";
+    var runnable = flags.blockers.length === 0;
+    // De-dupe verify/blocker notes (the same assumption can surface from multiple nodes).
+    var uniq = function (a) { var s = {}, o = []; a.forEach(function (x) { if (!s[x]) { s[x] = 1; o.push(x); } }); return o; };
+    var blockers = uniq(flags.blockers), verify = uniq(flags.verify);
+
+    var header = "-- SQL from Salesforce's stored segment criteria (authoritative — read via the API).\n" +
+                 "-- Segment: " + (segName || "") + (tabLabel ? "  (tab: " + tabLabel + ")" : "") + "\n";
+    if (!runnable) {
+      header += "-- ⚠️ LOGIC VIEW — NOT directly runnable. Read it to understand the logic; it needs the\n" +
+                "--    fixes below before it will execute:\n" +
+                blockers.map(function (b) { return "--    ✗ " + b; }).join("\n") + "\n";
+    } else {
+      header += "-- ✅ Intended to be runnable as-is against Data Cloud (SQL). Review before running.\n";
+    }
+    if (verify.length) header += "-- VERIFY:\n" + verify.map(function (v) { return "--    • " + v; }).join("\n") + "\n";
+    if (joinList.length) header += "-- Join keys (from the criteria's path):\n" + joinList.map(function (j) { return "--   " + j; }).join("\n") + "\n";
+    if (notes.length) header += "-- Notes:\n" + notes.map(function (n) { return "--   • " + n; }).join("\n") + "\n";
+    header += "-- Note: a segment resolves to UNIFIED individuals; a raw SELECT may differ from the\n" +
+              "-- published population, but the logic/joins/operators below are the real ones.\n";
     if (!where) return header + "-- (no include criteria)";
-    return header + "SELECT *\n/* FROM the segment's primary object; JOIN the objects above on the listed keys */\nWHERE " + where + ";";
+    return header + "SELECT *\nFROM " + from + "\nWHERE " + where + ";";
   }
 
   // ── Segment export modal ──────────────────────────────────────────────────
@@ -6322,28 +6464,93 @@
         };
         // PREFER the authoritative API criteria (clean SQL w/ real joins/operators) when the extension
         // is available; fall back to the DOM reconstruction (bookmarklet, or any API failure).
-        var segId = "";
-        try { segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || ""; } catch (er) {}
-        if (typeof window.__dcGetSegmentDef === "function" && segId) {
-          btn.textContent = "Fetching real criteria…";
-          window.__dcGetSegmentDef(segId).then(function (resp) {
-            try {
-              var segs = (resp && resp.segments) || (resp ? [resp] : []);
-              var dsEsc = function (s) { var ta = document.createElement("textarea"); ta.innerHTML = String(s || ""); return ta.value; };
-              // match the segment we're viewing by name; else first with criteria
-              var want = String(segName || "").replace(/[^A-Za-z0-9_]/g, "");
-              var seg = segs.find(function (s) { return want && String(s.apiName || s.displayName || "").replace(/[^A-Za-z0-9_]/g, "").indexOf(want) >= 0; }) || segs.find(function (s) { return s.includeCriteria; }) || segs[0];
-              var raw = currentModalTab && /exclude/i.test(currentModalTab) ? (seg && seg.excludeCriteria) : (seg && seg.includeCriteria);
-              if (!raw) { domFallback("API returned no criteria for this tab — showing DOM reconstruction"); return; }
-              var crit = JSON.parse(dsEsc(raw));
-              var sql = segmentApiCriteriaToSql(crit, segName, currentModalTab);
-              copy(sql);
-            } catch (er) { domFallback("couldn't parse API criteria — showing DOM reconstruction"); }
-          }).catch(function () { domFallback("API fetch failed (extension/session) — showing DOM reconstruction"); });
+        //
+        // TWO fetch strategies, tried in order, because the segment id isn't reliably in the URL:
+        //   (1) BY-ID: GET /ssot/segments/{runtime_cdp__record_id} — works on a SAVED segment's detail
+        //       page. BUT on the create/edit WIZARD, that URL id is the WIZARD's id, not the segment's,
+        //       so this 404s. That 404 was the whole reason Copy SQL kept dropping to DOM reconstruction.
+        //   (2) LIST + MATCH-BY-NAME: GET /ssot/segments/ (no id) returns ALL segments, each with its
+        //       includeCriteria/excludeCriteria; we match the one we're viewing by name. This is what
+        //       rescues the wizard case.
+        // Only if BOTH fail (or it's a brand-new UNSAVED segment not yet in the list) do we drop to DOM.
+        var wantExclude = currentModalTab && /exclude/i.test(currentModalTab);
+        var dsEsc = function (s) { var ta = document.createElement("textarea"); ta.innerHTML = String(s || ""); return ta.value; };
+        var norm = function (s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); };
+        // choose the segment from a list that best matches the one we're viewing (by any of its names)
+        var pickSeg = function (segs) {
+          if (!segs || !segs.length) return null;
+          var wantN = norm(segName), exact = null, contains = null;
+          for (var i = 0; i < segs.length; i++) {
+            var s = segs[i];
+            var names = [s.apiName, s.developerName, s.name, s.displayName, s.masterLabel].map(norm).filter(Boolean);
+            if (wantN && names.indexOf(wantN) >= 0) { exact = s; break; }
+            if (!contains && wantN && names.some(function (n) { return n.indexOf(wantN) >= 0 || wantN.indexOf(n) >= 0; })) contains = s;
+          }
+          return exact || contains || null;
+        };
+        var rawOf = function (seg) { return seg && (wantExclude ? seg.excludeCriteria : seg.includeCriteria); };
+        // Build a nested-segment resolver from the full segment list: devName/apiName → its published
+        // membership table, so "member of segment X" can render as a real IN (SELECT … FROM table).
+        var makeResolver = function (segs) {
+          var byKey = {};
+          (segs || []).forEach(function (s) {
+            // criteria = the nested segment's OWN include criteria (decoded), so it can be INLINED.
+            var crit = null; try { var raw = s.includeCriteria; if (raw) crit = JSON.parse(dsEsc(raw)); } catch (e) {}
+            var entry = { membershipTable: s.segmentMembershipTable || "", segmentId: s.marketSegmentId || s.segmentId || "", criteria: crit };
+            [s.apiName, s.developerName, s.name, s.displayName, s.masterLabel].forEach(function (k) { if (k) byKey[norm(k)] = entry; });
+          });
+          return function (devNameOrApi) { var r = byKey[norm(devNameOrApi)]; return (r && (r.criteria || r.membershipTable)) ? r : null; };
+        };
+        // render clean SQL from a matched segment's raw criteria string; returns true on success.
+        // `all` = the full segment list (for nested-segment resolution), may be empty.
+        var renderFrom = function (seg, all, note) {
+          var raw = rawOf(seg);
+          if (!raw) return false;
+          var crit; try { crit = JSON.parse(dsEsc(raw)); } catch (er) { return false; }
+          var fromObj = (seg && seg.segmentOnApiName) || "";
+          var resolver = makeResolver(all && all.length ? all : [seg]);
+          var sql; try { sql = segmentApiCriteriaToSql(crit, segName, currentModalTab, fromObj, resolver); } catch (er) { return false; }
+          if (!sql) return false;
+          if (note) sql = "-- (" + note + ")\n" + sql;
+          copy(sql);
+          return true;
+        };
+
+        if (typeof window.__dcGetSegmentDef !== "function") {
+          domFallback("bookmarklet: DOM reconstruction (install the extension for exact API-based SQL)");
           return;
         }
-        // no extension (bookmarklet) → DOM reconstruction, clearly labeled
-        domFallback("bookmarklet: DOM reconstruction (install the extension for exact API-based SQL)");
+        btn.textContent = "Fetching real criteria…";
+        var segId = "";
+        try { segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || ""; } catch (er) {}
+
+        var tryById = function () {
+          if (!segId) return Promise.reject(new Error("no record id in URL"));
+          return window.__dcGetSegmentDef(segId).then(function (resp) {
+            var segs = (resp && resp.segments) || (resp ? [resp] : []);
+            return { seg: pickSeg(segs) || segs.find(function (s) { return rawOf(s); }) || segs[0] || null, all: segs };
+          });
+        };
+        var tryList = function () {
+          return window.__dcGetSegmentDef("").then(function (resp) {
+            var segs = (resp && resp.segments) || (resp ? [resp] : []);
+            return { seg: pickSeg(segs), all: segs };
+          });
+        };
+
+        tryById()
+          .then(function (hit) { if (renderFrom(hit.seg, hit.all)) return "done"; throw new Error("by-id returned no criteria for this tab"); })
+          .catch(function () {
+            // by-id failed (404 on the wizard, no id, parse, or no criteria) → LIST + match by name
+            return tryList().then(function (hit) {
+              if (renderFrom(hit.seg, hit.all, "matched the saved segment by name via the list API")) return "done";
+              if (hit.seg && !rawOf(hit.seg)) { domFallback("the saved segment has no " + (wantExclude ? "exclude" : "include") + " criteria for this tab"); return "done"; }
+              throw new Error("segment not found in the list (new/unsaved?)");
+            });
+          })
+          .catch(function (err) {
+            domFallback("couldn't fetch the saved criteria (" + (err && err.message || "unknown") + ") — showing DOM reconstruction. If this is a NEW, unsaved segment, save it first to get exact API-based SQL.");
+          });
       };
     })();
 
@@ -21620,7 +21827,7 @@ processJSON();
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.663"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.675"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -21628,7 +21835,8 @@ processJSON();
     PING_BUILD = "dev";
     /* @strip:end */
     var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
-    var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle)
+    var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle) — set ONLY after a confirmed HTTP success
+    var _inFlight = {};              // per-feature in-flight guard (prevents duplicate concurrent sends)
     var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
     var LS_NOTICE = "dc_usage_noticed"; // "1" = the one-time disclosure notice has been shown
 
@@ -21677,16 +21885,33 @@ processJSON();
       // NOTE: Math.random fallback only in the live browser — this file never runs Math.random in tests.
       try { return "i" + String(Date.now()) + "_" + Math.floor(Math.random() * 1e9).toString(36); } catch (e) { return "i_anon"; }
     }
+    // In-memory fallbacks for when localStorage is UNAVAILABLE (VDI lockdowns, strict privacy modes,
+    // some incognito/3rd-party-storage-blocked contexts). Without these, every storage-blocked user
+    // would collapse to a single constant id ("i_nostore") — merging many real users into one AND
+    // never persisting the throttle. Instead we mint a per-page-session random id and keep the throttle
+    // in memory for the life of the page. Trade-off (documented): a storage-blocked user is counted
+    // fresh each full page load rather than once/day — honest over-count beats invisible under-count,
+    // and the report still sees distinct real people instead of one fake "i_nostore".
+    var _memId = null, _memSent = {};
     function installId() {
-      try { var v = localStorage.getItem(LS_ID); if (!v) { v = randId(); localStorage.setItem(LS_ID, v); } return v; } catch (e) { return "i_nostore"; }
+      try { var v = localStorage.getItem(LS_ID); if (!v) { v = randId(); localStorage.setItem(LS_ID, v); } return v; }
+      catch (e) { if (!_memId) _memId = randId(); return _memId; }   // storage blocked → stable for THIS page session
     }
     function todayStamp() { try { return new Date().toISOString().slice(0, 10); } catch (e) { return ""; } }
     // PER-FEATURE, per-day throttle: one ping per (feature, day) per browser. So a user who opens
     // the DMO FAB and the Segment FAB the same day sends TWO pings (one per feature), but reopening
-    // the SAME feature's FAB all day sends only one. Key is namespaced by feature + day.
+    // the SAME feature's FAB all day sends only one. Key is namespaced by feature + day. If storage is
+    // blocked, the throttle degrades to an in-memory map (once per feature per PAGE SESSION) — still
+    // prevents spam, just resets on a full reload.
     function throttleKey(feature) { return LS_LAST + "::" + (feature || "other") + "::" + todayStamp(); }
-    function sentToday(feature) { try { return localStorage.getItem(throttleKey(feature)) === "1"; } catch (e) { return true; } } // on error, assume sent → don't spam
-    function markSent(feature) { try { localStorage.setItem(throttleKey(feature), "1"); } catch (e) {} }
+    function sentToday(feature) {
+      var k = throttleKey(feature);
+      try { return localStorage.getItem(k) === "1"; } catch (e) { return _memSent[k] === true; }
+    }
+    function markSent(feature) {
+      var k = throttleKey(feature);
+      try { localStorage.setItem(k, "1"); } catch (e) { _memSent[k] = true; }
+    }
 
 
     // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
@@ -21720,11 +21945,21 @@ processJSON();
     // The working channel is a normal CORS+JSON fetch to firestore.googleapis.com (CSP-allowed via
     // *.googleapis.com) → writes one doc to the `usage` collection, silently. Fire-and-forget: we
     // don't read the response. Respects opt-out + per-feature/day throttle.
+    // Fire one usage ping. Returns a Promise<bool> that resolves TRUE only on a confirmed HTTP success.
+    // CRITICAL: the day/feature throttle (markSent) is set ONLY after the write actually succeeds — so a
+    // request that fails (e.g. CSP-blocked on a strict page) does NOT burn the throttle, and the user can
+    // still be captured later the same day on a page where the write is allowed. (Previously markSent ran
+    // unconditionally right after firing the fetch, so one CSP-blocked attempt silently locked the user
+    // out for the rest of the day — the "new user never captured" bug.)
     function reportUsage() {
-      if (optedOut()) return false;
-      if (!FS_URL) return false;
+      if (!PING_ENABLED) return Promise.resolve(false);   // master kill-switch (documented gate — now ENFORCED)
+      if (optedOut()) return Promise.resolve(false);
+      if (!FS_URL) return Promise.resolve(false);
+      var feature;
       try {
-        var feature = pingPageType();
+        feature = pingPageType();
+        if (_inFlight[feature]) return Promise.resolve(false);   // a send for this feature is already pending
+        _inFlight[feature] = true;
         // org = the Salesforce my-domain host (semi-identifying: points to an org, but NOT a person).
         // Lets the report count "how many ORGS use it". No username / record / field data.
         var org = ""; try { org = String(location.hostname || "").replace(/\.lightning\.force\.com$|\.my\.salesforce\.com$/i, "").slice(0, 80); } catch (e) {}
@@ -21737,14 +21972,23 @@ processJSON();
           org:   { stringValue: org },
           ts:    { stringValue: new Date().toISOString() }
         }};
-        fetch(FS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true })
-          /* @strip:start dev */
-          .then(function (r) { try { console.log("%c[dc usage] captured '" + feature + "' → HTTP " + r.status, r.ok ? "color:#0d9488" : "color:#b45309"); } catch (e) {} })
-          /* @strip:end */
-          .catch(function () {});                  // fire-and-forget; silent on any error (public build: no logging)
-        try { markSent(feature); } catch (e) {}    // one write per feature/day
-        return true;
-      } catch (e) { return false; }
+        return fetch(FS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true })
+          .then(function (r) {
+            _inFlight[feature] = false;
+            if (r && r.ok) {
+              try { markSent(feature); } catch (e) {}            // throttle ONLY on confirmed success
+              /* @strip:start dev */ try { console.log("%c[dc usage] captured '" + feature + "' → HTTP " + r.status, "color:#0d9488"); } catch (e) {} /* @strip:end */
+              return true;
+            }
+            /* @strip:start dev */ try { console.log("%c[dc usage] NOT captured '" + feature + "' → HTTP " + (r && r.status) + " (not marked; will retry on next FAB open)", "color:#b45309"); } catch (e) {} /* @strip:end */
+            return false;                                        // non-2xx → do NOT burn the throttle
+          })
+          .catch(function (err) {
+            _inFlight[feature] = false;
+            /* @strip:start dev */ try { console.log("%c[dc usage] FAILED '" + feature + "' → " + (err && err.message || err) + " (likely this page's CSP blocks firestore.googleapis.com; not marked — will retry elsewhere)", "color:#b45309"); } catch (e) {} /* @strip:end */
+            return false;                                        // network/CSP error → do NOT burn the throttle
+          });
+      } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
     }
 
     // Auto-capture tied to a user gesture (opening the FAB): at most ONCE PER FEATURE PER DAY per
@@ -21779,6 +22023,9 @@ processJSON();
         for (var i = 0; el && i < 8; i++) {
           var id = (el.id || "");
           if (/^dc-([a-z0-9]+-)?bar$/.test(id) || /^dc-([a-z0-9]+-)?fab$/.test(id)) return true;
+          // the "open in new tab ⧉" launchers are standalone (attached to <body>, not inside a *-bar),
+          // so their ids don't match the bar/fab pattern — list them explicitly so ⧉-only use is counted.
+          if (id === "dc-list-newtab" || id === "dc-nav-newtab") return true;
           el = el.parentElement;
         }
       } catch (e) {}
@@ -21786,11 +22033,21 @@ processJSON();
     }
     function onAnyFabClick(e) {
       try {
+        if (window.__dcUsageOff) return;   // honor a later disable without needing to unbind
         var path = (e.composedPath && e.composedPath()) || [e.target];
         for (var i = 0; i < path.length; i++) { if (path[i] && isFabClick(path[i])) { maybeReportOnFabOpen(); return; } }
       } catch (er) {}
     }
-    try { document.addEventListener("click", onAnyFabClick, true); } catch (e) {}
+    // RUN-ONCE listener: the whole file re-executes when the user re-pastes/re-clicks the bookmarklet,
+    // and onAnyFabClick is a fresh closure each time, so re-adding it would STACK duplicate document
+    // listeners (a memory/perf leak over a long VDI session). A stable window flag binds it exactly once
+    // per page; later re-runs skip the add. (The handler also bails on window.__dcUsageOff.)
+    try {
+      if (!window.__dcUsageClickBound) {
+        document.addEventListener("click", onAnyFabClick, true);
+        window.__dcUsageClickBound = true;
+      }
+    } catch (e) {}
 
     // On load: NO in-tool disclosure popup (per decision — silent in-tool). Disclosure instead lives
     // on the install page's Privacy section, and __dcUsageOptOut() remains available as the opt-out.

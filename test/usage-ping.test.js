@@ -26,15 +26,19 @@ function makePinger(opts) {
   function sentToday(feature) { try { return store[key(feature)] === "1"; } catch (e) { return true; } }
   function markSent(feature) { store[key(feature)] = "1"; }
   function installId() { if (!store.dc_usage_iid) store.dc_usage_iid = "i_rand"; return store.dc_usage_iid; }
-  // sendPing now takes the feature (defaults to opts.page) so one browser can ping once PER feature/day
+  // sendPing takes the feature (defaults to opts.page) so one browser can ping once PER feature/day.
+  // `httpOk` simulates the network result — the throttle (markSent) is set ONLY on a confirmed success,
+  // mirroring the real reportUsage. `opts.httpOk` (default true) lets a test simulate a CSP/network fail.
   function sendPing(feature) {
     feature = feature || opts.page || "DMO";
     if (!PING_ENABLED || !PING_ENDPOINT) return false;   // gates 1+2
     if (optedOut()) return false;                         // gate 3: user choice
     if (sentToday(feature)) return false;                 // per-feature/day throttle
+    var httpOk = opts.httpOk !== false;                   // simulate the fetch result
+    if (!httpOk) return false;                            // FAILED write → do NOT mark sent, do NOT record
     var payload = { iid: installId(), v: opts.version || "dev", page: feature, day: today, build: opts.build || "public" };
     sent.push(payload);
-    markSent(feature);
+    markSent(feature);                                    // throttle set ONLY after success
     return true;
   }
   return { sendPing, sent, store };
@@ -65,6 +69,57 @@ console.log("\n2. PER-FEATURE throttle: same feature once/day, but DIFFERENT fea
   eq("unique users = 1 (same iid across all features)", uniqueIids.length, 1);
   var features = p.sent.map(function (x) { return x.page; }).sort();
   eq("features captured = DMO, QueryEditor, Segment", features.join(","), "DMO,QueryEditor,Segment");
+}
+
+console.log("\n2a. FAILED write must NOT burn the throttle (the 'new user never captured' bug)");
+{
+  // A CSP-blocked / network-failed write must leave the throttle UNSET, so the SAME user can still be
+  // captured later the same day on a page where the write IS allowed. (Old bug: markSent ran whether or
+  // not the fetch succeeded → one blocked attempt silently locked the user out for the whole day.)
+  var store = {};
+  var blocked = makePinger({ enabled: true, endpoint: "https://x", httpOk: false, store: store });
+  eq("blocked write → returns false", blocked.sendPing("DMO"), false);
+  eq("blocked write → nothing recorded", blocked.sent.length, 0);
+  eq("blocked write → throttle NOT set (still eligible to retry)", store["dc_usage_last::DMO::2026-10-30"], undefined);
+  // same browser/day, now on a permissive page (httpOk) — must still capture
+  var okAgain = makePinger({ enabled: true, endpoint: "https://x", httpOk: true, store: store });
+  eq("later permissive write → CAPTURES (not locked out by the earlier failure)", okAgain.sendPing("DMO"), true);
+  eq("now recorded exactly once", okAgain.sent.length, 1);
+  eq("now the throttle IS set (success)", store["dc_usage_last::DMO::2026-10-30"], "1");
+  eq("and a second success same day → throttled", okAgain.sendPing("DMO"), false);
+}
+
+console.log("\n2c. STORAGE-BLOCKED (VDI/incognito) — real users stay DISTINCT, not merged into one fake id");
+{
+  // Simulate the REAL installId/throttle behavior when localStorage throws. The fix mints a per-page
+  // random id and keeps the throttle in memory, so two storage-blocked browsers are TWO users (not one
+  // "i_nostore"), and a single session still throttles once per feature.
+  var _tok = 0;
+  function makeBlockedSession() {
+    var memId = null, memSent = {};
+    // mirrors the REAL fallback: mint ONE random id per page session (crypto in prod; a unique token here)
+    function randId() { return "imem_" + (++_tok) + "_" + (_tok * 7 + 13).toString(36); }
+    function installId() { if (!memId) memId = randId(); return memId; }
+    function key(f) { return "L::" + f + "::day"; }
+    function sentToday(f) { return memSent[key(f)] === true; }
+    function markSent(f) { memSent[key(f)] = true; }
+    var sent = [];
+    function send(f) { if (sentToday(f)) return false; sent.push({ iid: installId(), page: f }); markSent(f); return true; }
+    return { send, sent, idOf: installId };
+  }
+  var s1 = makeBlockedSession(), s2 = makeBlockedSession();
+  eq("blocked session 1: DMO captures once", s1.send("DMO"), true);
+  eq("blocked session 1: DMO again → throttled (in-memory)", s1.send("DMO"), false);
+  eq("blocked session 1: Segment → captures (different feature)", s1.send("Segment"), true);
+  var id1 = s1.sent[0].iid, id2 = s2.idOf();
+  ok("two storage-blocked sessions get DIFFERENT ids (not merged into one 'i_nostore')", id1 !== id2 && !/nostore/.test(id1));
+  // source: the real installId has an in-memory fallback, NOT a constant return
+  const fs0 = require("fs"), path0 = require("path");
+  const src0 = fs0.readFileSync(path0.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("installId falls back to a per-session random id when storage is blocked (not constant 'i_nostore')",
+    /if \(!_memId\) _memId = randId\(\); return _memId;/.test(src0) && !/catch \(e\) \{ return "i_nostore"; \}/.test(src0));
+  ok("throttle degrades to in-memory when storage blocked (sentToday/markSent use _memSent)",
+    /return _memSent\[k\] === true;/.test(src0) && /_memSent\[k\] = true;/.test(src0));
 }
 
 console.log("\n2b. OPT-OUT (gate 3) — user's choice always wins, even when fully live");
@@ -121,20 +176,34 @@ console.log("\n4. page-type bucketing never leaks a record id or full url (mirro
   });
 }
 
-console.log("\n4b. FAB matcher (mirror of isFabClick) — every dc FAB counts, non-FABs don't");
+console.log("\n4b. FAB matcher — runs the REAL isFabClick from source (incl. the 8-ancestor walk)");
 {
-  // mirror the two patterns in isFabClick
-  function isFabId(id) { return /^dc-([a-z0-9]+-)?bar$/.test(id) || /^dc-([a-z0-9]+-)?fab$/.test(id); }
+  // EXTRACT the real isFabClick from the extension source and run it — not a mirror (which could drift).
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  const m = src.match(/function isFabClick\(target\)\s*\{[\s\S]*?\n    \}/);
+  if (!m) { ok("could not extract isFabClick", false); }
+  const isFabClick = new Function(m[0] + "\nreturn isFabClick;")();
+  // tiny fake element with parentElement chain, like the real DOM walk sees
+  const el = (id, parent) => ({ id: id, parentElement: parent || null });
+  const hit = (id, parent) => isFabClick(el(id, parent));
+
   // real FAB launcher ids that EXIST in the code → must all count
   ["dc-bar","dc-fab","dc-dg-bar","dc-ir-bar","dc-dsf-bar","dc-act-bar","dc-act-fab","dc-erd-bar"].forEach(function (id) {
-    ok("FAB id '" + id + "' triggers capture", isFabId(id) === true);
+    ok("FAB id '" + id + "' triggers capture", hit(id) === true);
   });
-  // non-FAB dc ids → must NOT count (no false captures on unrelated UI)
+  // ⧉ open-in-new-tab launchers (standalone on <body>) → NOW explicitly counted
+  ok("⧉ launcher 'dc-list-newtab' triggers capture", hit("dc-list-newtab") === true);
+  ok("⧉ launcher 'dc-nav-newtab' triggers capture", hit("dc-nav-newtab") === true);
+  // a click on an inner child of a tracked bar still resolves via the ancestor walk
+  ok("inner button inside dc-bar still counts (ancestor walk)", hit("dc-export", el("dc-bar")) === true);
+  ok("icon inside the ⧉ launcher still counts (ancestor walk)", hit("some-svg", el("dc-nav-newtab")) === true);
+  // non-FAB dc ids with NO tracked ancestor → must NOT count (no false captures on unrelated UI)
   ["dc-decor-diag","dc-fab-menu","dc-detail-btn","dc-report-usage-row","dc-usage-notice","dc-do-badge","dc-ir-api"].forEach(function (id) {
-    ok("non-FAB id '" + id + "' does NOT trigger capture", isFabId(id) === false);
+    ok("non-FAB id '" + id + "' does NOT trigger capture", hit(id) === false);
   });
   // future-proof: a brand-new FAB following the convention is caught automatically
-  ok("a FUTURE 'dc-xyz-bar' / 'dc-xyz-fab' is caught with no code change", isFabId("dc-xyz-bar") && isFabId("dc-xyz-fab"));
+  ok("a FUTURE 'dc-xyz-bar' / 'dc-xyz-fab' is caught with no code change", hit("dc-xyz-bar") && hit("dc-xyz-fab"));
 }
 
 console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DEV-ONLY");
@@ -155,7 +224,13 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("Firestore payload is the typed-field shape (fields.*.stringValue)",
     /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src) && /org:   \{ stringValue: org \}/.test(src));
   ok("org = my-domain host only (semi-identifying; NOT username/PII)", /var org = ""; try \{ org = String\(location\.hostname/.test(src) && !/username|userId|user_id/i.test(src.slice(src.indexOf("var org ="), src.indexOf("var org =") + 200)));
-  ok("mark-sent after dispatching the write (one per feature/day)", /fetch\(FS_URL[\s\S]{0,600}markSent\(feature\);/.test(src));
+  ok("throttle (markSent) is set ONLY inside the success branch — a failed/CSP-blocked write does NOT burn the day",
+    /if \(r && r\.ok\) \{\s*\n\s*try \{ markSent\(feature\); \}/.test(src));
+  ok("markSent does NOT run unconditionally after the fetch (the 'locked out for the day' bug is gone)",
+    !/\}\)\s*\n\s*\.catch\(function \(\) \{\}\);\s*\n\s*try \{ markSent\(feature\); \}/.test(src));
+  ok("failure paths (non-2xx + network/CSP) return false and leave the throttle unset",
+    /return false;\s*\/\/ non-2xx/.test(src) && /return false;\s*\/\/ network\/CSP error/.test(src));
+  ok("in-flight guard prevents duplicate concurrent sends for the same feature", /var _inFlight = \{\}/.test(src) && /if \(_inFlight\[feature\]\) return Promise\.resolve\(false\)/.test(src));
   ok("DEV-ONLY visibility: logs '[dc usage] captured …' on write + 'throttled' on skip (so you can SEE it in dev)",
     /\[dc usage\] captured/.test(src) && /already captured today \(throttled\)/.test(src));
   ok("DEV-ONLY: the usage console logs are STRIPPED from the public build (silent for real users)",
@@ -164,6 +239,12 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
+  ok("MASTER KILL-SWITCH enforced: reportUsage bails when PING_ENABLED is false (documented gate is REAL now)",
+    /if \(!PING_ENABLED\) return Promise\.resolve\(false\);/.test(src));
+  ok("RUN-ONCE listener: re-paste/re-run does NOT stack duplicate document click listeners (VDI leak fixed)",
+    /if \(!window\.__dcUsageClickBound\)/.test(src) && /window\.__dcUsageClickBound = true;/.test(src));
+  ok("handler also honors a later disable (window.__dcUsageOff) without needing to unbind",
+    /if \(window\.__dcUsageOff\) return;/.test(src));
   ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
     /\/\^dc-\(\[a-z0-9\]\+-\)\?bar\$\//.test(src) && /\/\^dc-\(\[a-z0-9\]\+-\)\?fab\$\//.test(src));
   ok("NO visible 'Report usage' FAB row (capture is silent/automatic — row removed)", !/dc-report-usage-row/.test(src));
@@ -181,7 +262,7 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("BUILD TAG: public default + @strip-dev override to 'dev' (two-table routing)",
     /var PING_BUILD\s+= "public";/.test(src) && /\/\* @strip:start dev \*\/\s*PING_BUILD = "dev";\s*\/\* @strip:end \*\//.test(src));
   ok("ANON payload = iid + version + feature(page) + day + build (no org/host/record/url)",
-    /stringValue: String\(installId\(\)\)/.test(src) && /stringValue: String\(feature\)/.test(src) && /stringValue: String\(PING_BUILD\)/.test(src) && /org:   \{ stringValue: org \}/.test(src) && /var feature = pingPageType\(\);/.test(src));
+    /stringValue: String\(installId\(\)\)/.test(src) && /stringValue: String\(feature\)/.test(src) && /stringValue: String\(PING_BUILD\)/.test(src) && /org:   \{ stringValue: org \}/.test(src) && /feature = pingPageType\(\);/.test(src));
   ok("install id is a RANDOM local token (crypto getRandomValues), stored in localStorage",
     /function installId/.test(src) && /crypto\.getRandomValues/.test(src) && /localStorage\.setItem\(LS_ID/.test(src));
   ok("page bucket NEVER returns a url/record — fixed vocabulary only", /function pingPageType/.test(src) && /return "other";/.test(src) && !/return location\.href/.test(src.slice(src.indexOf("function pingPageType"), src.indexOf("function pingPageType") + 900)));
