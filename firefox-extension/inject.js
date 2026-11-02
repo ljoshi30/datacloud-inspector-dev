@@ -5563,6 +5563,103 @@
     return header + "SELECT *\n" + fromLine + "\nWHERE " + whereClause + ";";
   }
 
+  /* ── Segment API criteria → CLEAN, ACCURATE SQL (dev-only; extension-fetched) ────────────────
+   * Renders the AUTHORITATIVE criteria tree Salesforce stores (GET /ssot/segments → includeCriteria,
+   * fetched via the extension bridge) — NOT a DOM rebuild. This carries the pieces the DOM lacks:
+   * real operator ENUMS, real object/field API names, and — crucially — the `path`/`joinPath` JOIN
+   * keys between objects. So this SQL can show real joins instead of guesses.
+   * CONFIRMED node grammar (from live samples):
+   *   GROUP: { type:"LogicalComparison", operator:"and"|"or", filters:[…] }
+   *   LEAF:  { type:"TextComparison"|"NumberComparison"|"DateComparison"|"BooleanComparison"|…,
+   *            subject:{objectApiName,fieldApiName}, operator:"equal"|"notEqual"|"contains"|…,
+   *            values:[…], path:[[{obj,field},{obj,field}],…] }
+   *   CI:    { type:"CalculatedInsight", subject:{obj,field}, path:[…], comparison:{…leaf…} }
+   *   WRAP:  { filter:{…} }  (aggregation / related-object — unwrap to the inner node)
+   * Anything unrecognized is emitted as a clearly-marked /* UNHANDLED: <type> *​/ comment (never
+   * silently wrong). Operator enums map to SQL; joins from `path` become explicit JOIN notes.
+   */
+  function segmentApiCriteriaToSql(criteria, segName, tabLabel) {
+    var joins = {};     // de-duped join notes gathered from every node's path
+    function q(v) {
+      var s = String(v == null ? "" : v);
+      if (/^-?\d+(\.\d+)?$/.test(s)) return s;
+      if (/^(true|false)$/i.test(s)) return s.toUpperCase();
+      return "'" + s.replace(/'/g, "''") + "'";
+    }
+    // operator enum → { fn(col,vals) → sql fragment }
+    function opSql(opRaw, vals) {
+      var op = String(opRaw || "").trim().toLowerCase();
+      var list = Array.isArray(vals) ? vals.slice() : (vals == null ? [] : [vals]);
+      switch (op) {
+        case "equal": case "equals": return "= " + (list.length ? q(list[0]) : "''");
+        case "notequal": case "notequals": case "not_equal": return "<> " + (list.length ? q(list[0]) : "''");
+        case "contains": return "LIKE " + q("%" + (list[0] || "") + "%");
+        case "notcontains": case "doesnotcontain": return "NOT LIKE " + q("%" + (list[0] || "") + "%");
+        case "startswith": case "beginswith": return "LIKE " + q((list[0] || "") + "%");
+        case "endswith": return "LIKE " + q("%" + (list[0] || ""));
+        case "in": case "includes": return "IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
+        case "notin": case "excludes": return "NOT IN (" + (list.length ? list.map(q).join(", ") : "''") + ")";
+        case "greaterthan": case "greater": return "> " + (list.length ? q(list[0]) : "0");
+        case "greaterthanorequal": case "greaterorequal": return ">= " + (list.length ? q(list[0]) : "0");
+        case "lessthan": case "less": return "< " + (list.length ? q(list[0]) : "0");
+        case "lessthanorequal": case "lessorequal": return "<= " + (list.length ? q(list[0]) : "0");
+        case "between": return "BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
+        case "notbetween": return "NOT BETWEEN " + (list[0] != null ? q(list[0]) : "''") + " AND " + (list[1] != null ? q(list[1]) : "''");
+        case "isnull": case "null": case "empty": return "IS NULL";
+        case "isnotnull": case "notnull": case "hasvalue": return "IS NOT NULL";
+        case "istrue": return "= TRUE";
+        case "isfalse": return "= FALSE";
+        default: return "/* op:" + opRaw + " */ " + (list.length ? q(list[0]) : "");
+      }
+    }
+    function col(subject) {
+      if (!subject) return "/* field? */";
+      var o = subject.objectApiName || "", f = subject.fieldApiName || "";
+      return (o && f) ? (o + "." + f) : (f || o || "/* field? */");
+    }
+    // record join hops from a node's path (array of [{obj,field},{obj,field}] pairs)
+    function notePath(path) {
+      if (!Array.isArray(path)) return;
+      path.forEach(function (hop) {
+        if (Array.isArray(hop) && hop.length === 2 && hop[0] && hop[1]) {
+          var key = col(hop[0]) + " = " + col(hop[1]);
+          joins[key] = true;
+        }
+      });
+    }
+    function leafSql(node) {
+      notePath(node.path);
+      if (node.comparison) notePath(node.comparison.path);
+      var cmp = node.comparison || node;   // CI wraps its leaf in .comparison
+      return col(cmp.subject) + " " + opSql(cmp.operator, cmp.values);
+    }
+    function walk(node, depth) {
+      if (!node || typeof node !== "object") return "";
+      if (node.filter && typeof node.filter === "object") return walk(node.filter, depth);  // unwrap
+      var t = String(node.type || "");
+      if (t === "LogicalComparison") {
+        var join = String(node.operator || "AND").toUpperCase();
+        var parts = (node.filters || []).map(function (f) { return walk(f, depth + 1); }).filter(Boolean);
+        if (!parts.length) return "";
+        var pad = "\n" + "  ".repeat(depth + 1) + join + " ";
+        var body = parts.join(pad);
+        return depth === 0 ? body : "(" + body + ")";
+      }
+      if (t === "CalculatedInsight") { notePath(node.path); return "/* calculated insight */ " + leafSql(node); }
+      if (/Comparison$/.test(t)) return leafSql(node);
+      return "/* UNHANDLED: " + (t || "unknown node") + " */";
+    }
+    var where = walk(criteria, 0);
+    var joinList = Object.keys(joins);
+    var header = "-- CLEAN SQL from Salesforce's stored segment criteria (authoritative — via API).\n" +
+                 "-- Segment: " + (segName || "") + (tabLabel ? "  (tab: " + tabLabel + ")" : "") + "\n" +
+                 (joinList.length ? "-- Join keys (from the criteria's path):\n" + joinList.map(function (j) { return "--   " + j; }).join("\n") + "\n" : "") +
+                 "-- Note: a segment resolves to UNIFIED individuals; a raw SELECT may differ from the\n" +
+                 "-- published population, but the logic/joins/operators below are the real ones.\n";
+    if (!where) return header + "-- (no include criteria)";
+    return header + "SELECT *\n/* FROM the segment's primary object; JOIN the objects above on the listed keys */\nWHERE " + where + ";";
+  }
+
   // ── Segment export modal ──────────────────────────────────────────────────
 
   function openSegmentExport() {
@@ -6122,7 +6219,7 @@
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
         "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
         "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
-        "<button class='sec' id='dc-d-sql' title='Copy the current tab&apos;s criteria as APPROXIMATE Data Cloud SQL (illustrative — verify before running)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL (approx)</button>" +
+        "<button class='sec' id='dc-d-sql' title='Copy this tab&apos;s criteria as SQL. With the extension it uses Salesforce&apos;s real stored criteria (accurate joins/operators); as a bookmarklet it reconstructs from the page (approximate).'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL</button>" +
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
@@ -6210,18 +6307,43 @@
         var btn = e.currentTarget || e.target;
         var d = tabData[currentModalTab] || {};
         var SQL_ICON = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>";
-        var restore = function () { setTimeout(function () { btn.innerHTML = SQL_ICON + "Copy SQL (approx)"; }, 1400); };
-        var hasCriteria = d.tree && d.tree.items && d.tree.items.length;
-        if (!hasCriteria) { btn.textContent = "Nothing to convert on this tab"; restore(); return; }
-        var sql = "";
-        // pass the primary object API only if "Segment On" already looks like an api (__dlm/__dll/__c);
-        // otherwise let segmentTreeToSql derive it from the tree's first top-level condition.
-        var primaryHint = (meta && /__(dlm|dll|dls|c|cio)$/i.test(String(meta.segmentOn || ""))) ? meta.segmentOn : "";
-        try { sql = segmentTreeToSql(d.tree, segName, currentModalTab, primaryHint); } catch (er) { sql = ""; }
-        if (!sql) { btn.textContent = "Couldn't build SQL"; restore(); return; }
-        var done = function () { btn.textContent = "✓ SQL copied!"; restore(); };
-        try { navigator.clipboard.writeText(sql).then(done, function () { try { var ta = document.createElement("textarea"); ta.value = sql; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); }
-        catch (e3) { done(); }
+        var restore = function () { setTimeout(function () { btn.innerHTML = SQL_ICON + "Copy SQL"; }, 1600); };
+        var done = function (label) { btn.textContent = label || "✓ SQL copied!"; restore(); };
+        var copy = function (sql) { try { navigator.clipboard.writeText(sql).then(function () { done(); }, function () { try { var ta = document.createElement("textarea"); ta.value = sql; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} done(); }); } catch (e3) { done(); } };
+        var domFallback = function (note) {
+          var hasCriteria = d.tree && d.tree.items && d.tree.items.length;
+          if (!hasCriteria) { done("Nothing to convert on this tab"); return; }
+          var primaryHint = (meta && /__(dlm|dll|dls|c|cio)$/i.test(String(meta.segmentOn || ""))) ? meta.segmentOn : "";
+          var sql = "";
+          try { sql = segmentTreeToSql(d.tree, segName, currentModalTab, primaryHint); } catch (er) { sql = ""; }
+          if (!sql) { done("Couldn't build SQL"); return; }
+          if (note) sql = "-- (" + note + ")\n" + sql;
+          copy(sql);
+        };
+        // PREFER the authoritative API criteria (clean SQL w/ real joins/operators) when the extension
+        // is available; fall back to the DOM reconstruction (bookmarklet, or any API failure).
+        var segId = "";
+        try { segId = new URLSearchParams(location.search).get("runtime_cdp__record_id") || ""; } catch (er) {}
+        if (typeof window.__dcGetSegmentDef === "function" && segId) {
+          btn.textContent = "Fetching real criteria…";
+          window.__dcGetSegmentDef(segId).then(function (resp) {
+            try {
+              var segs = (resp && resp.segments) || (resp ? [resp] : []);
+              var dsEsc = function (s) { var ta = document.createElement("textarea"); ta.innerHTML = String(s || ""); return ta.value; };
+              // match the segment we're viewing by name; else first with criteria
+              var want = String(segName || "").replace(/[^A-Za-z0-9_]/g, "");
+              var seg = segs.find(function (s) { return want && String(s.apiName || s.displayName || "").replace(/[^A-Za-z0-9_]/g, "").indexOf(want) >= 0; }) || segs.find(function (s) { return s.includeCriteria; }) || segs[0];
+              var raw = currentModalTab && /exclude/i.test(currentModalTab) ? (seg && seg.excludeCriteria) : (seg && seg.includeCriteria);
+              if (!raw) { domFallback("API returned no criteria for this tab — showing DOM reconstruction"); return; }
+              var crit = JSON.parse(dsEsc(raw));
+              var sql = segmentApiCriteriaToSql(crit, segName, currentModalTab);
+              copy(sql);
+            } catch (er) { domFallback("couldn't parse API criteria — showing DOM reconstruction"); }
+          }).catch(function () { domFallback("API fetch failed (extension/session) — showing DOM reconstruction"); });
+          return;
+        }
+        // no extension (bookmarklet) → DOM reconstruction, clearly labeled
+        domFallback("bookmarklet: DOM reconstruction (install the extension for exact API-based SQL)");
       };
     })();
 
@@ -21513,7 +21635,7 @@ processJSON();
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.657"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.659"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

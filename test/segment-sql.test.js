@@ -235,6 +235,67 @@ console.log("\n5d. RANK AND LIMIT is ORDER BY / LIMIT, NOT a WHERE filter (was p
   ok("'Lowest' direction → ASC", /ORDER BY .* ASC/.test(segmentTreeToSql({ type:"set", items:[{type:"simple",objApi:"O__dlm",fieldApi:"V__c",fieldLabel:"Lowest",values:"Limit: 5"}] }, "s", "Rank and Limit")));
 }
 
+console.log("\n5f. API-criteria renderer (segmentApiCriteriaToSql) — mirror, against REAL captured node shapes");
+{
+  // Mirror of the renderer's core (operator enum + col + walk) kept in sync with source.
+  function q(v){ var s=String(v==null?"":v); if(/^-?\d+(\.\d+)?$/.test(s))return s; if(/^(true|false)$/i.test(s))return s.toUpperCase(); return "'"+s.replace(/'/g,"''")+"'"; }
+  function opSql(opRaw,vals){ var op=String(opRaw||"").trim().toLowerCase(); var list=Array.isArray(vals)?vals.slice():(vals==null?[]:[vals]);
+    switch(op){ case "equal":case "equals":return "= "+(list.length?q(list[0]):"''");
+      case "notequal":return "<> "+(list.length?q(list[0]):"''");
+      case "contains":return "LIKE "+q("%"+(list[0]||"")+"%");
+      case "in":return "IN ("+(list.length?list.map(q).join(", "):"''")+")";
+      case "greaterthanorequal":return ">= "+(list.length?q(list[0]):"0");
+      case "between":return "BETWEEN "+(list[0]!=null?q(list[0]):"''")+" AND "+(list[1]!=null?q(list[1]):"''");
+      case "istrue":return "= TRUE"; case "isnotnull":case "hasvalue":return "IS NOT NULL";
+      default:return "/* op:"+opRaw+" */ "+(list.length?q(list[0]):""); } }
+  function col(s){ if(!s)return "/* field? */"; var o=s.objectApiName||"",f=s.fieldApiName||""; return (o&&f)?(o+"."+f):(f||o||"/* field? */"); }
+  var joins={};
+  function notePath(p){ if(!Array.isArray(p))return; p.forEach(function(h){ if(Array.isArray(h)&&h.length===2&&h[0]&&h[1]) joins[col(h[0])+" = "+col(h[1])]=true; }); }
+  function leaf(n){ notePath(n.path); if(n.comparison)notePath(n.comparison.path); var c=n.comparison||n; return col(c.subject)+" "+opSql(c.operator,c.values); }
+  function walk(n,d){ if(!n||typeof n!=="object")return ""; if(n.filter&&typeof n.filter==="object")return walk(n.filter,d);
+    var t=String(n.type||"");
+    if(t==="LogicalComparison"){ var j=String(n.operator||"AND").toUpperCase(); var parts=(n.filters||[]).map(function(f){return walk(f,d+1);}).filter(Boolean); if(!parts.length)return ""; var body=parts.join("\n"+"  ".repeat(d+1)+j+" "); return d===0?body:"("+body+")"; }
+    if(t==="CalculatedInsight"){ notePath(n.path); return "/* calculated insight */ "+leaf(n); }
+    if(/Comparison$/.test(t))return leaf(n);
+    return "/* UNHANDLED: "+(t||"unknown node")+" */"; }
+
+  // (a) the REAL CI leaf sample (TDI_5_random_control)
+  joins={};
+  var ci = { type:"CalculatedInsight", subject:{objectApiName:"TDI_Independent_Audience_Splits__cio",fieldApiName:"Unified_Individual_ID__c"},
+    path:[[{objectApiName:"TDI_UnifiedIndividualTdir__dlm",fieldApiName:"Id__c"},{objectApiName:"TDI_Independent_Audience_Splits__cio",fieldApiName:"Unified_Individual_ID__c"}]],
+    comparison:{type:"TextComparison",subject:{objectApiName:"TDI_Independent_Audience_Splits__cio",fieldApiName:"Control_5_Pct__c"},operator:"equal",values:["T"]} };
+  var ciSql = walk(ci,0);
+  ok("CI leaf → real col + '= T' using real operator enum", /TDI_Independent_Audience_Splits__cio\.Control_5_Pct__c = 'T'/.test(ciSql));
+  ok("CI join PATH captured (Individual.Id__c = CI.Unified_Individual_ID__c)", joins["TDI_UnifiedIndividualTdir__dlm.Id__c = TDI_Independent_Audience_Splits__cio.Unified_Individual_ID__c"] === true);
+
+  // (b) the REAL group sample (TDI_Gift_Card_Auto_95T): LogicalComparison AND with a leaf + wrapped child
+  joins={};
+  var grp = { type:"LogicalComparison", operator:"and", filters:[
+    { type:"TextComparison", subject:{objectApiName:"TDI_UnifiedIndividualTdir__dlm",fieldApiName:"TDI_Account_Multiline__c"}, operator:"equal", values:["A"] },
+    { filter: { type:"TextComparison", subject:{objectApiName:"TDI_TDI_GI_Individual_Additional__dlm",fieldApiName:"DataSourceObject__c"}, operator:"equal", values:["RH_Profile_Synthetic (79).csv"] } }
+  ] };
+  var gSql = walk(grp,0);
+  ok("group leaf 1 (real api + = 'A')", /TDI_UnifiedIndividualTdir__dlm\.TDI_Account_Multiline__c = 'A'/.test(gSql));
+  ok("AND join between filters", /= 'A'[\s\S]*\n\s*AND\s/.test(gSql));
+  ok("WRAPPED child {filter:…} is unwrapped to its inner leaf", /TDI_TDI_GI_Individual_Additional__dlm\.DataSourceObject__c = 'RH_Profile_Synthetic \(79\)\.csv'/.test(gSql));
+
+  // (c) nested OR group inside AND → parenthesized
+  var nested = { type:"LogicalComparison", operator:"and", filters:[
+    { type:"TextComparison", subject:{objectApiName:"O__dlm",fieldApiName:"a__c"}, operator:"equal", values:["1"] },
+    { type:"LogicalComparison", operator:"or", filters:[
+      { type:"TextComparison", subject:{objectApiName:"O__dlm",fieldApiName:"b__c"}, operator:"equal", values:["2"] },
+      { type:"TextComparison", subject:{objectApiName:"O__dlm",fieldApiName:"c__c"}, operator:"equal", values:["3"] } ] }
+  ] };
+  var nSql = walk(nested,0);
+  ok("nested OR group is parenthesized", /\(O__dlm\.b__c = 2[\s\S]*OR[\s\S]*O__dlm\.c__c = 3\)/.test(nSql));
+
+  // (d) operator enum coverage + unhandled node safety
+  ok("'greaterThanOrEqual' → >=", /\>= 5/.test(walk({type:"NumberComparison",subject:{objectApiName:"O__dlm",fieldApiName:"n__c"},operator:"greaterThanOrEqual",values:["5"]},0)));
+  ok("'in' list → IN (...)", /IN \('x', 'y'\)/.test(walk({type:"TextComparison",subject:{objectApiName:"O__dlm",fieldApiName:"s__c"},operator:"in",values:["x","y"]},0)));
+  ok("unknown node type → /* UNHANDLED */ (never silently wrong)", /\/\* UNHANDLED: WeirdNode \*\//.test(walk({type:"WeirdNode"},0)));
+  ok("unknown OPERATOR → /* op:xyz */ (surfaced, not dropped)", /\/\* op:xyz \*\//.test(walk({type:"TextComparison",subject:{objectApiName:"O__dlm",fieldApiName:"f__c"},operator:"xyz",values:["1"]},0)));
+}
+
 console.log("\n6. source presence — fixed function wired dev-only into the segment export");
 {
   const fs = require("fs"), path = require("path");
@@ -252,7 +313,18 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
   ok("primary object derived from first top-level simple condition when not passed", /function firstSimpleObj/.test(src));
   ok("never fakes an api — [Label] fallback", /"\[" \+ node\.objectLabel \+ "\]"/.test(src) && /not an API/.test(src));
   ok("caller passes a primary-object hint only when 'Segment On' looks like an api", /primaryHint = \(meta && \/__\(dlm\|dll\|dls\|c\|cio\)\$\/i\.test/.test(src) && /segmentTreeToSql\(d\.tree, segName, currentModalTab, primaryHint\)/.test(src));
-  ok("'Copy SQL (approx)' button present, guarded on the fn", /id='dc-d-sql'/.test(src) && /typeof segmentTreeToSql !== "function"/.test(src));
+  ok("'Copy SQL' button present, guarded on the fn", /id='dc-d-sql'/.test(src) && /typeof segmentTreeToSql !== "function"/.test(src));
+  ok("API-criteria renderer present (authoritative tree → clean SQL)", /function segmentApiCriteriaToSql\(criteria, segName, tabLabel\)/.test(src));
+  ok("renderer handles the real node grammar: LogicalComparison / CalculatedInsight / *Comparison / {filter} unwrap",
+    /t === "LogicalComparison"/.test(src) && /t === "CalculatedInsight"/.test(src) && /\/Comparison\$\/\.test\(t\)/.test(src) && /node\.filter && typeof node\.filter === "object"\) return walk\(node\.filter/.test(src));
+  ok("renderer maps REAL operator enums (equal/contains/in/greaterThanOrEqual/between/isTrue…)",
+    /case "equal":/.test(src) && /case "contains":/.test(src) && /case "greaterthanorequal":/.test(src) && /case "between":/.test(src) && /case "istrue":/.test(src));
+  ok("renderer captures JOIN keys from path[] (the thing the DOM lacked)", /function notePath\(path\)/.test(src) && /Join keys \(from the criteria's path\)/.test(src));
+  ok("renderer marks UNHANDLED nodes (never silently wrong)", /UNHANDLED: " \+ \(t \|\| "unknown node"\)/.test(src));
+  ok("Copy SQL PREFERS API criteria when extension present, DOM fallback otherwise",
+    /typeof window\.__dcGetSegmentDef === "function" && segId/.test(src) && /segmentApiCriteriaToSql\(crit, segName, currentModalTab\)/.test(src) && /var domFallback = function/.test(src));
+  ok("reads segment id from URL (runtime_cdp__record_id) + decodes HTML entities before JSON.parse",
+    /runtime_cdp__record_id/.test(src) && /ta\.innerHTML = String\(s \|\| ""\); return ta\.value/.test(src) && /JSON\.parse\(dsEsc\(raw\)\)/.test(src));
   ok("DEV-ONLY: absent from the public/stripped bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/function segmentTreeToSql/.test(strip) && !/dc-d-sql/.test(strip); })());
   ok("present in the FULL bookmarklet build (synced)", /function segmentTreeToSql/.test(bm));
 }
