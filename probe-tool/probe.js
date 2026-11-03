@@ -55,28 +55,62 @@
 
   var raw = collectRaw();
 
-  // census of every runtime_cdp-activation* / contact-point / target tag
+  // Activation is a MULTI-STEP wizard (progress bar). Each step holds different doc-worthy info
+  // (segment/membership, target/channel, contact points, attributes, filters, schedule). The big
+  // open question: are ALL steps' elements in the DOM at once, or only the ACTIVE step's? This probe
+  // reports the step/progress structure + which step is active so we know whether one capture is
+  // enough or whether the export must visit each step (like the segment Include/Exclude/Rank tabs).
+  out.wizard = { stepElements: [], progressText: [], activeHints: [] };
+
+  // census of EVERY runtime_cdp-* tag (so we see step/progress/filter/schedule tags we don't know yet)
   raw.forEach(function (el) {
     var t = tag(el);
-    if (/^runtime_cdp-(activation|contact|segment|data-stream)/.test(t) || /activation|contactpoint|target|publish/.test(t)) {
-      out.tagCensus[t] = (out.tagCensus[t] || 0) + 1;
-    }
+    if (/^runtime_cdp-/.test(t)) out.tagCensus[t] = (out.tagCensus[t] || 0) + 1;
+  });
+  // narrow the census to the interesting wizard/step/filter/schedule/target families for readability
+  out.stepTagCensus = {};
+  Object.keys(out.tagCensus).forEach(function (t) {
+    if (/(step|progress|wizard|path|stage|nav|panel|section|publish|schedule|filter|target|contact|activation|segment|member)/.test(t)) out.stepTagCensus[t] = out.tagCensus[t];
   });
 
-  // props worth sniffing on any element (membership / segment / channel / target / contact point)
+  // capture progress-bar / step labels (lightning-progress-indicator, *step*, aria-current, etc.)
+  raw.forEach(function (el) {
+    var t = tag(el);
+    if (/progress|step|path-/.test(t) || /lightning-(progress|path|tab)/.test(t)) {
+      var txt = (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120);
+      var cur = "";
+      try { cur = el.getAttribute && (el.getAttribute("aria-current") || el.getAttribute("aria-selected") || ""); } catch (e) {}
+      if (txt || cur) out.wizard.stepElements.push({ tag: t, text: txt, current: cur });
+    }
+    // active-step hints: elements marked current/selected
+    try {
+      if (el.getAttribute) {
+        var ac = el.getAttribute("aria-current"), as = el.getAttribute("aria-selected");
+        if (ac === "true" || ac === "step" || ac === "page" || as === "true") {
+          out.wizard.activeHints.push({ tag: t, text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80), aria_current: ac, aria_selected: as });
+        }
+      }
+    } catch (e) {}
+  });
+  out.wizard.stepElements = out.wizard.stepElements.slice(0, 30);
+  out.wizard.activeHints = out.wizard.activeHints.slice(0, 15);
+
+  // props worth sniffing on any element (membership / segment / channel / target / contact / filter / schedule)
   var SNIFF = ["data", "includedAttributes", "details", "attributes", "contactPoints", "contactPoint",
     "segmentName", "segmentApiName", "segmentDeveloperName", "membershipName", "membership",
     "activationName", "name", "label", "channel", "channelType", "platformName", "platformType",
     "activationTargetName", "targetName", "value", "config", "fieldConfig", "queryPathConfig",
-    "dataSpaceName", "developerName", "masterLabel", "entity", "fields", "record"];
+    "dataSpaceName", "developerName", "masterLabel", "entity", "fields", "record",
+    "filters", "filter", "criteria", "conditions", "schedule", "publishSchedule", "refreshType",
+    "frequency", "startDate", "endDate", "relatedDmoFilters", "directDmoFilters", "step", "stepName", "selected"];
 
-  // dump the key elements
+  // dump the key elements — include wizard/step/filter/schedule/target families, not just attributes
   raw.forEach(function (el) {
     var t = tag(el);
     var want = (t === "runtime_cdp-activation-attribute-datatable" ||
       t === "runtime_cdp-activation-summary" ||
       t === "runtime_cdp-drag-item" ||
-      /activation/.test(t) || /contact-?point/.test(t));
+      /activation|contact-?point|publish|schedule|filter|target|member/.test(t));
     if (!want) return;
     var rec = { tag: t, props: {} };
     SNIFF.forEach(function (p) {
@@ -95,9 +129,11 @@
     if (Object.keys(rec.props).length || (rec.allLwcPropNames && rec.allLwcPropNames.length)) out.elements.push(rec);
   });
 
-  out.notes.push("activation/contact tags present: " + Object.keys(out.tagCensus).length);
-  if (!out.elements.length) out.notes.push("⚠️ No activation datatable/summary/drag-item found. Are you on the Activation EDIT page (not /view)? Try opening the activation for edit, or scroll the attributes into view, then re-run.");
-  else out.notes.push("Captured " + out.elements.length + " element(s). Look at datatable.data[] (name/entityName/outputName) + summary.includedAttributes[] (attributeName/entityName) — that's the attribute inventory. Check allLwcPropNames for membership/segment/channel props we can also pull.");
+  out.notes.push("runtime_cdp tags present: " + Object.keys(out.tagCensus).length + " (step/filter/target families in stepTagCensus)");
+  out.notes.push("WIZARD: " + out.wizard.stepElements.length + " step/progress element(s), " + out.wizard.activeHints.length + " active-step hint(s). KEY QUESTION: run this probe on DIFFERENT steps — if each step shows DIFFERENT elements[], the export must VISIT each step (like segment tabs); if all steps' data is present regardless of active step, one capture is enough.");
+  if (!out.elements.length) out.notes.push("⚠️ No activation elements found. Are you on the Activation EDIT page (not /view)? Open the activation for edit, make sure a step's content is on screen, then re-run.");
+  else out.notes.push("Captured " + out.elements.length + " element(s). Attribute inventory = datatable.data[] (name/entityName/outputName) + summary.includedAttributes[] (attributeName/entityName). Check allLwcPropNames on each for membership/segment/channel/filter/schedule props to pull per step.");
+  out.notes.push("TIP: capture once per wizard step (segment, target, contact points, attributes, filters, schedule) so we see which step exposes what, and whether non-active steps are empty.");
 
   var p = document.createElement("div");
   p.id = PANEL_ID;
