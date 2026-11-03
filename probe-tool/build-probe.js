@@ -45,17 +45,17 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
   .note{background:#f1f5f9;border-radius:8px;padding:12px 14px;font-size:13px;color:#475569;margin-top:20px}
   code{background:#eef2ff;color:#4338ca;border-radius:4px;padding:1px 6px;font:600 12px SF Mono,monospace}
 </style></head><body><div class="card">
-  <h1>🔎 DOM Probe</h1>
-  <p class="sub">One-click Salesforce page snapshot → clipboard. No more pasting scripts.</p>
+  <h1>🔎 DOM Probe — Activation</h1>
+  <p class="sub">One-click snapshot of what an Activation page exposes to the bookmarklet → clipboard.</p>
   <p><a class="drag" href="${hrefSafe}">🔎 DOM Probe</a> &nbsp;← drag this to your bookmarks bar</p>
   <ol>
     <li>Drag the button above to your <b>bookmarks bar</b>.</li>
-    <li>Go to the Salesforce page you want captured.</li>
-    <li><b>Optional:</b> hover the exact element you care about (it's captured as <code>focus</code>).</li>
+    <li>Open an <b>Activation</b> page (the <b>edit</b> view is best — the /view page may show fewer fields).</li>
+    <li>Make sure the attributes / contact points are on screen.</li>
     <li>Click the <b>DOM Probe</b> bookmark → it copies a snapshot to your clipboard.</li>
     <li>Paste it back in chat.</li>
   </ol>
-  <div class="note"><b>What it captures:</b> the full shadow-DOM crawl, custom-element census, LWC data props (where API names live — <code>.entity.fields[]</code>, <code>.field</code>…), a label→API-name map with <b>duplicate labels</b> flagged, and the focused element. It does <b>not</b> capture raw HTML (useless here) and never changes the page.</div>
+  <div class="note"><b>What it captures (read-only):</b> the attribute inventory a DOM-only export could use — the activation datatable <code>.data[]</code> (name, object, output name), the summary <code>.includedAttributes[]</code> (field API, object API), drag-item details, plus a sniff of membership / segment / channel / target props and each element's full LWC prop-name list (so we see what else is available). No raw HTML; never changes the page.</div>
 </div></body></html>`;
 
 fs.writeFileSync(path.join(dir, "index.html"), html);
