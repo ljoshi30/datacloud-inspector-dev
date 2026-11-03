@@ -4115,8 +4115,17 @@ processJSON();
   // (same inspector icon, same dark menu, same drag), instead of separate floating pills.
   // Menu rows: "Export Activation" (extension/bridge only) and, dev-only, an "API names"
   // ON/OFF toggle row. Rebuilt idempotently (bails if the FAB already exists).
-  function ensureActivationLauncher() {
-    if (document.getElementById("dc-bar") || document.getElementById("dc-act-bar")) return;
+  function ensureActivationLauncher(rebuild) {
+    if (document.getElementById("dc-bar")) return;
+    var _existing = document.getElementById("dc-act-bar");
+    if (_existing) {
+      // Normal call: idempotent no-op. Dev re-run (rebuild=true) after the dev block
+      // has registered window.__dcDocActivation / window.__dcToggleSegApi: tear the old
+      // FAB down so it rebuilds WITH those dev-only rows (which were skipped on the
+      // first render because the fns weren't defined yet).
+      if (!rebuild) return;
+      _existing.remove();
+    }
 
     var wrap = document.createElement("div");
     wrap.id = "dc-act-bar";
@@ -5969,7 +5978,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.680"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.681"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

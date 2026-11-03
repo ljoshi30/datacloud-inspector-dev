@@ -17191,8 +17191,17 @@ processJSON();
   // (same inspector icon, same dark menu, same drag), instead of separate floating pills.
   // Menu rows: "Export Activation" (extension/bridge only) and, dev-only, an "API names"
   // ON/OFF toggle row. Rebuilt idempotently (bails if the FAB already exists).
-  function ensureActivationLauncher() {
-    if (document.getElementById("dc-bar") || document.getElementById("dc-act-bar")) return;
+  function ensureActivationLauncher(rebuild) {
+    if (document.getElementById("dc-bar")) return;
+    var _existing = document.getElementById("dc-act-bar");
+    if (_existing) {
+      // Normal call: idempotent no-op. Dev re-run (rebuild=true) after the dev block
+      // has registered window.__dcDocActivation / window.__dcToggleSegApi: tear the old
+      // FAB down so it rebuilds WITH those dev-only rows (which were skipped on the
+      // first render because the fns weren't defined yet).
+      if (!rebuild) return;
+      _existing.remove();
+    }
 
     var wrap = document.createElement("div");
     wrap.id = "dc-act-bar";
@@ -17231,7 +17240,18 @@ processJSON();
     }
 
     /* @strip:start dev
-     * Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn
+     * Dev-only "Document Activation" row — DOM-only (bookmarklet-safe, no bridge/API).
+     * Reads the activation straight from the page and opens a Salesforce-styled export
+     * modal with API names inline + CSV/Excel. Gated on the exporter fn (dev build only).
+     * This is the one that works where the extension is banned by org policy. */
+    if (typeof window.__dcDocActivation === "function") {
+      var docIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none'><path d='M4 2h5l3 3v9H4z' stroke='white' stroke-width='1.3' stroke-linejoin='round'/><path d='M9 2v3h3M6 8h4M6 10.5h4' stroke='white' stroke-width='1.1' stroke-linecap='round'/></svg>";
+      var docRow = mkBtn("dc-act-doc-row", "Document Activation", "Read this activation from the page (no API) and export it — Salesforce-styled, with API names — to CSV / Excel.", "linear-gradient(135deg,#0176d3,#032d60)", docIconSvg, "Overview, attributes & API names → CSV/Excel");
+      docRow.onclick = function (e) { e.stopPropagation(); try { window.__dcDocActivation(); } catch (err) {} };
+      menu.appendChild(docRow);
+    }
+
+    /* Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn
      * (dev build only) AND on the WIZARD page — the /view detail page has no attribute rows
      * to decorate, so the toggle would do nothing there (keep Export, drop this). */
     var apiRow = null;
@@ -19739,6 +19759,447 @@ processJSON();
       document.addEventListener("mousemove", onMove, true);
       document.addEventListener("keydown", onKey, true);
 
+      // ═══════════════════════════════════════════════════════════════════════════
+      // DOM-ONLY "Document Activation" export (bookmarklet-safe — no bridge/API).
+      // The existing "Export Activation" is extension/bridge-only (Connect API). The
+      // client's org bans the extension, so this reads the SAME information straight
+      // from the LWC props already on the page. Proven DOM shape (DOM Probe v56):
+      //   runtime_cdp-activation-summary  → the WHOLE activation (identical on every
+      //     wizard step): selectedDataSpace / selectedSegment / selectedTarget /
+      //     includedAttributes[] (uid,label,attributeName=fieldApi,category,
+      //     entityName=objectApi). ONE element = the core doc, NO step traversal.
+      //   runtime_cdp-activation-attribute-datatable .data[]  → output names + join
+      //     paths + static values, but ONLY while the Attributes step is visible.
+      //   runtime_cdp-activation-channel-wizard  → contact points, ONLY on that step.
+      // We NEVER auto-navigate the wizard (it can Save/Publish). We read the current
+      // step and ACCUMULATE step-specific extras as the user naturally visits them,
+      // and honestly label what hasn't been captured yet.
+      // ───────────────────────────────────────────────────────────────────────────
+
+      // Per-activation accumulator so re-opening the panel after visiting more steps
+      // keeps the contact points / static values gathered on earlier steps.
+      var _docActAccum = {};   // recordId → { outputByUid, staticRows[], contactPoints[], pathByUid }
+
+      function docActRecordId() {
+        try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
+      }
+      function docActAccumFor(id) {
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {} };
+        return _docActAccum[id];
+      }
+
+      // queryPathString is a JSON array of hop pairs {objectApiName,fieldApiName}.
+      function docActParsePath(s) {
+        if (!s) return [];
+        try { var p = JSON.parse(s); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+      }
+      function docActPathText(hops) {
+        if (!hops || !hops.length) return "";
+        return hops.map(function (h) {
+          var o = (h.objectApiName || h.objectName || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+          var f = h.fieldApiName || h.fieldName || "";
+          return f ? (o + "." + f) : o;
+        }).filter(Boolean).join(" → ");
+      }
+
+      // Read the whole activation from the DOM. Returns a plain object the renderer +
+      // CSV + Excel all consume. Pure read — never clicks, never mutates.
+      function docActScrape() {
+        var id = docActRecordId();
+        var acc = docActAccumFor(id);
+        var raw = collectRaw();
+
+        var summaryEl = null, attrTables = [], channelEl = null, wizardEl = null, staticTables = [];
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
+          else if (tag === "runtime_cdp-activation-attribute-datatable") attrTables.push(el);
+          else if (tag === "runtime_cdp-activation-channel-wizard") channelEl = channelEl || el;
+          else if (tag === "runtime_cdp-market-segment-activation-wizard") wizardEl = wizardEl || el;
+        });
+
+        var out = {
+          recordId: id,
+          found: !!summaryEl,
+          overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
+          captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false }
+        };
+
+        if (summaryEl) {
+          var ds = segSafeGet(summaryEl, "selectedDataSpace") || {};
+          var seg = segSafeGet(summaryEl, "selectedSegment") || {};
+          var tgt = segSafeGet(summaryEl, "selectedTarget") || {};
+          out.overview = {
+            dataSpace: ds.label || ds.value || "",
+            dataSpaceApi: ds.value || "",
+            segment: seg.name || "",
+            segmentApi: seg.segmentOnDeveloperName || seg.segmentApiName || "",
+            segmentOn: seg.segmentOnLabel || "",
+            segmentOnApi: seg.segmentOnDeveloperName || "",
+            segmentCount: (seg.count != null ? seg.count : ""),
+            publishType: seg.segmentPublishType || "",
+            schedule: seg.segmentSchedule || "",
+            target: tgt.name || "",
+            connectionType: tgt.connectionTypeLabel || tgt.connectionType || "",
+            platform: tgt.platformName || segSafeGet(summaryEl, "selectedPlatformName") || "",
+            businessUnits: (tgt.businessUnits && tgt.businessUnits.slice ? tgt.businessUnits.slice() : []),
+            eventType: segSafeGet(summaryEl, "selectedEventType") || "",
+            isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall")
+          };
+          if (out.overview.isWaterfall) {
+            var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments");
+            out.waterfall = (subs && subs.slice) ? subs.slice() : [];
+          }
+          // includedAttributes[] is the authoritative list of what the activation sends.
+          var inc = segSafeGet(summaryEl, "includedAttributes") || [];
+          out.captured.attributes = inc.length > 0;
+          inc.forEach(function (a) {
+            if (!a) return;
+            out.attributes.push({
+              uid: a.uid || "", label: a.label || "", fieldApi: a.attributeName || "",
+              objectApi: a.entityName || "", category: a.category || "", outputName: "", path: "", source: "INCLUDED"
+            });
+          });
+        }
+
+        // Attributes step: fold datatable .data[] into the accumulator (output names,
+        // join paths) and capture any static-value tables. Only present on that step.
+        attrTables.forEach(function (el) {
+          var data = segSafeGet(el, "data");
+          if (!data || !data.length) return;
+          data.forEach(function (d) {
+            if (!d) return;
+            if (d.staticAttributeName != null || d.staticAttributeValue != null) {
+              acc.staticRows.push({
+                name: d.staticAttributeName || d.name || "",
+                value: (d.staticAttributeValue != null ? String(d.staticAttributeValue) : ""),
+                objectApi: d.entityName || ""
+              });
+              return;
+            }
+            if (!d.uid) return;
+            var outName = d.defaultOutputName || d.preferredName || "";
+            if (outName) acc.outputByUid[d.uid] = outName;
+            var hops = docActParsePath(d.queryPathString);
+            if (hops.length) acc.pathByUid[d.uid] = docActPathText(hops);
+          });
+        });
+
+        // Contact Points step (accumulate into the record's store).
+        if (channelEl) {
+          var cp = {
+            platform: segSafeGet(channelEl, "selectedPlatform") || "",
+            connectionType: segSafeGet(channelEl, "targetConnectionType") || "",
+            email: segSafeGet(channelEl, "contactPointEmail") || "",
+            phone: segSafeGet(channelEl, "contactPointPhone") || "",
+            push: segSafeGet(channelEl, "contactPointPush") || "",
+            whatsApp: segSafeGet(channelEl, "contactPointWhatsApp") || "",
+            address: segSafeGet(channelEl, "contactPointAddress") || ""
+          };
+          var hasAny = cp.email || cp.phone || cp.push || cp.whatsApp || cp.address;
+          if (hasAny) {
+            // de-dupe by serialized content so revisiting the step doesn't pile up copies
+            var key = JSON.stringify(cp);
+            if (!acc.contactPoints.some(function (x) { return JSON.stringify(x) === key; })) acc.contactPoints.push(cp);
+          }
+        }
+
+        // Merge accumulated extras onto the attribute rows.
+        out.attributes.forEach(function (row) {
+          if (row.uid && acc.outputByUid[row.uid]) { row.outputName = acc.outputByUid[row.uid]; }
+          if (row.uid && acc.pathByUid[row.uid]) { row.path = acc.pathByUid[row.uid]; }
+        });
+        out.captured.outputNames = Object.keys(acc.outputByUid).length > 0;
+        out.staticRows = acc.staticRows.slice();
+        out.captured.staticValues = acc.staticRows.length > 0;
+        out.contactPoints = acc.contactPoints.slice();
+        out.captured.contactPoints = acc.contactPoints.length > 0;
+
+        return out;
+      }
+
+      function docActEsc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+      function docActObjKind(api) {
+        var a = String(api || "").toLowerCase();
+        if (/__dlm$/.test(a)) return "DMO";
+        if (/__(dll|dls)$/.test(a)) return "DLO";
+        if (/__cio$/.test(a)) return "CI";
+        return "";
+      }
+      // Salesforce-style "API" chip reused everywhere so API names look native (SLDS-like).
+      function docActApiChip(api) {
+        if (!api) return "";
+        return "<code style='font:500 10px/1.4 SFMono-Regular,Menlo,Consolas,monospace;color:#0b5cab;background:#eef4fb;border:1px solid #d6e3f3;border-radius:4px;padding:1px 5px;white-space:nowrap;'>" + docActEsc(api) + "</code>";
+      }
+
+      // The CSV: one row per included attribute (the documentation workhorse).
+      function docActCsv(data) {
+        function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+        var lines = [];
+        lines.push(["Section", "Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path", "Value"].map(q).join(","));
+        var ov = data.overview;
+        [["Overview", "Data Space", "", ov.dataSpaceApi, "", "", "", ov.dataSpace],
+         ["Overview", "Segment", ov.segmentApi, "", "", "", "", ov.segment],
+         ["Overview", "Segment Membership (as shown)", "", "", "", "", "", ov.segmentCount],
+         ["Overview", "Target", "", "", "", "", "", ov.target],
+         ["Overview", "Platform", "", "", "", "", "", ov.platform],
+         ["Overview", "Connection Type", "", "", "", "", "", ov.connectionType],
+         ["Overview", "Business Units", "", "", "", "", "", (ov.businessUnits || []).join("; ")],
+         ["Overview", "Publish Type", "", "", "", "", "", ov.publishType],
+         ["Overview", "Schedule", "", "", "", "", "", ov.schedule]
+        ].forEach(function (r) { if (r[7] !== "" && r[7] != null && String(r[7]).length) lines.push(r.map(q).join(",")); });
+        data.attributes.forEach(function (a) {
+          lines.push(["Attribute", a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path, ""].map(q).join(","));
+        });
+        data.contactPoints.forEach(function (cp) {
+          [["email", cp.email], ["phone", cp.phone], ["push", cp.push], ["whatsApp", cp.whatsApp], ["address", cp.address]].forEach(function (p) {
+            if (p[1]) lines.push(["Contact Point", p[0], "", "", "", "", "", p[1]].map(q).join(","));
+          });
+        });
+        data.staticRows.forEach(function (s) {
+          lines.push(["Static Value", s.name, "", s.objectApi, "", "", "", s.value].map(q).join(","));
+        });
+        return lines.join("\r\n");
+      }
+
+      function docActDownload(name, mime, blobParts) {
+        var blob = new Blob(blobParts, { type: mime });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 1500);
+      }
+
+      // Excel (.xlsx) via the bundled MiniXLSX — reachable DOM-only in the dev/full build.
+      function docActExcel(data) {
+        var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+        if (!_MiniXLSX) { segToast("Excel builder not available in this build"); return; }
+        var wb = new _MiniXLSX.Workbook();
+        var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0176D3" } };
+        var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        var boldFont = { bold: true, size: 11 };
+        var ov = data.overview;
+
+        var ws1 = wb.addWorksheet("Overview");
+        ws1.getColumn(1).width = 24; ws1.getColumn(2).width = 48; ws1.getColumn(3).width = 36;
+        ws1.getCell(1, 1).value = "ACTIVATION — " + (ov.target || ov.segment || ""); ws1.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0176D3" } };
+        ws1.getRow(1).height = 22;
+        ["Field", "Value", "API Name"].forEach(function (h, i) { ws1.getCell(2, i + 1).value = h; ws1.getCell(2, i + 1).font = hdrFont; ws1.getCell(2, i + 1).fill = hdrFill; });
+        var ovRows = [
+          ["Data Space", ov.dataSpace, ov.dataSpaceApi],
+          ["Segment", ov.segment, ov.segmentApi],
+          ["Segment On", ov.segmentOn, ov.segmentOnApi],
+          ["Segment Membership (as shown)", (ov.segmentCount === "" ? "" : String(ov.segmentCount)), ""],
+          ["Target", ov.target, ""],
+          ["Platform", ov.platform, ""],
+          ["Connection Type", ov.connectionType, ""],
+          ["Business Units", (ov.businessUnits || []).join("; "), ""],
+          ["Publish Type", ov.publishType, ""],
+          ["Schedule", ov.schedule, ""],
+          ["Waterfall", ov.isWaterfall ? "Yes" : "No", ""]
+        ];
+        var r1 = 3;
+        ovRows.forEach(function (row) {
+          if (!row[1] && !row[2]) return;
+          ws1.getCell(r1, 1).value = row[0]; ws1.getCell(r1, 1).font = boldFont;
+          ws1.getCell(r1, 2).value = String(row[1] || "");
+          if (row[2]) ws1.getCell(r1, 3).value = String(row[2]);
+          r1++;
+        });
+
+        var ws2 = wb.addWorksheet("Attributes");
+        ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 30; ws2.getColumn(3).width = 30; ws2.getColumn(4).width = 32; ws2.getColumn(5).width = 30; ws2.getColumn(6).width = 16; ws2.getColumn(7).width = 40;
+        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
+        data.attributes.forEach(function (a, i) {
+          var r = i + 2;
+          ws2.getCell(r, 1).value = i + 1;
+          ws2.getCell(r, 2).value = a.label || "";
+          ws2.getCell(r, 3).value = a.fieldApi || "";
+          ws2.getCell(r, 4).value = a.objectApi || "";
+          ws2.getCell(r, 5).value = a.outputName || "";
+          ws2.getCell(r, 6).value = a.category || "";
+          ws2.getCell(r, 7).value = a.path || "";
+        });
+
+        var ws3 = wb.addWorksheet("Contact Points");
+        ws3.getColumn(1).width = 14; ws3.getColumn(2).width = 40; ws3.getColumn(3).width = 20;
+        ["Channel", "Value", "Platform"].forEach(function (h, i) { ws3.getCell(1, i + 1).value = h; ws3.getCell(1, i + 1).font = hdrFont; ws3.getCell(1, i + 1).fill = hdrFill; });
+        var r3 = 2;
+        data.contactPoints.forEach(function (cp) {
+          [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) {
+            if (!p[1]) return;
+            ws3.getCell(r3, 1).value = p[0]; ws3.getCell(r3, 2).value = String(p[1]); ws3.getCell(r3, 3).value = cp.platform || "";
+            r3++;
+          });
+        });
+
+        var ws4 = wb.addWorksheet("Static Values");
+        ws4.getColumn(1).width = 30; ws4.getColumn(2).width = 40; ws4.getColumn(3).width = 30;
+        ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
+        data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
+
+        wb.xlsx.writeBuffer().then(function (buf) {
+          var fn = "activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".xlsx";
+          docActDownload(fn, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", [buf]);
+        });
+      }
+
+      // The cosmetic modal — laid out like the Salesforce activation review screen, with
+      // API names shown inline on every field/object (the user's explicit request).
+      function docActShowModal() {
+        var data = docActScrape();
+        var existing = document.getElementById("dc-docact-modal");
+        if (existing) existing.remove();
+        var e = docActEsc, ov = data.overview;
+
+        var modal = document.createElement("div");
+        modal.id = "dc-docact-modal";
+        modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;";
+        modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.remove(); });
+
+        var box = document.createElement("div");
+        box.style.cssText = "background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
+
+        // ── Header bar (SLDS-ish dark-blue) ──
+        var hdr = document.createElement("div");
+        hdr.style.cssText = "flex-shrink:0;background:linear-gradient(135deg,#032d60,#0176d3);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;";
+        hdr.innerHTML =
+          "<div style='width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;'>"
+          + "<svg width='18' height='18' viewBox='0 0 24 24' fill='none'><path d='M4 5h16M4 12h16M4 19h10' stroke='#fff' stroke-width='2' stroke-linecap='round'/></svg></div>"
+          + "<div style='flex:1;min-width:0;'><div style='font:700 15px/1.2 inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>" + e(ov.target || ov.segment || "Activation") + "</div>"
+          + "<div style='font:400 11px/1.3 inherit;opacity:.85;'>Document Activation · read from the page · API names included</div></div>";
+
+        var btnCss = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+        var csvBtn = document.createElement("button"); csvBtn.textContent = "⬇ CSV"; csvBtn.style.cssText = btnCss; csvBtn.title = "Download the attribute list + overview as CSV";
+        var xlsBtn = document.createElement("button"); xlsBtn.textContent = "⬇ Excel"; xlsBtn.style.cssText = btnCss; xlsBtn.title = "Download a multi-sheet .xlsx (Overview · Attributes · Contact Points · Static Values)";
+        var copyBtn = document.createElement("button"); copyBtn.textContent = "⧉ Copy table"; copyBtn.style.cssText = btnCss; copyBtn.title = "Copy the attribute table (TSV) to paste into Excel/Sheets/Confluence";
+        var xBtn = document.createElement("button"); xBtn.textContent = "✕"; xBtn.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;";
+        xBtn.onclick = function () { modal.remove(); };
+        csvBtn.onclick = function () { docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".csv", "text/csv;charset=utf-8", ["﻿" + docActCsv(data)]); };
+        xlsBtn.onclick = function () { docActExcel(data); };
+        copyBtn.onclick = function () {
+          var tsv = ["Label\tField API\tObject/DMO API\tOutput Name\tCategory\tJoin Path"]
+            .concat(data.attributes.map(function (a) { return [a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path].join("\t"); })).join("\n");
+          segCopy(tsv);
+        };
+        hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(copyBtn); hdr.appendChild(xBtn);
+
+        // ── Body ──
+        var body = document.createElement("div");
+        body.style.cssText = "flex:1;overflow:auto;padding:18px 20px;";
+
+        if (!data.found) {
+          body.innerHTML = "<div style='text-align:center;padding:40px 20px;color:#64748b;'><div style='font:600 15px system-ui;color:#334155;margin-bottom:6px;'>No activation summary found on this page</div><div style='font:400 13px system-ui;'>Open an activation (the wizard or its review step) and try again — this tool reads the live page, it doesn't call any API.</div></div>";
+        } else {
+          var card = "background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);";
+          var secTitle = "font:700 13px system-ui;color:#032d60;margin:0 0 12px;display:flex;align-items:center;gap:8px;";
+
+          // Overview as SLDS-style record detail grid.
+          function ovItem(lbl, val, api) {
+            if (!val && !api) return "";
+            return "<div style='min-width:0;'><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;'>" + e(lbl) + "</div>"
+              + "<div style='font:500 13px system-ui;color:#181818;word-break:break-word;'>" + e(val || "—") + (api ? " " + docActApiChip(api) : "") + "</div></div>";
+          }
+          var ovGrid = "<div style='" + card + "'><div style='" + secTitle + "'>Overview</div>"
+            + "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px 22px;'>"
+            + ovItem("Data Space", ov.dataSpace, ov.dataSpaceApi)
+            + ovItem("Segment", ov.segment, ov.segmentApi)
+            + ovItem("Segment On", ov.segmentOn, ov.segmentOnApi)
+            + ovItem("Target", ov.target, "")
+            + ovItem("Platform", ov.platform, "")
+            + ovItem("Connection Type", ov.connectionType, "")
+            + ovItem("Business Units", (ov.businessUnits || []).join(", "), "")
+            + ovItem("Publish Type", ov.publishType, "")
+            + ovItem("Schedule", ov.schedule, "")
+            + ovItem("Segment Membership", (ov.segmentCount === "" ? "" : Number(ov.segmentCount).toLocaleString() + " (as shown)"), "")
+            + (ov.isWaterfall ? ovItem("Waterfall", (data.waterfall || []).join(", ") || "Yes", "") : "")
+            + "</div></div>";
+
+          // What's captured vs not (honest status banner).
+          var caps = data.captured;
+          function pill(ok, label) {
+            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : "#8a6d00") + ";background:" + (ok ? "#e3f6ec" : "#fef6dd") + ";border:1px solid " + (ok ? "#b6e6cd" : "#f1dca0") + ";border-radius:12px;padding:3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + "</span>";
+          }
+          var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;'>"
+            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")")
+            + pill(caps.outputNames, "Output names")
+            + pill(caps.contactPoints, "Contact points")
+            + pill(caps.staticValues, "Static values")
+            + "</div>";
+          if (!caps.outputNames || !caps.contactPoints) {
+            status += "<div style='font:400 11px/1.5 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:16px;'>○ Some details only appear on their own wizard step. Visit the "
+              + (!caps.outputNames ? "<b>Attributes</b>" : "") + (!caps.outputNames && !caps.contactPoints ? " and " : "") + (!caps.contactPoints ? "<b>Contact Points</b>" : "")
+              + " step, then reopen this panel — it accumulates what you've seen. (It never navigates for you.)</div>";
+          }
+
+          // Attributes table grouped by object, API names inline — Salesforce-like.
+          var byEntity = {};
+          data.attributes.forEach(function (a) { var en = a.objectApi || "(unspecified)"; (byEntity[en] = byEntity[en] || []).push(a); });
+          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes <span style='color:#5c5c5c;font-weight:500;'>(" + data.attributes.length + ")</span></div>";
+          Object.keys(byEntity).sort().forEach(function (en) {
+            var rows = byEntity[en];
+            var kind = docActObjKind(en);
+            var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
+            attrHtml += "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 6px;'><span style='font:600 12px system-ui;color:#181818;'>" + e(en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")) + "</span>"
+              + docActApiChip(en) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>";
+            attrHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
+            rows.forEach(function (a) {
+              attrHtml += "<tr>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "—") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px system-ui;color:#475569;'>" + (a.path ? e(a.path) : "<span style='color:#b0b0b0;'>—</span>") + "</td></tr>";
+            });
+            attrHtml += "</tbody></table>";
+          });
+          attrHtml += "</div>";
+
+          // Contact points.
+          var cpHtml = "";
+          if (data.contactPoints.length) {
+            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Points</div>";
+            data.contactPoints.forEach(function (cp) {
+              cpHtml += "<div style='display:flex;flex-wrap:wrap;gap:16px;padding:8px 0;border-bottom:1px solid #f1f1f1;'>";
+              [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) {
+                if (!p[1]) return;
+                cpHtml += "<div><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;'>" + e(p[0]) + "</div><div>" + docActApiChip(p[1]) + "</div></div>";
+              });
+              if (cp.platform) cpHtml += "<div><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;'>Platform</div><div style='font:500 12px system-ui;color:#181818;'>" + e(cp.platform) + "</div></div>";
+              cpHtml += "</div>";
+            });
+            cpHtml += "</div>";
+          }
+
+          // Static values.
+          var stHtml = "";
+          if (data.staticRows.length) {
+            stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Static Values <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span></div>";
+            stHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Name</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Value</th></tr></thead><tbody>";
+            data.staticRows.forEach(function (s) { stHtml += "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(s.name) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 12px SFMono-Regular,monospace;color:#0b5cab;'>" + e(s.value) + "</td></tr>"; });
+            stHtml += "</tbody></table></div>";
+          }
+
+          body.innerHTML = status + ovGrid + attrHtml + cpHtml + stHtml;
+        }
+
+        box.appendChild(hdr); box.appendChild(body);
+        modal.appendChild(box);
+        document.body.appendChild(modal);
+      }
+
+      // Expose the DOM-only exporter so the Activation launcher can add a row for it
+      // (dev-gated there via `typeof window.__dcDocActivation === "function"`).
+      try { window.__dcDocActivation = docActShowModal; } catch (e) {}
+
       // Toggle entry point for the launcher. Returns the new state (true = on).
       function toggleSegApi(force) {
         segOn = (typeof force === "boolean") ? force : !segOn;
@@ -19753,11 +20214,11 @@ processJSON();
       try { window.__dcToggleSegApi = toggleSegApi; } catch (e) {}
       try { window.__dcSegApiIsOn = segApiIsOn; } catch (e) {}
       try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
-      // On the Activation wizard the launcher already ran (before this block set the toggle
-      // fn), so its "API names" button was skipped. Re-run it now — it's idempotent (bails
-      // if its buttons already exist) and will add the toggle button on this pass.
+      // On the Activation page the launcher already ran (before this block registered
+      // __dcDocActivation / __dcToggleSegApi), so the dev-only rows were skipped. Re-run
+      // with rebuild=true so it tears down and re-renders WITH those rows.
       if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
-        try { ensureActivationLauncher(); } catch (e) {}
+        try { ensureActivationLauncher(true); } catch (e) {}
       }
     })();
   }
