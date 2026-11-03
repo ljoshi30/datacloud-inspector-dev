@@ -129,7 +129,32 @@
     if (Object.keys(rec.props).length || (rec.allLwcPropNames && rec.allLwcPropNames.length)) out.elements.push(rec);
   });
 
+  // ── FOCUSED summary dump: the runtime_cdp-activation-summary element aggregates the WHOLE activation
+  // (segment, target, platform, data space, membership, attributes). Dump its overview prop VALUES in
+  // full (not shallow) so we know their exact shapes before building the doc export.
+  out.summary = null;
+  (function () {
+    var el = raw.filter(function (e) { return tag(e) === "runtime_cdp-activation-summary"; })[0];
+    if (!el) return;
+    var want = ["selectedDataSpace", "selectedDmoLabel", "selectedIdMembership", "selectedDataGraph",
+      "selectedSegment", "isSelectedSegmentWaterfall", "waterfallSelectAll", "selectedWaterfallSubsegments",
+      "selectedTarget", "selectedPlatformName", "selectedTemplate", "selectedEventType", "selectedEventOptions",
+      "selectedPartnerObjects", "selectedMatchBoostProvider", "displaySelectedDmo", "savedCalculatedInsightRecords"];
+    var dump = {};
+    want.forEach(function (k) {
+      var v = get(el, k);
+      if (v === undefined) return;
+      // full (bounded) serialization so we see exact shapes/values
+      try { dump[k] = JSON.parse(JSON.stringify(v)); } catch (e) { dump[k] = String(v); }
+    });
+    // also the first 2 includedAttributes in FULL to confirm the join keys
+    var inc = get(el, "includedAttributes");
+    dump._includedAttributes_first2 = Array.isArray(inc) ? inc.slice(0, 2) : inc;
+    out.summary = dump;
+  })();
+
   out.notes.push("runtime_cdp tags present: " + Object.keys(out.tagCensus).length + " (step/filter/target families in stepTagCensus)");
+  out.notes.push("SUMMARY element " + (out.summary ? "FOUND — see out.summary for the overview field VALUES (segment/target/platform/dataspace/membership). This one element aggregates all steps → no step traversal needed." : "NOT found — open the activation's Review/summary step and re-run."));
   out.notes.push("WIZARD: " + out.wizard.stepElements.length + " step/progress element(s), " + out.wizard.activeHints.length + " active-step hint(s). KEY QUESTION: run this probe on DIFFERENT steps — if each step shows DIFFERENT elements[], the export must VISIT each step (like segment tabs); if all steps' data is present regardless of active step, one capture is enough.");
   if (!out.elements.length) out.notes.push("⚠️ No activation elements found. Are you on the Activation EDIT page (not /view)? Open the activation for edit, make sure a step's content is on screen, then re-run.");
   else out.notes.push("Captured " + out.elements.length + " element(s). Attribute inventory = datatable.data[] (name/entityName/outputName) + summary.includedAttributes[] (attributeName/entityName). Check allLwcPropNames on each for membership/segment/channel/filter/schedule props to pull per step.");
