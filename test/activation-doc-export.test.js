@@ -7,7 +7,8 @@
 // reads the CURRENT step and ACCUMULATES step-specific extras (output names, contact points,
 // static values) as the user naturally visits them, labeling honestly what isn't captured yet.
 //
-// PROVEN DOM (DOM Probe v56, two captures on different wizard steps of the live org):
+// DOM shapes (from live-org probe captures + the live screenshot that corrected the contact-point
+// shape — those channel props are OBJECTS, not strings; rendering them raw produced "[object Object]"):
 //   runtime_cdp-activation-summary  → the WHOLE activation, IDENTICAL on every step:
 //     selectedDataSpace{label,value}  selectedSegment{name,segmentOnLabel,segmentOnDeveloperName,
 //       count,segmentPublishType,segmentSchedule}  selectedTarget{name,connectionTypeLabel,
@@ -17,9 +18,11 @@
 //     {uid,name,defaultOutputName|preferredName,entityName,queryPathString}  + static rows
 //     {staticAttributeName,staticAttributeValue,entityName}
 //   runtime_cdp-activation-channel-wizard (ONLY on the Contact Points step):
-//     {selectedPlatform,targetConnectionType,contactPointEmail/Phone/Push/WhatsApp/Address}
+//     {selectedPlatform,targetConnectionType, contactPointEmail/Phone/Push/WhatsApp/Address}
+//     where each contactPoint* is EITHER a plain string OR a config object carrying some of
+//     {fieldApiName|name, contactPointEntityName|entityName, label, queryPathConfig.configs[]}.
 // These tests run a faithful MIRROR of the source functions over that real-shaped data —
-// they prove BEHAVIOR, not just that strings exist in the file.
+// they prove BEHAVIOR (incl. the [object Object] fix), not just that strings exist in the file.
 
 let pass = 0, fail = 0;
 function ok(name, cond, extra) { if (cond) { pass++; console.log("  ✓ " + name); } else { fail++; console.log("  ✗ " + name + (extra ? "  → " + extra : "")); } }
@@ -52,6 +55,96 @@ function docActObjKind(api) {
   return "";
 }
 
+// ── Contact-point normalizer (the [object Object] fix) — mirror of the source. ──
+function docActCpStr(v) { return (v == null) ? "" : (typeof v === "object" ? "" : String(v)); }
+function docActCpFirst(obj, keys) {
+  for (var i = 0; i < keys.length; i++) {
+    var val = obj[keys[i]];
+    if (val != null && typeof val !== "object" && String(val).length) return String(val);
+  }
+  return "";
+}
+function docActCpPath(obj) {
+  try {
+    var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
+    if (cfgs && cfgs.length) {
+      for (var i = 0; i < cfgs.length; i++) {
+        var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path);
+        if (qp && qp.length) {
+          return qp.map(function (s) {
+            var o = (s.objectApiName || s.objectName || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+            var f = s.fieldApiName || s.fieldName || "";
+            return f ? (o + "." + f) : o;
+          }).filter(Boolean).join(" → ");
+        }
+      }
+    }
+    if (obj.queryPathString) return docActPathText(docActParsePath(obj.queryPathString));
+  } catch (e) {}
+  return "";
+}
+function docActCpDump(obj) {
+  try {
+    return Object.keys(obj).filter(function (k) {
+      var val = obj[k];
+      return val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
+    }).map(function (k) { return k + ": " + String(obj[k]); }).join(", ");
+  } catch (e) { return ""; }
+}
+function docActCpExtract(v) {
+  if (v == null || v === "") return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
+  if (typeof v !== "object") return { present: true, value: String(v), fieldApi: String(v), entityApi: "", path: "", dump: "" };
+  var fieldApi = docActCpFirst(v, ["fieldApiName", "name", "contactPointFieldName", "fieldName", "developerName"]);
+  var entityApi = docActCpFirst(v, ["contactPointEntityName", "entityName", "objectApiName", "objectName", "dmoApiName"]);
+  var label = docActCpFirst(v, ["label", "fieldLabel", "masterLabel", "displayName"]);
+  if (!fieldApi && v.fieldConfig && v.fieldConfig.contactPointFields && v.fieldConfig.contactPointFields.length) {
+    var f0 = v.fieldConfig.contactPointFields[0] || {};
+    fieldApi = f0.name || f0.fieldApiName || "";
+    label = label || f0.label || "";
+  }
+  var path = docActCpPath(v);
+  var value = label || fieldApi || "";
+  var dump = (value || path) ? "" : docActCpDump(v);
+  return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
+}
+function docActCpText(cpv) {
+  if (!cpv || !cpv.present) return "";
+  var bits = [];
+  if (cpv.value) bits.push(cpv.value);
+  if (cpv.fieldApi && cpv.fieldApi !== cpv.value) bits.push(cpv.fieldApi);
+  if (cpv.entityApi) bits.push(cpv.entityApi);
+  if (cpv.path) bits.push(cpv.path);
+  if (!bits.length && cpv.dump) bits.push(cpv.dump);
+  if (!bits.length) bits.push("Configured");
+  return bits.join(" · ");
+}
+
+function docActReadFilters(summaryEl, seg) {
+  var out = [];
+  function pushText(label, raw) {
+    if (raw == null) return;
+    var t = (typeof raw === "object") ? docActCpDump(raw) : String(raw);
+    if (t && t.length) out.push({ label: label, text: t });
+  }
+  try {
+    if (seg) {
+      if (seg.filterLabel || seg.filterText || seg.criteriaText) pushText("Segment filter", seg.filterText || seg.criteriaText || seg.filterLabel);
+      if (Array.isArray(seg.filters)) seg.filters.forEach(function (f, i) {
+        var lbl = (f && (f.label || f.name)) ? (f.label || f.name) : ("Filter " + (i + 1));
+        pushText(lbl, f && (f.text || f.filterExpression || f.expression || f.displayText || f));
+      });
+    }
+    ["relatedDmoFilters", "directDmoFilters", "dmoFilters", "activationFilters", "filters"].forEach(function (k) {
+      var v = summaryEl && segSafeGet(summaryEl, k);
+      if (Array.isArray(v)) v.forEach(function (f, i) {
+        var txt = f && (f.filterExpression || f.expression || f.label || f.displayText);
+        pushText((f && f.entityName ? f.entityName.replace(/__dlm$/, "") + " filter" : k + " " + (i + 1)), txt || f);
+      });
+    });
+  } catch (e) {}
+  return out;
+}
+
 // scrape over a provided list of "elements" + a persistent accumulator (the source keeps one
 // per recordId in _docActAccum; here we pass it in so we can simulate visiting two steps).
 function docActScrapeOver(raw, acc) {
@@ -77,12 +170,16 @@ function docActScrapeOver(raw, acc) {
       segment: seg.name || "", segmentApi: seg.segmentOnDeveloperName || seg.segmentApiName || "",
       segmentOn: seg.segmentOnLabel || "", segmentOnApi: seg.segmentOnDeveloperName || "",
       segmentCount: (seg.count != null ? seg.count : ""),
-      publishType: seg.segmentPublishType || "", schedule: seg.segmentSchedule || "",
+      publishType: seg.segmentPublishType || "",
       target: tgt.name || "", connectionType: tgt.connectionTypeLabel || tgt.connectionType || "",
       platform: tgt.platformName || segSafeGet(summaryEl, "selectedPlatformName") || "",
       businessUnits: (tgt.businessUnits && tgt.businessUnits.slice ? tgt.businessUnits.slice() : []),
       eventType: segSafeGet(summaryEl, "selectedEventType") || "",
-      isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall")
+      isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
+      refreshType: docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+      processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
+      schedule: seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
+      filters: docActReadFilters(summaryEl, seg)
     };
     if (out.overview.isWaterfall) { var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments"); out.waterfall = (subs && subs.slice) ? subs.slice() : []; }
     var inc = segSafeGet(summaryEl, "includedAttributes") || [];
@@ -112,12 +209,12 @@ function docActScrapeOver(raw, acc) {
 
   if (channelEl) {
     var cp = {
-      platform: segSafeGet(channelEl, "selectedPlatform") || "", connectionType: segSafeGet(channelEl, "targetConnectionType") || "",
-      email: segSafeGet(channelEl, "contactPointEmail") || "", phone: segSafeGet(channelEl, "contactPointPhone") || "",
-      push: segSafeGet(channelEl, "contactPointPush") || "", whatsApp: segSafeGet(channelEl, "contactPointWhatsApp") || "",
-      address: segSafeGet(channelEl, "contactPointAddress") || ""
+      platform: docActCpStr(segSafeGet(channelEl, "selectedPlatform")), connectionType: docActCpStr(segSafeGet(channelEl, "targetConnectionType")),
+      email: docActCpExtract(segSafeGet(channelEl, "contactPointEmail")), phone: docActCpExtract(segSafeGet(channelEl, "contactPointPhone")),
+      push: docActCpExtract(segSafeGet(channelEl, "contactPointPush")), whatsApp: docActCpExtract(segSafeGet(channelEl, "contactPointWhatsApp")),
+      address: docActCpExtract(segSafeGet(channelEl, "contactPointAddress"))
     };
-    var hasAny = cp.email || cp.phone || cp.push || cp.whatsApp || cp.address;
+    var hasAny = ["email", "phone", "push", "whatsApp", "address"].some(function (k) { return cp[k] && cp[k].present; });
     if (hasAny) { var key = JSON.stringify(cp); if (!acc.contactPoints.some(function (x) { return JSON.stringify(x) === key; })) acc.contactPoints.push(cp); }
   }
 
@@ -134,28 +231,12 @@ function docActScrapeOver(raw, acc) {
 }
 function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {} }; }
 
+// CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
   function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
   var lines = [];
-  lines.push(["Section", "Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path", "Value"].map(q).join(","));
-  var ov = data.overview;
-  [["Overview", "Data Space", "", ov.dataSpaceApi, "", "", "", ov.dataSpace],
-   ["Overview", "Segment", ov.segmentApi, "", "", "", "", ov.segment],
-   ["Overview", "Segment Membership (as shown)", "", "", "", "", "", ov.segmentCount],
-   ["Overview", "Target", "", "", "", "", "", ov.target],
-   ["Overview", "Platform", "", "", "", "", "", ov.platform],
-   ["Overview", "Connection Type", "", "", "", "", "", ov.connectionType],
-   ["Overview", "Business Units", "", "", "", "", "", (ov.businessUnits || []).join("; ")],
-   ["Overview", "Publish Type", "", "", "", "", "", ov.publishType],
-   ["Overview", "Schedule", "", "", "", "", "", ov.schedule]
-  ].forEach(function (r) { if (r[7] !== "" && r[7] != null && String(r[7]).length) lines.push(r.map(q).join(",")); });
-  data.attributes.forEach(function (a) { lines.push(["Attribute", a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path, ""].map(q).join(",")); });
-  data.contactPoints.forEach(function (cp) {
-    [["email", cp.email], ["phone", cp.phone], ["push", cp.push], ["whatsApp", cp.whatsApp], ["address", cp.address]].forEach(function (p) {
-      if (p[1]) lines.push(["Contact Point", p[0], "", "", "", "", "", p[1]].map(q).join(","));
-    });
-  });
-  data.staticRows.forEach(function (s) { lines.push(["Static Value", s.name, "", s.objectApi, "", "", "", s.value].map(q).join(",")); });
+  lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
+  data.attributes.forEach(function (a) { lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category].map(q).join(",")); });
   return lines.join("\r\n");
 }
 
@@ -188,9 +269,20 @@ function attrDatatableEl() {
     ]
   };
 }
-// STEP 3 = the Contact Points step.
+// STEP 3 = the Contact Points step. The channel props are OBJECTS (the live screenshot proved this —
+// rendering them raw produced "[object Object]"). Email carries a nested path config; Address is a
+// bare object with NO known keys (exercises the key:value dump fallback).
 function channelEl() {
-  return { tagName: "runtime_cdp-activation-channel-wizard", selectedPlatform: "MarketingCloud", targetConnectionType: "Marketing Cloud", contactPointEmail: "ssot__EmailAddress__c", contactPointPhone: "", contactPointPush: "", contactPointWhatsApp: "", contactPointAddress: "" };
+  return {
+    tagName: "runtime_cdp-activation-channel-wizard",
+    selectedPlatform: "MarketingCloud", targetConnectionType: "Marketing Cloud",
+    contactPointEmail: {
+      fieldApiName: "ssot__EmailAddress__c", contactPointEntityName: "ssot__ContactPointEmail__dlm", label: "Email Address",
+      queryPathConfig: { configs: [{ queryPath: [{ objectApiName: "IndividualG__dlm", fieldApiName: "Id" }, { objectApiName: "ssot__ContactPointEmail__dlm", fieldApiName: "ssot__EmailAddress__c" }] }] }
+    },
+    contactPointPhone: "", contactPointPush: "", contactPointWhatsApp: "",
+    contactPointAddress: { mysteryKeyA: "Primary Mailing", mysteryKeyB: 2 }   // no known keys → dump fallback
+  };
 }
 
 console.log("\n1. path parsing + text: queryPathString (JSON hop pairs) → readable DMO.field → … chain");
@@ -223,6 +315,7 @@ console.log("\n3. ONE summary element = the whole core doc (no step traversal ne
   eq("connection type label preferred", out.overview.connectionType, "Marketing Cloud");
   eq("platform", out.overview.platform, "MarketingCloud");
   eq("business units carried through", out.overview.businessUnits.join(","), "TDI GI - SIT_520005329");
+  eq("schedule read from segment", out.overview.schedule, "Daily at 2:00 AM");
   eq("membership captured verbatim (labeled 'as shown' elsewhere)", out.overview.segmentCount, 51878);
   eq("all 3 included attributes read", out.attributes.length, 3);
   eq("each attribute carries its real field API", out.attributes[0].fieldApi, "ssot__EmailAddress__c");
@@ -234,10 +327,8 @@ console.log("\n3. ONE summary element = the whole core doc (no step traversal ne
 console.log("\n4. accumulation across steps: output names + path + static + contact points FOLD IN as the user visits");
 {
   var acc = newAccum();
-  // user opens on the summary/review step
   var s1 = docActScrapeOver([summaryEl()], acc);
   ok("step 1: attributes yes, extras no", s1.captured.attributes && !s1.captured.outputNames && !s1.captured.contactPoints && !s1.captured.staticValues);
-  // user clicks into the Attributes step → datatable now present (summary still present too)
   var s2 = docActScrapeOver([summaryEl(), attrDatatableEl()], acc);
   eq("step 2: output name merged by uid (u1 → 'email')", s2.attributes[0].outputName, "email");
   eq("step 2: preferredName used when defaultOutputName absent (u2 → 'first_name')", s2.attributes[1].outputName, "first_name");
@@ -245,15 +336,38 @@ console.log("\n4. accumulation across steps: output names + path + static + cont
   eq("step 2: static value captured", s2.staticRows.length, 1);
   eq("step 2: static name/value right", s2.staticRows[0].name + "=" + s2.staticRows[0].value, "campaign_id=VIF-2026-Q1");
   ok("step 2 captured flags flip on for output names + static", s2.captured.outputNames && s2.captured.staticValues && !s2.captured.contactPoints);
-  // user clicks into the Contact Points step
   var s3 = docActScrapeOver([summaryEl(), channelEl()], acc);
   eq("step 3: one contact point captured", s3.contactPoints.length, 1);
-  eq("step 3: email contact point API name", s3.contactPoints[0].email, "ssot__EmailAddress__c");
   ok("step 3: earlier extras STILL present (accumulator persists across steps)", s3.captured.outputNames && s3.captured.staticValues && s3.captured.contactPoints);
   eq("step 3: output name still merged (not lost when datatable left the DOM)", s3.attributes[0].outputName, "email");
 }
 
-console.log("\n5. contact points de-dupe (revisiting the step must not pile up copies)");
+console.log("\n5. [object Object] FIX: object-shaped contact-point props are extracted, never rendered as [object Object]");
+{
+  var out = docActScrapeOver([summaryEl(), channelEl()], newAccum());
+  var cp = out.contactPoints[0];
+  // Email channel = object with known keys → value/field/entity/path all extracted.
+  eq("email value = human label", cp.email.value, "Email Address");
+  eq("email field API extracted from object", cp.email.fieldApi, "ssot__EmailAddress__c");
+  eq("email entity API extracted from object", cp.email.entityApi, "ssot__ContactPointEmail__dlm");
+  eq("email path built from nested queryPathConfig", cp.email.path, "IndividualG.Id → ssot__ContactPointEmail.ssot__EmailAddress__c");
+  ok("email present flag true", cp.email.present === true);
+  // Address channel = object with NO known keys → readable key:value dump, NOT [object Object].
+  ok("address present flag true (object is a configured channel)", cp.address.present === true);
+  eq("address falls back to readable key:value dump", cp.address.dump, "mysteryKeyA: Primary Mailing, mysteryKeyB: 2");
+  // The flattened text used by CSV/Excel must never contain the JS object toString.
+  var emailText = docActCpText(cp.email), addrText = docActCpText(cp.address);
+  ok("email flattened text has value + field api", /Email Address/.test(emailText) && /ssot__EmailAddress__c/.test(emailText));
+  ok("NO '[object Object]' anywhere in flattened contact-point text", emailText.indexOf("[object Object]") === -1 && addrText.indexOf("[object Object]") === -1);
+  eq("address flattened text = its dump", addrText, "mysteryKeyA: Primary Mailing, mysteryKeyB: 2");
+  // empty channels normalize to not-present (no phantom rows)
+  ok("empty string channel → not present", cp.phone.present === false && cp.push.present === false && cp.whatsApp.present === false);
+  // A plain-string channel (older DOM shape) still works (backward compatible).
+  var strCp = docActCpExtract("ssot__MobilePhone__c");
+  ok("string-form channel stays supported", strCp.present === true && strCp.value === "ssot__MobilePhone__c");
+}
+
+console.log("\n6. contact points de-dupe (revisiting the step must not pile up copies)");
 {
   var acc = newAccum();
   docActScrapeOver([summaryEl(), channelEl()], acc);
@@ -262,34 +376,45 @@ console.log("\n5. contact points de-dupe (revisiting the step must not pile up c
   eq("still exactly one contact point after 3 visits", out.contactPoints.length, 1);
 }
 
-console.log("\n6. no summary on the page → found=false, nothing fabricated");
+console.log("\n7. no summary on the page → found=false, nothing fabricated");
 {
   var out = docActScrapeOver([{ tagName: "div" }, { tagName: "runtime_cdp-activation-attribute-datatable", data: [] }], newAccum());
   ok("found=false when no summary element", out.found === false);
   eq("no attributes invented", out.attributes.length, 0);
 }
 
-console.log("\n7. CSV is well-formed: header + overview rows + one row per attribute + contact points + static");
+console.log("\n8. CSV is ATTRIBUTES-ONLY now (per user): 5 columns, one row per attribute, no overview/contact/static, no Join Path");
 {
   var acc = newAccum();
   docActScrapeOver([summaryEl(), attrDatatableEl()], acc);
   var out = docActScrapeOver([summaryEl(), channelEl()], acc);   // full picture
   var csv = docActCsv(out);
   var rows = csv.split("\r\n");
-  eq("header is the 8 documentation columns", rows[0], "Section,Label,Field API,Object / DMO API,Output Name,Category,Join Path,Value");
+  eq("header is the 5 attribute columns (Join Path removed)", rows[0], "Label,Field API,Object / DMO API,Output Name,Category");
   ok("CRLF line endings (Excel-friendly)", csv.indexOf("\r\n") !== -1);
-  ok("every included attribute appears as an Attribute row", out.attributes.every(function (a) { return csv.indexOf("Attribute," + a.label + ",") !== -1; }));
+  eq("exactly header + one row per attribute (3 attrs → 4 lines)", rows.length, 4);
+  ok("no Overview/Contact Point/Static Value rows in the CSV", !/Overview|Contact Point|Static Value/.test(csv));
   ok("field API name present in CSV", csv.indexOf("ssot__EmailAddress__c") !== -1);
   ok("output name present in CSV", /,email,/.test(csv));
-  ok("join path (with the → arrow) present in CSV", csv.indexOf("IndividualG.Id → ssot__ContactPointEmail.ssot__PartyId__c") !== -1);
-  ok("contact point row present", csv.indexOf("Contact Point,email,") !== -1);
-  ok("static value row present", csv.indexOf("Static Value,campaign_id,") !== -1);
-  // a value containing a comma must be quoted
-  var out2 = docActScrapeOver([{ tagName: "runtime_cdp-activation-summary", selectedDataSpace: {}, selectedSegment: {}, selectedTarget: { name: "A, B, C", businessUnits: [] }, includedAttributes: [] }], newAccum());
+  ok("NO Join Path column / arrow in CSV", csv.indexOf("→") === -1);
+  // a value containing a comma must still be quoted
+  var out2 = { attributes: [{ label: "A, B, C", fieldApi: "X__c", objectApi: "Y__dlm", outputName: "", category: "" }] };
   ok("comma-bearing value is CSV-quoted", docActCsv(out2).indexOf('"A, B, C"') !== -1);
 }
 
-console.log("\n8. waterfall segments captured when present");
+console.log("\n9. applied filters read ONLY when present (never fabricated)");
+{
+  var noFilter = docActScrapeOver([summaryEl()], newAccum());
+  eq("no filters in DOM → empty array (section hidden)", noFilter.overview.filters.length, 0);
+  var wf = summaryEl();
+  wf.relatedDmoFilters = [{ entityName: "IndividualG__dlm", filterExpression: "Tier__c = 'Gold'" }];
+  wf.selectedSegment.filters = [{ label: "Active only", text: "IsActive__c = true" }];
+  var withFilter = docActScrapeOver([wf], newAccum());
+  ok("segment-level filter captured", withFilter.overview.filters.some(function (f) { return /IsActive__c = true/.test(f.text); }));
+  ok("activation DMO filter captured + labeled by entity", withFilter.overview.filters.some(function (f) { return f.label === "IndividualG filter" && /Tier__c = 'Gold'/.test(f.text); }));
+}
+
+console.log("\n10. waterfall segments captured when present");
 {
   var wf = summaryEl(); wf.isSelectedSegmentWaterfall = true; wf.selectedWaterfallSubsegments = ["TDI_Sub_A", "TDI_Sub_B"];
   var out = docActScrapeOver([wf], newAccum());
@@ -298,7 +423,7 @@ console.log("\n8. waterfall segments captured when present");
 }
 
 // ── Source & strip presence (the feature is wired + lives DEV-ONLY) ──
-console.log("\n9. SOURCE wiring: DOM-only exporter defined, launcher row added, DEV-ONLY, and present in the bookmarklet");
+console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added, DEV-ONLY, and present in the bookmarklet");
 {
   const fs = require("fs"), path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
@@ -308,10 +433,12 @@ console.log("\n9. SOURCE wiring: DOM-only exporter defined, launcher row added, 
   ok("reads the summary element by its real tag", /runtime_cdp-activation-summary/.test(src));
   ok("merges datatable output names + path (Attributes step) and channel contact points", /runtime_cdp-activation-attribute-datatable/.test(src) && /runtime_cdp-activation-channel-wizard/.test(src));
   ok("reuses collectRaw + segSafeGet (no new shadow walker, no new prop reader)", /collectRaw\(\)/.test(src) && /segSafeGet\(/.test(src));
+  // The [object Object] fix lives in the source: a contact-point extractor with a dump fallback.
+  ok("contact-point extractor present (the [object Object] fix)", /function docActCpExtract/.test(src) && /function docActCpDump/.test(src) && /docActCpExtract\(segSafeGet\(channelEl/.test(src));
+  ok("filters + refresh type read conditionally (not fabricated)", /function docActReadFilters/.test(src) && /refreshType:/.test(src));
   // NEVER auto-navigates the Save/Publish-capable wizard. Isolate the doc-export code region
   // (from its first fn to where it's exposed on window) and assert it contains no wizard-step
-  // navigation — no setCurrentStep/goToStep/nextStep, and its only .click() is the download
-  // anchor (a.click()), never a click on a wizard Next/Back/step control.
+  // navigation — no setCurrentStep/goToStep/nextStep, and its only .click() is the download anchor.
   (function () {
     var m = src.match(/var _docActAccum[\s\S]*?window\.__dcDocActivation\s*=\s*docActShowModal/);
     var region = m ? m[0] : "";
@@ -323,19 +450,21 @@ console.log("\n9. SOURCE wiring: DOM-only exporter defined, launcher row added, 
   })();
   ok("launcher offers a 'Document Activation' row, gated on the exporter fn", /dc-act-doc-row/.test(src) && /typeof window\.__dcDocActivation === "function"/.test(src));
   ok("launcher is rebuild-aware so the dev row appears after the dev block registers the fn", /function ensureActivationLauncher\(rebuild\)/.test(src) && /ensureActivationLauncher\(true\)/.test(src));
-  ok("CSV + Excel (MiniXLSX) + Copy-table exports wired", /function docActCsv/.test(src) && /function docActExcel/.test(src) && /SEGX\.MiniXLSX/.test(src) && /Copy table/.test(src));
+  ok("CSV + Excel (MiniXLSX) exports wired", /function docActCsv/.test(src) && /function docActExcel/.test(src) && /SEGX\.MiniXLSX/.test(src));
+  ok("Copy-table button REMOVED per feedback", !/Copy table/.test(src));
+  ok("CSV header is the attributes-only 5 columns (Join Path removed) in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category"\]/.test(src));
   ok("honest 'captured vs not yet visited' status in the modal", /not yet visited|captured|Visit the/.test(src) && /captured\.outputNames/.test(src));
+  ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));
 
-  // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build. The launcher's
-  // typeof-guarded reference lives in the shared launcher (survives, like seg/formula rows), so the
-  // correct dev-only assertion is: the definition is absent from the public build.
+  // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
   ok("DEV-ONLY: exporter definition stripped from the public bookmarklet", !/function docActShowModal/.test(pub));
   ok("DEV-ONLY: public build never DEFINES __dcDocActivation (only the guarded launcher reference may remain)", !/window\.__dcDocActivation\s*=/.test(pub));
   ok("DEV-ONLY: the 'Document Activation' launcher ROW is inside a strip block (not in public menu)", !/dc-act-doc-row/.test(pub));
+  ok("DEV-ONLY: contact-point extractor stripped from public build", !/function docActCpExtract/.test(pub));
 
   // present in the FULL (dev) bookmarklet build — this is the artifact the client actually runs.
-  ok("present in the FULL bookmarklet (synced from ext)", /function docActShowModal/.test(bm) && /dc-act-doc-row/.test(bm));
+  ok("present in the FULL bookmarklet (synced from ext)", /function docActShowModal/.test(bm) && /dc-act-doc-row/.test(bm) && /function docActCpExtract/.test(bm));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
