@@ -97,17 +97,30 @@ console.log("\n2d. LEARN-THEN-ADAPT — silent write in permissive orgs; beacon-
   function makeOrg(opts) {
     var store = {}, today = "2026-10-30";
     var tabsOpened = 0, silentOk = opts.silentOk;  // silentOk=false simulates a CSP/CASB-locked org
+    var beaconReaches = opts.beaconReaches !== false;  // false = a corporate web filter blocks the beacon destination too
     function sentToday(f) { return store["last::" + f] === "1"; }
     function markSent(f) { store["last::" + f] = "1"; }
     function orgBlocked() { return store["blocked"] === "1"; }
     function markBlocked() { store["blocked"] = "1"; }
-    function beaconOpen(f) { tabsOpened++; return true; }   // window.open returns a handle (sync)
+    function beaconDead() { return store["beacon_dead"] === "1"; }
+    function markBeaconDead() { store["beacon_dead"] = "1"; }
+    // beaconOpen opens a tab; if the destination is filter-blocked it NEVER confirms → mark dead.
+    function beaconOpen(f) {
+      tabsOpened++;
+      if (!beaconReaches) { markBeaconDead(); return "opened-but-blocked"; }  // no confirmation → dead
+      captured.push({ f: f, via: "beacon" }); return "opened-ok";
+    }
     var captured = [];
-    // mirrors maybeReportOnFabOpen
+    // mirrors maybeReportOnFabOpen (incl. the auto-disable: once beacon is dead, no more tabs)
     function onFab(f) {
       if (sentToday(f)) return "throttled";
-      if (orgBlocked()) { if (beaconOpen(f)) { markSent(f); captured.push({ f: f, via: "beacon" }); return "beacon"; } return "blocked-nopopup"; }
-      // silent attempt (async in reality; synchronous here for the test)
+      if (orgBlocked()) {
+        if (beaconDead()) return "giveup-silent";             // filter blocks beacon too → no tab, no capture
+        var r = beaconOpen(f);
+        if (r === "opened-ok") { markSent(f); return "beacon"; }
+        if (r === "opened-but-blocked") return "beacon-blocked-now-dead";  // this click showed the flash; future clicks won't
+        return "blocked-nopopup";
+      }
       if (silentOk) { markSent(f); captured.push({ f: f, via: "silent" }); return "silent"; }
       markBlocked();                              // LEARN: this org blocks the silent write
       return "silent-failed-learned";             // this click's capture is lost; next click uses beacon
@@ -133,6 +146,17 @@ console.log("\n2d. LEARN-THEN-ADAPT — silent write in permissive orgs; beacon-
   eq("locked: exactly 2 beacon tabs (DMO retry + Segment), not more", lock.tabs(), 2);
   eq("locked: captured via beacon = 2", lock.captured.filter(function (c) { return c.via === "beacon"; }).length, 2);
 
+  // FILTER-BLOCKED org (TD): silent blocked AND the beacon destination blocked by corporate web filter.
+  // The beacon flashes the block page ONCE, then auto-disables — no more tabs, no captures. Key UX win:
+  // the scary "Unauthorized Access" flash happens at most ONCE per org, never repeatedly.
+  var td = makeOrg({ silentOk: false, beaconReaches: false });
+  eq("TD: 1st click → silent fails + learns block", td.onFab("DMO"), "silent-failed-learned");
+  eq("TD: 2nd click → beacon tab opens but is filter-blocked (flash shown ONCE) → marked dead", td.onFab("DMO"), "beacon-blocked-now-dead");
+  eq("TD: 3rd click (DMO) → NO tab (beacon dead) — but DMO is still unthrottled so it retries silently? no: give up", td.onFab("Segment"), "giveup-silent");
+  eq("TD: 4th click (another feature) → still NO tab", td.onFab("DataStream"), "giveup-silent");
+  eq("TD: only ONE tab was EVER opened (the single unavoidable flash)", td.tabs(), 1);
+  eq("TD: nothing captured (unmeasurable externally — expected)", td.captured.length, 0);
+
   // source checks — the real code must implement this (not just the mirror)
   const fs2 = require("fs"), path2 = require("path");
   const src2 = fs2.readFileSync(path2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
@@ -141,6 +165,12 @@ console.log("\n2d. LEARN-THEN-ADAPT — silent write in permissive orgs; beacon-
   ok("real code: beacon carries anonymous fields only (iid/v/page/day/build/org — no PII)", /function beaconUrl\(feature\)/.test(src2) && /"&org=" \+ encodeURIComponent/.test(src2) && !/username|userId/i.test(src2.slice(src2.indexOf("function beaconUrl"), src2.indexOf("function beaconUrl") + 500)));
   ok("real code: blocked flag is per-ORG host (re-learns when moving orgs)", /function blockedKey\(\) \{ return "dc_usage_blocked::" \+ orgHost\(\)/.test(src2));
   ok("real code: beacon points at the worker /beacon route", /var BEACON_BASE = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/beacon"/.test(src2));
+  // AUTO-DISABLE: the beacon page postMessages a confirmation; if none arrives in 4s, mark beacon dead.
+  ok("real code: /beacon confirmation listener sets _beaconConfirmed + clears the dead flag", /ev\.data\.__dcBeacon === "ok"/.test(src2) && /_beaconConfirmed\[orgHost\(\)\] = true/.test(src2));
+  ok("real code: no confirmation within 4s → markBeaconDead (corporate filter blocked the destination)", /if \(!_beaconConfirmed\[orgHost\(\)\]\) markBeaconDead\(\);/.test(src2) && /\}, 4000\)/.test(src2));
+  ok("real code: once beacon is dead, NO tab is opened (user never sees the block flash again)", /if \(beaconDead\(\)\) \{[\s\S]*?return false;/.test(src2));
+  ok("real code: beacon-dead flag is per-ORG host", /function beaconDeadKey\(\) \{ return "dc_usage_beacon_dead::" \+ orgHost\(\)/.test(src2));
+  ok("worker /beacon confirms back to opener via postMessage(__dcBeacon:ok)", (function () { var w = fs2.readFileSync(path2.join(__dirname, "..", "usage-endpoint", "worker.js"), "utf8"); return /window\.opener\.postMessage\(\{__dcBeacon:'ok'/.test(w); })());
 }
 
 console.log("\n2c. STORAGE-BLOCKED (VDI/incognito) — real users stay DISTINCT, not merged into one fake id");

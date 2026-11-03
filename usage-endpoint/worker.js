@@ -464,10 +464,14 @@ export default {
         } catch (e) { stored = false; }
       }
       // tiny auto-closing page (self-origin → no CSP issue here); closes fast so the flash is minimal.
+      // It posts a confirmation back to the opener so the tool KNOWS the beacon actually reached us
+      // (vs. a corporate web-filter block page, which is a different origin and can't send this). If the
+      // opener never gets this message, it marks the beacon "dead" for that org and stops opening tabs.
       const html = "<!doctype html><meta charset=utf-8><title>recorded</title>" +
         "<body style=\"font:13px -apple-system,sans-serif;color:#334;display:grid;place-items:center;height:100vh;margin:0\">" +
         "<div>" + (stored ? "✓ usage recorded" : "· noted") + "</div>" +
-        "<script>try{window.close()}catch(e){};setTimeout(function(){try{window.close()}catch(e){}},400)</script>";
+        "<script>try{if(window.opener)window.opener.postMessage({__dcBeacon:'ok',stored:" + (stored ? "true" : "false") + "},'*')}catch(e){}" +
+        "try{window.close()}catch(e){};setTimeout(function(){try{window.close()}catch(e){}},400)</script>";
       return new Response(html, { headers: cors({ "Content-Type": "text/html", "Cache-Control": "no-store" }) });
     }
 
