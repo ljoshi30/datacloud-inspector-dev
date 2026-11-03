@@ -19376,8 +19376,14 @@ processJSON();
    * Zero mutation of SF's shadow DOM → survives re-renders, can't break the page.
    * NOTE: for Activation, only the WIZARD page has attribute rows — the /view detail page
    * has nothing to decorate, so we skip it there (the toggle/decorator would be a no-op). */
-  if (detailPageType === "Segment" || (detailPageType === "Activation" && isActivationWizardPage())) {
+  // The API-name hover DECORATOR is meaningful only on the Segment builder and the Activation
+  // WIZARD (where attribute rows render). The DOM-only "Document Activation" exporter, however,
+  // should be available on ANY activation page (the /view detail page too) — it reads whatever
+  // summary/attribute/channel DOM is present and honestly reports what isn't. So we enter this
+  // block on any activation page, and gate only the decorator's hover wiring on the wizard.
+  if (detailPageType === "Segment" || detailPageType === "Activation") {
     (function segApiNameFeature() {
+      var _segDecoratorActive = (detailPageType === "Segment") || isActivationWizardPage();
       function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
 
       // ── Container Path: READ VERBATIM from the open edit panel (never reconstructed) ──
@@ -19756,8 +19762,13 @@ processJSON();
         var api = (info.kind === "group") ? info.objectApi : (info.fieldApi || info.objectApi);
         if (api) { segCopy(api); e.preventDefault(); }
       }
-      document.addEventListener("mousemove", onMove, true);
-      document.addEventListener("keydown", onKey, true);
+      // Only attach the hover/copy decorator where there are rows to decorate (Segment builder
+      // or the Activation wizard). On the Activation /view detail page there's nothing to hover,
+      // so we skip the listeners — but STILL define the Document Activation exporter below.
+      if (_segDecoratorActive) {
+        document.addEventListener("mousemove", onMove, true);
+        document.addEventListener("keydown", onKey, true);
+      }
 
       // ═══════════════════════════════════════════════════════════════════════════
       // DOM-ONLY "Document Activation" export (bookmarklet-safe — no bridge/API).
@@ -19778,13 +19789,22 @@ processJSON();
 
       // Per-activation accumulator so re-opening the panel after visiting more steps
       // keeps the contact points / static values gathered on earlier steps.
-      var _docActAccum = {};   // recordId → { outputByUid, staticRows[], contactPoints[], pathByUid }
+      // Accumulator lives on WINDOW, not in this IIFE — the bookmarklet re-runs on every
+      // step navigation (Lightning SPA + watchNavigation tears the FAB down), which would
+      // otherwise reset an IIFE-local object to {} and WIPE everything captured on earlier
+      // steps. Persisting on window.__dcDocActAccum means each step the user visits FOLDS
+      // its extras into the SAME per-activation store, so the final modal shows everything
+      // seen so far. Cleared only on a full page reload (fresh window).
+      var _docActAccum = (function () {
+        try { if (!window.__dcDocActAccum) window.__dcDocActAccum = {}; return window.__dcDocActAccum; }
+        catch (e) { return {}; }   // paranoid fallback (sandboxed window) — still works within one run
+      })();
 
       function docActRecordId() {
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {} };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {} };
         return _docActAccum[id];
       }
 
@@ -19816,24 +19836,55 @@ processJSON();
         }
         return "";
       }
-      // Build "obj.field" path text from the SF contact-point path config, if present.
+      // Turn an array of hop objects into "Obj.field → Obj.field" text.
+      function docActHopsText(qp) {
+        if (!qp || !qp.length) return "";
+        return qp.map(function (s) {
+          if (!s || typeof s !== "object") return "";
+          var o = (s.objectApiName || s.objectName || s.entityName || s.objectLabel || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+          var f = s.fieldApiName || s.fieldName || s.fieldLabel || s.name || "";
+          return f ? (o + "." + f) : o;
+        }).filter(Boolean).join(" → ");
+      }
+      // Does this array look like a path (array of {object*,field*} hop objects)?
+      function docActLooksLikeHops(arr) {
+        return Array.isArray(arr) && arr.length > 0 && arr.every(function (s) {
+          return s && typeof s === "object" && (s.objectApiName || s.objectName || s.entityName || s.fieldApiName || s.fieldName);
+        });
+      }
+      // Build "obj.field" path text from the SF contact-point path config, covering the known
+      // shapes AND falling back to a bounded deep-scan for any nested hop array (the live DOM
+      // key names are inferred, so the deep-scan makes path capture robust to key differences).
       function docActCpPath(obj) {
         try {
+          // 1) known nested config: queryPathConfig.configs[].queryPath|path
           var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
           if (cfgs && cfgs.length) {
             for (var i = 0; i < cfgs.length; i++) {
-              var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path);
-              if (qp && qp.length) {
-                return qp.map(function (s) {
-                  var o = (s.objectApiName || s.objectName || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
-                  var f = s.fieldApiName || s.fieldName || "";
-                  return f ? (o + "." + f) : o;
-                }).filter(Boolean).join(" → ");
-              }
+              var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path || cfgs[i].hops);
+              var t = docActHopsText(qp);
+              if (t) return t;
             }
           }
-          // Single-hop form carried directly on the object.
-          if (obj.queryPathString) return docActPathText(docActParsePath(obj.queryPathString));
+          // 2) hop array carried directly on the object under a few known keys
+          var direct = obj.queryPath || obj.path || obj.hops || obj.joinPath;
+          var dt = docActHopsText(direct);
+          if (dt) return dt;
+          // 3) stringified JSON hop array
+          if (obj.queryPathString) { var st = docActPathText(docActParsePath(obj.queryPathString)); if (st) return st; }
+          // 4) bounded deep-scan: find the first nested array that looks like hops (robust to
+          //    unknown key names). Depth-limited so it can never run away on a big LWC object.
+          var found = "";
+          (function scan(node, depth) {
+            if (found || !node || typeof node !== "object" || depth > 4) return;
+            if (docActLooksLikeHops(node)) { found = docActHopsText(node); return; }
+            var keys = Object.keys(node);
+            for (var k = 0; k < keys.length && !found; k++) {
+              var v = node[keys[k]];
+              if (v && typeof v === "object") scan(v, depth + 1);
+            }
+          })(obj, 0);
+          if (found) return found;
         } catch (e) {}
         return "";
       }
@@ -20232,16 +20283,23 @@ processJSON();
           function pill(ok, label) {
             return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : "#8a6d00") + ";background:" + (ok ? "#e3f6ec" : "#fef6dd") + ";border:1px solid " + (ok ? "#b6e6cd" : "#f1dca0") + ";border-radius:12px;padding:3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + "</span>";
           }
-          var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;'>"
+          var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>"
             + pill(caps.attributes, "Attributes (" + data.attributes.length + ")")
             + pill(caps.outputNames, "Output names")
             + pill(caps.contactPoints, "Contact points")
             + pill(caps.staticValues, "Static values")
             + "</div>";
-          if (!caps.outputNames || !caps.contactPoints) {
-            status += "<div style='font:400 11px/1.5 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:16px;'>○ Some details only appear on their own wizard step. Visit the "
+          // Captures PERSIST across wizard steps (stored on the window per activation), so this
+          // panel shows everything seen so far. Prompt the user honestly: either export now, or
+          // visit the remaining step(s) first — we never navigate the Save/Publish wizard for them.
+          var missing = (!caps.outputNames || !caps.contactPoints);
+          if (!missing) {
+            status += "<div style='font:500 12px/1.5 system-ui;color:#116149;background:#e9f9f0;border:1px solid #b6e6cd;border-radius:8px;padding:9px 13px;margin-bottom:16px;display:flex;align-items:center;gap:8px;'>"
+              + "<span style='font-size:14px;'>✓</span><span>All steps captured. Ready to export — click <b>⬇ CSV</b> (attributes) or <b>⬇ Excel</b> (full documentation) above.</span></div>";
+          } else {
+            status += "<div style='font:400 11px/1.5 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:16px;'>○ Output names and contact points each appear only on their own wizard step. This panel <b>accumulates</b> what you've seen (it persists as you move between steps). Visit the "
               + (!caps.outputNames ? "<b>Attributes</b>" : "") + (!caps.outputNames && !caps.contactPoints ? " and " : "") + (!caps.contactPoints ? "<b>Contact Points</b>" : "")
-              + " step, then reopen this panel — it accumulates what you've seen. (It never navigates for you.)</div>";
+              + " step, then reopen this panel to capture the rest — then export. (It never navigates for you.)</div>";
           }
 
           // Attributes table grouped by object, API names inline — Salesforce-like.
@@ -22436,7 +22494,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.683"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.684"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

@@ -64,22 +64,45 @@ function docActCpFirst(obj, keys) {
   }
   return "";
 }
+function docActHopsText(qp) {
+  if (!qp || !qp.length) return "";
+  return qp.map(function (s) {
+    if (!s || typeof s !== "object") return "";
+    var o = (s.objectApiName || s.objectName || s.entityName || s.objectLabel || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+    var f = s.fieldApiName || s.fieldName || s.fieldLabel || s.name || "";
+    return f ? (o + "." + f) : o;
+  }).filter(Boolean).join(" → ");
+}
+function docActLooksLikeHops(arr) {
+  return Array.isArray(arr) && arr.length > 0 && arr.every(function (s) {
+    return s && typeof s === "object" && (s.objectApiName || s.objectName || s.entityName || s.fieldApiName || s.fieldName);
+  });
+}
 function docActCpPath(obj) {
   try {
     var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
     if (cfgs && cfgs.length) {
       for (var i = 0; i < cfgs.length; i++) {
-        var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path);
-        if (qp && qp.length) {
-          return qp.map(function (s) {
-            var o = (s.objectApiName || s.objectName || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
-            var f = s.fieldApiName || s.fieldName || "";
-            return f ? (o + "." + f) : o;
-          }).filter(Boolean).join(" → ");
-        }
+        var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path || cfgs[i].hops);
+        var t = docActHopsText(qp);
+        if (t) return t;
       }
     }
-    if (obj.queryPathString) return docActPathText(docActParsePath(obj.queryPathString));
+    var direct = obj.queryPath || obj.path || obj.hops || obj.joinPath;
+    var dt = docActHopsText(direct);
+    if (dt) return dt;
+    if (obj.queryPathString) { var st = docActPathText(docActParsePath(obj.queryPathString)); if (st) return st; }
+    var found = "";
+    (function scan(node, depth) {
+      if (found || !node || typeof node !== "object" || depth > 4) return;
+      if (docActLooksLikeHops(node)) { found = docActHopsText(node); return; }
+      var keys = Object.keys(node);
+      for (var k = 0; k < keys.length && !found; k++) {
+        var v = node[keys[k]];
+        if (v && typeof v === "object") scan(v, depth + 1);
+      }
+    })(obj, 0);
+    if (found) return found;
   } catch (e) {}
   return "";
 }
@@ -229,7 +252,7 @@ function docActScrapeOver(raw, acc) {
   out.captured.contactPoints = acc.contactPoints.length > 0;
   return out;
 }
-function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {} }; }
+function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {} }; }
 
 // CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
@@ -376,6 +399,44 @@ console.log("\n6. contact points de-dupe (revisiting the step must not pile up c
   eq("still exactly one contact point after 3 visits", out.contactPoints.length, 1);
 }
 
+console.log("\n6b. PERSISTENCE: a capture from one step SURVIVES navigating to a step that no longer has that element");
+{
+  // The source persists the accumulator on window.__dcDocActAccum, so re-running the bookmarklet
+  // on a later step (where the channel element is GONE) must still show the earlier capture.
+  // The mirror models that by reusing the SAME acc across calls (= the window store).
+  var acc = newAccum();
+  // Step: Contact Points — channel present → email captured.
+  var atContact = docActScrapeOver([summaryEl(), channelEl()], acc);
+  eq("contact point captured while on the Contact Points step", atContact.contactPoints.length, 1);
+  ok("email value present at capture time", atContact.contactPoints[0].email.present === true);
+  // User moves to the NEXT step → bookmarklet re-runs; summary is still there but NO channel element.
+  var atNextStep = docActScrapeOver([summaryEl()], acc);
+  eq("contact point STILL present after moving to a step without the channel (not wiped)", atNextStep.contactPoints.length, 1);
+  ok("the persisted email is intact (regression guard for the 'removes contact point' bug)", atNextStep.contactPoints[0].email.present === true && atNextStep.contactPoints[0].email.fieldApi === "ssot__EmailAddress__c");
+  // And output names captured on the Attributes step earlier also persist here.
+  docActScrapeOver([summaryEl(), attrDatatableEl()], acc);          // visit Attributes
+  var afterAll = docActScrapeOver([summaryEl()], acc);              // land somewhere with neither
+  ok("output names + static + contact points ALL persist on a bare step", afterAll.captured.outputNames && afterAll.captured.staticValues && afterAll.captured.contactPoints);
+}
+
+console.log("\n6c. CONTACT-POINT PATH capture, incl. deep-scan when the hop array hides under an unknown key");
+{
+  // Known nested config path.
+  var cp1 = docActCpExtract(channelEl().contactPointEmail);
+  eq("path from known queryPathConfig.configs[].queryPath", cp1.path, "IndividualG.Id → ssot__ContactPointEmail.ssot__EmailAddress__c");
+  // Path hidden under an UNKNOWN wrapper key → the bounded deep-scan must still find the hop array.
+  var weird = { fieldApiName: "ssot__Mobile__c", somethingUnexpected: { nestedWrapper: { theHops: [
+    { objectApiName: "IndividualG__dlm", fieldApiName: "Id" },
+    { objectApiName: "ssot__ContactPointPhone__dlm", fieldApiName: "ssot__PhoneNumber__c" }
+  ] } } };
+  var cp2 = docActCpExtract(weird);
+  eq("deep-scan finds the hop array under an unknown key", cp2.path, "IndividualG.Id → ssot__ContactPointPhone.ssot__PhoneNumber__c");
+  eq("field api still extracted alongside the deep-scanned path", cp2.fieldApi, "ssot__Mobile__c");
+  // A non-path nested object must NOT be mistaken for a path.
+  var noPath = docActCpExtract({ fieldApiName: "x__c", meta: { createdBy: "someone", count: 3 } });
+  eq("no false-positive path from a non-hop nested object", noPath.path, "");
+}
+
 console.log("\n7. no summary on the page → found=false, nothing fabricated");
 {
   var out = docActScrapeOver([{ tagName: "div" }, { tagName: "runtime_cdp-activation-attribute-datatable", data: [] }], newAccum());
@@ -455,6 +516,17 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("CSV header is the attributes-only 5 columns (Join Path removed) in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category"\]/.test(src));
   ok("honest 'captured vs not yet visited' status in the modal", /not yet visited|captured|Visit the/.test(src) && /captured\.outputNames/.test(src));
   ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));
+  // PERSISTENCE: the accumulator must live on window, not in an IIFE-local that the per-step re-run wipes.
+  ok("accumulator persisted on window.__dcDocActAccum (survives per-step bookmarklet re-runs)", /window\.__dcDocActAccum/.test(src));
+  // LAUNCHER GATE: the exporter launcher must register on ANY activation page (wizard OR /view), not wizard-only.
+  (function () {
+    // The exporter branch must be reachable for detailPageType === "Activation" without an AND on isActivationWizardPage().
+    var m = src.match(/detailPageType === "Segment"[\s\S]{0,160}?detailPageType === "Activation"[^\n]*\{/);
+    ok("launcher branch entered on any Activation page (no wizard-only AND on the exporter gate)",
+       !!m && !/detailPageType === "Activation"\s*&&\s*isActivationWizardPage\(\)\s*\)\s*\{/.test(m[0]));
+  })();
+  // PATH: deep-scan path extraction is wired (finds the hop array even under an unknown wrapper key).
+  ok("contact-point path deep-scan wired (docActLooksLikeHops + bounded scan)", /function docActLooksLikeHops/.test(src) && /function docActHopsText/.test(src));
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");

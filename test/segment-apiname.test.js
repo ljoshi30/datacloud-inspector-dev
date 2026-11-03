@@ -529,7 +529,11 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("targets the real tags", /runtime_cdp-attribute-row/.test(src) && /runtime_cdp-segment-builder-simple-condition/.test(src));
   ok("OLD fragile label-matching annotation removed (no fetchDmo/labelToDevName)", !/function fetchDmo\s*\(/.test(src) && !/labelToDevName\s*[=\[]/.test(src));
   // ACTIVATION coverage
-  ok("ACTIVATION: runs on the activation WIZARD too (not just Segment; /view detail excluded)", /detailPageType === "Segment" \|\| \(detailPageType === "Activation" && isActivationWizardPage\(\)\)/.test(src));
+  // The API-name DECORATOR (hover-to-see-api) is active only where there are attributes to decorate:
+  // the Segment builder, or the Activation WIZARD. The /view detail page has none — decorator stays off
+  // there. (The separate Document Activation EXPORTER launcher DOES run on /view — see the broadened
+  // outer branch assertion below.)
+  ok("ACTIVATION: API-name decorator active on Segment or the activation WIZARD only (_segDecoratorActive)", /var _segDecoratorActive = \(detailPageType === "Segment"\) \|\| isActivationWizardPage\(\);/.test(src));
   ok("ACTIVATION: drag-item .details read for api name", /details[\s\S]{0,120}(targetFieldName|fieldApiName)/.test(src) && /runtime_cdp-drag-item/.test(src));
   ok("ACTIVATION: datatable cell resolved by uid-join", /rowUid/.test(src) && /includedAttributes/.test(src) && /buildUidResolver|segBuildUidResolver|_resolveUid/.test(src));
   ok("ACTIVATION: never fabricates a field api (related rows show object+output only)", /activationAttr/.test(src));
@@ -585,7 +589,11 @@ console.log("\n7. source presence (wired, dev-only, reads props directly)");
   ok("NAV hover PREFERS composedPath (flattened across shadow) then falls back to climb", /if \(e\.composedPath\) \{ var p = e\.composedPath\(\);[\s\S]{0,140}dcNavAnchorToItem\(p\[i\]\)/.test(src) && /if \(!hit\) hit = dcNavItemFrom\(e\.target\)/.test(src));
   ok("NAV climb fallback crosses shadow boundaries (getRootNode().host hop)", /function dcNavItemFrom\(node\)[\s\S]{0,400}getRootNode && node\.getRootNode\(\)[\s\S]{0,60}rt\.host\) \? rt\.host : null/.test(src));
   ok("NAV skips the 'More' overflow toggle + category headers", /show more navigation\|more\$/i.test(src) && /category-header/.test(src));
-  ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /detailPageType === "Activation" && isActivationWizardPage\(\)/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
+  // API-names (the "API names" launcher row + decorator) stay WIZARD-only — /view has no attributes to
+  // decorate. But the OUTER launcher branch is broadened to ANY activation page so the Document
+  // Activation EXPORTER launcher registers on /view and every wizard step (user request).
+  ok("ACTIVATION API-names gated to the WIZARD page only (/view detail has no attrs; Export still works there)", /function isActivationWizardPage\s*\(/.test(src) && /__dcToggleSegApi === "function" && isActivationWizardPage\(\)/.test(src));
+  ok("ACTIVATION: outer launcher branch broadened to ANY activation page (exporter runs on /view too)", /if \(detailPageType === "Segment" \|\| detailPageType === "Activation"\) \{/.test(src));
   ok("TOGGLE-OFF truly stops the persistent ⧉ overlays (both handlers gate on dcNewTabEnabled; __dcOff set on off, cleared on activate)", /window\.__dcOff = true/.test(src) && /window\.__dcOff = false/.test(src) && (src.match(/if \(!dcNewTabEnabled\(\)\)/g) || []).length >= 2);
   // The per-launcher "Remove" rows were replaced by a non-destructive menu-close ×; the tool is
   // removed by re-clicking the bookmark, whose guard sets window.__dcOff = true directly. The
