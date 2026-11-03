@@ -321,9 +321,13 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
     src.indexOf('t === "NumberAggregation"') < src.indexOf("node.filter && typeof node.filter === \"object\") return walk(node.filter"));
   ok("operand read as values[] OR scalar value (Boolean/Number leaves)", /function operandOf\(cmp\)/.test(src) && /cmp\.values != null/.test(src) && /cmp\.value != null/.test(src));
   ok("operator normalizer strips spaces/underscores (real phrases: 'has value', 'greater than or equal')", /replace\(\/\[\\s_\]\+\/g, ""\)/.test(src) && /case "hasvalue": return "IS NOT NULL"/.test(src));
-  ok("NestedSegment INLINES the referenced segment's own criteria (recursive, cycle-guarded) before any membership fallback",
-    /function nestedSql\(node, depth\)/.test(src) && /resolved && resolved\.criteria/.test(src) && /seenSegs\[key\]/.test(src) && /MAX_NEST_DEPTH/.test(src) && /walk\(critObj, \(depth \|\| 0\) \+ 1\)/.test(src));
-  ok("NestedSegment falls back to membership IN(SELECT…) only when criteria aren't inlinable", /resolved\.membershipTable/.test(src) && /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src));
+  ok("NestedSegment: SNAPSHOT (useLastPublishedMembership) reads the membership TABLE; LIVE/dynamic inlines criteria (the 797-vs-25k fix)",
+    /function nestedSql\(node, depth\)/.test(src) && /var isSnapshot = \/lastpublished\|snapshot\/i\.test/.test(src) && /if \(isSnapshot\) \{/.test(src) && /function inlineCriteria\(\)/.test(src) && /function membershipSubquery\(\)/.test(src));
+  ok("membership subquery = current members only (Delta_Type__c='existing' excludes churned 'removed' rows — backend-verified)",
+    /Delta_Type__c = 'existing'/.test(src) && /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src));
+  ok("SNAPSHOT never silently inlines when the table is unresolvable (would give a different population) — blocks instead",
+    /its membership table couldn't be resolved here — its live criteria would give a DIFFERENT population, so it's not safe to inline/.test(src));
+  ok("inline path keeps the cycle guard + depth cap", /seenSegs\[key\]/.test(src) && /MAX_NEST_DEPTH/.test(src) && /walk\(critObj, \(depth \|\| 0\) \+ 1\)/.test(src));
   ok("resolver provides the nested segment's own criteria (decoded) for inlining", /criteria = the nested segment's OWN include criteria/.test(src) && /crit = JSON\.parse\(dsEsc\(raw\)\)/.test(src));
   ok("renderer maps REAL operator enums (equal/contains/in/greaterThanOrEqual/between/isTrue…)",
     /case "equal":/.test(src) && /case "contains":/.test(src) && /case "greaterthanorequal":/.test(src) && /case "between":/.test(src) && /case "istrue":/.test(src));
@@ -334,8 +338,8 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
     /IS_MEMBER_OF_SEGMENT\('/.test(src) && !/return "\/\* " \+ facts/.test(src));
   ok("runnability is tracked honestly (blockers → LOGIC VIEW, else ✅ runnable)",
     /var flags = \{ blockers: \[\], verify: \[\] \}/.test(src) && /LOGIC VIEW — NOT directly runnable/.test(src) && /Intended to be runnable as-is/.test(src));
-  ok("nested membership uses the VERIFIED schema (Id__c member key + Segment_Id__c filter, 15-char id)",
-    /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src) && /Segment_Id__c = " \+ q\(segId15\)/.test(src) && /segId\.slice\(0, 15\)/.test(src));
+  ok("nested membership uses the VERIFIED schema (Id__c member key + 15-char Segment_Id + Delta_Type='existing')",
+    /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src) && /Segment_Id__c = " \+ q\(segId15\)/.test(src) && /segId\.slice\(0, 15\)/.test(src) && /Delta_Type__c = 'existing'/.test(src));
   ok("Copy SQL PREFERS API criteria when extension present, DOM fallback otherwise",
     /typeof window\.__dcGetSegmentDef !== "function"/.test(src) && /segmentApiCriteriaToSql\(crit, segName, currentModalTab, fromObj, resolver\)/.test(src) && /var domFallback = function/.test(src));
   ok("caller threads real FROM (seg.segmentOnApiName) + nested resolver into the renderer",

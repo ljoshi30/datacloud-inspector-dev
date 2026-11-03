@@ -106,6 +106,30 @@ async function readAllDocs(token) {
   throw new Error(lastErr || "read failed");
 }
 
+// ── Write ONE usage doc to Firestore (server-side, via the service account) ──
+// Used by the /beacon route: a bookmarklet in a CSP/CASB-locked org can't write to Firestore directly
+// (blocked), but it CAN navigate a tab to this worker; the worker (not subject to the page's CSP/CASB)
+// then writes the doc. Fields mirror the direct in-page ping exactly so both sources aggregate together.
+async function writeUsageDoc(token, fields) {
+  const base = "https://firestore.googleapis.com/v1/projects/" + PROJECT + "/databases/";
+  const body = JSON.stringify({ fields: {
+    iid:   { stringValue: String(fields.iid || "") },
+    v:     { stringValue: String(fields.v || "") },
+    page:  { stringValue: String(fields.page || "other") },
+    day:   { stringValue: String(fields.day || "") },
+    build: { stringValue: String(fields.build || "public") },
+    org:   { stringValue: String(fields.org || "") },
+    ts:    { stringValue: String(fields.ts || "") }
+  }});
+  // this project's DB id is literally "default"; try that first, then "(default)".
+  for (const db of ["default", "(default)"]) {
+    const u = base + db + "/documents/" + COLLECTION;
+    const r = await fetch(u, { method: "POST", headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }, body });
+    if (r.ok) return true;
+  }
+  return false;
+}
+
 // Drop test/synthetic docs and malformed rows so the report shows REAL usage only. iids used for
 // manual end-to-end testing (and any obviously-synthetic prefix) must never count as real users.
 const TEST_IIDS = new Set(["ifs_test", "idiag_act", "itest1", "iwindowtest", "idirect1", "icsptest", "itest", "i_anon", "i_nostore"]);
@@ -421,6 +445,31 @@ export default {
     const p = url.pathname;
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
     if (p === "/health") return new Response("ok", { headers: cors() });
+
+    // ── /beacon — usage capture for CSP/CASB-LOCKED orgs where the in-page Firestore write is blocked ──
+    // The bookmarklet can't write to Firestore directly in a locked org, but it CAN navigate a tab here
+    // (top-level navigation, not background egress). This worker — which is NOT subject to the page's CSP
+    // or the client CASB — writes the doc server-side via the service account, shows a 1-line "recorded"
+    // page, and auto-closes. Anonymous only (iid/version/feature/day/build/org). No token (public write,
+    // same trust model as the direct Firestore create-only rule). Fields are validated + bounded.
+    if (p === "/beacon") {
+      const g = (k, max) => (url.searchParams.get(k) || "").slice(0, max || 80);
+      const iid = g("iid", 60), page = g("page", 40), day = g("day", 10), build = (g("build", 6) === "dev" ? "dev" : "public"), org = g("org", 80), v = g("v", 20);
+      const okShape = /^[A-Za-z0-9_]+$/.test(iid) && iid.length < 60 && /^\d{4}-\d{2}-\d{2}$/.test(day) && VALID_PAGES.has(page);
+      let stored = false;
+      if (okShape && env.FIREBASE_SA && iid && !(new Set(["ifs_test","idiag_act","itest1"]).has(iid))) {
+        try {
+          const at = await getAccessToken(env.FIREBASE_SA);
+          stored = await writeUsageDoc(at, { iid, v, page, day, build, org, ts: new Date().toISOString() });
+        } catch (e) { stored = false; }
+      }
+      // tiny auto-closing page (self-origin → no CSP issue here); closes fast so the flash is minimal.
+      const html = "<!doctype html><meta charset=utf-8><title>recorded</title>" +
+        "<body style=\"font:13px -apple-system,sans-serif;color:#334;display:grid;place-items:center;height:100vh;margin:0\">" +
+        "<div>" + (stored ? "✓ usage recorded" : "· noted") + "</div>" +
+        "<script>try{window.close()}catch(e){};setTimeout(function(){try{window.close()}catch(e){}},400)</script>";
+      return new Response(html, { headers: cors({ "Content-Type": "text/html", "Cache-Control": "no-store" }) });
+    }
 
     // ── auth routes ──────────────────────────────────────────────────────────
     if (p === "/login" && request.method === "POST") {

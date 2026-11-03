@@ -89,6 +89,60 @@ console.log("\n2a. FAILED write must NOT burn the throttle (the 'new user never 
   eq("and a second success same day → throttled", okAgain.sendPing("DMO"), false);
 }
 
+console.log("\n2d. LEARN-THEN-ADAPT — silent write in permissive orgs; beacon-tab fallback in LOCKED orgs");
+{
+  // Focused mirror of maybeReportOnFabOpen's learn-then-adapt state machine (per-org blocked memory +
+  // silent-first, beacon-on-known-blocked). Proves: permissive org NEVER opens a tab; locked org learns
+  // on the 1st blocked click then uses the beacon (synchronous) on subsequent clicks; throttle honored.
+  function makeOrg(opts) {
+    var store = {}, today = "2026-10-30";
+    var tabsOpened = 0, silentOk = opts.silentOk;  // silentOk=false simulates a CSP/CASB-locked org
+    function sentToday(f) { return store["last::" + f] === "1"; }
+    function markSent(f) { store["last::" + f] = "1"; }
+    function orgBlocked() { return store["blocked"] === "1"; }
+    function markBlocked() { store["blocked"] = "1"; }
+    function beaconOpen(f) { tabsOpened++; return true; }   // window.open returns a handle (sync)
+    var captured = [];
+    // mirrors maybeReportOnFabOpen
+    function onFab(f) {
+      if (sentToday(f)) return "throttled";
+      if (orgBlocked()) { if (beaconOpen(f)) { markSent(f); captured.push({ f: f, via: "beacon" }); return "beacon"; } return "blocked-nopopup"; }
+      // silent attempt (async in reality; synchronous here for the test)
+      if (silentOk) { markSent(f); captured.push({ f: f, via: "silent" }); return "silent"; }
+      markBlocked();                              // LEARN: this org blocks the silent write
+      return "silent-failed-learned";             // this click's capture is lost; next click uses beacon
+    }
+    return { onFab, tabs: function () { return tabsOpened; }, captured, store };
+  }
+
+  // PERMISSIVE org: silent works → captured silently, ZERO tabs ever.
+  var perm = makeOrg({ silentOk: true });
+  eq("permissive: 1st DMO → silent capture", perm.onFab("DMO"), "silent");
+  eq("permissive: DMO again → throttled", perm.onFab("DMO"), "throttled");
+  eq("permissive: Segment → silent capture", perm.onFab("Segment"), "silent");
+  eq("permissive: NO tabs ever opened", perm.tabs(), 0);
+  eq("permissive: captures all via silent", perm.captured.filter(function (c) { return c.via === "silent"; }).length, 2);
+
+  // LOCKED org: silent fails on 1st click (learns), beacon on every subsequent click.
+  var lock = makeOrg({ silentOk: false });
+  eq("locked: 1st DMO → silent fails + LEARNS block (capture lost this once)", lock.onFab("DMO"), "silent-failed-learned");
+  eq("locked: still no tab on the learning click", lock.tabs(), 0);
+  eq("locked: 2nd DMO (now known-blocked) → beacon tab", lock.onFab("DMO"), "beacon");
+  eq("locked: Segment → beacon tab (different feature, same day)", lock.onFab("Segment"), "beacon");
+  eq("locked: DMO again → throttled (already captured via beacon)", lock.onFab("DMO"), "throttled");
+  eq("locked: exactly 2 beacon tabs (DMO retry + Segment), not more", lock.tabs(), 2);
+  eq("locked: captured via beacon = 2", lock.captured.filter(function (c) { return c.via === "beacon"; }).length, 2);
+
+  // source checks — the real code must implement this (not just the mirror)
+  const fs2 = require("fs"), path2 = require("path");
+  const src2 = fs2.readFileSync(path2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("real code: learns per-org block on silent failure (markOrgBlocked in the fetch .catch)", /try \{ markOrgBlocked\(\); \} catch/.test(src2));
+  ok("real code: beacon opens SYNCHRONOUSLY on the gesture when org is known-blocked", /if \(orgKnownBlocked\(\)\) \{[\s\S]*?beaconOpen\(feature\)/.test(src2));
+  ok("real code: beacon carries anonymous fields only (iid/v/page/day/build/org — no PII)", /function beaconUrl\(feature\)/.test(src2) && /"&org=" \+ encodeURIComponent/.test(src2) && !/username|userId/i.test(src2.slice(src2.indexOf("function beaconUrl"), src2.indexOf("function beaconUrl") + 500)));
+  ok("real code: blocked flag is per-ORG host (re-learns when moving orgs)", /function blockedKey\(\) \{ return "dc_usage_blocked::" \+ orgHost\(\)/.test(src2));
+  ok("real code: beacon points at the worker /beacon route", /var BEACON_BASE = "https:\/\/d360-usage\.ljoshi30-d360\.workers\.dev\/beacon"/.test(src2));
+}
+
 console.log("\n2c. STORAGE-BLOCKED (VDI/incognito) — real users stay DISTINCT, not merged into one fake id");
 {
   // Simulate the REAL installId/throttle behavior when localStorage throws. The fix mints a per-page
@@ -219,8 +273,10 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("LIVE (silent write, no tab)", /var PING_ENABLED\s+= true;/.test(src) && /SILENT AUTO-CAPTURE via FIRESTORE/.test(src));
   ok("CAPTURE = normal CORS+JSON fetch to Firestore (fire-and-forget), NOT window.open/tab",
     /function reportUsage/.test(src) && /fetch\(FS_URL, \{ method: "POST", headers: \{ "Content-Type": "application\/json" \}, body: JSON\.stringify\(payload\)/.test(src) && !/window\.open\(base/.test(src));
-  ok("NO tab/beacon/window.open left in the capture path (fully silent now)",
-    !/dc_usage_beacon/.test(src) && !/\/beacon/.test(src) && !/function sendPing/.test(src));
+  ok("SILENT-FIRST: the primary capture is a background Firestore fetch (no tab) — beacon is ONLY a locked-org fallback",
+    /return fetch\(FS_URL, \{ method: "POST"/.test(src) && !/function sendPing/.test(src) &&
+    // beacon exists but is gated behind orgKnownBlocked() (not the default path)
+    /if \(orgKnownBlocked\(\)\) \{/.test(src) && /function beaconOpen\(feature\)/.test(src));
   ok("Firestore payload is the typed-field shape (fields.*.stringValue)",
     /iid:   \{ stringValue: String\(installId\(\)\) \}/.test(src) && /page:  \{ stringValue: String\(feature\) \}/.test(src) && /build: \{ stringValue: String\(PING_BUILD\) \}/.test(src) && /org:   \{ stringValue: org \}/.test(src));
   ok("org = my-domain host only (semi-identifying; NOT username/PII)", /var org = ""; try \{ org = String\(location\.hostname/.test(src) && !/username|userId|user_id/i.test(src.slice(src.indexOf("var org ="), src.indexOf("var org =") + 200)));
@@ -228,15 +284,15 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /if \(r && r\.ok\) \{\s*\n\s*try \{ markSent\(feature\); \}/.test(src));
   ok("markSent does NOT run unconditionally after the fetch (the 'locked out for the day' bug is gone)",
     !/\}\)\s*\n\s*\.catch\(function \(\) \{\}\);\s*\n\s*try \{ markSent\(feature\); \}/.test(src));
-  ok("failure paths (non-2xx + network/CSP) return false and leave the throttle unset",
-    /return false;\s*\/\/ non-2xx/.test(src) && /return false;\s*\/\/ network\/CSP error/.test(src));
+  ok("failure paths leave the throttle unset; the CSP/CASB-block path learns the org is blocked",
+    /return false;\s*\/\/ non-2xx/.test(src) && /try \{ markOrgBlocked\(\); \} catch/.test(src));
   ok("in-flight guard prevents duplicate concurrent sends for the same feature", /var _inFlight = \{\}/.test(src) && /if \(_inFlight\[feature\]\) return Promise\.resolve\(false\)/.test(src));
   ok("DEV-ONLY visibility: logs '[dc usage] captured …' on write + 'throttled' on skip (so you can SEE it in dev)",
     /\[dc usage\] captured/.test(src) && /already captured today \(throttled\)/.test(src));
   ok("DEV-ONLY: the usage console logs are STRIPPED from the public build (silent for real users)",
     (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/\[dc usage\]/.test(strip); })());
   ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
-    /function maybeReportOnFabOpen/.test(src) && /if \(sentToday\(pingPageType\(\)\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
+    /function maybeReportOnFabOpen/.test(src) && /var feature = pingPageType\(\);/.test(src) && /if \(sentToday\(feature\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
   ok("MASTER KILL-SWITCH enforced: reportUsage bails when PING_ENABLED is false (documented gate is REAL now)",

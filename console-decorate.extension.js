@@ -5698,48 +5698,69 @@
       var resolved = (typeof segResolver === "function" && devName) ? segResolver(devName) : null;
       // the FROM object's PK: standard unified individual uses ssot__Id__c; custom unified DMOs use Id__c.
       var pk = /^ssot__/i.test(String(fromObj || "")) ? "ssot__Id__c" : "Id__c";
+      // Snapshot vs live. "useLastPublishedMembership" = the nested clause means "whoever was in that
+      // segment's LAST PUBLISHED membership" — a FROZEN list, NOT a live re-evaluation of its criteria.
+      // For that mode the membership TABLE is the source of truth; inlining the criteria is WRONG (it can
+      // match a wildly different population — e.g. 25,341 live vs 797 published). Only when the nested
+      // segment is set to live/dynamic re-evaluation is inlining its criteria correct.
+      var isSnapshot = /lastpublished|snapshot/i.test(String(behavior));
 
-      // (1) INLINE the referenced segment's real criteria — recursive, cycle-guarded, depth-capped.
-      var nestedCrit = resolved && resolved.criteria;   // the other segment's parsed includeCriteria (object) or raw string
-      if (nestedCrit) {
-        var key = (devName || label).toLowerCase();
-        if (seenSegs[key]) {
-          flags.blockers.push("nested segment \"" + label + "\" forms a CYCLE (it eventually references itself) — can't inline");
-          return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
-        }
-        if ((depth || 0) >= MAX_NEST_DEPTH) {
-          flags.blockers.push("nested segment \"" + label + "\" exceeds the inline depth limit (" + MAX_NEST_DEPTH + ") — expand it separately");
-          return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
-        }
-        var critObj = nestedCrit;
-        if (typeof critObj === "string") { try { critObj = JSON.parse(critObj); } catch (e) { critObj = null; } }
-        if (critObj && typeof critObj === "object") {
-          seenSegs[key] = true;
-          var sub = walk(critObj, (depth || 0) + 1);
-          delete seenSegs[key];
-          if (sub) {
-            flags.verify.push("nested segment \"" + label + "\" was INLINED below as a parenthesized group (its own criteria)" +
-              (behavior === "useLastPublishedMembership" ? ". NOTE: it's set to '" + behavior + "' (a PUBLISHED SNAPSHOT), so the inlined LIVE criteria may differ slightly from the actual last-published membership." : "."));
-            return "(" + sub + ")";   // clean parenthesized group — no inline comment (facts are in the header)
-          }
-        }
-      }
-
-      // (2) Membership-table fallback — VERIFIED: Segment_Id__c stores the 15-CHAR id (18-char → 0 rows).
-      if (resolved && resolved.membershipTable) {
+      // --- membership subquery (VERIFIED against the backend) ---------------------------------------
+      // The published membership lives in a Segment Membership HISTORY table (…_SMH_…). It is SHARED
+      // across segments (filter Segment_Id__c = the 15-CHAR id — the 18-char id returns 0 rows) AND keeps
+      // churn history (Delta_Type__c: 'existing' = currently a member, 'removed' = dropped). Current
+      // membership = Delta_Type__c = 'existing'. PROVEN: COUNT(DISTINCT Id__c) with that filter equals the
+      // segment's lastSegmentMemberCount exactly; without it you also count removed rows → wrong number.
+      function membershipSubquery() {
+        if (!resolved || !resolved.membershipTable) return null;
         var segId = String(resolved.segmentId || "");
         var segId15 = /^[A-Za-z0-9]{18}$/.test(segId) ? segId.slice(0, 15) : segId;
-        if (segId15) {
-          flags.verify.push("nested segment \"" + label + "\": its own criteria weren't available to inline, so members are read " +
-            "from its published membership table " + resolved.membershipTable + " (Segment_Id__c = " + segId15 + ", 15-char).");
-          return (fromObj || "Individual") + "." + pk + " IN (SELECT Id__c FROM " + resolved.membershipTable + " WHERE Segment_Id__c = " + q(segId15) + ")";
+        if (!segId15) return null;
+        return (fromObj || "Individual") + "." + pk + " IN (SELECT Id__c FROM " + resolved.membershipTable +
+               " WHERE Segment_Id__c = " + q(segId15) + " AND Delta_Type__c = 'existing')";
+      }
+      // --- inline the nested segment's own criteria (recursive, cycle-guarded, depth-capped) ----------
+      function inlineCriteria() {
+        var nestedCrit = resolved && resolved.criteria;
+        if (!nestedCrit) return null;
+        var key = (devName || label).toLowerCase();
+        if (seenSegs[key]) { flags.blockers.push("nested segment \"" + label + "\" forms a CYCLE (it eventually references itself) — can't inline"); return null; }
+        if ((depth || 0) >= MAX_NEST_DEPTH) { flags.blockers.push("nested segment \"" + label + "\" exceeds the inline depth limit (" + MAX_NEST_DEPTH + ")"); return null; }
+        var critObj = nestedCrit;
+        if (typeof critObj === "string") { try { critObj = JSON.parse(critObj); } catch (e) { critObj = null; } }
+        if (!critObj || typeof critObj !== "object") return null;
+        seenSegs[key] = true;
+        var sub = walk(critObj, (depth || 0) + 1);
+        delete seenSegs[key];
+        return sub ? "(" + sub + ")" : null;
+      }
+
+      if (isSnapshot) {
+        // SNAPSHOT mode → published membership is authoritative. Use the table; do NOT inline criteria.
+        var sub1 = membershipSubquery();
+        if (sub1) {
+          flags.verify.push("nested segment \"" + label + "\" is '" + behavior + "' (a FROZEN published snapshot). " +
+            "Members are read from its published membership table " + resolved.membershipTable + " (current members only, " +
+            "Delta_Type__c='existing'). This is the CORRECT source — inlining its live criteria would match a different population.");
+          return sub1;
         }
-        flags.blockers.push("nested segment \"" + label + "\": membership table " + resolved.membershipTable +
-          " is shared across segments and its Segment_Id__c couldn't be resolved — can't filter to this segment");
+        // membership table not resolvable → can't honor the snapshot correctly. Inlining would be WRONG,
+        // so do NOT silently inline; emit a valid placeholder and block runnability.
+        flags.blockers.push("nested segment \"" + label + "\" is '" + behavior + "' (a published snapshot) but its membership table couldn't be resolved here — its live criteria would give a DIFFERENT population, so it's not safe to inline. Expand that segment separately.");
         return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
       }
 
-      // (3) Nothing resolvable → valid placeholder + non-runnable flag.
+      // LIVE/dynamic mode → inline the nested segment's criteria (correct), else membership, else placeholder.
+      var sub2 = inlineCriteria();
+      if (sub2) {
+        flags.verify.push("nested segment \"" + label + "\" (live/dynamic) was INLINED below as a parenthesized group (its own criteria).");
+        return sub2;
+      }
+      var sub3 = membershipSubquery();
+      if (sub3) {
+        flags.verify.push("nested segment \"" + label + "\": criteria weren't available to inline, so members are read from its membership table " + resolved.membershipTable + " (current members, Delta_Type__c='existing').");
+        return sub3;
+      }
       flags.blockers.push("references nested segment \"" + label + "\" (" + (devName || label) + ") whose criteria/membership couldn't be resolved here — expand that segment separately");
       return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
     }
@@ -21826,6 +21847,11 @@ processJSON();
     var FS_DB      = "default";    // this project's actual DB id (no parens — confirmed by test)
     var FS_KEY     = "AIzaSyDoIjca9Hw8IEBScjLVsNlu-crgT3idMTk";   // Firebase Web API key (public by design; rules lock writes to create-only)
     var FS_URL     = "https://firestore.googleapis.com/v1/projects/" + FS_PROJECT + "/databases/" + FS_DB + "/documents/usage?key=" + FS_KEY;
+    // Fallback capture for CSP/CASB-LOCKED orgs where the silent Firestore write is blocked: navigate a
+    // tab to this worker's /beacon (top-level navigation crosses where a background fetch can't); the
+    // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
+    // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
+    var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
     var PING_VERSION  = "__DC_BUILD_ID__"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
@@ -21913,6 +21939,43 @@ processJSON();
       try { localStorage.setItem(k, "1"); } catch (e) { _memSent[k] = true; }
     }
 
+    // ── Per-ORG "silent write is blocked here" memory (the learn-then-adapt core) ─────────────────
+    // We only open a tab (beacon) in orgs we KNOW block the silent fetch — so permissive orgs never
+    // flash a tab. The flag is namespaced per org host so moving between orgs re-learns correctly.
+    var _memBlocked = {};
+    function orgHost() { try { return String(location.hostname || "").slice(0, 80); } catch (e) { return ""; } }
+    function blockedKey() { return "dc_usage_blocked::" + orgHost(); }
+    function orgKnownBlocked() {
+      try { return localStorage.getItem(blockedKey()) === "1"; } catch (e) { return _memBlocked[blockedKey()] === true; }
+    }
+    function markOrgBlocked() {
+      try { localStorage.setItem(blockedKey(), "1"); } catch (e) { _memBlocked[blockedKey()] = true; }
+      /* @strip:start dev */ try { console.log("%c[dc usage] learned this org blocks the silent write → will use the beacon tab next time", "color:#b45309"); } catch (e) {} /* @strip:end */
+    }
+    // Build the beacon URL carrying the same anonymous fields as the direct ping.
+    function beaconUrl(feature) {
+      var qs = "?iid=" + encodeURIComponent(installId()) +
+               "&v=" + encodeURIComponent(String(PING_VERSION)) +
+               "&page=" + encodeURIComponent(feature) +
+               "&day=" + encodeURIComponent(todayStamp()) +
+               "&build=" + encodeURIComponent(String(PING_BUILD)) +
+               "&org=" + encodeURIComponent(orgHost().replace(/\.lightning\.force\.com$|\.my\.salesforce\.com$/i, ""));
+      return BEACON_BASE + qs;
+    }
+    // Open the beacon tab SYNCHRONOUSLY (must be inside the click gesture or the popup blocker kills it).
+    // The worker writes the doc server-side and the page auto-closes (~400ms). Returns true if a window
+    // handle came back (best-effort — we can't read the cross-origin result, so we mark-sent optimistically).
+    function beaconOpen(feature) {
+      try {
+        var w = window.open(beaconUrl(feature), "dc_usage_beacon", "width=360,height=140,left=" + (screen.width - 380) + ",top=" + (screen.height - 220));
+        if (w) {
+          /* @strip:start dev */ try { console.log("%c[dc usage] beacon tab opened for '" + feature + "' (locked org fallback)", "color:#2563eb"); } catch (e) {} /* @strip:end */
+          return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
 
     // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
     // (no point disclosing something that's off), only once (LS_NOTICE), and never if already
@@ -21985,22 +22048,37 @@ processJSON();
           })
           .catch(function (err) {
             _inFlight[feature] = false;
-            /* @strip:start dev */ try { console.log("%c[dc usage] FAILED '" + feature + "' → " + (err && err.message || err) + " (likely this page's CSP blocks firestore.googleapis.com; not marked — will retry elsewhere)", "color:#b45309"); } catch (e) {} /* @strip:end */
-            return false;                                        // network/CSP error → do NOT burn the throttle
+            // The silent write was blocked (CSP/CASB). REMEMBER this org blocks it, so the NEXT click
+            // uses the beacon-tab fallback (which must open synchronously on the gesture — can't do it
+            // from here, this is async and the user-gesture is already gone). Do NOT burn the throttle.
+            try { markOrgBlocked(); } catch (e2) {}
+            /* @strip:start dev */ try { console.log("%c[dc usage] FAILED '" + feature + "' → " + (err && err.message || err) + " (silent write blocked here; learned → beacon tab will be used next click. Throttle not burned.)", "color:#b45309"); } catch (e) {} /* @strip:end */
+            return false;
           });
       } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
     }
 
-    // Auto-capture tied to a user gesture (opening the FAB): at most ONCE PER FEATURE PER DAY per
-    // browser. The Firestore write is silent (no tab), so this just needs the throttle + opt-out.
+    // Auto-capture on FAB open — at most ONCE PER FEATURE PER DAY. LEARN-THEN-ADAPT:
+    //   • Org NOT known-blocked → try the SILENT Firestore write (no tab). Most users, permissive orgs.
+    //   • Org KNOWN-blocked (we learned the silent write fails here) → open the BEACON TAB synchronously
+    //     on THIS click gesture (the only way to capture in a CSP/CASB-locked org). Brief flash, once/day.
+    // The very FIRST click in a locked org loses its capture to the silent attempt (which then learns the
+    // block) — every subsequent click that day uses the beacon. Net: permissive orgs never flash a tab;
+    // locked orgs flash ~once/feature/day and ARE captured.
     function maybeReportOnFabOpen() {
       try {
         if (optedOut()) return false;              // user choice wins
-        if (sentToday(pingPageType())) {           // THIS feature already captured today
-          /* @strip:start dev */ try { console.log("%c[dc usage] '" + pingPageType() + "' already captured today (throttled) — no re-send", "color:#64748b"); } catch (e) {} /* @strip:end */
+        var feature = pingPageType();
+        if (sentToday(feature)) {                  // THIS feature already captured today
+          /* @strip:start dev */ try { console.log("%c[dc usage] '" + feature + "' already captured today (throttled) — no re-send", "color:#64748b"); } catch (e) {} /* @strip:end */
           return false;
         }
-        return reportUsage();                      // silent write + marks sent for this feature
+        if (orgKnownBlocked()) {
+          // locked org → beacon tab, SYNCHRONOUS (we're inside the click gesture right now).
+          if (beaconOpen(feature)) { try { markSent(feature); } catch (e) {} return true; }
+          return false;                            // popup blocked → not marked, retry next click
+        }
+        return reportUsage();                      // silent write (may learn-and-block for next time)
       } catch (e) { return false; }
     }
 

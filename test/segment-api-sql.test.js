@@ -80,20 +80,35 @@ function placeholdersImplyLogicView(sql) {
   ok("NestedSegment devName + member count appear in the HEADER (not the body)", /TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind/.test(sql) && /96239/.test(sql), sql);
 }
 
-// (1b) ★ NESTED SEGMENT INLINED — the referenced segment's OWN criteria are inlined as a real
-// parenthesized condition group (what the user asked for), NOT an opaque Segment_Id__c filter.
+// (1b) ★ SNAPSHOT nested segment (useLastPublishedMembership) → MUST read the published membership
+// TABLE (current members only), NOT inline the live criteria. This is the 797-vs-25,341 bug: inlining
+// the nested segment's criteria re-evaluates them LIVE and matches a totally different population.
 {
-  // the nested segment "Cust Mkt Contact Ind" has its own criteria (a contactability flag)
+  // give the resolver BOTH criteria AND a membership table — the snapshot path must choose the TABLE.
   const nestedCriteria = { type: "TextComparison", subject: { objectApiName: "TDI_UnifiedIndividualApp6__dlm", fieldApiName: "TDI_Marketing_Contactable__c" }, operator: "equal", values: ["Y"] };
   const resolver = (dev) => dev === "TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind"
     ? { membershipTable: "Individual_Unified_SMH_123__dlm", segmentId: "1sgHo000000wkgRIAQ", criteria: nestedCriteria } : null;
   const sql = render(multiline, "SF_PM_GI_TRGT__Multiline", "Include", "TDI_UnifiedIndividualApp6__dlm", resolver);
-  ok("★ nested segment's REAL criteria are INLINED (not Segment_Id__c =)", /TDI_Marketing_Contactable__c = 'Y'/.test(sql) && !/Segment_Id__c/.test(sql), sql);
-  ok("★ inlined nested criteria wrapped in parentheses within the AND chain", /= TRUE\s*\n\s*AND \(TDI_UnifiedIndividualApp6__dlm\.TDI_Marketing_Contactable__c = 'Y'\)/.test(sql), sql);
-  ok("inlined nested → NO dangling AND, valid chain", noDanglingBool(sql), sql);
-  ok("inlined nested → SQL body has NO inline comment", bodyHasNoBlockComment(sql), sql);
-  ok("inlined nested → VERIFY explains it was inlined + snapshot caveat", /INLINED/.test(sql) && /PUBLISHED SNAPSHOT/.test(sql), sql);
-  ok("inlined nested (all nodes translated) → marked runnable (no LOGIC VIEW)", !/LOGIC VIEW/.test(sql), sql);
+  ok("★ snapshot nested → reads membership TABLE, does NOT inline the live criteria", /IN \(SELECT Id__c FROM Individual_Unified_SMH_123__dlm/.test(sql) && !/TDI_Marketing_Contactable__c/.test(sql), sql);
+  ok("★ snapshot nested → current members only (Delta_Type__c = 'existing' — excludes churned rows)", /Delta_Type__c = 'existing'/.test(sql), sql);
+  ok("★ snapshot nested → 15-char Segment_Id (18-char returns 0 rows)", /Segment_Id__c = '1sgHo000000wkgR'/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
+  ok("snapshot nested → NO dangling AND, valid chain", noDanglingBool(sql), sql);
+  ok("snapshot nested → SQL body has NO inline comment", bodyHasNoBlockComment(sql), sql);
+  ok("snapshot nested → VERIFY explains membership-table-is-correct vs inlining-would-differ", /FROZEN published snapshot/.test(sql) && /CORRECT source/.test(sql), sql);
+  ok("snapshot nested (membership resolved) → marked runnable (no LOGIC VIEW)", !/LOGIC VIEW/.test(sql), sql);
+}
+// (1b-live) ★ LIVE/dynamic nested segment → inline its criteria (correct for that mode).
+{
+  const liveNested = { type: "LogicalComparison", operator: "and", filters: [
+    { type: "TextComparison", subject: { objectApiName: "U__dlm", fieldApiName: "parent__c" }, operator: "equal", values: ["P"] },
+    { type: "NestedSegment", segmentId: "TDI_LIVE", subject: { fieldApiName: "Live Child", segmentDevName: "TDI_LIVE", nestedPublishBehavior: "dynamic" } }
+  ] };
+  const nestedCriteria = { type: "TextComparison", subject: { objectApiName: "U__dlm", fieldApiName: "child__c" }, operator: "equal", values: ["C"] };
+  const resolver = (dev) => dev === "TDI_LIVE" ? { membershipTable: "SMH__dlm", segmentId: "1sgHo000000aaaBBB", criteria: nestedCriteria } : null;
+  const sql = render(liveNested, "LiveParent", "Include", "U__dlm", resolver);
+  ok("★ live/dynamic nested → INLINES its criteria (not the membership table)", /U__dlm\.child__c = 'C'/.test(sql) && !/Delta_Type__c/.test(sql), sql);
+  ok("live/dynamic nested → wrapped in parentheses, valid chain", /AND \(U__dlm\.child__c = 'C'\)/.test(sql) && noDanglingBool(sql), sql);
+  ok("live/dynamic nested → runnable, no body comment", !/LOGIC VIEW/.test(sql) && bodyHasNoBlockComment(sql), sql);
 }
 // (1c) ★ CYCLE GUARD — a nested segment that references itself must NOT infinite-loop; falls back safely.
 {
@@ -110,13 +125,13 @@ function placeholdersImplyLogicView(sql) {
   ok("★ self-referential nested segment does NOT infinite-loop", !threw, threw ? "THREW" : "");
   ok("cycle → flagged as a blocker (LOGIC VIEW), not silently wrong", threw ? false : /CYCLE/.test(sql) && /LOGIC VIEW/.test(sql), sql);
 }
-// (1d) membership-table FALLBACK when the nested segment has NO inlinable criteria (membership-only).
+// (1d) membership subquery shape (snapshot segment, membership-only) — 15-char id + Delta_Type filter.
 {
   const resolver = () => ({ membershipTable: "Individual_Unified_SMH_123__dlm", segmentId: "1sgHo000000wkgRIAQ", criteria: null });  // 18-char, no criteria
   const sql = render(multiline, "s", "Include", "TDI_UnifiedIndividualApp6__dlm", resolver);
-  ok("★ no inlinable criteria → membership subquery with 15-CHAR id (18→15, live-verified)",
-    /Id__c IN \(SELECT Id__c FROM Individual_Unified_SMH_123__dlm WHERE Segment_Id__c = '1sgHo000000wkgR'\)/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
-  ok("membership fallback → NO dangling AND + no body comment", noDanglingBool(sql) && bodyHasNoBlockComment(sql), sql);
+  ok("★ membership subquery: 15-CHAR id + Delta_Type__c='existing' (current members only, live-verified)",
+    /Id__c IN \(SELECT Id__c FROM Individual_Unified_SMH_123__dlm WHERE Segment_Id__c = '1sgHo000000wkgR' AND Delta_Type__c = 'existing'\)/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
+  ok("membership subquery → NO dangling AND + no body comment", noDanglingBool(sql) && bodyHasNoBlockComment(sql), sql);
 }
 
 // (2) AGGREGATION — real SP_Test shape: NumberAggregation(count) with inner filter + comparison ≥ 1.
