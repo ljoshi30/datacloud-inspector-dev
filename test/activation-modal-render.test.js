@@ -5,7 +5,7 @@ const names=["docActObjSettings","docActWordHtml","docActOvTable","docActOvRows"
 const code=names.map(grab).join("\n");
 let bodyHtml="";
 function el(){const o={style:{},children:[],classList:{add(){}},_l:{},appendChild(c){o.children.push(c)},insertBefore(c){o.children.push(c)},addEventListener(){},remove(){},closest(){return null},set innerHTML(v){o._h=v;if(o.__body)bodyHtml=v},get innerHTML(){return o._h},offsetWidth:1000,offsetHeight:700};return o}
-const data={found:true,provisional:{limit:"5000"},membership:{label:"Unified Individual TDI",hasFilter:false},overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
+const data={found:true,provisional:{limit:"5000",rank:[{order:"1",attribute:"Last Purchase Date",sortBy:"Descending"},{order:"2",attribute:"Lifetime Value",sortBy:"Descending"}]},membership:{label:"Unified Individual TDI",hasFilter:false},overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
 attributes:[
 {label:"SubSegmentId",objectApi:"",source:"SYSTEM",category:"System"},
 {label:"First Name",fieldApi:"FirstName__c",objectApi:"UnifiedIndividual__dlm",outputName:"FirstName",category:"Profile"},
@@ -82,3 +82,6 @@ const byObj=(n)=>osr.filter(r=>r.object===n)[0]||{};
 must("Excel Object Settings: Contact Point Email = Contact Point section, Filtered, fixed limit, path from Contact Points step", byObj("Contact Point Email").section==="Contact Point" && byObj("Contact Point Email").filter==="Filtered" && /fixed/.test(byObj("Contact Point Email").max) && byObj("Contact Point Email").path==="CPE.Party > Ind.Id");
 must("Excel Object Settings: TDI Individual Additional carries limit + 2 numbered conditions + path", byObj("TDI Individual Additional").sortBy==="Last Modified Date" && /1\. Global Exclusion In Equals; 2\. Segment Code Has Value/.test(byObj("TDI Individual Additional").cond) && /A\.Id/.test(byObj("TDI Individual Additional").path));
 must("Excel Object Settings ordered like the wizard (Membership, Contact Point, Attributes)", osr.map(r=>r.section).join(",").indexOf("Activation Membership")<osr.map(r=>r.section).join(",").indexOf("Contact Point") && osr.map(r=>r.section).join(",").indexOf("Contact Point")<osr.map(r=>r.section).join(",").indexOf("Attributes"));
+
+must("Provisional section lists Rank Attributes rows (Rank Order / Attribute / Sort By), no pop-up note", /Last Purchase Date/.test(html) && /Lifetime Value/.test(html) && !/pop-up/.test(html));
+must("Doc carries the Rank Attributes table too", /Last Purchase Date/.test(docOut) && /Rank Order/.test(docOut));

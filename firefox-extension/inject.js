@@ -19863,13 +19863,13 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {}, provLimit: null, provSection: false };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {}, provLimit: null, provSection: false, provRank: [] };
         // Back-fill fields added in later versions: the accumulator lives on window and survives
         // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
         var a = _docActAccum[id];
         if (!a.limits) a.limits = {};
         if (!a.pathChoices) a.pathChoices = {};
-        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {}; if (a.provLimit === undefined) a.provLimit = null; if (a.provSection === undefined) a.provSection = false;
+        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {}; if (a.provLimit === undefined) a.provLimit = null; if (a.provSection === undefined) a.provSection = false; if (!a.provRank) a.provRank = [];
         return a;
       }
 
@@ -20398,8 +20398,22 @@ processJSON();
         // Attributes step: fold datatable .data[] into the accumulator (output names,
         // join paths) and capture any static-value tables. Only present on that step.
         var staticNow = [];   // Campaign Data rows visible in THIS read are authoritative
+        var rankSeen = false, rankNow = [];
         attrTables.forEach(function (el) {
           var data = segSafeGet(el, "data");
+          // Provisional Audience Limiting "Rank Attributes" table: columns Rank Order / Attributes / Sort By
+          // (fieldNames adhocrankorder / attributeLabel / adhocsortby — confirmed in the activation probe).
+          var cols = segSafeGet(el, "columns");
+          if (cols && cols.some && cols.some(function (c) { return c && c.fieldName === "adhocrankorder"; })) {
+            rankSeen = true;
+            (data || []).forEach(function (r, i) {
+              if (!r) return;
+              var at = r.attributeLabel || r.name || r.attributeName || "";
+              if (!at && r.adhocrankorder == null) return;
+              rankNow.push({ order: r.adhocrankorder != null && r.adhocrankorder !== "" ? String(r.adhocrankorder) : String(i + 1), attribute: String(at), sortBy: String(r.adhocsortby || "") });
+            });
+            return;
+          }
           if (!data || !data.length) return;
           data.forEach(function (d) {
             if (!d) return;
@@ -20454,6 +20468,7 @@ processJSON();
           }
         }
 
+        if (rankSeen) { acc.provRank = rankNow; acc.provSection = true; }   // live table: what the page shows now
         // Campaign Data is a live table: what the page shows NOW replaces rows left by an earlier read, an edited/removed
         // row, or another activation (otherwise old rows pile up and never go away).
         if (staticNow.length || attrTables.length) acc.staticRows = staticNow;   // Attributes step visible + no Campaign rows = none configured
@@ -20478,7 +20493,7 @@ processJSON();
         });
         out.membership = acc.membership || null;
         out.groupSection = acc.groupSection || {};
-        out.provisional = acc.provSection ? { limit: acc.provLimit == null ? "" : acc.provLimit } : null;
+        out.provisional = acc.provSection ? { limit: acc.provLimit == null ? "" : acc.provLimit, rank: (acc.provRank || []).slice() } : null;
         out.captured.filterGroups = out.filterGroups.length > 0;
 
         out.captured.limits = Object.keys(acc.limits).length > 0;
@@ -20691,6 +20706,13 @@ processJSON();
         ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
 
+        if (data.provisional) {
+          var wsP = wb.addWorksheet("Provisional Limiting");
+          [18, 44, 26].forEach(function (w, i) { wsP.getColumn(i + 1).width = w; });
+          wsP.getCell(1, 1).value = "Limit"; wsP.getCell(1, 1).font = boldFont; wsP.getCell(1, 2).value = String(data.provisional.limit || "") || "Not set";
+          ["Rank Order", "Attribute", "Sort By"].forEach(function (h, i) { wsP.getCell(3, i + 1).value = h; wsP.getCell(3, i + 1).font = hdrFont; wsP.getCell(3, i + 1).fill = hdrFill; });
+          (data.provisional.rank || []).forEach(function (r, i) { wsP.getCell(i + 4, 1).value = r.order; wsP.getCell(i + 4, 2).value = r.attribute; wsP.getCell(i + 4, 3).value = r.sortBy; });
+        }
         var os = docActObjSettings(data);
         if (os.length) {
           var wsO = wb.addWorksheet("Object Settings");
@@ -21041,7 +21063,13 @@ processJSON();
             pvHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Provisional Audience Limiting" + docActInfoIcon(TIP.provisional) + "</div>"
               + "<div style='margin:0 0 8px;'><span style='" + lblTxt + "'>Limit</span> "
               + (lv ? "<b style='font:700 13px system-ui;'>" + docActEsc(Number(lv).toLocaleString ? Number(lv).toLocaleString() : lv) + "</b>" : "<span style='font:500 12px system-ui;color:#5c5c5c;'>Not set</span>") + "</div>"
-              + "<div style='font:400 11px/1.5 system-ui;color:#5c5c5c;'>Rank Attributes (Rank Order · Attribute · Sort By) are set in a pop-up on the Salesforce page; open <b>Rank Attributes</b> there to review them.</div></div>";
+              + "<div style='font:700 11px system-ui;color:#5c5c5c;margin:6px 0 4px;'>Rank Attributes</div>"
+              + ((data.provisional.rank || []).length
+                ? "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;width:14%;'>Rank Order</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;width:26%;'>Sort By</th></tr></thead><tbody>"
+                  + data.provisional.rank.map(function (r) { return "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + e(r.order) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(r.attribute) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(r.sortBy) + "</td></tr>"; }).join("")
+                  + "</tbody></table>"
+                : "<div style='font:500 12px system-ui;color:#5c5c5c;'>No ranking attributes set</div>")
+              + "</div>";
           }
 
           // Contact points — each channel shows its value + field/entity API + path.
@@ -23312,7 +23340,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.713"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.714"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

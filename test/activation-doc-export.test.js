@@ -1189,5 +1189,24 @@ console.log("\n24. Campaign Data reflects ONLY what the page shows now (behavior
   eq("other step (no datatable) → keep what was captured", applyCampaign({ staticRows: [{ name: "x", value: "y" }] }, 0, []).length, 1);
 }
 
+console.log("\n25. Rank Attributes reader (probe shape: adhocrankorder / attributeLabel / adhocsortby)");
+{
+  var s25 = require("fs").readFileSync(require("path").join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var b0 = s25.indexOf("var rankSeen = false, rankNow = [];"), b1 = s25.indexOf("if (!data || !data.length) return;", b0);
+  var blk = s25.slice(b0, b1) + "});";   // close the attrTables.forEach callback; only the rank branch runs before the first data return
+  var run25 = new Function("attrTables", "segSafeGet", blk + "\nreturn { rankSeen: rankSeen, rankNow: rankNow };");
+  var get25 = function (el, k) { return el[k]; };
+  var cols25 = [{ label: "Rank Order", fieldName: "adhocrankorder" }, { label: "Attributes", fieldName: "attributeLabel" }, { label: "Sort By", fieldName: "adhocsortby" }, { type: "action" }];
+  var out25 = run25([{ columns: [{ label: "Name", fieldName: "staticAttributeName" }], data: [] }, { columns: cols25, data: [{ adhocrankorder: 1, attributeLabel: "Last Purchase Date", adhocsortby: "Descending" }, { attributeLabel: "Lifetime Value", adhocsortby: "Ascending" }] }], get25);
+  ok("rank table found by its adhocrankorder column", out25.rankSeen === true);
+  eq("two ranked attributes read", out25.rankNow.length, 2);
+  eq("first row order/attribute/sort", JSON.stringify(out25.rankNow[0]), JSON.stringify({ order: "1", attribute: "Last Purchase Date", sortBy: "Descending" }));
+  eq("missing order falls back to row position", out25.rankNow[1].order, "2");
+  var empty25 = run25([{ columns: cols25, data: [] }], get25);
+  ok("empty rank table → seen, zero rows (renders 'No ranking attributes set')", empty25.rankSeen === true && empty25.rankNow.length === 0);
+  var none25 = run25([{ columns: [{ fieldName: "x" }], data: [] }], get25);
+  ok("no rank table on this step → not seen (stored value kept)", none25.rankSeen === false);
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);
