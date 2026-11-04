@@ -950,5 +950,74 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("filter badge/dialog parsers present in the FULL bookmarklet (synced from ext)", /function docActParseFilterBadges/.test(bm) && /function docActParseFilterDialog/.test(bm));
 }
 
+
+// ── Limiting + Show Paths: runs the REAL source functions against live-probe data (v17/v18 verbatim) ──
+console.log("\n13. BEHAVIOR (real source fns): Provisional Audience Limiting + Show Paths");
+{
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  function grab(name) {
+    const i = src.indexOf("function " + name + "(");
+    if (i < 0) throw new Error("missing " + name);
+    let d = 0, j = src.indexOf("{", i);
+    for (let k = j; k < src.length; k++) { if (src[k] === "{") d++; else if (src[k] === "}") { d--; if (d === 0) return src.slice(i, k + 1); } }
+  }
+  const names = ["docActOptionLabel", "docActDeepFind", "docActStripCount", "docActOwnerHeader", "docActPathOwner", "docActReadLimits"];
+  const code = "var segSafeGet=function(o,k){try{return o[k];}catch(e){return undefined;}};\n" + names.map(grab).join("\n") + "\nreturn docActReadLimits;";
+  const readLimits = new Function(code)();
+
+  // minimal fake DOM
+  function kid(tag, text) { return { tagName: tag, textContent: text }; }
+  function combo(value, options, label) { return { tagName: "lightning-combobox", value, options, label }; }
+  function root(list) { return { querySelectorAll: (sel) => sel === "*" ? list : list.filter(e => e.tagName === sel) }; }
+  function limitEl(owner, lim, disabled, combos) {
+    const el = { tagName: "runtime_cdp-activation-related-attribute-limit", relatedAttributesLimit: lim, disableRelatedAttributesLimit: disabled, shadowRoot: root(combos) };
+    el.parentNode = { children: [kid("header", owner + " (1)"), el] };
+    return el;
+  }
+  const dateOpts = [{ label: "Last Modified Date", value: "LastModifiedDate__c" }];
+  const recentOpts = [{ label: "Most Recent", value: "DESC" }, { label: "Oldest", value: "ASC" }];
+  const textOpts = [{ label: "Contact Point Email Id", value: "Id__c" }];
+  const ascOpts = [{ label: "Ascending", value: "ASC" }, { label: "Descending", value: "DESC" }];
+  const raw = [
+    limitEl("Contact Point Email", { attributeName: "Id__c", maxNumberOfValues: "1", order: "ASC", orderByDataType: "TEXT" }, true,
+      [combo("1", [{ label: "1", value: "1" }]), combo("Id__c", textOpts), combo("ASC", ascOpts)]),
+    limitEl("TDI Individual Additional", { attributeName: "LastModifiedDate__c", maxNumberOfValues: "1", order: "DESC", orderByDataType: "DATE" }, false,
+      [combo("1", [{ label: "1", value: "1" }]), combo("LastModifiedDate__c", dateOpts), combo("DESC", recentOpts)]),
+    { tagName: "lightning-input", label: "Show Paths", type: "toggle", checked: true },
+    combo("0", [], "Path"),
+    combo("0", [], "Path")
+  ];
+  // Path combos: verbatim shown text from the probe (option label lookup fails -> DOM text fallback)
+  raw[3].shadowRoot = root([{ tagName: "div", className: "slds-combobox", textContent: "Unified Individual TDI.Unified Individual Id > Unified Link Individual TDI.Unified Individual Id, Unified Link Individual TDI.Individual Id > Individual.Individual Id, Individual.Individual Id > TDI Individual Additional.Individual Additional Information ID" }]);
+  raw[3].shadowRoot.querySelector = (s) => raw[3].shadowRoot.querySelectorAll("*")[0];
+  raw[4].shadowRoot = root([{ tagName: "div", className: "slds-combobox", textContent: "Unified Individual TDI.Unified Individual Id > Unified Indv Contact Point Address TDI.Party" }]);
+  raw[4].shadowRoot.querySelector = (s) => raw[4].shadowRoot.querySelectorAll("*")[0];
+
+  const r = readLimits(raw);
+  eq("2 limits read", r.limits.length, 2);
+  eq("owner from sibling header, '(1)' stripped", r.limits[0].owner, "Contact Point Email");
+  eq("sort label from combobox options (not API name)", r.limits[0].sortLabel, "Contact Point Email Id");
+  eq("sort api kept for chip", r.limits[0].sortField, "Id__c");
+  eq("order label dynamic: text -> Ascending", r.limits[0].orderLabel, "Ascending");
+  ok("disabled limit flagged fixed", r.limits[0].fixed === true);
+  eq("date limit: order label 'Most Recent' (data-type aware, read not mapped)", r.limits[1].orderLabel, "Most Recent");
+  ok("active limit not fixed", r.limits[1].fixed === false);
+  eq("max values", r.limits[1].maxValues, "1");
+  eq("show paths toggle read", r.showOn, true);
+  eq("2 path choices", r.paths.length, 2);
+  eq("path owner #1 = last hop object", r.paths[0].owner, "TDI Individual Additional");
+  eq("path owner #2", r.paths[1].owner, "Unified Indv Contact Point Address TDI");
+  ok("path owners match limit owners for join", r.paths[0].owner === r.limits[1].owner);
+  eq("empty page -> nothing fabricated", readLimits([]).limits.length + readLimits([]).paths.length, 0);
+  eq("toggle absent -> showOn null (unknown, not false)", readLimits([]).showOn, null);
+  ok("limit without header skipped (no placeholder)", readLimits([{ tagName: "runtime_cdp-activation-related-attribute-limit", relatedAttributesLimit: { attributeName: "x" }, parentNode: { children: [] }, shadowRoot: root([]) }]).limits.length === 0);
+
+  ok("wired: scrape accumulates limits/paths, modal + Excel render them", /acc\.limits\[l\.owner\]/.test(src) && /Related Object Settings/.test(src) && /addWorksheet\("Related Objects"\)/.test(src));
+  ok("showPaths toggle off hides path choices", /acc\.showPathsOn === false \? \[\]/.test(src));
+  const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.min.js"), "utf8");
+  ok("public build excludes it (dev-only)", !/Related Object Settings/.test(bm));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

@@ -19866,7 +19866,7 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null };
         return _docActAccum[id];
       }
 
@@ -20078,6 +20078,76 @@ processJSON();
         };
       }
 
+      // Provisional Audience Limiting + Show Paths (live-probed v17/v18 on a real activation).
+      // Limiting: one runtime_cdp-activation-related-attribute-limit per RELATED object, sitting
+      // next to a <header> "Object Label (N)". Its @api relatedAttributesLimit =
+      // {attributeName, maxNumberOfValues, order, orderByDataType}; disableRelatedAttributesLimit
+      // = SF fixed it at 1 (one-to-one object). Display labels (sort field / order) are read from
+      // the limit's own comboboxes' options[] — never hardcoded, so locale/org wording is respected.
+      // Show Paths: lightning-input "Show Paths" toggle + one lightning-combobox "Path" per related
+      // object; the selected option's label is the readable join path. Owner = object label after
+      // the last ">" (before the first "."). Pure read — never clicks.
+      function docActDeepFind(root, tag, out) {
+        out = out || [];
+        if (!root || !root.querySelectorAll) return out;
+        var list = []; try { list = root.querySelectorAll(tag); } catch (e) {}
+        for (var i = 0; i < list.length; i++) out.push(list[i]);
+        var all = []; try { all = root.querySelectorAll("*"); } catch (e) {}
+        for (var j = 0; j < all.length; j++) if (all[j].shadowRoot) docActDeepFind(all[j].shadowRoot, tag, out);
+        return out;
+      }
+      function docActStripCount(t) { return String(t || "").replace(/\s*\(\d+\)\s*$/, "").trim(); }
+      function docActOwnerHeader(limitEl) {
+        var p = limitEl && limitEl.parentNode, kids = (p && p.children) || [];
+        for (var i = 0; i < kids.length; i++) {
+          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(kids[i].textContent);
+        }
+        return "";
+      }
+      function docActPathOwner(pathText) {
+        var seg = String(pathText || "").split(">").pop() || "";
+        var dot = seg.indexOf(".");
+        return (dot >= 0 ? seg.slice(0, dot) : seg).trim();
+      }
+      function docActReadLimits(raw) {
+        var limits = [], paths = [], showOn = null;
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-related-attribute-limit") {
+            var lim = segSafeGet(el, "relatedAttributesLimit");
+            var owner = docActOwnerHeader(el);
+            if (!lim || !owner) return;
+            var combos = docActDeepFind(el.shadowRoot, "lightning-combobox");
+            function labelFor(value) {
+              for (var i = 0; i < combos.length; i++) {
+                var l = docActOptionLabel(segSafeGet(combos[i], "options"), value);
+                if (l && segSafeGet(combos[i], "value") === value) return l;
+              }
+              return "";
+            }
+            limits.push({
+              owner: owner,
+              sortField: lim.attributeName || "",
+              sortLabel: labelFor(lim.attributeName) || lim.attributeName || "",
+              order: lim.order || "",
+              orderLabel: labelFor(lim.order) || lim.order || "",
+              maxValues: lim.maxNumberOfValues != null ? String(lim.maxNumberOfValues) : "",
+              fixed: !!segSafeGet(el, "disableRelatedAttributesLimit")
+            });
+          } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
+            showOn = !!segSafeGet(el, "checked");
+          } else if (tag === "lightning-combobox" && segSafeGet(el, "label") === "Path") {
+            var txt = docActOptionLabel(segSafeGet(el, "options"), segSafeGet(el, "value"));
+            if (!txt) {
+              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? String(c.textContent || "").replace(/\s+/g, " ").trim() : ""; } catch (e) {}
+            }
+            var po = docActPathOwner(txt);
+            if (txt && po) paths.push({ owner: po, text: txt });
+          }
+        });
+        return { limits: limits, paths: paths, showOn: showOn };
+      }
+
       function docActReadFilters(summaryEl, seg) {
         var out = [];
         function pushText(label, raw) {
@@ -20205,6 +20275,12 @@ processJSON();
         // else above; this step tears down like any other on navigation).
         var detailsNow = docActReadDetailsSection(raw);
         if (detailsNow) acc.detailsSection = detailsNow;
+
+        // Limiting + Show Paths (accumulate by owner label — these steps tear down on navigation).
+        var lp = docActReadLimits(raw);
+        lp.limits.forEach(function (l) { acc.limits[l.owner] = l; });
+        lp.paths.forEach(function (pc) { acc.pathChoices[pc.owner] = pc; });
+        if (lp.showOn != null) acc.showPathsOn = lp.showOn;
 
         var out = {
           recordId: id,
@@ -20358,6 +20434,9 @@ processJSON();
         });
         out.captured.filterGroups = out.filterGroups.length > 0;
 
+        out.limits = Object.keys(acc.limits).map(function (k) { return acc.limits[k]; });
+        out.pathChoices = acc.showPathsOn === false ? [] : Object.keys(acc.pathChoices).map(function (k) { return acc.pathChoices[k]; });
+
         return out;
       }
 
@@ -20505,6 +20584,22 @@ processJSON();
         ws4.getColumn(1).width = 30; ws4.getColumn(2).width = 40; ws4.getColumn(3).width = 30;
         ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
+
+        if ((data.limits || []).length || (data.pathChoices || []).length) {
+          var ws5 = wb.addWorksheet("Related Objects");
+          ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 80; ws5.getColumn(3).width = 28; ws5.getColumn(4).width = 20; ws5.getColumn(5).width = 14;
+          ["Related Object", "Join Path", "Sort By", "Order", "Max Values"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
+          var owners = {}; (data.limits || []).forEach(function (l) { owners[l.owner] = 1; }); (data.pathChoices || []).forEach(function (pc) { owners[pc.owner] = 1; });
+          Object.keys(owners).forEach(function (o, i) {
+            var l = (data.limits || []).filter(function (x) { return x.owner === o; })[0];
+            var pc = (data.pathChoices || []).filter(function (x) { return x.owner === o; })[0];
+            ws5.getCell(i + 2, 1).value = o;
+            ws5.getCell(i + 2, 2).value = pc ? pc.text : "";
+            ws5.getCell(i + 2, 3).value = l ? l.sortLabel : "";
+            ws5.getCell(i + 2, 4).value = l ? l.orderLabel : "";
+            ws5.getCell(i + 2, 5).value = l ? (l.fixed ? l.maxValues + " (fixed)" : l.maxValues) : "";
+          });
+        }
 
         wb.xlsx.writeBuffer().then(function (buf) {
           var fn = "activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".xlsx";
@@ -20680,6 +20775,26 @@ processJSON();
             afHtml += "</div>";
           }
 
+          // ONE card, one row per related object: its join path + its row limit/ranking.
+          var rsHtml = "";
+          var rsOwners = {};
+          (data.limits || []).forEach(function (l) { rsOwners[l.owner] = 1; });
+          (data.pathChoices || []).forEach(function (pc) { rsOwners[pc.owner] = 1; });
+          var rsKeys = Object.keys(rsOwners);
+          if (rsKeys.length) {
+            rsHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Related Object Settings <span style='color:#5c5c5c;font-weight:500;'>(" + rsKeys.length + ")</span>"
+              + docActInfoIcon("For each related object: the join path from the segment's object, and how many records are sent per profile and in what order (Provisional Audience Limiting).") + "</div>";
+            rsKeys.forEach(function (o) {
+              var l = (data.limits || []).filter(function (x) { return x.owner === o; })[0];
+              var pc = (data.pathChoices || []).filter(function (x) { return x.owner === o; })[0];
+              rsHtml += "<div style='padding:6px 0;border-bottom:1px solid #f1f1f1;'><div style='font:700 11px system-ui;color:#16325c;'>" + docActEsc(o) + "</div>";
+              if (pc) rsHtml += "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'><span style='color:#5c5c5c;'>Path: </span>" + docActEsc(pc.text) + "</div>";
+              if (l) rsHtml += "<div style='font:500 12px/1.5 system-ui;color:#181818;'><span style='color:#5c5c5c;'>Limit: </span>" + docActEsc(l.maxValues) + (l.fixed ? " (fixed)" : " max") + " · sorted by " + docActEsc(l.sortLabel) + " " + docActApiChip(l.sortField) + " · " + docActEsc(l.orderLabel) + "</div>";
+              rsHtml += "</div>";
+            });
+            rsHtml += "</div>";
+          }
+
           // Campaign Data — this is the exact field-group label Salesforce itself uses on the
           // Attributes step (confirmed via live DOM probe: "Campaign Data / Campaign Attributes
           // (N) / Add Campaign Attribute"), NOT an invented name. (Only shown when present.)
@@ -20698,7 +20813,7 @@ processJSON();
             stHtml += "</tbody></table></div>";
           }
 
-          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + stHtml;
+          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + rsHtml + stHtml;
           body.innerHTML = sections;   // all interpolated values escaped via e()/docActEsc above
         }
 
