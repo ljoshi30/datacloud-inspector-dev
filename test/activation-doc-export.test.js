@@ -1159,5 +1159,15 @@ console.log("\n21. Contact Point path + filters stay in their own group");
   ok("unused-filter card keyed by SF label", /!usedFlt\[g\.label\]/.test(s21));
 }
 
+console.log("\n22. Page behind the modal stays scrollable");
+{
+  var s22 = require("fs").readFileSync(require("path").join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var ov22 = s22.match(/modal\.id = "dc-docact-modal";\s*modal\.style\.cssText = "([^"]+)"/);
+  var bx22 = s22.match(/box\.style\.cssText = "(pointer-events:auto[^"]*)"/);
+  ok("overlay is click-through (pointer-events:none) so wheel/clicks reach the page", !!ov22 && /pointer-events:none/.test(ov22[1]));
+  ok("modal box itself stays interactive (pointer-events:auto)", !!bx22);
+  ok("overlay no longer traps the page with a heavy dim", !!ov22 && !/rgba\(15,23,42,\.55\)/.test(ov22[1]));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

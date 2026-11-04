@@ -20694,7 +20694,7 @@ processJSON();
 
         var modal = document.createElement("div");
         modal.id = "dc-docact-modal";
-        modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;";
+        modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.18);pointer-events:none;display:flex;align-items:center;justify-content:center;padding:28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;";
         modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.remove(); });
 
         var style = document.createElement("style");
@@ -20702,7 +20702,7 @@ processJSON();
         modal.appendChild(style);
 
         var box = document.createElement("div");
-        box.style.cssText = "background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
+        box.style.cssText = "pointer-events:auto;background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
 
         // ── Header bar (SLDS-ish dark-blue) ──
         var hdr = document.createElement("div");
@@ -23224,7 +23224,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.710"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.711"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
