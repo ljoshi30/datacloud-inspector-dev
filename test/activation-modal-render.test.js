@@ -8,9 +8,9 @@ function el(){const o={style:{},children:[],classList:{add(){}},_l:{},appendChil
 const data={found:true,provisional:{limit:"5000"},membership:{label:"Unified Individual TDI",hasFilter:false},overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
 attributes:[
 {label:"SubSegmentId",objectApi:"",source:"SYSTEM",category:"System"},
-{label:"Email Address",fieldApi:"EmailAddress__c",objectApi:"TDI_ContactPointEmail__dlm",outputName:"EmailAddress"},
 {label:"First Name",fieldApi:"FirstName__c",objectApi:"UnifiedIndividual__dlm",outputName:"FirstName",category:"Profile"},
 {label:"State Province",fieldApi:"StateProvinceId__c",objectApi:"TDI_UnifiedContactPointAddressTdi__dlm",outputName:"StateProvinceId"},
+{label:"Control_05_Random",fieldApi:"Control_05_Random__c",objectApi:"TDI_MultiRand_RandomControl_5to50Pct__cio",outputName:"Control_05_Random"},
 {label:"Global Exclusion In",fieldApi:"G__c",objectApi:"TDI_Individual_Additional__dlm",outputName:"TDI_G",path:"A.B > C.D"}],
 contactPoints:[],groupSection:{"Contact Point Email":"Contact Point","TDI Individual Additional":"Attributes","Unified Individual":"Attributes","Unified Indv Contact Point Address TDI":"Attributes"},staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
 limits:[{owner:"Unified Indv Contact Point Address TDI",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"TDI Individual Additional",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"Contact Point Email",maxValues:"1",sortField:"Id__c",sortLabel:"Contact Point Email Id",orderLabel:"Ascending",fixed:true}],
@@ -56,12 +56,16 @@ must("Doc keeps API chips and per-object limit line", /FirstName__c/.test(docOut
 const ovr=(typeof docActOvRowsFn==="function")?docActOvRowsFn(data):null;
 must("shared Overview rows (used by Excel + Doc) include Membership and Provisional Limit", !!ovr && ovr.some(r=>r[0]==="Activation Membership"&&/Unified Individual TDI — No filter/.test(r[1])) && ovr.some(r=>r[0]==="Provisional Audience Limiting — Limit"&&r[1]==="5000"));
 const ci=html.indexOf(">Contact Point<"), ai=html.indexOf(">Attributes<");
-must("Contact Point section contains Email Address attribute, before Attributes section", html.indexOf("EmailAddress__c")>ci && html.indexOf("EmailAddress__c")<ai);
+must("Contact Point Email group (no attribute rows captured) still renders in Contact Point section", html.indexOf(">Contact Point Email<")>ci && html.indexOf(">Contact Point Email<")<ai);
 must("no separate channel table", !/Contact Point field \/ object/.test(html));
 must("SF label (not API-ish name) used as group title", html.indexOf(">Contact Point Email<")>-1);
 console.log(process.exitCode?"❌ FAILURES":"✅ ALL PASS");
 
 must("no standalone Filters card when every filter belongs to a rendered group", !/>Filters <span/.test(html));
-const cpi=html.indexOf("EmailAddress__c"), cpStart=html.lastIndexOf("Contact Point Email",cpi);
-must("Contact Point Email Filtered badge sits inside its own group (before its first row)", html.slice(cpStart,cpi).indexOf("Filtered")>-1);
+const cpStart=html.indexOf(">Contact Point Email<");
+must("Contact Point Email Filtered badge sits inside its own group, before the Attributes section", html.slice(cpStart,html.indexOf(">Attributes<")).indexOf("Filtered")>-1);
+must("CI row is a numbered row of the main Attributes table (no separate CI group)", !/>CI<\/span>/.test(html) && html.indexOf("Control_05_Random")>html.indexOf("First Name") && html.indexOf("Control_05_Random")<html.indexOf("Global Exclusion In"));
+must("primary table titled with the segment object (SF label), not the first API name", /Unified Individual TDI<\/span>/.test(html.slice(html.indexOf(">Attributes<"))));
+must("rows are numbered 1..n in the primary table", /<td[^>]*>1<\/td><td[^>]*>SubSegmentId/.test(html) && /<td[^>]*>3<\/td><td[^>]*>Control_05_Random/.test(html));
 if(process.env.DBG){const i=html.indexOf(">Filters <span");console.log(html.slice(i,i+900).replace(/<[^>]+>/g," ").replace(/\s+/g," "));}
+if(process.env.DBG){const a=html.indexOf(">Attributes<");console.log(html.slice(a,a+3500).replace(/<[^>]+>/g,"|").replace(/\|+/g,"|"));}

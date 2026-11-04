@@ -20854,11 +20854,12 @@ processJSON();
               + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
           }
           var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes" + docActInfoIcon(TIP.attributes) + "</div>";
-          function renderGroup(en, rows) {
+          function renderGroup(en, rows, titleOverride) {
             var gh = "";
             var kind = docActObjKind(en);
             var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
-            var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en);
+            var isSysGroup = !!titleOverride || !/__(dlm|cio|dll|dls)$/.test(en);
+            if (titleOverride) kind = "";
             var pl = pickBy(limByObj, en), pp = pickBy(pathByObj, en), pf = pickBy(fltByObj, en);
             var lim = pl && pl.v, pth = pp && pp.v, flt = pf && pf.v;
             if (!pth) {   // the group's own datatable rows carry queryPathString (the join path SF shows under Show Paths)
@@ -20874,18 +20875,19 @@ processJSON();
             }
             if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
             gh += "<div style='margin:0 0 16px;'>"
-              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(pl ? pl.key : (pf ? pf.key : (pp ? pp.key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")))) + "</span>"
-              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span></div>"
+              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(titleOverride ? titleOverride : pl ? pl.key : (pf ? pf.key : (pp ? pp.key : (pickBy(gsecM, en) ? pickBy(gsecM, en).key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, ""))))) + "</span>"
+              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + (rows.length ? "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span>" : "") + "</div>"
               + (lim ? limLine(lim) : "") + fltBadge(flt)
               + (!pth && isCpObj(en) && !(data.contactPoints || []).length ? "<div style='margin:0 0 6px;font:500 11px system-ui;color:#8a6d00;'>Path is set on the Contact Points step — open that step once, then re-run to capture it.</div>" : "")
               + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
-            gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:26%'><col style='width:26%'><col style='width:20%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'>"
+            if (!rows.length) return gh + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div></div>";
+            gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:4%'><col style='width:24%'><col style='width:25%'><col style='width:20%'><col style='width:27%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
-            rows.forEach(function (a) {
-              gh += "<tr>"
+            rows.forEach(function (a, ri) {
+              gh += "<tr><td style='padding:6px 6px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + (ri + 1) + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
@@ -20914,8 +20916,17 @@ processJSON();
             if (!primEn) primEn = en;
             primRows = primRows.concat(ordered[en]);
           });
+          // Filters / limits / paths whose object has no captured attribute rows still belong to THEIR section.
+          var orphan = {};
+          [limByObj, pathByObj, fltByObj].forEach(function (m) { Object.keys(m).forEach(function (lab) { orphan[lab] = 1; }); });
+          Object.keys(orphan).forEach(function (lab) {
+            var claimed = Object.keys(ordered).some(function (en) { return sameObj(lab, en); });
+            if (claimed) return;
+            if (isCpObj(lab)) cpGroupsHtml += renderGroup(lab, []);
+            else relHtml += "<div style='" + card + "'>" + renderGroup(lab, []) + "</div>";
+          });
           if (sysRows.length) primRows = sysRows.concat(primRows);
-          if (primRows.length) { attrCount += primRows.length; attrHtml += renderGroup(primEn || "Attributes", primRows); }
+          if (primRows.length) { attrCount += primRows.length; attrHtml += renderGroup(primEn || "Attributes", primRows, (data.membership && data.membership.label) || ((data.overview || {}).segmentOn) || ""); }
           attrHtml += "</div>";
           // Group order: primary object first (Salesforce order = as captured), system fields last.
           function byEntityOrder(list) {
