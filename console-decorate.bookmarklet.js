@@ -17305,7 +17305,7 @@ processJSON();
      * This is the one that works where the extension is banned by org policy. */
     if (typeof window.__dcDocActivation === "function") {
       var docIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none'><path d='M4 2h5l3 3v9H4z' stroke='white' stroke-width='1.3' stroke-linejoin='round'/><path d='M9 2v3h3M6 8h4M6 10.5h4' stroke='white' stroke-width='1.1' stroke-linecap='round'/></svg>";
-      var docRow = mkBtn("dc-act-doc-row", "Document Activation", "Read this activation from the page (no API) and export it — Salesforce-styled, with API names — to CSV / Excel.", "linear-gradient(135deg,#0176d3,#032d60)", docIconSvg, "Overview, attributes & API names → CSV/Excel");
+      var docRow = mkBtn("dc-act-doc-row", "Activation Blueprint", "Read the whole activation from the page (no API) — overview, attributes, filters, limits, join paths — and export it with API names to CSV / Excel.", "linear-gradient(135deg,#0176d3,#032d60)", docIconSvg, "Full spec with API names → CSV / Excel");
       docRow.onclick = function (e) { e.stopPropagation(); try { window.__dcDocActivation(); } catch (err) {} };
       menu.appendChild(docRow);
     }
@@ -20438,6 +20438,8 @@ processJSON();
         });
         out.captured.filterGroups = out.filterGroups.length > 0;
 
+        out.captured.limits = Object.keys(acc.limits).length > 0;
+        out.captured.paths = Object.keys(acc.pathChoices).length > 0;
         out.limits = Object.keys(acc.limits).map(function (k) { return acc.limits[k]; });
         out.pathChoices = acc.showPathsOn === false ? [] : Object.keys(acc.pathChoices).map(function (k) { return acc.pathChoices[k]; });
 
@@ -20494,9 +20496,9 @@ processJSON();
       function docActCsv(data) {
         function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
         var lines = [];
-        lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
+        lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].map(q).join(","));
         data.attributes.forEach(function (a) {
-          lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category].map(q).join(","));
+          lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path].map(q).join(","));
         });
         return lines.join("\r\n");
       }
@@ -20555,8 +20557,8 @@ processJSON();
         });
 
         var ws2 = wb.addWorksheet("Attributes");
-        ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 30; ws2.getColumn(3).width = 30; ws2.getColumn(4).width = 32; ws2.getColumn(5).width = 30; ws2.getColumn(6).width = 16;
-        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
+        ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 30; ws2.getColumn(3).width = 30; ws2.getColumn(4).width = 32; ws2.getColumn(5).width = 30; ws2.getColumn(6).width = 16; ws2.getColumn(7).width = 90;
+        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
         data.attributes.forEach(function (a, i) {
           var r = i + 2;
           ws2.getCell(r, 1).value = i + 1;
@@ -20565,6 +20567,7 @@ processJSON();
           ws2.getCell(r, 4).value = a.objectApi || "";
           ws2.getCell(r, 5).value = a.outputName || "";
           ws2.getCell(r, 6).value = a.category || "";
+          ws2.getCell(r, 7).value = a.path || "";
         });
 
         var ws3 = wb.addWorksheet("Contact Points");
@@ -20589,20 +20592,23 @@ processJSON();
         ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
 
-        if ((data.limits || []).length || (data.pathChoices || []).length) {
-          var ws5 = wb.addWorksheet("Related Objects");
-          ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 80; ws5.getColumn(3).width = 28; ws5.getColumn(4).width = 20; ws5.getColumn(5).width = 14;
-          ["Related Object", "Join Path", "Sort By", "Order", "Max Values"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
-          var owners = {}; (data.limits || []).forEach(function (l) { owners[l.owner] = 1; }); (data.pathChoices || []).forEach(function (pc) { owners[pc.owner] = 1; });
-          Object.keys(owners).forEach(function (o, i) {
-            var l = (data.limits || []).filter(function (x) { return x.owner === o; })[0];
-            var pc = (data.pathChoices || []).filter(function (x) { return x.owner === o; })[0];
-            ws5.getCell(i + 2, 1).value = o;
-            ws5.getCell(i + 2, 2).value = pc ? pc.text : "";
-            ws5.getCell(i + 2, 3).value = l ? l.sortLabel : "";
-            ws5.getCell(i + 2, 4).value = l ? l.orderLabel : "";
-            ws5.getCell(i + 2, 5).value = l ? (l.fixed ? l.maxValues + " (fixed)" : l.maxValues) : "";
+        if ((data.limits || []).length) {
+          var ws5 = wb.addWorksheet("Provisional Audience Limiting");
+          ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 14; ws5.getColumn(3).width = 30; ws5.getColumn(4).width = 30; ws5.getColumn(5).width = 20;
+          ["Related Object", "Limit", "Sort By", "Sort By API", "Order"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
+          data.limits.forEach(function (l, i) {
+            ws5.getCell(i + 2, 1).value = l.owner;
+            ws5.getCell(i + 2, 2).value = l.fixed ? l.maxValues + " (fixed)" : l.maxValues;
+            ws5.getCell(i + 2, 3).value = l.sortLabel;
+            ws5.getCell(i + 2, 4).value = l.sortField;
+            ws5.getCell(i + 2, 5).value = l.orderLabel;
           });
+        }
+        if ((data.pathChoices || []).length) {
+          var ws6 = wb.addWorksheet("Show Paths");
+          ws6.getColumn(1).width = 34; ws6.getColumn(2).width = 110;
+          ["Related Object", "Path"].forEach(function (h, i) { ws6.getCell(1, i + 1).value = h; ws6.getCell(1, i + 1).font = hdrFont; ws6.getCell(1, i + 1).fill = hdrFill; });
+          data.pathChoices.forEach(function (pc, i) { ws6.getCell(i + 2, 1).value = pc.owner; ws6.getCell(i + 2, 2).value = pc.text; });
         }
 
         wb.xlsx.writeBuffer().then(function (buf) {
@@ -20638,7 +20644,7 @@ processJSON();
           "<div style='width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;'>"
           + "<svg width='18' height='18' viewBox='0 0 24 24' fill='none'><path d='M4 5h16M4 12h16M4 19h10' stroke='#fff' stroke-width='2' stroke-linecap='round'/></svg></div>"
           + "<div style='flex:1;min-width:0;'><div style='font:700 15px/1.2 inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>" + e(ov.target || ov.segment || "Activation") + "</div>"
-          + "<div style='font:400 11px/1.3 inherit;opacity:.85;'>Document Activation · read from the page · API names included</div></div>";
+          + "<div style='font:400 11px/1.3 inherit;opacity:.85;'>Activation Blueprint · read from the page · API names included</div></div>";
 
         var btnCss = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
         var csvBtn = document.createElement("button"); csvBtn.textContent = "⬇ CSV"; csvBtn.style.cssText = btnCss; csvBtn.title = "Download the attribute list as CSV (Label · Field API · Object/DMO API · Output Name · Category)";
@@ -20693,7 +20699,17 @@ processJSON();
             + pill(caps.outputNames, "Output names")
             + pill(caps.contactPoints, "Contact points")
             + pill(caps.staticValues, "Campaign Data")
+            + pill(caps.limits, "Provisional Audience Limiting")
+            + pill(caps.paths, "Show Paths")
             + "</div>";
+          // How to capture the two Attributes-step extras (read only while visible, then remembered).
+          if (!caps.limits || !caps.paths) {
+            status += "<div style='font:400 11px/1.6 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:12px;'>"
+              + "<b>If this activation uses related attributes</b>, these are read from the screen and remembered, so open them once:"
+              + (!caps.limits ? "<br>• <b>Provisional Audience Limiting</b> — go to the Attributes step and scroll to the Provisional Audience Limiting section." : "")
+              + (!caps.paths ? "<br>• <b>Show Paths</b> — on the Attributes step click <b>Add Attributes</b> and turn on <b>Show Paths</b> (the Path for each object appears)." : "")
+              + "<br>Then reopen this panel. (It never clicks or navigates for you.)</div>";
+          }
           // Captures PERSIST across wizard steps (stored on the window per activation), so this
           // panel shows everything seen so far. Prompt the user honestly: either export now, or
           // visit the remaining step(s) first — we never navigate the Save/Publish wizard for them.
@@ -20709,23 +20725,26 @@ processJSON();
 
           // Attributes table grouped by object, API names inline — Salesforce-like.
           var byEntity = {};
-          data.attributes.forEach(function (a) { var en = a.objectApi || "(unspecified)"; (byEntity[en] = byEntity[en] || []).push(a); });
+          data.attributes.forEach(function (a) { var en = a.objectApi || (a.source === "SYSTEM" ? "System fields (added by Salesforce)" : "Other"); (byEntity[en] = byEntity[en] || []).push(a); });
           var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes <span style='color:#5c5c5c;font-weight:500;'>(" + data.attributes.length + ")</span></div>";
           Object.keys(byEntity).sort().forEach(function (en) {
             var rows = byEntity[en];
             var kind = docActObjKind(en);
             var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
+            var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en) && rows.every(function (r) { return !r.objectApi; });
             attrHtml += "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 6px;'><span style='font:600 12px system-ui;color:#181818;'>" + e(en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")) + "</span>"
-              + docActApiChip(en) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>";
+              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>";
             attrHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
-              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th></tr></thead><tbody>";
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
             rows.forEach(function (a) {
               attrHtml += "<tr>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "—") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "<span style='color:#b0b0b0;'>—</span>") + "</td></tr>";
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "<span style='color:#b0b0b0;'>—</span>") + "</td></tr>";
             });
             attrHtml += "</tbody></table>";
           });
@@ -20779,24 +20798,33 @@ processJSON();
             afHtml += "</div>";
           }
 
-          // ONE card, one row per related object: its join path + its row limit/ranking.
-          var rsHtml = "";
-          var rsOwners = {};
-          (data.limits || []).forEach(function (l) { rsOwners[l.owner] = 1; });
-          (data.pathChoices || []).forEach(function (pc) { rsOwners[pc.owner] = 1; });
-          var rsKeys = Object.keys(rsOwners);
-          if (rsKeys.length) {
-            rsHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Related Object Settings <span style='color:#5c5c5c;font-weight:500;'>(" + rsKeys.length + ")</span>"
-              + docActInfoIcon("For each related object: the join path from the segment's object, and how many records are sent per profile and in what order (Provisional Audience Limiting).") + "</div>";
-            rsKeys.forEach(function (o) {
-              var l = (data.limits || []).filter(function (x) { return x.owner === o; })[0];
-              var pc = (data.pathChoices || []).filter(function (x) { return x.owner === o; })[0];
-              rsHtml += "<div style='padding:6px 0;border-bottom:1px solid #f1f1f1;'><div style='font:700 11px system-ui;color:#16325c;'>" + docActEsc(o) + "</div>";
-              if (pc) rsHtml += "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'><span style='color:#5c5c5c;'>Path: </span>" + docActEsc(pc.text) + "</div>";
-              if (l) rsHtml += "<div style='font:500 12px/1.5 system-ui;color:#181818;'><span style='color:#5c5c5c;'>Limit: </span>" + docActEsc(l.maxValues) + (l.fixed ? " (fixed)" : " max") + " · sorted by " + docActEsc(l.sortLabel) + " " + docActApiChip(l.sortField) + " · " + docActEsc(l.orderLabel) + "</div>";
-              rsHtml += "</div>";
+          // Provisional Audience Limiting — SF's own section/column wording ("Limit", "Sort By").
+          var lpHtml = "";
+          if ((data.limits || []).length) {
+            lpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Provisional Audience Limiting <span style='color:#5c5c5c;font-weight:500;'>(" + data.limits.length + ")</span>"
+              + docActInfoIcon("Define limits and set attribute priority: for each related object, how many related records are sent per profile, and which ones (sorted by).") + "</div>"
+              + "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
+              + ["Related Object", "Limit", "Sort By", "Order"].map(function (h) { return "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>" + h + "</th>"; }).join("")
+              + "</tr></thead><tbody>";
+            data.limits.forEach(function (l) {
+              var td = "padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;";
+              lpHtml += "<tr><td style='" + td + "font-weight:600;'>" + docActEsc(l.owner) + "</td>"
+                + "<td style='" + td + "'>" + docActEsc(l.maxValues) + (l.fixed ? " <span style='color:#5c5c5c;'>(fixed)</span>" : "") + "</td>"
+                + "<td style='" + td + "'>" + docActEsc(l.sortLabel) + " " + docActApiChip(l.sortField) + "</td>"
+                + "<td style='" + td + "'>" + docActEsc(l.orderLabel) + "</td></tr>";
             });
-            rsHtml += "</div>";
+            lpHtml += "</tbody></table></div>";
+          }
+          // Show Paths — SF's "Show Paths" toggle + the selected "Path" per related object.
+          var pcHtml = "";
+          if ((data.pathChoices || []).length) {
+            pcHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Show Paths <span style='color:#5c5c5c;font-weight:500;'>(" + data.pathChoices.length + ")</span>"
+              + docActInfoIcon("The join path selected for each related object, from the segment's object to that object.") + "</div>";
+            data.pathChoices.forEach(function (pc) {
+              pcHtml += "<div style='padding:6px 0;border-bottom:1px solid #f1f1f1;'><div style='font:700 11px system-ui;color:#16325c;'>" + docActEsc(pc.owner) + "</div>"
+                + "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pc.text) + "</div></div>";
+            });
+            pcHtml += "</div>";
           }
 
           // Campaign Data — this is the exact field-group label Salesforce itself uses on the
@@ -20817,7 +20845,7 @@ processJSON();
             stHtml += "</tbody></table></div>";
           }
 
-          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + rsHtml + stHtml;
+          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + lpHtml + pcHtml + stHtml;
           body.innerHTML = sections;   // all interpolated values escaped via e()/docActEsc above
         }
 

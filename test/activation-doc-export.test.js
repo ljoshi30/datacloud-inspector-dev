@@ -380,8 +380,8 @@ function newAccum() { return { outputByUid: {}, staticRows: [], contactPoint: nu
 function docActCsv(data) {
   function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
   var lines = [];
-  lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
-  data.attributes.forEach(function (a) { lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category].map(q).join(",")); });
+  lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].map(q).join(","));
+  data.attributes.forEach(function (a) { lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path].map(q).join(",")); });
   return lines.join("\r\n");
 }
 
@@ -803,13 +803,13 @@ console.log("\n8. CSV is ATTRIBUTES-ONLY now (per user): 5 columns, one row per 
   var out = docActScrapeOver([summaryEl(), channelEl()], acc);   // full picture
   var csv = docActCsv(out);
   var rows = csv.split("\r\n");
-  eq("header is the 5 attribute columns (Join Path removed)", rows[0], "Label,Field API,Object / DMO API,Output Name,Category");
+  eq("header is the attribute columns incl. Join Path", rows[0], "Label,Field API,Object / DMO API,Output Name,Category,Join Path");
   ok("CRLF line endings (Excel-friendly)", csv.indexOf("\r\n") !== -1);
   eq("exactly header + one row per attribute (3 attrs → 4 lines)", rows.length, 4);
   ok("no Overview/Contact Point/Static Value rows in the CSV", !/Overview|Contact Point|Static Value/.test(csv));
   ok("field API name present in CSV", csv.indexOf("ssot__EmailAddress__c") !== -1);
   ok("output name present in CSV", /,email,/.test(csv));
-  ok("NO Join Path column / arrow in CSV", csv.indexOf("→") === -1);
+  ok("Join Path column present in CSV", rows[0].indexOf("Join Path") !== -1);
   // a value containing a comma must still be quoted
   var out2 = { attributes: [{ label: "A, B, C", fieldApi: "X__c", objectApi: "Y__dlm", outputName: "", category: "" }] };
   ok("comma-bearing value is CSV-quoted", docActCsv(out2).indexOf('"A, B, C"') !== -1);
@@ -888,11 +888,14 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
     var anchorClicks = (region.match(/a\.click\(\)/g) || []).length;
     ok("the only .click() is the download anchor (never a wizard control)", clicks.length === anchorClicks);
   })();
+  ok("FAB row renamed 'Activation Blueprint' (id unchanged)", /mkBtn\("dc-act-doc-row", "Activation Blueprint"/.test(src) && !/mkBtn\("dc-act-doc-row", "Document Activation"/.test(src));
+  ok("capture hints + pills for limits/paths in the status area", /caps\.limits/.test(src) && /caps\.paths/.test(src) && /Add Attributes<\/b> and turn on <b>Show Paths/.test(src));
   ok("launcher offers a 'Document Activation' row, gated on the exporter fn", /dc-act-doc-row/.test(src) && /typeof window\.__dcDocActivation === "function"/.test(src));
   ok("launcher is rebuild-aware so the dev row appears after the dev block registers the fn", /function ensureActivationLauncher\(rebuild\)/.test(src) && /ensureActivationLauncher\(true\)/.test(src));
   ok("CSV + Excel (MiniXLSX) exports wired", /function docActCsv/.test(src) && /function docActExcel/.test(src) && /SEGX\.MiniXLSX/.test(src));
   ok("Copy-table button REMOVED per feedback", !/Copy table/.test(src));
-  ok("CSV header is the attributes-only 5 columns (Join Path removed) in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category"\]/.test(src));
+  ok("CSV header carries Join Path in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category", "Join Path"\]/.test(src));
+  ok("no '(unspecified)' group: system rows get an honest label", !/\(unspecified\)/.test(src) && /System fields \(added by Salesforce\)/.test(src));
   ok("honest 'captured vs not yet visited' status in the modal", /not yet visited|captured|Visit the/.test(src) && /captured\.outputNames/.test(src));
   ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));
   // PERSISTENCE: the accumulator must live on window, not in an IIFE-local that the per-step re-run wipes.
@@ -1013,10 +1016,10 @@ console.log("\n13. BEHAVIOR (real source fns): Provisional Audience Limiting + S
   eq("toggle absent -> showOn null (unknown, not false)", readLimits([]).showOn, null);
   ok("limit without header skipped (no placeholder)", readLimits([{ tagName: "runtime_cdp-activation-related-attribute-limit", relatedAttributesLimit: { attributeName: "x" }, parentNode: { children: [] }, shadowRoot: root([]) }]).limits.length === 0);
 
-  ok("wired: scrape accumulates limits/paths, modal + Excel render them", /acc\.limits\[l\.owner\]/.test(src) && /Related Object Settings/.test(src) && /addWorksheet\("Related Objects"\)/.test(src));
+  ok("wired: scrape accumulates limits/paths, modal + Excel render them", /acc\.limits\[l\.owner\]/.test(src) && /Provisional Audience Limiting/.test(src) && /addWorksheet\("Show Paths"\)/.test(src) && /addWorksheet\("Provisional Audience Limiting"\)/.test(src) && !/Related Object Settings/.test(src));
   ok("showPaths toggle off hides path choices", /acc\.showPathsOn === false \? \[\]/.test(src));
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.min.js"), "utf8");
-  ok("public build excludes it (dev-only)", !/Related Object Settings/.test(bm));
+  ok("public build excludes it (dev-only)", !/Provisional Audience Limiting/.test(bm) && !/Activation Blueprint/.test(bm));
 }
 
 
