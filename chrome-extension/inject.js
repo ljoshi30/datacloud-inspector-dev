@@ -20020,20 +20020,25 @@ processJSON();
       // activation filter config). Returns [] when nothing is found → the UI hides the
       // section rather than showing an empty/fabricated one. Each entry: {label, text}.
       // Refresh Type has NO structured getter anywhere on the summary element (confirmed via
-      // live probe: searching all 278 getters for refresh/schedule-related names found none) —
-      // it's ONLY rendered as sidebar text ("Publish Schedule:Don't refresh") on the Contact
-      // Points step. Reuses the exact small-leaf-element + "Publish Schedule:" pattern already
-      // proven live in the extension-fed exporter (~line 16093), scoped to the DOM-only raw scan.
+      // live probe: searching all 278 getters for refresh/schedule-related names found none).
+      // CORRECTION (live probe v9, real org): "Publish Schedule:Don't refresh" on the Contact
+      // Points step is the SEGMENT's publish schedule, NOT the activation's own Refresh Type —
+      // reading it there produced a wrong value. The activation's actual Refresh Type is its
+      // own record-detail field, rendered label-then-value with NO separator: literal text
+      // "Activation Refresh TypeFull Refresh" on a small leaf (label+value, no colon). Scan for
+      // the SMALLEST such leaf (children.length<=2, length<60) to avoid matching the page's big
+      // text-dump wrappers that also happen to contain the same substring.
       function docActReadRefreshType(raw) {
+        var best = "";
         for (var i = 0; i < raw.length; i++) {
           var el = raw[i];
           var txt = "";
-          try { txt = (el.children && el.children.length < 5) ? (el.textContent || "").trim() : ""; } catch (e) {}
-          if (/^Publish Schedule:/.test(txt) && txt.length < 60) {
-            return txt.replace(/^Publish Schedule:\s*/i, "").trim();
+          try { txt = (el.children && el.children.length <= 2) ? (el.textContent || "").trim() : ""; } catch (e) {}
+          if (/^Activation Refresh Type\S/.test(txt) && txt.length < 60 && (!best || txt.length < best.length)) {
+            best = txt;
           }
         }
-        return "";
+        return best ? best.replace(/^Activation Refresh Type\s*/i, "").trim() : "";
       }
 
       function docActReadFilters(summaryEl, seg) {
@@ -20089,9 +20094,14 @@ processJSON();
       // Attribute here". Multiple conditions concatenate in that same span.
       function docActParseFilterDialog(dialogText) {
         if (!dialogText) return null;
-        var titleM = /Filter "([^"]+)" Attributes/.exec(dialogText);
-        var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(dialogText);
-        var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(dialogText);
+        // Normalize: the real DOM renders this dialog with a newline between every short
+        // text node (confirmed via live probe), not spaces — collapse all whitespace
+        // (incl. \n) to single spaces BEFORE matching, so "." in the patterns below (which
+        // doesn't span newlines) sees the same single-line text our fixtures use.
+        var flat = dialogText.replace(/\s+/g, " ").trim();
+        var titleM = /Filter "([^"]+)" Attributes/.exec(flat);
+        var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(flat);
+        var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(flat);
         var conditions = [];
         if (spanM && spanM[1]) {
           var span = spanM[1].trim();
@@ -22714,7 +22724,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.686"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.687"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

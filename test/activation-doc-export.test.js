@@ -191,9 +191,10 @@ var DOCACT_FILTER_OPS = ["Has Value", "Is Null", "Is Not Null", "Does Not Contai
 // The open "Edit/Add Filters" dialog's plain innerText → {entityLabel, path, conditions[]}.
 function docActParseFilterDialog(dialogText) {
   if (!dialogText) return null;
-  var titleM = /Filter "([^"]+)" Attributes/.exec(dialogText);
-  var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(dialogText);
-  var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(dialogText);
+  var flat = dialogText.replace(/\s+/g, " ").trim();
+  var titleM = /Filter "([^"]+)" Attributes/.exec(flat);
+  var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(flat);
+  var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(flat);
   var conditions = [];
   if (spanM && spanM[1]) {
     var span = spanM[1].trim();
@@ -210,13 +211,14 @@ function docActParseFilterDialog(dialogText) {
 // scrape over a provided list of "elements" + a persistent accumulator (the source keeps one
 // per recordId in _docActAccum; here we pass it in so we can simulate visiting two steps).
 function docActReadRefreshType(raw) {
+  var best = "";
   for (var i = 0; i < raw.length; i++) {
     var el = raw[i];
     var txt = "";
-    try { txt = (el.children && el.children.length < 5) ? (el.textContent || "").trim() : ""; } catch (e) {}
-    if (/^Publish Schedule:/.test(txt) && txt.length < 60) return txt.replace(/^Publish Schedule:\s*/i, "").trim();
+    try { txt = (el.children && el.children.length <= 2) ? (el.textContent || "").trim() : ""; } catch (e) {}
+    if (/^Activation Refresh Type\S/.test(txt) && txt.length < 60 && (!best || txt.length < best.length)) best = txt;
   }
-  return "";
+  return best ? best.replace(/^Activation Refresh Type\s*/i, "").trim() : "";
 }
 function docActScrapeOver(raw, acc) {
   var summaryEl = null, attrTables = [], channelEl = null, attrWizardEl = null, filterDialogEl = null;
@@ -587,12 +589,16 @@ console.log("\n6f. FILTER-EXISTS BADGE: 'Edit Filters' vs 'Add Filters' readable
 console.log("\n6g. APPLIED FILTER CONTENT: parsed from the open filter dialog's plain innerText");
 {
   // Real innerText shape from the live-org probe (Attributes step, "Edit Filters" dialog OPEN).
-  var dialogText = 'Filter "Contact Point Email" Attributes CancelSave Attributes Press Enter to add to canvas ' +
-    'Contact Point Email Id TEXT Press Enter to add to canvas Email Address TEXT ' +
-    'To determine which contact points are chosen for a member, select attributes to filter the contact points. ' +
-    'Path Unified Individual TDIR.Unified Individual Id > Unified Link Individual TDIR.Unified Individual Id, ' +
-    'Unified Link Individual TDIR.Individual Id > Individual.Individual Id, Individual.Individual Id > Contact Point Email.Party ' +
-    'Attributes (1) Email Address Contact Point Email: Edit Filter Remove Filter Drag and drop Email Address Has Value Add another Attribute here';
+  // REGRESSION (user-reported, live probe v9): the REAL DOM renders a newline between every
+  // short text node, not a space. "." in the match patterns does not span newlines by
+  // default — a single-line fixture (old test) passed while the real multi-line text failed
+  // silently in production. This fixture uses real \n's to catch that class of bug.
+  var dialogText = 'Filter "Contact Point Email" Attributes\nCancelSave\nAttributes\nPress Enter to add to canvas\n' +
+    'Contact Point Email Id\nTEXT\nPress Enter to add to canvas\nEmail Address\nTEXT\n' +
+    'To determine which contact points are chosen for a member, select attributes to filter the contact points.\n' +
+    'Path\nUnified Individual TDIR.Unified Individual Id > Unified Link Individual TDIR.Unified Individual Id, ' +
+    'Unified Link Individual TDIR.Individual Id > Individual.Individual Id, Individual.Individual Id > Contact Point Email.Party\n' +
+    'Attributes (1)\nEmail Address\nContact Point Email:\nEdit Filter\nRemove Filter\nDrag and drop\nEmail Address\nHas Value\nAdd another Attribute here';
   var parsed = docActParseFilterDialog(dialogText);
   ok("dialog parsed (entityLabel found)", !!parsed);
   eq("entity label from the dialog title", parsed.entityLabel, "Contact Point Email");
@@ -602,8 +608,8 @@ console.log("\n6g. APPLIED FILTER CONTENT: parsed from the open filter dialog's 
   eq("condition field", parsed.conditions[0].field, "Email Address");
   eq("condition operator (multi-word phrase 'Has Value' kept whole, not split)", parsed.conditions[0].operator, "Has Value");
   // A dialog with NO applied condition yet (freshly opened "Add Filters") must not fabricate one.
-  var emptyDialog = 'Filter "Insurance Account" Attributes CancelSave Attributes Path Unified Individual TDIR.Id > Insurance Account.PrimaryInsuredId ' +
-    'Attributes (0) Drag and drop Add another Attribute here';
+  var emptyDialog = 'Filter "Insurance Account" Attributes\nCancelSave\nAttributes\nPath\nUnified Individual TDIR.Id > Insurance Account.PrimaryInsuredId\n' +
+    'Attributes (0)\nDrag and drop\nAdd another Attribute here';
   var parsedEmpty = docActParseFilterDialog(emptyDialog);
   eq("no conditions in an unfiltered dialog → empty conditions array, never a fabricated one", parsedEmpty.conditions.length, 0);
   // Not the filter dialog at all → null, never throws.
@@ -626,7 +632,7 @@ console.log("\n6h. filterGroups MERGE: badge (closed) + condition text (only if 
   // Now the user opens "Edit Filters" on Contact Point Email once → condition text folds in,
   // and it SURVIVES after the dialog closes (accumulator persists, same pattern as contact points).
   var dialogEl = { tagName: "runtime_cdp-activation-related-attributes-filter-dialog",
-    innerText: 'Filter "Contact Point Email" Attributes Path X.Id > Y.Id Attributes (1) Drag and drop Email Address Has Value Add another Attribute here' };
+    innerText: 'Filter "Contact Point Email" Attributes\nPath\nX.Id > Y.Id\nAttributes (1)\nDrag and drop\nEmail Address\nHas Value\nAdd another Attribute here' };
   docActScrapeOver([summaryEl(), wizardEl, dialogEl], acc);
   var afterOpen = docActScrapeOver([summaryEl(), wizardEl], acc);   // dialog closed again
   var cpe2 = afterOpen.filterGroups.filter(function (g) { return g.label === "Contact Point Email"; })[0];
@@ -635,23 +641,36 @@ console.log("\n6h. filterGroups MERGE: badge (closed) + condition text (only if 
   eq("captured.filterGroups flips true once any badge is seen", afterBadgeOnly.captured.filterGroups, true);
 }
 
-console.log("\n6i. REFRESH TYPE: sidebar 'Publish Schedule:' text (no getter property exists for this at all)");
+console.log("\n6i. REFRESH TYPE: the activation's own 'Activation Refresh Type' field (not the segment's Publish Schedule)");
 {
-  // Real sidebar leaf-element shape from the live-org probe (Contact Points step):
-  // "Publish Schedule:Don't refresh" rendered as one small-leaf-element's textContent.
-  var scheduleLeaf = { tagName: "div", children: [], textContent: "Publish Schedule:Don't refresh" };
+  // CORRECTION (user-reported, live probe v9, real org): the PRIOR approach read "Publish
+  // Schedule:Don't refresh" on the Contact Points step — but that is the SEGMENT's publish
+  // schedule, a different field, and gave a WRONG value. The activation's actual Refresh Type
+  // is its own record-detail field, rendered label-then-value with no separator at all:
+  // "Activation Refresh TypeFull Refresh" on a small leaf (label immediately followed by value).
+  var refreshLeaf = { tagName: "div", children: [], textContent: "Activation Refresh TypeFull Refresh" };
   var acc = newAccum();
-  var out = docActScrapeOver([summaryEl(), scheduleLeaf], acc);
-  eq("refresh type read from sidebar text (no structured property exists for it)", out.overview.refreshType, "Don't refresh");
-  // Persists once seen, same as output names / contact points / static values — the
-  // Contact Points step (where this text renders) tears down when the user moves on.
+  var out = docActScrapeOver([summaryEl(), refreshLeaf], acc);
+  eq("refresh type read from the activation's own record-detail field", out.overview.refreshType, "Full Refresh");
+  // Persists once seen, same as output names / contact points / static values.
   var afterNextStep = docActScrapeOver([summaryEl()], acc);
-  eq("refresh type persists after navigating away from the Contact Points step", afterNextStep.overview.refreshType, "Don't refresh");
-  // A noisy leaf (too many children / too long / wrong prefix) must never be mistaken for it.
-  var noisyLeaf = { tagName: "div", children: [1, 2, 3, 4, 5], textContent: "Publish Schedule:Don't refresh" };
+  eq("refresh type persists after navigating away from the step where it was seen", afterNextStep.overview.refreshType, "Full Refresh");
+  // The segment's "Publish Schedule:" text (Contact Points step) must NOT be read as Refresh Type.
+  var scheduleLeaf = { tagName: "div", children: [], textContent: "Publish Schedule:Don't refresh" };
   var acc2 = newAccum();
-  var out2 = docActScrapeOver([summaryEl(), noisyLeaf], acc2);
-  eq("a leaf with >=5 children is not read as the sidebar label (avoids matching a big wrapper)", out2.overview.refreshType, "");
+  var out2 = docActScrapeOver([summaryEl(), scheduleLeaf], acc2);
+  eq("segment Publish Schedule text is NOT mistaken for the activation's Refresh Type", out2.overview.refreshType, "");
+  // A larger wrapper (children.length>2, e.g. the whole record-detail <ul> that also contains
+  // this exact label+value as a substring further down its nested structure) must not be
+  // mistaken for the small 1-2-child leaf that actually renders the label+value pair.
+  var bigWrapper = { tagName: "ul", children: [1, 2, 3, 4, 5, 6], textContent:
+    "Activation DataspaceTDIActivation TargetMCE1SegmentGift_Card_Auto__95TData Model ObjectTDI_UnifiedIndividualTdirActivation StatusActiveActivation Refresh TypeFull Refresh" };
+  var acc3 = newAccum();
+  var out3 = docActScrapeOver([summaryEl(), bigWrapper, refreshLeaf], acc3);
+  eq("the small label+value leaf wins; the big multi-child wrapper is never read as the value", out3.overview.refreshType, "Full Refresh");
+  var acc4 = newAccum();
+  var out4 = docActScrapeOver([summaryEl(), bigWrapper], acc4);
+  eq("without the small leaf present, the big wrapper alone yields nothing (never misread)", out4.overview.refreshType, "");
 }
 
 console.log("\n7. no summary on the page → found=false, nothing fabricated");
@@ -761,9 +780,10 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   // step renders this field group as "Campaign Data" / "Campaign Attributes (N)" (confirmed via
   // live DOM probe). The modal/Excel must use SF's real wording, not our own.
   ok("user-facing label renamed to SF's real 'Campaign Data' wording (modal + Excel sheet)", /Campaign Data/.test(src) && !/>Static Values</.test(src) && !/addWorksheet\("Static Values"\)/.test(src));
-  // REFRESH TYPE: no getter property exists for it at all — reused the proven sidebar
-  // "Publish Schedule:" text pattern (already live-tested in the older extension-fed exporter).
-  ok("refresh type read via the sidebar 'Publish Schedule:' text pattern", /function docActReadRefreshType/.test(src) && /Publish Schedule:/.test(src));
+  // REFRESH TYPE: no getter property exists for it at all; reads the activation's own
+  // "Activation Refresh Type" record-detail label+value text (NOT the segment's unrelated
+  // "Publish Schedule:" text, which was the prior approach's bug — it read the wrong field).
+  ok("refresh type read via the activation's own 'Activation Refresh Type' field text", /function docActReadRefreshType/.test(src) && /Activation Refresh Type/.test(src));
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
