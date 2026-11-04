@@ -1155,6 +1155,7 @@ console.log("\n21. Contact Point path + filters stay in their own group");
   ok("CP group falls back to Contact Points-step path", /sameObj\(v\.entityApi, en\)/.test(s21));
   ok("Path combobox label matched loosely", /\^Path\\b\/i\.test/.test(s21));
   ok("group Path falls back to its rows' queryPathString path", /rows\.filter\(function \(r\) \{ return r\.path; \}\)/.test(s21));
+  ok("CP path matched by channel keyword + hint when step 1 not captured", s21.indexOf("var chan = k === \"whatsApp\"") > -1 && s21.indexOf("open that step once") > -1);
   ok("unused-filter card keyed by SF label", /!usedFlt\[g\.label\]/.test(s21));
 }
 

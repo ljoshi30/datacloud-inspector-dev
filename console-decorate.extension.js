@@ -20867,7 +20867,9 @@ processJSON();
             }
             if (!pth) {   // contact-point objects: path captured at the Contact Points step (same object as this group)
               (data.contactPoints || []).forEach(function (cp) { ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
-                var v = cp[k]; if (!pth && v && v.path && v.entityApi && sameObj(v.entityApi, en)) pth = { text: v.path };
+                var v = cp[k]; if (pth || !v || !v.path) return;
+                var chan = k === "whatsApp" ? "whatsapp" : k;   // channel keyword in the object name (…ContactPointEmail__dlm)
+                if ((v.entityApi && sameObj(v.entityApi, en)) || (isCpObj(en) && new RegExp("contact\\s*point\\s*" + chan, "i").test(String(en).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ")))) pth = { text: v.path };
               }); });
             }
             if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
@@ -20875,6 +20877,7 @@ processJSON();
               + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(pl ? pl.key : (pf ? pf.key : (pp ? pp.key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")))) + "</span>"
               + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span></div>"
               + (lim ? limLine(lim) : "") + fltBadge(flt)
+              + (!pth && isCpObj(en) && !(data.contactPoints || []).length ? "<div style='margin:0 0 6px;font:500 11px system-ui;color:#8a6d00;'>Path is set on the Contact Points step — open that step once, then re-run to capture it.</div>" : "")
               + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
             gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:26%'><col style='width:26%'><col style='width:20%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
