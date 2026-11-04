@@ -19866,7 +19866,7 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" };
         return _docActAccum[id];
       }
 
@@ -20244,7 +20244,12 @@ processJSON();
           });
         });
 
-        // Contact Points step (accumulate into the record's store).
+        // Contact Points step — there is only ONE real config (one channel wizard per
+        // activation), so this merges onto a single stored object (field-by-field, "last
+        // known good value wins") rather than appending snapshots to a list. Appending used
+        // to let a stale/incomplete capture (e.g. an unconfigured channel's noise, read before
+        // the user finished configuring, or before this noise-filter existed) sit alongside a
+        // later good one forever, rendering both as if they were two separate contact points.
         if (channelEl) {
           var cp = {
             platform: docActCpStr(segSafeGet(channelEl, "selectedPlatform")),
@@ -20257,9 +20262,15 @@ processJSON();
           };
           var hasAny = ["email", "phone", "push", "whatsApp", "address"].some(function (k) { return cp[k] && cp[k].present; });
           if (hasAny) {
-            // de-dupe by serialized content so revisiting the step doesn't pile up copies
-            var key = JSON.stringify(cp);
-            if (!acc.contactPoints.some(function (x) { return JSON.stringify(x) === key; })) acc.contactPoints.push(cp);
+            if (!acc.contactPoint) {
+              acc.contactPoint = cp;
+            } else {
+              if (cp.platform) acc.contactPoint.platform = cp.platform;
+              if (cp.connectionType) acc.contactPoint.connectionType = cp.connectionType;
+              ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
+                if (cp[k] && cp[k].present) acc.contactPoint[k] = cp[k];
+              });
+            }
           }
         }
 
@@ -20271,8 +20282,8 @@ processJSON();
         out.captured.outputNames = Object.keys(acc.outputByUid).length > 0;
         out.staticRows = acc.staticRows.slice();
         out.captured.staticValues = acc.staticRows.length > 0;
-        out.contactPoints = acc.contactPoints.slice();
-        out.captured.contactPoints = acc.contactPoints.length > 0;
+        out.contactPoints = acc.contactPoint ? [acc.contactPoint] : [];
+        out.captured.contactPoints = !!acc.contactPoint;
 
         // Filter badges + any condition content captured while its dialog was open, joined
         // by group/entity label (same label SF shows on both the closed row and the dialog title).

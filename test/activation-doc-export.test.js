@@ -306,7 +306,17 @@ function docActScrapeOver(raw, acc) {
       address: docActCpExtract(segSafeGet(channelEl, "contactPointAddress"))
     };
     var hasAny = ["email", "phone", "push", "whatsApp", "address"].some(function (k) { return cp[k] && cp[k].present; });
-    if (hasAny) { var key = JSON.stringify(cp); if (!acc.contactPoints.some(function (x) { return JSON.stringify(x) === key; })) acc.contactPoints.push(cp); }
+    if (hasAny) {
+      if (!acc.contactPoint) {
+        acc.contactPoint = cp;
+      } else {
+        if (cp.platform) acc.contactPoint.platform = cp.platform;
+        if (cp.connectionType) acc.contactPoint.connectionType = cp.connectionType;
+        ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
+          if (cp[k] && cp[k].present) acc.contactPoint[k] = cp[k];
+        });
+      }
+    }
   }
 
   out.attributes.forEach(function (row) {
@@ -316,8 +326,8 @@ function docActScrapeOver(raw, acc) {
   out.captured.outputNames = Object.keys(acc.outputByUid).length > 0;
   out.staticRows = acc.staticRows.slice();
   out.captured.staticValues = acc.staticRows.length > 0;
-  out.contactPoints = acc.contactPoints.slice();
-  out.captured.contactPoints = acc.contactPoints.length > 0;
+  out.contactPoints = acc.contactPoint ? [acc.contactPoint] : [];
+  out.captured.contactPoints = !!acc.contactPoint;
   out.filterGroups = Object.keys(acc.filterGroups).map(function (label) {
     var g = acc.filterGroups[label];
     var cond = acc.filterConditions[label];
@@ -326,7 +336,7 @@ function docActScrapeOver(raw, acc) {
   out.captured.filterGroups = out.filterGroups.length > 0;
   return out;
 }
-function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" }; }
+function newAccum() { return { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" }; }
 
 // CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
@@ -477,6 +487,33 @@ console.log("\n6. contact points de-dupe (revisiting the step must not pile up c
   docActScrapeOver([summaryEl(), channelEl()], acc);   // revisit same step, identical content
   var out = docActScrapeOver([summaryEl(), channelEl()], acc);
   eq("still exactly one contact point after 3 visits", out.contactPoints.length, 1);
+}
+
+console.log("\n6a2. REGRESSION (user-reported, live screenshot): an EARLIER noisy/incomplete capture does not");
+console.log("     survive alongside a LATER good one — only ONE merged contact point ever shows, never two.");
+{
+  var acc = newAccum();
+  // Simulate the OLD bug directly: push/whatsApp/address captured while still mid-configuration
+  // (only UI-state plumbing visible, same shape the live screenshot showed).
+  var noisyChannelEl = { tagName: "runtime_cdp-activation-channel-wizard", selectedPlatform: "", targetConnectionType: "Marketing Cloud",
+    contactPointEmail: { fieldApiName: "ssot__EmailAddress__c", contactPointEntityName: "ssot__ContactPointEmail__dlm" },
+    contactPointPhone: { disablePathDropdown: true, pathIndex: -1 },
+    contactPointPush: { disablePathDropdown: true, pathIndex: -1 },
+    contactPointWhatsApp: { disablePathDropdown: true, pathIndex: -1 },
+    contactPointAddress: { disablePathDropdown: true, pathIndex: -1 } };
+  docActScrapeOver([summaryEl(), noisyChannelEl], acc);
+  // Later the user finishes configuring (or this is simply a cleaner re-read); push/whatsApp/address
+  // are genuinely unconfigured (empty string, not even a noise object) and email/phone are real.
+  var cleanChannelEl = { tagName: "runtime_cdp-activation-channel-wizard", selectedPlatform: "MarketingCloud", targetConnectionType: "Marketing Cloud",
+    contactPointEmail: { fieldApiName: "ssot__EmailAddress__c", contactPointEntityName: "ssot__ContactPointEmail__dlm", label: "Email Address" },
+    contactPointPhone: "", contactPointPush: "", contactPointWhatsApp: "", contactPointAddress: "" };
+  docActScrapeOver([summaryEl(), cleanChannelEl], acc);
+  var out = docActScrapeOver([summaryEl(), cleanChannelEl], acc);
+  eq("exactly ONE contact point in the export, never two", out.contactPoints.length, 1);
+  var cp = out.contactPoints[0];
+  eq("email (good in both captures) keeps its real config", cp.email.fieldApi, "ssot__EmailAddress__c");
+  ok("push/whatsApp/address end up NOT present (the later, correct read wins — no stale noise leaks through)",
+     cp.push.present === false && cp.whatsApp.present === false && cp.address.present === false);
 }
 
 console.log("\n6b. PERSISTENCE: a capture from one step SURVIVES navigating to a step that no longer has that element");
