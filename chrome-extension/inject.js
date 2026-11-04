@@ -20197,12 +20197,18 @@ processJSON();
             refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
                                      seg.refreshType || seg.activationRefreshType || tgt.refreshType),
             processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
-            schedule: seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
+            // seg.segmentSchedule is a raw enum ("TWENTY_FOUR"); seg.segmentScheduleLabel is
+            // the human text SF itself renders ("24 hours") — live-probed on a real waterfall
+            // activation. Prefer the label, fall back to the enum only if the label is absent.
+            schedule: seg.segmentScheduleLabel || seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
             filters: docActReadFilters(summaryEl, seg)
           };
           if (out.overview.isWaterfall) {
+            // selectedWaterfallSubsegments is an array of {id,name,isChecked} objects
+            // (live-probed), not strings — map to the name so the export shows readable
+            // segment names instead of "[object Object]".
             var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments");
-            out.waterfall = (subs && subs.slice) ? subs.slice() : [];
+            out.waterfall = (subs && subs.map) ? subs.map(function (s) { return (s && (s.name || s.label)) || ""; }).filter(Boolean) : [];
           }
           // includedAttributes[] is the authoritative list of what the activation sends.
           var inc = segSafeGet(summaryEl, "includedAttributes") || [];
@@ -20214,6 +20220,14 @@ processJSON();
               objectApi: a.entityName || "", category: a.category || "", outputName: "", path: "", source: "INCLUDED"
             });
           });
+          // Waterfall activations add two system fields (SubSegmentId, SubSegmentName) that
+          // identify which tier a record matched — SF adds these itself, they're not in
+          // includedAttributes[] (confirmed via live probe: 12 real DMO fields, no subsegment
+          // rows) and have no DMO/field API since they're synthetic, not sourced from a DMO.
+          if (out.overview.isWaterfall) {
+            out.attributes.push({ uid: "", label: "SubSegmentId", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+            out.attributes.push({ uid: "", label: "SubSegmentName", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+          }
         }
 
         // Attributes step: fold datatable .data[] into the accumulator (output names,
@@ -20384,7 +20398,7 @@ processJSON();
           ["Refresh Type", ov.refreshType, ""],
           ["Processing Type", ov.processingType, ""],
           ["Schedule", ov.schedule, ""],
-          ["Waterfall", ov.isWaterfall ? "Yes" : "No", ""]
+          ["Waterfall", ov.isWaterfall ? ((data.waterfall || []).join(", ") || "Yes") : "No", ""]
         ].concat((ov.filters || []).map(function (f) { return ["Filter — " + f.label, f.text, ""]; }))
          .concat((data.filterGroups || []).map(function (g) {
            var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
@@ -22744,7 +22758,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.689"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.690"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

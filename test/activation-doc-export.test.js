@@ -267,16 +267,23 @@ function docActScrapeOver(raw, acc) {
       isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
       refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
       processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
-      schedule: seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
+      schedule: seg.segmentScheduleLabel || seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
       filters: docActReadFilters(summaryEl, seg)
     };
-    if (out.overview.isWaterfall) { var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments"); out.waterfall = (subs && subs.slice) ? subs.slice() : []; }
+    if (out.overview.isWaterfall) {
+      var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments");
+      out.waterfall = (subs && subs.map) ? subs.map(function (s) { return (s && (s.name || s.label)) || ""; }).filter(Boolean) : [];
+    }
     var inc = segSafeGet(summaryEl, "includedAttributes") || [];
     out.captured.attributes = inc.length > 0;
     inc.forEach(function (a) {
       if (!a) return;
       out.attributes.push({ uid: a.uid || "", label: a.label || "", fieldApi: a.attributeName || "", objectApi: a.entityName || "", category: a.category || "", outputName: "", path: "", source: "INCLUDED" });
     });
+    if (out.overview.isWaterfall) {
+      out.attributes.push({ uid: "", label: "SubSegmentId", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+      out.attributes.push({ uid: "", label: "SubSegmentName", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+    }
   }
 
   attrTables.forEach(function (el) {
@@ -765,10 +772,37 @@ console.log("\n9. applied filters read ONLY when present (never fabricated)");
 
 console.log("\n10. waterfall segments captured when present");
 {
-  var wf = summaryEl(); wf.isSelectedSegmentWaterfall = true; wf.selectedWaterfallSubsegments = ["TDI_Sub_A", "TDI_Sub_B"];
+  // Real shape (live-probed on an actual waterfall activation): each subsegment is an
+  // {id,name,isChecked} OBJECT, not a plain string — joining the raw objects previously
+  // rendered "[object Object]" in the export (user-reported).
+  var wf = summaryEl();
+  wf.isSelectedSegmentWaterfall = true;
+  wf.selectedWaterfallSubsegments = [
+    { id: "1sgbc0000001yLVAAY", name: "SF_EM_GI_TRGT_26492_GI-Multiline-AO-Auto", isChecked: true },
+    { id: "1sgbc0000001yLWAAZ", name: "TDI_Sub_B", isChecked: true }
+  ];
   var out = docActScrapeOver([wf], newAccum());
   ok("isWaterfall true", out.overview.isWaterfall === true);
-  eq("subsegments captured", (out.waterfall || []).join(","), "TDI_Sub_A,TDI_Sub_B");
+  eq("subsegment NAMES captured (never raw objects / [object Object])", (out.waterfall || []).join(","), "SF_EM_GI_TRGT_26492_GI-Multiline-AO-Auto,TDI_Sub_B");
+  ok("SubSegmentId system row added to attributes on waterfall activations", out.attributes.some(function (a) { return a.label === "SubSegmentId" && a.source === "SYSTEM"; }));
+  ok("SubSegmentName system row added to attributes on waterfall activations", out.attributes.some(function (a) { return a.label === "SubSegmentName" && a.source === "SYSTEM"; }));
+  var nonWf = docActScrapeOver([summaryEl()], newAccum());
+  ok("no SubSegmentId/Name rows on a non-waterfall activation", !nonWf.attributes.some(function (a) { return a.source === "SYSTEM"; }));
+}
+
+console.log("\n10b. schedule reads the HUMAN LABEL, not the raw enum (user-reported: showed \"24\" instead of \"24 hours\")");
+{
+  // Live-probed real shape: seg.segmentSchedule = "TWENTY_FOUR" (raw enum), seg.segmentScheduleLabel
+  // = "24 hours" (the text SF itself renders) — these are sibling props on selectedSegment.
+  var seg = summaryEl();
+  seg.selectedSegment.segmentSchedule = "TWENTY_FOUR";
+  seg.selectedSegment.segmentScheduleLabel = "24 hours";
+  var out = docActScrapeOver([seg], newAccum());
+  eq("schedule shows the human label", out.overview.schedule, "24 hours");
+  var noLabel = summaryEl();
+  noLabel.selectedSegment.segmentSchedule = "TWENTY_FOUR";
+  var out2 = docActScrapeOver([noLabel], newAccum());
+  eq("falls back to raw enum when no label present", out2.overview.schedule, "TWENTY_FOUR");
 }
 
 // ── Source & strip presence (the feature is wired + lives DEV-ONLY) ──
