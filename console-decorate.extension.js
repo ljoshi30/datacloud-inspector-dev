@@ -20933,17 +20933,24 @@ processJSON();
               + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
           }
           // One labelled settings panel per object: Limit / Filters / Path rows (table → also valid in Word).
-          function metaBox(lim, flt, pth, hint) {
+          // Salesforce shows Max # of Attribute Values / Sort By (+ order) as labelled fields ABOVE the table: label over value.
+          function limBox(lim) {
+            if (!lim) return "";
+            var cell = "padding:8px 14px;vertical-align:top;border-right:1px solid #e5e7eb;";
+            var lab = "display:block;font:600 11px system-ui;color:#5c5c5c;margin:0 0 3px;";
+            var val = "font:600 13px system-ui;color:#181818;";
+            return "<table style='width:100%;border-collapse:collapse;background:#f7f9fb;border:1px solid #e5e7eb;margin:0 0 8px;'><tbody><tr>"
+              + "<td style='" + cell + "width:24%;'><span style='" + lab + "'>Max. # of Attribute Values</span><span style='" + val + "'>" + docActEsc(lim.maxValues) + "</span>" + (lim.fixed ? " <span style='color:#8a8a8a;font-size:11px;'>(fixed)</span>" : "") + "</td>"
+              + "<td style='" + cell + "'><span style='" + lab + "'>Sort By</span><span style='" + val + "'>" + docActEsc(lim.sortLabel) + "</span> " + docActApiChip(lim.sortField) + "</td>"
+              + "<td style='" + cell + "width:22%;border-right:0;'><span style='" + lab + "'>Order</span><span style='" + val + "'>" + docActEsc(lim.orderLabel) + "</span></td>"
+              + "</tr></tbody></table>";
+          }
+          // Below the table: Filters (numbered conditions) and Path (numbered steps).
+          function metaBox(flt, pth, hint) {
             var th = "padding:7px 12px;width:84px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #eef0f2;" + lblTxt;
             var td = "padding:7px 12px;vertical-align:top;border-bottom:1px solid #eef0f2;font:500 12px/1.6 system-ui;color:#181818;";
             var chip = "display:inline-block;margin:0 6px 4px 0;padding:2px 8px;border:1px solid #d8dde3;border-radius:5px;background:#fff;";
             var rows = "";
-            if (lim) {
-              rows += "<tr><th style='" + th + "'>Limit</th><td style='" + td + "'>"
-                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Max # of Attribute Values</span> <b>" + docActEsc(lim.maxValues) + "</b>" + (lim.fixed ? " <span style='color:#8a8a8a;font-size:11px;'>fixed</span>" : "") + "</span>"
-                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Sort by</span> <b>" + docActEsc(lim.sortLabel) + "</b> " + docActApiChip(lim.sortField) + "</span>"
-                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Order</span> <b>" + docActEsc(lim.orderLabel) + "</b></span></td></tr>";
-            }
             if (flt) {
               var conds = (flt.conditions || []).filter(function (c) { return c.text || c.field; });
               var fb = flt.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;margin-right:8px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
@@ -20989,9 +20996,10 @@ processJSON();
               + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(titleOverride ? titleOverride : pl ? pl.key : (pf ? pf.key : (pp ? pp.key : (pickBy(gsecM, en) ? pickBy(gsecM, en).key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, ""))))) + "</span>"
               + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + (rows.length ? "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span>" : "") + "</div>"
               + "";
-            var metaHtml = metaBox(lim, flt, pth, (!pth && isCpObj(en) && !(data.contactPoints || []).length) ? "Set on the Contact Points step — open that step once, then re-run to capture it." : "");
-            if (!rows.length) return gh + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div>" + metaHtml + "</div>";
-            gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:4%'><col style='width:24%'><col style='width:25%'><col style='width:20%'><col style='width:27%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
+            var limHtml = limBox(lim);
+            var metaHtml = metaBox(flt, pth, (!pth && isCpObj(en) && !(data.contactPoints || []).length) ? "Set on the Contact Points step — open that step once, then re-run to capture it." : "");
+            if (!rows.length) return gh + limHtml + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div>" + metaHtml + "</div>";
+            gh += limHtml + "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:4%'><col style='width:24%'><col style='width:25%'><col style='width:20%'><col style='width:27%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"

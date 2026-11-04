@@ -36,7 +36,8 @@ const must=(n,c)=>{console.log((c?"✓ ":"✗ ")+n);if(!c)process.exitCode=1};
 must("Activation Membership section shown first (before Contact Point)", html.indexOf("Activation Membership")>-1 && html.indexOf("Activation Membership")<html.indexOf(">Contact Point<"));
 must("rendered", html.length>500);
 const gi=html.indexOf("TDI_Individual_Additional");const grp=html.slice(gi);
-must("TDI group: attribute table FIRST, then its Limit / Filters / Path panel below", grp.indexOf("Global Exclusion In")>-1 && grp.indexOf("Max # of Attribute Values")>grp.indexOf("Global Exclusion In") && grp.indexOf("Filters")>grp.indexOf("Global Exclusion In") && grp.indexOf(">Path<")>grp.indexOf("Global Exclusion In"));
+must("TDI group like Salesforce: Max. # of Attribute Values / Sort By / Order fields ABOVE the table; Filters + Path BELOW it", grp.indexOf("Max. # of Attribute Values")>-1 && grp.indexOf("Max. # of Attribute Values")<grp.indexOf("Global Exclusion In") && grp.indexOf("Sort By")<grp.indexOf("Global Exclusion In") && grp.indexOf("Filters")>grp.indexOf("Global Exclusion In") && grp.indexOf(">Path<")>grp.indexOf("Global Exclusion In"));
+must("limit fields are label-over-value (not a 'Limit' chip row)", !/>Limit<\/th>/.test(grp.slice(0,3000)));
 must("TDI group shows its Path and its Filtered badge", (grp.indexOf("A.Id")>-1 && grp.indexOf("TDI.Info")>-1) && grp.indexOf("Filtered")>-1);
 must("no Other-settings card (all attached)", !/Other related-object settings/.test(html));
 must("Contact Point limit lives in Contact Point section, ordered before Attributes", html.indexOf("Contact Point Email")>-1 && html.indexOf(">Contact Point<")<html.indexOf(">Attributes"));
@@ -52,7 +53,7 @@ must("Doc has NO flex/grid layout (Word ignores them)", !/display:flex|display:g
 const di=(s)=>docOut.indexOf(s);
 must("Doc keeps UI section order: Overview, Membership, Contact Point, Attributes, Campaign Data, Provisional", di(">Overview<")>-1 && di(">Overview<")<di("Activation Membership") && di("Activation Membership")<di(">Contact Point") && di(">Contact Point")<di(">Attributes") && di(">Attributes")<di("Campaign Data") && di("Campaign Data")<docOut.lastIndexOf("Provisional Audience Limiting"));
 must("Doc Overview lists Membership + Provisional Limit rows", /Activation Membership<\/th>/.test(docOut) && /Provisional Audience Limiting — Limit<\/th><td>5000/.test(docOut));
-must("Doc keeps API chips and per-object limit line", /FirstName__c/.test(docOut) && /Max # of Attribute Values/.test(docOut));
+must("Doc keeps API chips and per-object limit line", /FirstName__c/.test(docOut) && /Max\. # of Attribute Values/.test(docOut));
 const ovr=(typeof docActOvRowsFn==="function")?docActOvRowsFn(data):null;
 must("shared Overview rows (used by Excel + Doc) include Membership and Provisional Limit", !!ovr && ovr.some(r=>r[0]==="Activation Membership"&&/Unified Individual TDI — No filter/.test(r[1])) && ovr.some(r=>r[0]==="Provisional Audience Limiting — Limit"&&r[1]==="5000"));
 const ci=html.indexOf(">Contact Point<"), ai=html.indexOf(">Attributes<");
