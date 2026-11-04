@@ -10,11 +10,12 @@ attributes:[
 {label:"SubSegmentId",objectApi:"",source:"SYSTEM",category:"System"},
 {label:"Email Address",fieldApi:"EmailAddress__c",objectApi:"TDI_ContactPointEmail__dlm",outputName:"EmailAddress"},
 {label:"First Name",fieldApi:"FirstName__c",objectApi:"UnifiedIndividual__dlm",outputName:"FirstName",category:"Profile"},
+{label:"State Province",fieldApi:"StateProvinceId__c",objectApi:"TDI_UnifiedContactPointAddressTdi__dlm",outputName:"StateProvinceId"},
 {label:"Global Exclusion In",fieldApi:"G__c",objectApi:"TDI_Individual_Additional__dlm",outputName:"TDI_G",path:"A.B > C.D"}],
-contactPoints:[],groupSection:{"Contact Point Email":"Contact Point","TDI Individual Additional":"Attributes","Unified Individual":"Attributes"},staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
-limits:[{owner:"TDI Individual Additional",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"Contact Point Email",maxValues:"1",sortField:"Id__c",sortLabel:"Contact Point Email Id",orderLabel:"Ascending",fixed:true}],
+contactPoints:[],groupSection:{"Contact Point Email":"Contact Point","TDI Individual Additional":"Attributes","Unified Individual":"Attributes","Unified Indv Contact Point Address TDI":"Attributes"},staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
+limits:[{owner:"Unified Indv Contact Point Address TDI",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"TDI Individual Additional",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"Contact Point Email",maxValues:"1",sortField:"Id__c",sortLabel:"Contact Point Email Id",orderLabel:"Ascending",fixed:true}],
 pathChoices:[{owner:"TDI Individual Additional",text:"U.Id > TDI.Info"}],
-filterGroups:[{label:"TDI Individual Additional",hasFilter:true,conditions:[]}]};
+filterGroups:[{label:"Contact Point Email",hasFilter:true,conditions:[]},{label:"TDI Individual Additional",hasFilter:false,conditions:[]},{label:"Unified Indv Contact Point Address TDI",hasFilter:false,conditions:[]}]};
 let mod;
 const docActOvRowsFn=new Function(grab('docActOvRows')+'\nreturn docActOvRows;')();
 const document={getElementById(){return null},createElement(t){const o=el();return o},body:{appendChild(m){mod=m},contains(){return true}},addEventListener(){},removeEventListener(){}};
@@ -36,7 +37,7 @@ must("Activation Membership section shown first (before Contact Point)", html.in
 must("rendered", html.length>500);
 const gi=html.indexOf("TDI_Individual_Additional");const grp=html.slice(gi);
 must("TDI group has Max # / Sort By inside it, before its first attribute row", grp.indexOf("Max # of Attribute Values")>-1 && grp.indexOf("Max # of Attribute Values")<grp.indexOf("Global Exclusion In"));
-must("TDI group shows its Path and Filtered badge", grp.indexOf("U.Id &gt; TDI.Info")>-1 && grp.indexOf("Filtered")>-1);
+must("TDI group shows its Path and its own No filter badge", grp.indexOf("U.Id &gt; TDI.Info")>-1 && grp.indexOf("No filter")>-1);
 must("no Other-settings card (all attached)", !/Other related-object settings/.test(html));
 must("Contact Point limit lives in Contact Point section, ordered before Attributes", html.indexOf("Contact Point Email")>-1 && html.indexOf(">Contact Point<")<html.indexOf(">Attributes"));
 must("Unified Individual group has NO limit line", !/UnifiedIndividual[\s\S]{0,200}Max # of Attribute Values[\s\S]{0,50}FirstName/.test(html.slice(0,html.indexOf("Global Exclusion In"))) );
@@ -59,3 +60,8 @@ must("Contact Point section contains Email Address attribute, before Attributes 
 must("no separate channel table", !/Contact Point field \/ object/.test(html));
 must("SF label (not API-ish name) used as group title", html.indexOf(">Contact Point Email<")>-1);
 console.log(process.exitCode?"❌ FAILURES":"✅ ALL PASS");
+
+must("no standalone Filters card when every filter belongs to a rendered group", !/>Filters <span/.test(html));
+const cpi=html.indexOf("EmailAddress__c"), cpStart=html.lastIndexOf("Contact Point Email",cpi);
+must("Contact Point Email Filtered badge sits inside its own group (before its first row)", html.slice(cpStart,cpi).indexOf("Filtered")>-1);
+if(process.env.DBG){const i=html.indexOf(">Filters <span");console.log(html.slice(i,i+900).replace(/<[^>]+>/g," ").replace(/\s+/g," "));}
