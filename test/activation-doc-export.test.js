@@ -80,6 +80,11 @@ function docActLooksLikeHops(arr) {
 }
 function docActCpPath(obj) {
   try {
+    if (obj.pathComboboxOptions && obj.pathComboboxOptions.length && obj.pathIndex != null) {
+      var idx = parseInt(obj.pathIndex, 10);
+      var opt = obj.pathComboboxOptions[idx];
+      if (opt && opt.label) return opt.label;
+    }
     var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
     if (cfgs && cfgs.length) {
       for (var i = 0; i < cfgs.length; i++) {
@@ -168,20 +173,64 @@ function docActReadFilters(summaryEl, seg) {
   return out;
 }
 
+// Filter-exists badge, from the attribute-wizard's plain innerText (panel CLOSED):
+// "<Group Label> (N)\nAdd Filters" (no filter) or "...\nEdit Filters" (filter applied).
+function docActParseFilterBadges(wizardText) {
+  var out = {};
+  if (!wizardText) return out;
+  var re = /([A-Za-z0-9 _.]+?)\s*\((\d+)\)\s*\n\s*(Add Filters|Edit Filters)/g;
+  var m;
+  while ((m = re.exec(wizardText))) out[m[1].trim()] = { count: parseInt(m[2], 10), hasFilter: m[3] === "Edit Filters" };
+  return out;
+}
+var DOCACT_FILTER_OPS = ["Has Value", "Is Null", "Is Not Null", "Does Not Contain", "Not Equal To",
+  "Not Equal", "Starts With", "Ends With", "Greater Than Or Equal", "Less Than Or Equal",
+  "Greater Than", "Less Than", "Not In", "Contains", "Equals", "Between", "In"];
+// The open "Edit/Add Filters" dialog's plain innerText → {entityLabel, path, conditions[]}.
+function docActParseFilterDialog(dialogText) {
+  if (!dialogText) return null;
+  var titleM = /Filter "([^"]+)" Attributes/.exec(dialogText);
+  var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(dialogText);
+  var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(dialogText);
+  var conditions = [];
+  if (spanM && spanM[1]) {
+    var span = spanM[1].trim();
+    var opAlt = DOCACT_FILTER_OPS.map(function (o) { return o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|");
+    var condRe = new RegExp("([A-Za-z0-9 _.]+?)\\s+(" + opAlt + ")(?=\\s+[A-Z]|$)", "g");
+    var cm;
+    while ((cm = condRe.exec(span))) conditions.push({ field: cm[1].trim(), operator: cm[2].trim() });
+    if (!conditions.length) conditions.push({ field: "", operator: "", text: span });
+  }
+  if (!titleM && !conditions.length) return null;
+  return { entityLabel: titleM ? titleM[1] : "", path: pathM ? pathM[1].trim() : "", conditions: conditions };
+}
+
 // scrape over a provided list of "elements" + a persistent accumulator (the source keeps one
 // per recordId in _docActAccum; here we pass it in so we can simulate visiting two steps).
 function docActScrapeOver(raw, acc) {
-  var summaryEl = null, attrTables = [], channelEl = null;
+  var summaryEl = null, attrTables = [], channelEl = null, attrWizardEl = null, filterDialogEl = null;
   raw.forEach(function (el) {
     var tag = (el.tagName || "").toLowerCase();
     if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
     else if (tag === "runtime_cdp-activation-attribute-datatable") attrTables.push(el);
     else if (tag === "runtime_cdp-activation-channel-wizard") channelEl = channelEl || el;
+    else if (tag === "runtime_cdp-activation-attribute-wizard") attrWizardEl = attrWizardEl || el;
+    else if (tag === "runtime_cdp-activation-related-attributes-filter-dialog") filterDialogEl = filterDialogEl || el;
   });
+
+  if (attrWizardEl) {
+    var badges = docActParseFilterBadges(attrWizardEl.innerText || attrWizardEl.textContent || "");
+    Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
+  }
+  if (filterDialogEl) {
+    var parsed = docActParseFilterDialog(filterDialogEl.innerText || filterDialogEl.textContent || "");
+    if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
+  }
 
   var out = {
     found: !!summaryEl, overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
-    captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false }
+    filterGroups: [], filterConditions: [],
+    captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false, filterGroups: false }
   };
 
   if (summaryEl) {
@@ -219,7 +268,9 @@ function docActScrapeOver(raw, acc) {
     data.forEach(function (d) {
       if (!d) return;
       if (d.staticAttributeName != null || d.staticAttributeValue != null) {
-        acc.staticRows.push({ name: d.staticAttributeName || d.name || "", value: (d.staticAttributeValue != null ? String(d.staticAttributeValue) : ""), objectApi: d.entityName || "" });
+        var srow = { name: d.staticAttributeName || d.name || "", value: (d.staticAttributeValue != null ? String(d.staticAttributeValue) : ""), objectApi: d.entityName || "" };
+        var sKey = srow.name + "" + srow.value + "" + srow.objectApi;
+        if (!acc.staticRows.some(function (x) { return (x.name + "" + x.value + "" + x.objectApi) === sKey; })) acc.staticRows.push(srow);
         return;
       }
       if (!d.uid) return;
@@ -250,9 +301,15 @@ function docActScrapeOver(raw, acc) {
   out.captured.staticValues = acc.staticRows.length > 0;
   out.contactPoints = acc.contactPoints.slice();
   out.captured.contactPoints = acc.contactPoints.length > 0;
+  out.filterGroups = Object.keys(acc.filterGroups).map(function (label) {
+    var g = acc.filterGroups[label];
+    var cond = acc.filterConditions[label];
+    return { label: label, count: g.count, hasFilter: g.hasFilter, conditions: cond ? cond.conditions : [], path: cond ? cond.path : "" };
+  });
+  out.captured.filterGroups = out.filterGroups.length > 0;
   return out;
 }
-function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {} }; }
+function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {} }; }
 
 // CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
@@ -437,6 +494,128 @@ console.log("\n6c. CONTACT-POINT PATH capture, incl. deep-scan when the hop arra
   eq("no false-positive path from a non-hop nested object", noPath.path, "");
 }
 
+console.log("\n6d. STATIC VALUES de-dupe across re-runs (the 'Static Values (12)' = 3 unique × 4 re-runs bug)");
+{
+  // A multi-static-row datatable, mirroring the live capture (Campaign Name / Waver Number / Segment Name).
+  function multiStaticEl() {
+    return { tagName: "runtime_cdp-activation-attribute-datatable", data: [
+      { staticAttributeName: "Campaign Name", staticAttributeValue: "Multiline adhoc giftcard", entityName: "IndividualG__dlm" },
+      { staticAttributeName: "Waver Number",  staticAttributeValue: "1",                        entityName: "IndividualG__dlm" },
+      { staticAttributeName: "Segment Name",  staticAttributeValue: "1234_64598_Gift_Card_Auto__95T_W1_1-1_T", entityName: "IndividualG__dlm" }
+    ]};
+  }
+  var acc = newAccum();
+  docActScrapeOver([summaryEl(), multiStaticEl()], acc);   // 1st visit
+  docActScrapeOver([summaryEl(), multiStaticEl()], acc);   // re-run (step revisited / bookmarklet re-ran)
+  docActScrapeOver([summaryEl(), multiStaticEl()], acc);   // re-run
+  var out = docActScrapeOver([summaryEl(), multiStaticEl()], acc);   // 4th scrape — the screenshot had 4×
+  eq("exactly 3 unique static rows after 4 scrapes (was 12 before the de-dupe fix)", out.staticRows.length, 3);
+  var names = out.staticRows.map(function (s) { return s.name; }).sort().join(",");
+  eq("the 3 distinct names kept once each", names, "Campaign Name,Segment Name,Waver Number");
+  // A genuinely different value for the same name is NOT collapsed (de-dupe is by name+value+object, not name alone).
+  var acc2 = newAccum();
+  docActScrapeOver([summaryEl(), { tagName: "runtime_cdp-activation-attribute-datatable", data: [
+    { staticAttributeName: "Waver Number", staticAttributeValue: "1", entityName: "IndividualG__dlm" },
+    { staticAttributeName: "Waver Number", staticAttributeValue: "2", entityName: "IndividualG__dlm" }
+  ] }], acc2);
+  eq("same name, different value → both kept (not over-collapsed)", acc2.staticRows.length, 2);
+}
+
+console.log("\n6e. EMAIL ADDRESS PATH: pathComboboxOptions[pathIndex].label is the readable path text");
+{
+  // Real shape from the live-org probe: contactPointEmail carries pathComboboxOptions[] + pathIndex,
+  // and the combobox's visible text is pathComboboxOptions[pathIndex].label verbatim.
+  var cpEmail = {
+    fieldApiName: "EmailAddress__c", contactPointEntityName: "TDI_ContactPointEmail__dlm", label: "Email Address",
+    pathIndex: "0",
+    pathComboboxOptions: [
+      { label: "Contact Point Email.Party > Individual.Individual Id, Individual.Individual Id > Unified Link Individual TDIR.Individual Id, Unified Link Individual TDIR.Unified Individual Id > Unified Individual TDIR.Unified Individual Id", value: "0" },
+      { label: "Contact Point Email.Contact Point Email Id > Unified Link Contact Point Email TDIR.Contact Point Email Id, ...", value: "1" }
+    ]
+  };
+  var cp = docActCpExtract(cpEmail);
+  eq("path = pathComboboxOptions[pathIndex].label, read directly off the live-confirmed shape",
+     cp.path, "Contact Point Email.Party > Individual.Individual Id, Individual.Individual Id > Unified Link Individual TDIR.Individual Id, Unified Link Individual TDIR.Unified Individual Id > Unified Individual TDIR.Unified Individual Id");
+  // pathIndex selects a DIFFERENT option when the user picked a non-default path.
+  var cp2 = docActCpExtract(Object.assign({}, cpEmail, { pathIndex: "1" }));
+  ok("a non-zero pathIndex selects the matching option, not always index 0", /Contact Point Email Id > Unified Link/.test(cp2.path));
+  // No pathComboboxOptions at all → falls through to the other known shapes / deep-scan (no crash).
+  var cp3 = docActCpExtract({ fieldApiName: "x__c" });
+  eq("absent pathComboboxOptions → empty path, no throw", cp3.path, "");
+}
+
+console.log("\n6f. FILTER-EXISTS BADGE: 'Edit Filters' vs 'Add Filters' readable per group, panel CLOSED");
+{
+  // Real innerText shape from the live-org probe (Attributes step, filter panel closed).
+  var wizardText = "Add Attributes and Filters to Your Activation\nHelp\nAdd Attributes\nActivation Membership\n" +
+    "Unified Individual TDIR\nAdd Filters\nAdd filters to refine the activation membership.\nContact Point\n" +
+    "Contact Point Email (1)\nEdit Filters\nMax. # of Attribute Values\n*\n1\nSort By\n*\nContact Point Email Id\n" +
+    "*\nAscending\nAttributes\nUnified Individual TDIR (8)\nNavigation Mode\n \nAttribute\n" +
+    "Insurance Account (1)\nAdd Filters\nMax. # of Attribute Values\n*\n1\nSort By\n*\nData Source\n*\nDescending\n" +
+    "Insurance Policy (3)\nAdd Filters\nMax. # of Attribute Values\n*\n1\nSort By\n*\nData Source\n*\nDescending";
+  var badges = docActParseFilterBadges(wizardText);
+  ok("Contact Point Email group detected as FILTERED (Edit Filters)", badges["Contact Point Email"] && badges["Contact Point Email"].hasFilter === true);
+  eq("Contact Point Email count parsed", badges["Contact Point Email"].count, 1);
+  ok("Insurance Account group detected as NOT filtered (Add Filters)", badges["Insurance Account"] && badges["Insurance Account"].hasFilter === false);
+  ok("Insurance Policy group detected as NOT filtered (Add Filters)", badges["Insurance Policy"] && badges["Insurance Policy"].hasFilter === false);
+  // Unified Individual TDIR (8) is a group WITHOUT an Add/Edit Filters line directly after it in this
+  // text (its line is "Navigation Mode" next) → must NOT be misreported as either state.
+  ok("a group header with no immediately-following Add/Edit Filters line is simply absent (never guessed)", !badges["Unified Individual TDIR"]);
+  // No wizard text at all → empty map, never throws.
+  eq("empty text → no badges", Object.keys(docActParseFilterBadges("")).length, 0);
+}
+
+console.log("\n6g. APPLIED FILTER CONTENT: parsed from the open filter dialog's plain innerText");
+{
+  // Real innerText shape from the live-org probe (Attributes step, "Edit Filters" dialog OPEN).
+  var dialogText = 'Filter "Contact Point Email" Attributes CancelSave Attributes Press Enter to add to canvas ' +
+    'Contact Point Email Id TEXT Press Enter to add to canvas Email Address TEXT ' +
+    'To determine which contact points are chosen for a member, select attributes to filter the contact points. ' +
+    'Path Unified Individual TDIR.Unified Individual Id > Unified Link Individual TDIR.Unified Individual Id, ' +
+    'Unified Link Individual TDIR.Individual Id > Individual.Individual Id, Individual.Individual Id > Contact Point Email.Party ' +
+    'Attributes (1) Email Address Contact Point Email: Edit Filter Remove Filter Drag and drop Email Address Has Value Add another Attribute here';
+  var parsed = docActParseFilterDialog(dialogText);
+  ok("dialog parsed (entityLabel found)", !!parsed);
+  eq("entity label from the dialog title", parsed.entityLabel, "Contact Point Email");
+  eq("join path captured from the dialog's 'Path' line", parsed.path,
+     "Unified Individual TDIR.Unified Individual Id > Unified Link Individual TDIR.Unified Individual Id, Unified Link Individual TDIR.Individual Id > Individual.Individual Id, Individual.Individual Id > Contact Point Email.Party");
+  eq("exactly one applied condition parsed", parsed.conditions.length, 1);
+  eq("condition field", parsed.conditions[0].field, "Email Address");
+  eq("condition operator (multi-word phrase 'Has Value' kept whole, not split)", parsed.conditions[0].operator, "Has Value");
+  // A dialog with NO applied condition yet (freshly opened "Add Filters") must not fabricate one.
+  var emptyDialog = 'Filter "Insurance Account" Attributes CancelSave Attributes Path Unified Individual TDIR.Id > Insurance Account.PrimaryInsuredId ' +
+    'Attributes (0) Drag and drop Add another Attribute here';
+  var parsedEmpty = docActParseFilterDialog(emptyDialog);
+  eq("no conditions in an unfiltered dialog → empty conditions array, never a fabricated one", parsedEmpty.conditions.length, 0);
+  // Not the filter dialog at all → null, never throws.
+  ok("unrelated text → null (no false match)", docActParseFilterDialog("some random page text") === null);
+  ok("empty text → null", docActParseFilterDialog("") === null);
+}
+
+console.log("\n6h. filterGroups MERGE: badge (closed) + condition text (only if the dialog was opened once) join by label");
+{
+  var acc = newAccum();
+  var wizardEl = { tagName: "runtime_cdp-activation-attribute-wizard",
+    innerText: "Contact Point Email (1)\nEdit Filters\nInsurance Account (1)\nAdd Filters" };
+  docActScrapeOver([summaryEl(), wizardEl], acc);
+  var afterBadgeOnly = docActScrapeOver([summaryEl()], acc);
+  var cpe = afterBadgeOnly.filterGroups.filter(function (g) { return g.label === "Contact Point Email"; })[0];
+  ok("badge alone (dialog never opened): hasFilter true, but NO condition text yet (honest, not fabricated)",
+     cpe && cpe.hasFilter === true && cpe.conditions.length === 0);
+  var ia = afterBadgeOnly.filterGroups.filter(function (g) { return g.label === "Insurance Account"; })[0];
+  ok("Insurance Account badge: not filtered", ia && ia.hasFilter === false);
+  // Now the user opens "Edit Filters" on Contact Point Email once → condition text folds in,
+  // and it SURVIVES after the dialog closes (accumulator persists, same pattern as contact points).
+  var dialogEl = { tagName: "runtime_cdp-activation-related-attributes-filter-dialog",
+    innerText: 'Filter "Contact Point Email" Attributes Path X.Id > Y.Id Attributes (1) Drag and drop Email Address Has Value Add another Attribute here' };
+  docActScrapeOver([summaryEl(), wizardEl, dialogEl], acc);
+  var afterOpen = docActScrapeOver([summaryEl(), wizardEl], acc);   // dialog closed again
+  var cpe2 = afterOpen.filterGroups.filter(function (g) { return g.label === "Contact Point Email"; })[0];
+  ok("condition text persists after the dialog is closed (window-accumulator pattern)",
+     cpe2 && cpe2.conditions.length === 1 && cpe2.conditions[0].field === "Email Address" && cpe2.conditions[0].operator === "Has Value");
+  eq("captured.filterGroups flips true once any badge is seen", afterBadgeOnly.captured.filterGroups, true);
+}
+
 console.log("\n7. no summary on the page → found=false, nothing fabricated");
 {
   var out = docActScrapeOver([{ tagName: "div" }, { tagName: "runtime_cdp-activation-attribute-datatable", data: [] }], newAccum());
@@ -518,6 +697,8 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));
   // PERSISTENCE: the accumulator must live on window, not in an IIFE-local that the per-step re-run wipes.
   ok("accumulator persisted on window.__dcDocActAccum (survives per-step bookmarklet re-runs)", /window\.__dcDocActAccum/.test(src));
+  // STATIC DE-DUPE: because the accumulator persists, static rows must be de-duped on push (or re-runs pile up copies).
+  ok("static rows de-duped by content before push (no 'Static Values (12)' = 3×4 duplication)", /acc\.staticRows\.some\(function \(x\) \{ return \(x\.name/.test(src));
   // LAUNCHER GATE: the exporter launcher must register on ANY activation page (wizard OR /view), not wizard-only.
   (function () {
     // The exporter branch must be reachable for detailPageType === "Activation" without an AND on isActivationWizardPage().
@@ -527,6 +708,11 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   })();
   // PATH: deep-scan path extraction is wired (finds the hop array even under an unknown wrapper key).
   ok("contact-point path deep-scan wired (docActLooksLikeHops + bounded scan)", /function docActLooksLikeHops/.test(src) && /function docActHopsText/.test(src));
+  // EMAIL PATH / FILTER BADGE / FILTER DIALOG: the three new capture mechanisms are wired in source.
+  ok("Email Address Path read via pathComboboxOptions[pathIndex] (live-confirmed shape)", /pathComboboxOptions/.test(src) && /pathIndex/.test(src));
+  ok("filter-exists badge parser present and reads the attribute-wizard tag", /function docActParseFilterBadges/.test(src) && /runtime_cdp-activation-attribute-wizard/.test(src));
+  ok("applied-filter-dialog parser present and reads the filter-dialog tag (read-only, never auto-opened)", /function docActParseFilterDialog/.test(src) && /runtime_cdp-activation-related-attributes-filter-dialog/.test(src));
+  ok("filterGroups merged into scrape output and rendered in the modal", /out\.filterGroups\s*=/.test(src) && /Attribute Filters/.test(src));
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
@@ -534,9 +720,11 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("DEV-ONLY: public build never DEFINES __dcDocActivation (only the guarded launcher reference may remain)", !/window\.__dcDocActivation\s*=/.test(pub));
   ok("DEV-ONLY: the 'Document Activation' launcher ROW is inside a strip block (not in public menu)", !/dc-act-doc-row/.test(pub));
   ok("DEV-ONLY: contact-point extractor stripped from public build", !/function docActCpExtract/.test(pub));
+  ok("DEV-ONLY: filter badge/dialog parsers stripped from public build", !/function docActParseFilterBadges/.test(pub) && !/function docActParseFilterDialog/.test(pub));
 
   // present in the FULL (dev) bookmarklet build — this is the artifact the client actually runs.
   ok("present in the FULL bookmarklet (synced from ext)", /function docActShowModal/.test(bm) && /dc-act-doc-row/.test(bm) && /function docActCpExtract/.test(bm));
+  ok("filter badge/dialog parsers present in the FULL bookmarklet (synced from ext)", /function docActParseFilterBadges/.test(bm) && /function docActParseFilterDialog/.test(bm));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

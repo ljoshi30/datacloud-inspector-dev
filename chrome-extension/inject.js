@@ -5655,15 +5655,61 @@
         }
       });
     }
-    function leafSql(node) {
+    // Shared correlation builder. From path[] (hops [[{obj,field},{obj,field}],…]) produce the pieces of
+    // a correlated subquery that links `container` back to the OUTER individual (fromObj) row-by-row:
+    //   { usable, fromList:[objs to put in subquery FROM], joinPreds:[hop equalities] }.
+    // The outer object is referenced by TABLE NAME (verified: Data Cloud correlates by outer table name).
+    // Returns usable=false when there's no path or a malformed hop — caller must then NOT emit an
+    // uncorrelated predicate (that's the 'matches everyone' bug) and should flag the query instead.
+    function buildCorrelation(path, container) {
+      var hops = Array.isArray(path) ? path : [];
+      var outer = fromObj || (hops[0] && hops[0][0] && hops[0][0].objectApiName) || "";
+      var joinPreds = [], fromObjs = {}, usable = hops.length > 0 && !!outer;
+      hops.forEach(function (hop) {
+        if (!(Array.isArray(hop) && hop.length === 2 && hop[0] && hop[1])) { usable = false; return; }
+        joinPreds.push(col(hop[0]) + " = " + col(hop[1]));
+        [hop[0], hop[1]].forEach(function (end) { var o = end.objectApiName; if (o && o !== outer) fromObjs[o] = true; });
+      });
+      if (container && container !== outer) fromObjs[container] = true;
+      var fromList = Object.keys(fromObjs);
+      if (container) fromList = [container].concat(fromList.filter(function (o) { return o !== container; }));
+      return { usable: usable && joinPreds.length > 0, outer: outer, fromList: fromList, joinPreds: joinPreds };
+    }
+    // leafSql(node, ctxObj): ctxObj = the object this leaf is being rendered WITHIN (defaults to the
+    // segment's FROM individual). A leaf whose object == ctxObj is a plain predicate. A leaf on a
+    // DIFFERENT object (e.g. a Calculated Insight on another object, at top level) must be a CORRELATED
+    // EXISTS over its path — a bare reference to an unjoined table would be invalid SQL. When a leaf is
+    // the INNER filter of an aggregation, the caller passes ctxObj=container, so it stays a bare predicate
+    // (it's already inside that subquery's FROM) and is NOT wrongly re-correlated.
+    function leafSql(node, ctxObj) {
       notePath(node.path);
       if (node.comparison) notePath(node.comparison.path);
       var cmp = node.comparison || node;   // CI wraps its leaf in .comparison
-      return col(cmp.subject) + " " + opSql(cmp.operator, operandOf(cmp));
+      var subjObj = cmp.subject && cmp.subject.objectApiName;
+      var pred = col(cmp.subject) + " " + opSql(cmp.operator, operandOf(cmp));
+      var ctx = ctxObj || fromObj || "";
+      if (subjObj && ctx && subjObj !== ctx) {
+        var c = buildCorrelation(node.path || (node.comparison && node.comparison.path), subjObj);
+        if (c.usable) {
+          return "EXISTS (SELECT 1 FROM " + c.fromList.join(", ") +
+                 "\n      WHERE " + c.joinPreds.concat([pred]).join("\n        AND ") + ")";
+        }
+        flags.blockers.push("condition on \"" + subjObj + "\" is on a different object than the segment's and has no join path to correlate — build it in Query Editor.");
+        return "RELATED_CONDITION(" + subjObj + ")";
+      }
+      return pred;   // same-object leaf → plain predicate (correct)
     }
     // NumberAggregation: "individuals having <aggFn> of <container rows matching inner filter> <op> N".
     // Real shape: { aggregateFunction:"count", filter:{inner condition}, comparison:{op,value},
     // containerObjectApiName, path:[join hops] }. Rendered as a correlated COUNT(*) subquery vs a threshold.
+    // NumberAggregation = "this individual has <fn> of <related rows matching filter> <op> N" — e.g.
+    // "has ≥1 email contact point". The related object joins back to the individual through Data Cloud's
+    // IDENTITY-RESOLUTION graph — a (possibly multi-hop) join carried in node.path as [[{obj,field},
+    // {obj,field}], …]. We build a REAL CORRELATED subquery from those hops (VERIFIED live: Data Cloud
+    // supports correlated subqueries, outer-table-name correlation, and multi-table comma joins inside
+    // the subquery — each returns the correct per-individual count, not the whole org). The first hop's
+    // first object is the OUTER individual (= fromObj); we correlate to it by table-name (no alias needed).
+    // Fallback: only if path[] is missing/unusable do we flag LOGIC VIEW (can't correlate without keys).
     function aggSql(node) {
       notePath(node.path);
       var fn = String(node.aggregateFunction || "count").toUpperCase();
@@ -5671,11 +5717,24 @@
         (node.filter && node.filter.subject && node.filter.subject.objectApiName) ||
         (node.comparison && node.comparison.subject && node.comparison.subject.objectApiName) || "";
       if (!container) { flags.blockers.push("an aggregation is missing its container object"); container = "UNKNOWN_OBJECT"; }
-      var innerWhere = node.filter ? walk(node.filter, 1) : "";
+      var innerWhere = node.filter ? walk(node.filter, 1, container) : "";   // inner filter is in the container's scope
       var thr = node.comparison ? opSql(node.comparison.operator, operandOf(node.comparison)) : ">= 1";
       var selectExpr = fn === "COUNT" ? "COUNT(*)" : (fn + "(" + col(node.comparison && node.comparison.subject) + ")");
-      notes.push("aggregation: " + fn + " of " + container + (innerWhere ? " where " + innerWhere : "") + " " + thr + " (correlated to each individual via the join keys)");
-      return "(SELECT " + selectExpr + " FROM " + container + (innerWhere ? " WHERE " + innerWhere : "") + ") " + thr;
+
+      // Build the correlation from path[] (shared with CI leaves). The OUTER individual is referenced by
+      // table name so the subquery correlates row-by-row; all other chain objects go in the subquery FROM.
+      var c = buildCorrelation(node.path, container);
+      if (c.usable) {
+        var whereParts = c.joinPreds.concat(innerWhere ? [innerWhere] : []);
+        notes.push("aggregation: " + fn + " of " + container + (innerWhere ? " where " + innerWhere : "") + " " + thr + " (correlated per individual via the path join keys)");
+        return "(SELECT " + selectExpr + " FROM " + c.fromList.join(", ") + "\n      WHERE " + whereParts.join("\n        AND ") + ") " + thr;
+      }
+
+      // No usable path → we cannot correlate correctly. Do NOT emit an uncorrelated COUNT (that's the
+      // 'matches everyone' bug). Flag it and emit a clearly-non-runnable marker (no inline comment).
+      flags.blockers.push("aggregation over \"" + container + "\" has no join path in the criteria, so it can't be correlated to each individual here — build the correlated count in Query Editor.");
+      notes.push("aggregation: " + fn + " of " + container + (innerWhere ? " where " + innerWhere : "") + " " + thr + " — NO path to correlate (shown as logic only)");
+      return "UNCORRELATED_COUNT(" + container + ") " + thr;
     }
     // NestedSegment: this individual is a MEMBER of another segment. We INLINE that segment's actual
     // criteria (recursively) so the SQL shows the real conditions, not an opaque id. Resolution order:
@@ -5716,7 +5775,10 @@
         var segId = String(resolved.segmentId || "");
         var segId15 = /^[A-Za-z0-9]{18}$/.test(segId) ? segId.slice(0, 15) : segId;
         if (!segId15) return null;
-        return (fromObj || "Individual") + "." + pk + " IN (SELECT Id__c FROM " + resolved.membershipTable +
+        // SELECT DISTINCT: the SMH table keeps one row per member PER PUBLISH RUN, so a member can appear
+        // many times (verified: 169 rows = 1 member over 169 publishes). IN already dedupes for membership,
+        // but DISTINCT makes it explicit + correct if the subquery is ever wrapped in a COUNT.
+        return (fromObj || "Individual") + "." + pk + " IN (SELECT DISTINCT Id__c FROM " + resolved.membershipTable +
                " WHERE Segment_Id__c = " + q(segId15) + " AND Delta_Type__c = 'existing')";
       }
       // --- inline the nested segment's own criteria (recursive, cycle-guarded, depth-capped) ----------
@@ -5764,24 +5826,27 @@
       flags.blockers.push("references nested segment \"" + label + "\" (" + (devName || label) + ") whose criteria/membership couldn't be resolved here — expand that segment separately");
       return "IS_MEMBER_OF_SEGMENT('" + String(devName || label).replace(/'/g, "''") + "')";
     }
-    function walk(node, depth) {
+    // walk(node, depth, ctxObj): ctxObj = the object context leaves render within (threaded into leafSql).
+    // Top level = undefined → leafSql uses fromObj. Inside an aggregation subquery, aggSql passes the
+    // container so the inner filter's same-object columns stay bare (not wrongly re-correlated).
+    function walk(node, depth, ctxObj) {
       if (!node || typeof node !== "object") return "";
       var t = String(node.type || "");
       // Order matters: NumberAggregation ALSO has a .filter, so it must be handled BEFORE the bare
       // {filter:…} unwrap below — otherwise the aggregation (count ≥ N) is silently discarded.
       if (t === "NumberAggregation" || t === "NumberAggregationComparison") return aggSql(node);
       if (t === "NestedSegment") return nestedSql(node, depth);
-      if (t === "CalculatedInsight") { notePath(node.path); notes.push("calculated insight condition on " + col((node.comparison || node).subject)); return leafSql(node); }
+      if (t === "CalculatedInsight") { return leafSql(node, ctxObj); }   // leafSql correlates cross-object CI leaves
       if (t === "LogicalComparison") {
         var join = String(node.operator || "AND").toUpperCase();
-        var parts = (node.filters || []).map(function (f) { return walk(f, depth + 1); }).filter(Boolean);
+        var parts = (node.filters || []).map(function (f) { return walk(f, depth + 1, ctxObj); }).filter(Boolean);
         if (!parts.length) return "";
         var pad = "\n" + "  ".repeat(depth + 1) + join + " ";
         var body = parts.join(pad);
         return depth === 0 ? body : "(" + body + ")";
       }
-      if (/Comparison$/.test(t)) return leafSql(node);
-      if (node.filter && typeof node.filter === "object") return walk(node.filter, depth);  // bare wrapper (last)
+      if (/Comparison$/.test(t)) return leafSql(node, ctxObj);
+      if (node.filter && typeof node.filter === "object") return walk(node.filter, depth, ctxObj);  // bare wrapper (last)
       // Unknown node: emit a VALID placeholder predicate (never a bare comment that dangles the AND)
       // and block runnability so it's never mistaken for exact. Reason goes in the header, not inline.
       flags.blockers.push("unsupported criteria node \"" + (t || "unknown") + "\" — couldn't be translated to SQL");
@@ -5805,20 +5870,17 @@
     var uniq = function (a) { var s = {}, o = []; a.forEach(function (x) { if (!s[x]) { s[x] = 1; o.push(x); } }); return o; };
     var blockers = uniq(flags.blockers), verify = uniq(flags.verify);
 
-    var header = "-- SQL from Salesforce's stored segment criteria (authoritative — read via the API).\n" +
-                 "-- Segment: " + (segName || "") + (tabLabel ? "  (tab: " + tabLabel + ")" : "") + "\n";
+    // Compact header: segment name + a single status line. Blockers (if any) and short VERIFY notes only
+    // when they exist. Join keys now live INSIDE the SQL (correlated subqueries), so no separate list; the
+    // verbose per-aggregation "Notes" are dropped — the SQL itself is the explanation.
+    var header = "-- Segment: " + (segName || "") + (tabLabel ? "  (tab: " + tabLabel + ")" : "") + "  — from Salesforce's stored criteria (via API)\n";
     if (!runnable) {
-      header += "-- ⚠️ LOGIC VIEW — NOT directly runnable. Read it to understand the logic; it needs the\n" +
-                "--    fixes below before it will execute:\n" +
+      header += "-- ⚠️ LOGIC VIEW — not directly runnable. Reasons:\n" +
                 blockers.map(function (b) { return "--    ✗ " + b; }).join("\n") + "\n";
     } else {
-      header += "-- ✅ Intended to be runnable as-is against Data Cloud (SQL). Review before running.\n";
+      header += "-- Runnable against Data Cloud (SQL). Review before running; a segment resolves to unified individuals, so a raw count may differ slightly from the published population.\n";
     }
-    if (verify.length) header += "-- VERIFY:\n" + verify.map(function (v) { return "--    • " + v; }).join("\n") + "\n";
-    if (joinList.length) header += "-- Join keys (from the criteria's path):\n" + joinList.map(function (j) { return "--   " + j; }).join("\n") + "\n";
-    if (notes.length) header += "-- Notes:\n" + notes.map(function (n) { return "--   • " + n; }).join("\n") + "\n";
-    header += "-- Note: a segment resolves to UNIFIED individuals; a raw SELECT may differ from the\n" +
-              "-- published population, but the logic/joins/operators below are the real ones.\n";
+    if (verify.length) header += "-- VERIFY: " + verify.join(" | ") + "\n";
     if (!where) return header + "-- (no include criteria)";
     return header + "SELECT *\nFROM " + from + "\nWHERE " + where + ";";
   }
@@ -19804,7 +19866,7 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {} };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {} };
         return _docActAccum[id];
       }
 
@@ -19857,6 +19919,14 @@ processJSON();
       // key names are inferred, so the deep-scan makes path capture robust to key differences).
       function docActCpPath(obj) {
         try {
+          // 0) the Email/Phone/etc Address Path combobox: pathComboboxOptions[pathIndex].label
+          // is the exact text shown in the "Email Address Path" field on the Contact Points
+          // step (confirmed against the live DOM) — check this first, it's the most direct shape.
+          if (obj.pathComboboxOptions && obj.pathComboboxOptions.length && obj.pathIndex != null) {
+            var idx = parseInt(obj.pathIndex, 10);
+            var opt = obj.pathComboboxOptions[idx];
+            if (opt && opt.label) return opt.label;
+          }
           // 1) known nested config: queryPathConfig.configs[].queryPath|path
           var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
           if (cfgs && cfgs.length) {
@@ -19971,6 +20041,47 @@ processJSON();
         return out;
       }
 
+      // The Attributes-step wizard renders each group header as "<Group Label> (N)" followed
+      // immediately by an "Add Filters" (no filter yet) or "Edit Filters" (filter applied)
+      // button — readable from plain innerText with the filter panel CLOSED (confirmed on the
+      // live DOM). This is the "filter exists" badge; it carries no condition detail.
+      function docActParseFilterBadges(wizardText) {
+        var out = {};
+        if (!wizardText) return out;
+        var re = /([A-Za-z0-9 _.]+?)\s*\((\d+)\)\s*\n\s*(Add Filters|Edit Filters)/g;
+        var m;
+        while ((m = re.exec(wizardText))) {
+          out[m[1].trim()] = { count: parseInt(m[2], 10), hasFilter: m[3] === "Edit Filters" };
+        }
+        return out;
+      }
+      // Known SF filter-condition operator phrases, used only to SPLIT the dialog's plain
+      // innerText into {field, operator} — never to fabricate a condition that isn't in the text.
+      var DOCACT_FILTER_OPS = ["Has Value", "Is Null", "Is Not Null", "Does Not Contain", "Not Equal To",
+        "Not Equal", "Starts With", "Ends With", "Greater Than Or Equal", "Less Than Or Equal",
+        "Greater Than", "Less Than", "Not In", "Contains", "Equals", "Between", "In"];
+      // The "Edit/Add Filters" dialog renders (read ONLY when the panel is open): a title
+      // `Filter "<Entity Label>" Attributes`, the join Path text, then each applied condition as
+      // plain "<Field Label> <Operator Phrase>" between "Drag and drop" and "Add another
+      // Attribute here". Multiple conditions concatenate in that same span.
+      function docActParseFilterDialog(dialogText) {
+        if (!dialogText) return null;
+        var titleM = /Filter "([^"]+)" Attributes/.exec(dialogText);
+        var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(dialogText);
+        var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(dialogText);
+        var conditions = [];
+        if (spanM && spanM[1]) {
+          var span = spanM[1].trim();
+          var opAlt = DOCACT_FILTER_OPS.map(function (o) { return o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|");
+          var condRe = new RegExp("([A-Za-z0-9 _.]+?)\\s+(" + opAlt + ")(?=\\s+[A-Z]|$)", "g");
+          var cm;
+          while ((cm = condRe.exec(span))) conditions.push({ field: cm[1].trim(), operator: cm[2].trim() });
+          if (!conditions.length) conditions.push({ field: "", operator: "", text: span });
+        }
+        if (!titleM && !conditions.length) return null;
+        return { entityLabel: titleM ? titleM[1] : "", path: pathM ? pathM[1].trim() : "", conditions: conditions };
+      }
+
       // Read the whole activation from the DOM. Returns a plain object the renderer +
       // CSV + Excel all consume. Pure read — never clicks, never mutates.
       function docActScrape() {
@@ -19979,19 +20090,38 @@ processJSON();
         var raw = collectRaw();
 
         var summaryEl = null, attrTables = [], channelEl = null, wizardEl = null, staticTables = [];
+        var attrWizardEl = null, filterDialogEl = null;
         raw.forEach(function (el) {
           var tag = (el.tagName || "").toLowerCase();
           if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
           else if (tag === "runtime_cdp-activation-attribute-datatable") attrTables.push(el);
           else if (tag === "runtime_cdp-activation-channel-wizard") channelEl = channelEl || el;
           else if (tag === "runtime_cdp-market-segment-activation-wizard") wizardEl = wizardEl || el;
+          else if (tag === "runtime_cdp-activation-attribute-wizard") attrWizardEl = attrWizardEl || el;
+          else if (tag === "runtime_cdp-activation-related-attributes-filter-dialog") filterDialogEl = filterDialogEl || el;
         });
+
+        // Filter-exists badges (Edit Filters vs Add Filters, read closed) — accumulate like
+        // output names/paths since this step tears down on navigation.
+        if (attrWizardEl) {
+          var wizText = ""; try { wizText = attrWizardEl.innerText || attrWizardEl.textContent || ""; } catch (e) {}
+          var badges = docActParseFilterBadges(wizText);
+          Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
+        }
+        // Applied filter condition content — read ONLY while the "Edit/Add Filters" dialog
+        // is actually open (per user constraint: never auto-open it).
+        if (filterDialogEl) {
+          var dlgText = ""; try { dlgText = filterDialogEl.innerText || filterDialogEl.textContent || ""; } catch (e) {}
+          var parsed = docActParseFilterDialog(dlgText);
+          if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
+        }
 
         var out = {
           recordId: id,
           found: !!summaryEl,
           overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
-          captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false }
+          filterGroups: [], filterConditions: [],
+          captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false, filterGroups: false }
         };
 
         if (summaryEl) {
@@ -20044,11 +20174,16 @@ processJSON();
           data.forEach(function (d) {
             if (!d) return;
             if (d.staticAttributeName != null || d.staticAttributeValue != null) {
-              acc.staticRows.push({
+              var srow = {
                 name: d.staticAttributeName || d.name || "",
                 value: (d.staticAttributeValue != null ? String(d.staticAttributeValue) : ""),
                 objectApi: d.entityName || ""
-              });
+              };
+              // de-dupe by full content: the accumulator persists on window, so re-scraping the
+              // Attributes step (every bookmarklet re-run) would otherwise append the same rows again
+              // (the "Static Values (12)" = 3 unique × 4 re-runs bug). Same name+value+object = same row.
+              var sKey = srow.name + "" + srow.value + "" + srow.objectApi;
+              if (!acc.staticRows.some(function (x) { return (x.name + "" + x.value + "" + x.objectApi) === sKey; })) acc.staticRows.push(srow);
               return;
             }
             if (!d.uid) return;
@@ -20088,6 +20223,15 @@ processJSON();
         out.captured.staticValues = acc.staticRows.length > 0;
         out.contactPoints = acc.contactPoints.slice();
         out.captured.contactPoints = acc.contactPoints.length > 0;
+
+        // Filter badges + any condition content captured while its dialog was open, joined
+        // by group/entity label (same label SF shows on both the closed row and the dialog title).
+        out.filterGroups = Object.keys(acc.filterGroups).map(function (label) {
+          var g = acc.filterGroups[label];
+          var cond = acc.filterConditions[label];
+          return { label: label, count: g.count, hasFilter: g.hasFilter, conditions: cond ? cond.conditions : [], path: cond ? cond.path : "" };
+        });
+        out.captured.filterGroups = out.filterGroups.length > 0;
 
         return out;
       }
@@ -20160,7 +20304,11 @@ processJSON();
           ["Processing Type", ov.processingType, ""],
           ["Schedule", ov.schedule, ""],
           ["Waterfall", ov.isWaterfall ? "Yes" : "No", ""]
-        ].concat((ov.filters || []).map(function (f) { return ["Filter — " + f.label, f.text, ""]; }));
+        ].concat((ov.filters || []).map(function (f) { return ["Filter — " + f.label, f.text, ""]; }))
+         .concat((data.filterGroups || []).map(function (g) {
+           var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+           return ["Attribute Filter — " + g.label, g.hasFilter ? (condTxt || "Filtered") : "No filter", ""];
+         }));
         var r1 = 3;
         ovRows.forEach(function (row) {
           if (!row[1] && !row[2]) return;
@@ -20355,6 +20503,25 @@ processJSON();
             flHtml += "</div>";
           }
 
+          // Attribute filters (from the Attributes-step "Edit/Add Filters" rows). Badge is
+          // readable even with the panel closed; condition text only when it was opened once.
+          var afHtml = "";
+          if (data.filterGroups && data.filterGroups.length) {
+            afHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attribute Filters <span style='color:#5c5c5c;font-weight:500;'>(" + data.filterGroups.length + ")</span></div>";
+            data.filterGroups.forEach(function (g) {
+              var badge = g.hasFilter
+                ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>"
+                : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
+              var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+              afHtml += "<div style='display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid #f1f1f1;'>"
+                + "<div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;min-width:140px;'>" + e(g.label) + "</div>"
+                + badge
+                + (condTxt ? "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + e(condTxt) + "</div>" : "")
+                + "</div>";
+            });
+            afHtml += "</div>";
+          }
+
           // Static values. (Only shown when the activation actually has them.)
           var stHtml = "";
           if (data.staticRows.length) {
@@ -20367,7 +20534,7 @@ processJSON();
             stHtml += "</tbody></table></div>";
           }
 
-          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + stHtml;
+          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + stHtml;
           body.innerHTML = sections;   // all interpolated values escaped via e()/docActEsc above
         }
 
@@ -22494,7 +22661,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.684"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.685"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
