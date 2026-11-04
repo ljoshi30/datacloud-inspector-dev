@@ -20742,9 +20742,9 @@ processJSON();
             rows.forEach(function (a) {
               attrHtml += "<tr>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "—") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "<span style='color:#b0b0b0;'>—</span>") + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "<span style='color:#b0b0b0;'>—</span>") + "</td></tr>";
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
             });
             attrHtml += "</tbody></table>";
           });
@@ -22971,7 +22971,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.697"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.698"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
