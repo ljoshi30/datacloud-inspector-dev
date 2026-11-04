@@ -20551,21 +20551,30 @@ processJSON();
       }
 
       // Excel (.xlsx) via the bundled MiniXLSX — reachable DOM-only in the dev/full build.
-      function docActExcel(data) {
-        var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
-        if (!_MiniXLSX) { segToast("Excel builder not available in this build"); return; }
-        var wb = new _MiniXLSX.Workbook();
-        var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0176D3" } };
-        var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-        var boldFont = { bold: true, size: 11 };
-        var ov = data.overview;
+      // Word has no CSS grid/flex/tooltips: turn the modal's section HTML into Word-safe HTML that keeps the same
+      // order, headings, tables, API-name chips and badges (inline styles are kept; layout containers become blocks/tables).
+      function docActWordHtml(inner) {
+        var h = String(inner || "");
+        h = h.replace(/<span style='position:relative[^']*' class='dc-info-ic'>[\s\S]*?<\/span><\/span>/g, "");   // drop "i" tooltip bubbles
+        h = h.replace(/display:grid;grid-template-columns:[^;]*;gap:[^;]*;/g, "");
+        h = h.replace(/display:flex;[^'"]*?(?=['"])/g, function (m) { return m.replace(/display:flex;|flex-wrap:wrap;|align-items:[^;]*;|gap:[^;]*;|flex-direction:[^;]*;|flex-shrink:0;|flex:1;/g, ""); });
+        h = h.replace(/<(div|span)([^>]*)\bmin-width:\d+px;/g, "<$1$2");
+        h = h.replace(/overflow-x:auto;|overflow:auto;|word-break:break-word;|table-layout:fixed;/g, "");
+        h = h.replace(/box-shadow:[^;']*;?/g, "");
+        return h;
+      }
+      // Overview as a real 2-column table (Word renders this like the modal's detail grid).
+      function docActOvTable(data) {
+        var e = docActEsc, rows = docActOvRows(data).filter(function (r) { return r[1] || r[2]; });
+        if (!rows.length) return "";
+        return "<h2 style='color:#032d60;font:700 15px Segoe UI,Arial;margin:18px 0 6px;border-left:4px solid #0176d3;padding-left:8px;'>Overview</h2><table><tbody>"
+          + rows.map(function (r) { return "<tr><th style='width:30%;'>" + e(r[0]) + "</th><td>" + e(r[1]) + (r[2] ? " <code>" + e(r[2]) + "</code>" : "") + "</td></tr>"; }).join("") + "</tbody></table>";
+      }
 
-        var ws1 = wb.addWorksheet("Overview");
-        ws1.getColumn(1).width = 24; ws1.getColumn(2).width = 48; ws1.getColumn(3).width = 36;
-        ws1.getCell(1, 1).value = "ACTIVATION — " + (ov.target || ov.segment || ""); ws1.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0176D3" } };
-        ws1.getRow(1).height = 22;
-        ["Field", "Value", "API Name"].forEach(function (h, i) { ws1.getCell(2, i + 1).value = h; ws1.getCell(2, i + 1).font = hdrFont; ws1.getCell(2, i + 1).fill = hdrFill; });
-        var ovRows = [
+      // Overview rows shared by Excel and the Doc export: [label, value, api].
+      function docActOvRows(data) {
+        var ov = data.overview;
+        var rows = [
           ["Data Space", ov.dataSpace, ov.dataSpaceApi],
           ["Segment", ov.segment, ov.segmentApi],
           ["Segment On", ov.segmentOn, ov.segmentOnApi],
@@ -20584,7 +20593,27 @@ processJSON();
          .concat((data.filterGroups || []).map(function (g) {
            var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
            return ["Attribute Filter — " + g.label, g.hasFilter ? (condTxt || "Filtered") : "No filter", ""];
-         }));
+         }))
+        if (data.membership) rows.push(["Activation Membership", data.membership.label + (data.membership.hasFilter ? " — Filtered" : " — No filter"), ""]);
+        if (data.provisional) rows.push(["Provisional Audience Limiting — Limit", String(data.provisional.limit || "") || "Not set", ""]);
+        return rows;
+      }
+
+      function docActExcel(data) {
+        var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+        if (!_MiniXLSX) { segToast("Excel builder not available in this build"); return; }
+        var wb = new _MiniXLSX.Workbook();
+        var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0176D3" } };
+        var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        var boldFont = { bold: true, size: 11 };
+        var ov = data.overview;
+
+        var ws1 = wb.addWorksheet("Overview");
+        ws1.getColumn(1).width = 24; ws1.getColumn(2).width = 48; ws1.getColumn(3).width = 36;
+        ws1.getCell(1, 1).value = "ACTIVATION — " + (ov.target || ov.segment || ""); ws1.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0176D3" } };
+        ws1.getRow(1).height = 22;
+        ["Field", "Value", "API Name"].forEach(function (h, i) { ws1.getCell(2, i + 1).value = h; ws1.getCell(2, i + 1).font = hdrFont; ws1.getCell(2, i + 1).fill = hdrFill; });
+        var ovRows = docActOvRows(data);
         var r1 = 3;
         ovRows.forEach(function (row) {
           if (!row[1] && !row[2]) return;
@@ -20693,13 +20722,13 @@ processJSON();
         xlsBtn.onclick = function () { docActExcel(data); };
         var docBtn = document.createElement("button"); docBtn.textContent = "⬇ Doc"; docBtn.style.cssText = btnCss; docBtn.title = "Download a structured Word-compatible document of the whole activation (sections in wizard order)";
         docBtn.onclick = function () {
-          var inner = modal.__docSections || "";
+          var inner = docActWordHtml(modal.__docSectionsNoOv || "");
           var html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation Blueprint</title>"
-            + "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#181818;margin:28px;} h1{color:#032d60;font-size:22px;margin:0 0 4px;} .sub{color:#5c5c5c;font-size:12px;margin:0 0 18px;}"
+            + "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#181818;margin:28px;} h2{page-break-after:avoid;} code{background:#eef4fb;border:1px solid #d6e3f3;padding:0 3px;} h1{color:#032d60;font-size:22px;margin:0 0 4px;} .sub{color:#5c5c5c;font-size:12px;margin:0 0 18px;}"
             + " table{border-collapse:collapse;width:100%;margin:6px 0;} th,td{border:1px solid #d8dde6;padding:5px 8px;font-size:12px;text-align:left;} th{background:#f3f3f3;}"
             + " code{font-family:Consolas,monospace;}</style></head><body>"
             + "<h1>" + e(ov.target || ov.segment || "Activation") + "</h1><div class='sub'>Activation Blueprint · generated " + e(new Date().toISOString().slice(0, 10)) + " · read from the Salesforce page</div>"
-            + inner + "</body></html>";
+            + docActOvTable(data) + inner + "</body></html>";
           docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".doc", "application/msword;charset=utf-8", ["﻿" + html]);
         };
         hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(docBtn); hdr.appendChild(xBtn);
@@ -20964,7 +20993,8 @@ processJSON();
           var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + stHtml + pvHtml + afHtml;
           var sections = status + docSections;
           body.innerHTML = sections;
-          modal.__docSections = docSections;   // all interpolated values escaped via e()/docActEsc above
+          modal.__docSections = docSections;
+          modal.__docSectionsNoOv = flHtml + memHtml + cpHtml + attrHtml + stHtml + pvHtml + afHtml;   // all interpolated values escaped via e()/docActEsc above
         }
 
         box.appendChild(hdr); box.appendChild(body);
@@ -23168,7 +23198,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.704"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.705"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
