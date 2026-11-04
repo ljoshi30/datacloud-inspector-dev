@@ -8,9 +8,10 @@ function el(){const o={style:{},children:[],classList:{add(){}},_l:{},appendChil
 const data={found:true,membership:{label:"Unified Individual TDI",hasFilter:false},overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
 attributes:[
 {label:"SubSegmentId",objectApi:"",source:"SYSTEM",category:"System"},
+{label:"Email Address",fieldApi:"EmailAddress__c",objectApi:"TDI_ContactPointEmail__dlm",outputName:"EmailAddress"},
 {label:"First Name",fieldApi:"FirstName__c",objectApi:"UnifiedIndividual__dlm",outputName:"FirstName",category:"Profile"},
 {label:"Global Exclusion In",fieldApi:"G__c",objectApi:"TDI_Individual_Additional__dlm",outputName:"TDI_G",path:"A.B > C.D"}],
-contactPoints:[],staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
+contactPoints:[],groupSection:{"Contact Point Email":"Contact Point","TDI Individual Additional":"Attributes","Unified Individual":"Attributes"},staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
 limits:[{owner:"TDI Individual Additional",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"Contact Point Email",maxValues:"1",sortField:"Id__c",sortLabel:"Contact Point Email Id",orderLabel:"Ascending",fixed:true}],
 pathChoices:[{owner:"TDI Individual Additional",text:"U.Id > TDI.Info"}],
 filterGroups:[{label:"TDI Individual Additional",hasFilter:true,conditions:[]}]};
@@ -39,4 +40,8 @@ must("Unified Individual group has NO limit line", !/UnifiedIndividual[\s\S]{0,2
 must("System fields group last + explained, no (unspecified)", html.indexOf("System fields (added by Salesforce)")>html.indexOf("Global Exclusion In") && !/unspecified/.test(html));
 must("Campaign Data after attributes", html.lastIndexOf("Campaign Data")>html.indexOf("Global Exclusion In"));
 
+const ci=html.indexOf(">Contact Point<"), ai=html.indexOf(">Attributes<");
+must("Contact Point section contains Email Address attribute, before Attributes section", html.indexOf("EmailAddress__c")>ci && html.indexOf("EmailAddress__c")<ai);
+must("no separate channel table", !/Contact Point field \/ object/.test(html));
+must("SF label (not API-ish name) used as group title", html.indexOf(">Contact Point Email<")>-1);
 console.log(process.exitCode?"❌ FAILURES":"✅ ALL PASS");

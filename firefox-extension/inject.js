@@ -19863,13 +19863,13 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {} };
         // Back-fill fields added in later versions: the accumulator lives on window and survives
         // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
         var a = _docActAccum[id];
         if (!a.limits) a.limits = {};
         if (!a.pathChoices) a.pathChoices = {};
-        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null;
+        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {};
         return a;
       }
 
@@ -20193,6 +20193,26 @@ processJSON();
         }
         return out;
       }
+      // Which Salesforce SECTION owns each "Label (N)" group — taken from the wizard's own text order
+      // (Activation Membership → Contact Point → Attributes → Campaign Data → Provisional Audience
+      // Limiting), never guessed from object names.
+      function docActParseGroupSections(wizardText) {
+        var out = {}; if (!wizardText) return out;
+        var lines = String(wizardText).split(/\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+        var heads = { "Activation Membership": 1, "Contact Point": 1, "Attributes": 1, "Campaign Data": 1, "Provisional Audience Limiting": 1 };
+        var cur = "";
+        for (var i = 0; i < lines.length; i++) {
+          var L = lines[i];
+          if (heads[L]) {
+            // "Attributes" is also a column header inside the Provisional table — only a section when a "(N)" group follows.
+            if (L === "Attributes" && !/\(\d+\)$/.test(lines[i + 1] || "")) continue;
+            cur = L; continue;
+          }
+          var m = /^(.+?)\s*\((\d+)\)$/.exec(L);
+          if (m && cur) out[m[1].trim()] = cur;
+        }
+        return out;
+      }
       // "Activation Membership" block: header, the segment-on object label, then Add/Edit Filters
       // (no "(N)" count here, so the generic badge regex never sees it).
       function docActParseMembership(wizardText) {
@@ -20259,6 +20279,8 @@ processJSON();
           Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
           var mem = docActParseMembership(wizText);
           if (mem) acc.membership = mem;
+          var gs = docActParseGroupSections(wizText);
+          Object.keys(gs).forEach(function (k) { acc.groupSection[k] = gs[k]; });
         }
         // Applied filter condition content — read ONLY while the "Edit/Add Filters" dialog
         // is actually open (per user constraint: never auto-open it).
@@ -20446,6 +20468,7 @@ processJSON();
           return { label: label, count: g.count, hasFilter: g.hasFilter, conditions: cond ? cond.conditions : [], path: cond ? cond.path : "" };
         });
         out.membership = acc.membership || null;
+        out.groupSection = acc.groupSection || {};
         out.captured.filterGroups = out.filterGroups.length > 0;
 
         out.captured.limits = Object.keys(acc.limits).length > 0;
@@ -20747,11 +20770,31 @@ processJSON();
           // Attributes grouped by object, in Salesforce's own order. Each object's group carries ITS OWN
           // "Max # of Attribute Values / Sort By / Order" (the related-attribute limit), its "Show Paths"
           // path and its filter badge — exactly where the wizard shows them. Nothing floats elsewhere.
-          function normLbl(x) { return String(x || "").toLowerCase().replace(/__(dlm|cio|dll|dls)$/, "").replace(/[^a-z0-9]/g, ""); }
+          function normLbl(x) { return String(x || "").toLowerCase().replace(/__(dlm|cio|dll|dls)$/, "").replace(/^ssot__/, "").replace(/[^a-z0-9]/g, ""); }
+          // Salesforce shows a LABEL ("Contact Point Email", "Unified Individual TDI"); the attribute rows carry the
+          // OBJECT API name (TDI_ContactPointEmail__dlm, TDI_UnifiedIndividualTdi__dlm). Match by word-sets, never by position.
+          function toks(x) {
+            return String(x || "").replace(/__(dlm|cio|dll|dls)$/i, "").replace(/^ssot__/i, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+              .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).filter(function (t, i, a) { return a.indexOf(t) === i; });
+          }
+          function sameObj(label, api) {
+            var a = toks(label), b = toks(api); if (!a.length || !b.length) return false;
+            var inB = a.every(function (t) { return b.indexOf(t) > -1; }), inA = b.every(function (t) { return a.indexOf(t) > -1; });
+            return inB || inA;
+          }
+          function pickBy(map, api) {          // map keyed by SF label → entry; exact word-set first, else subset
+            var best = null, bestScore = -1;
+            Object.keys(map).forEach(function (lab) {
+              if (!sameObj(lab, api)) return;
+              var a = toks(lab), b = toks(api), score = (a.length === b.length ? 100 : 0) + Math.min(a.length, b.length);
+              if (score > bestScore) { bestScore = score; best = { key: lab, v: map[lab] }; }
+            });
+            return best;
+          }
           var limByObj = {}, pathByObj = {}, fltByObj = {}, usedLim = {}, usedFlt = {};
-          (data.limits || []).forEach(function (l) { limByObj[normLbl(l.owner)] = l; });
-          (data.pathChoices || []).forEach(function (pc) { pathByObj[normLbl(pc.owner)] = pc; });
-          (data.filterGroups || []).forEach(function (g) { fltByObj[normLbl(g.label)] = g; });
+          (data.limits || []).forEach(function (l) { limByObj[l.owner] = l; });
+          (data.pathChoices || []).forEach(function (pc) { pathByObj[pc.owner] = pc; });
+          (data.filterGroups || []).forEach(function (g) { fltByObj[g.label] = g; });
           var lblTxt = "font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;";
           function limLine(l) {
             return "<div style='display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;background:#f7f9fb;border:1px solid #e5e7eb;border-radius:6px;padding:7px 10px;margin:0 0 6px;'>"
@@ -20766,33 +20809,47 @@ processJSON();
               + (g.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>")
               + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
           }
-          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes <span style='color:#5c5c5c;font-weight:500;'>(" + data.attributes.length + ")</span></div>";
-          Object.keys(byEntityOrder(data.attributes)).forEach(function (en) {
-            var rows = byEntityOrder(data.attributes)[en];
+          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes</div>";
+          function renderGroup(en, rows) {
+            var gh = "";
             var kind = docActObjKind(en);
             var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
             var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en) && rows.every(function (r) { return !r.objectApi; });
-            var nk = normLbl(en), lim = limByObj[nk], pth = pathByObj[nk], flt = fltByObj[nk];
-            if (lim) usedLim[nk] = 1; if (flt) usedFlt[nk] = 1;
-            attrHtml += "<div style='border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:0 0 12px;'>"
-              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")) + "</span>"
+            var pl = pickBy(limByObj, en), pp = pickBy(pathByObj, en), pf = pickBy(fltByObj, en);
+            var lim = pl && pl.v, pth = pp && pp.v, flt = pf && pf.v;
+            if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
+            gh += "<div style='margin:0 0 16px;'>"
+              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(pl ? pl.key : (pf ? pf.key : (pp ? pp.key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")))) + "</span>"
               + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>"
               + (isSysGroup ? "<div style='font:400 11px system-ui;color:#5c5c5c;margin:-4px 0 8px;'>Added automatically by Salesforce for waterfall activations.</div>" : "")
               + (lim ? limLine(lim) : "") + fltBadge(flt)
               + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
-            attrHtml += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
+            gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:26%'><col style='width:26%'><col style='width:20%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
             rows.forEach(function (a) {
-              attrHtml += "<tr>"
+              gh += "<tr>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
             });
-            attrHtml += "</tbody></table></div></div>";
+            gh += "</tbody></table></div></div>";
+          return gh; }
+          // Contact Point groups are the standard contact-point objects (from the Contact Points step, or
+          // ssot__ContactPoint*); everything else is an Attributes group. Salesforce shows them in separate sections.
+          var cpSet = {};
+          (data.contactPoints || []).forEach(function (cp) { ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) { if (cp[k] && cp[k].entityApi) cpSet[normLbl(cp[k].entityApi)] = 1; }); });
+          var gsecM = data.groupSection || {};
+          // Section comes from the wizard's own DOM order; only if that was never seen do we fall back to the contact-point objects.
+          function isCpObj(en) { var d = pickBy(gsecM, en); return d ? d.v === "Contact Point" : !!cpSet[normLbl(en)]; }
+          var cpGroupsHtml = "", attrCount = 0;
+          var ordered = byEntityOrder(data.attributes);
+          Object.keys(ordered).forEach(function (en) {
+            if (isCpObj(en)) cpGroupsHtml += renderGroup(en, ordered[en]);
+            else { attrCount += ordered[en].length; attrHtml += renderGroup(en, ordered[en]); }
           });
           attrHtml += "</div>";
           // Group order: primary object first (Salesforce order = as captured), system fields last.
@@ -20816,26 +20873,8 @@ processJSON();
           }
           // Contact points — each channel shows its value + field/entity API + path.
           var cpHtml = "";
-          var cpLims = (data.limits || []).filter(function (l) { return /contact\s*point/i.test(l.owner); });
-          if (data.contactPoints.length || cpLims.length) {
-            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point</div>";
-            (data.limits || []).forEach(function (l) {
-              var k = normLbl(l.owner);
-              if (usedLim[k] || !/contact\s*point/i.test(l.owner)) return;
-              usedLim[k] = 1;
-              var cf = fltByObj[k]; if (cf) usedFlt[k] = 1;
-              cpHtml += "<div style='margin:0 0 4px;font:700 12px system-ui;color:#181818;'>" + docActEsc(l.owner) + "</div>" + limLine(l) + fltBadge(cf);
-            });
-            data.contactPoints.forEach(function (cp) {
-              cpHtml += "<div style='display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid #f1f1f1;'>";
-              [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) {
-                var html = docActCpHtml(p[1]);
-                if (!html) return;
-                cpHtml += "<div style='display:flex;align-items:baseline;gap:8px;'><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;min-width:72px;'>" + e(p[0]) + "</div><div style='display:flex;flex-wrap:wrap;align-items:center;gap:6px;'>" + html + "</div></div>";
-              });
-              if (cp.platform) cpHtml += "<div style='display:flex;align-items:baseline;gap:8px;'><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;min-width:72px;'>Platform</div><div style='font:500 12px system-ui;color:#181818;'>" + e(cp.platform) + "</div></div>";
-              cpHtml += "</div>";
-            });
+          if (cpGroupsHtml) {
+            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point</div>" + cpGroupsHtml;
             cpHtml += "</div>";
           }
 
@@ -23079,7 +23118,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.701"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.702"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

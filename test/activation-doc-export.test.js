@@ -1104,7 +1104,7 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   ok("no standalone 'Provisional Audience Limiting' card (that's a different, unconfigured SF section)", !/>Provisional Audience Limiting</.test(s2));
   ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
   ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
-  ok("Contact Point section carries the Contact Point limit", /contact\\s\*point/.test(s2) && /Contact Point<\/div>/.test(s2));
+  ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point<\/div>/.test(s2) && /pickBy\(gsecM/.test(s2));
   ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
   ok("system rows explained, no (unspecified)", /Added automatically by Salesforce for waterfall/.test(s2) && !/\(unspecified\)/.test(s2));
@@ -1123,6 +1123,22 @@ console.log("\n18. Activation Membership parser (real source fn, verbatim innerT
   eq("Add Filters => no filter", r1 && r1.hasFilter, false);
   eq("Edit Filters => filtered", pm(t1.replace("Add Filters\nAdd filters", "Edit Filters\nAdd filters")).hasFilter, true);
   eq("absent => null", pm("Contact Point\nContact Point Email (1)\nEdit Filters"), null);
+}
+
+console.log("\n19. Section ownership comes from the wizard DOM order (real source fn)");
+{
+  var fs4 = require("fs"), p4 = require("path");
+  var s4 = fs4.readFileSync(p4.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var i4 = s4.indexOf("function docActParseGroupSections("), d4 = 0, j4 = s4.indexOf("{", i4), k4;
+  for (k4 = j4; k4 < s4.length; k4++) { if (s4[k4] === "{") d4++; else if (s4[k4] === "}") { d4--; if (!d4) break; } }
+  var gsf = new Function(s4.slice(i4, k4 + 1) + "\nreturn docActParseGroupSections;")();
+  var wiz = "Add Attributes and Filters to Your Activation\nActivation Membership\nUnified Individual TDI\nAdd Filters\nContact Point\nContact Point Email (1)\nEdit Filters\nAttribute\nAttributes\nUnified Individual TDI (9)\nTDI Individual Additional (1)\nUnified Indv Contact Point Address TDI (1)\nCampaign Data\nCampaign Attributes (1)\nProvisional Audience Limiting\nRank Order\nAttributes\nSort By";
+  var g = gsf(wiz);
+  eq("Contact Point Email -> Contact Point", g["Contact Point Email"], "Contact Point");
+  eq("Unified Indv Contact Point Address TDI -> Attributes (NOT Contact Point, despite its name)", g["Unified Indv Contact Point Address TDI"], "Attributes");
+  eq("Unified Individual TDI -> Attributes", g["Unified Individual TDI"], "Attributes");
+  eq("Campaign Attributes -> Campaign Data", g["Campaign Attributes"], "Campaign Data");
+  eq("'Attributes' column header inside Provisional table is not a section", Object.keys(g).length, 5);
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
