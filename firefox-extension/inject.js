@@ -20850,6 +20850,65 @@ processJSON();
         }
 
         box.appendChild(hdr); box.appendChild(body);
+
+        // ── Resizable + responsive ──
+        // Corner/edge drag handles resize the (centred) box; double-click the header or use the
+        // maximise button to toggle full-screen; size is remembered. Narrow viewports go full-screen
+        // via CSS, tables scroll horizontally instead of overflowing.
+        box.style.position = "relative";
+        box.style.maxWidth = "100vw"; box.style.maxHeight = "100vh";
+        box.style.minWidth = "min(360px,100vw)"; box.style.minHeight = "240px";
+        var SZ_KEY = "dcDocActSize", maxed = false;
+        function clampSz(w, h) {
+          return { w: Math.max(360, Math.min(window.innerWidth, w)), h: Math.max(240, Math.min(window.innerHeight, h)) };
+        }
+        function applySz(w, h) { var c = clampSz(w, h); box.style.width = c.w + "px"; box.style.height = c.h + "px"; box.style.maxHeight = "100vh"; }
+        try {
+          var sv = JSON.parse(localStorage.getItem(SZ_KEY) || "null");
+          if (sv && sv.w && sv.h) applySz(sv.w, sv.h);
+        } catch (e1) {}
+        function saveSz() { try { localStorage.setItem(SZ_KEY, JSON.stringify({ w: box.offsetWidth, h: box.offsetHeight })); } catch (e2) {} }
+        function mkHandle(css, cursor, dx, dy) {
+          var hd = document.createElement("div");
+          hd.style.cssText = "position:absolute;z-index:5;" + css + "cursor:" + cursor + ";";
+          hd.addEventListener("mousedown", function (ev) {
+            ev.preventDefault(); ev.stopPropagation();
+            var sx = ev.clientX, sy = ev.clientY, sw = box.offsetWidth, sh = box.offsetHeight;
+            maxed = false;
+            function mv(m) {
+              // box is centred, so each pixel of drag changes the size by 2px to keep the edge under the cursor
+              applySz(dx ? sw + dx * (m.clientX - sx) * 2 : sw, dy ? sh + dy * (m.clientY - sy) * 2 : sh);
+            }
+            function up() { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); saveSz(); }
+            document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
+          });
+          box.appendChild(hd);
+          return hd;
+        }
+        mkHandle("right:0;top:12px;bottom:12px;width:6px;", "ew-resize", 1, 0);
+        mkHandle("left:0;top:12px;bottom:12px;width:6px;", "ew-resize", -1, 0);
+        mkHandle("left:12px;right:12px;bottom:0;height:6px;", "ns-resize", 0, 1);
+        var corner = mkHandle("right:0;bottom:0;width:16px;height:16px;", "nwse-resize", 1, 1);
+        corner.title = "Drag to resize";
+        corner.innerHTML = "<svg width='16' height='16' viewBox='0 0 16 16'><path d='M14 6L6 14M14 10l-4 4M14 2L2 14' stroke='#9aa4b2' stroke-width='1.5' stroke-linecap='round'/></svg>";
+        var maxBtn = document.createElement("button");
+        maxBtn.textContent = "⛶"; maxBtn.title = "Maximise / restore"; maxBtn.style.cssText = "border:none;background:none;color:#fff;font-size:16px;cursor:pointer;padding:2px 8px;";
+        function toggleMax() {
+          if (maxed) { maxed = false; try { var r = JSON.parse(localStorage.getItem(SZ_KEY) || "null"); if (r) applySz(r.w, r.h); else { box.style.width = "min(1040px,96vw)"; box.style.height = ""; } } catch (e3) {} }
+          else { maxed = true; applySz(window.innerWidth, window.innerHeight); }
+        }
+        maxBtn.onclick = toggleMax;
+        hdr.insertBefore(maxBtn, xBtn);
+        hdr.addEventListener("dblclick", function (ev) { if (!ev.target.closest("button")) toggleMax(); });
+        window.addEventListener("resize", function onRs() {
+          if (!document.body.contains(modal)) { window.removeEventListener("resize", onRs); return; }
+          if (maxed) applySz(window.innerWidth, window.innerHeight);
+          else if (box.style.width && /px$/.test(box.style.width)) applySz(box.offsetWidth, box.offsetHeight);
+        });
+        style.textContent += "#dc-docact-modal table{min-width:460px;}"
+          + "#dc-docact-modal .dc-docact-hdr{flex-wrap:wrap;}"
+          + "@media (max-width:700px){#dc-docact-modal{padding:0 !important;}#dc-docact-modal > div{width:100vw !important;height:100vh !important;border-radius:0 !important;}}";
+        hdr.classList.add("dc-docact-hdr");
         modal.appendChild(box);
         document.body.appendChild(modal);
       }
@@ -22971,7 +23030,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.698"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.699"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

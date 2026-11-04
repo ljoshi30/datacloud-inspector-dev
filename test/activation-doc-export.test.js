@@ -1053,5 +1053,49 @@ console.log("\n15. NO console output anywhere in shipped source");
   });
 }
 
+console.log("\n16. Modal is resizable + responsive (behavior of the real resize block on stubs)");
+{
+  var fs = require("fs"), path = require("path");
+  var srcR = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var a1 = srcR.indexOf("// ── Resizable + responsive ──"), a2 = srcR.indexOf("modal.appendChild(box);", a1);
+  ok("resize block found in source", a1 > 0 && a2 > a1);
+  var blk = srcR.slice(a1, a2);
+  function mkEl() { var el = { style: {}, children: [], classList: { add: function () {} }, _l: {}, offsetWidth: 1040, offsetHeight: 700,
+    appendChild: function (c) { el.children.push(c); }, insertBefore: function (c) { el.children.push(c); },
+    addEventListener: function (n, f) { (el._l[n] = el._l[n] || []).push(f); }, closest: function () { return null; } }; return el; }
+  var box = mkEl();
+  Object.defineProperty(box, "offsetWidth", { get: function () { return parseInt(box.style.width, 10) || 1040; } });
+  Object.defineProperty(box, "offsetHeight", { get: function () { return parseInt(box.style.height, 10) || 700; } });
+  var hdr = mkEl(), xBtn = mkEl(), style = { textContent: "" }, modal = mkEl();
+  var store = {}, docL = {}, winL = {};
+  var doc = { createElement: mkEl, body: { contains: function () { return true; } },
+    addEventListener: function (n, f) { docL[n] = f; }, removeEventListener: function () {} };
+  var win = { innerWidth: 1200, innerHeight: 800, addEventListener: function (n, f) { winL[n] = f; }, removeEventListener: function () {} };
+  var ls = { getItem: function (k) { return store[k] || null; }, setItem: function (k, v) { store[k] = v; } };
+  new Function("box", "hdr", "xBtn", "style", "modal", "document", "window", "localStorage", blk)(box, hdr, xBtn, style, modal, doc, win, ls);
+  var handles = box.children.filter(function (c) { return /resize/.test(c.style.cssText || ""); });
+  eq("4 resize handles (right,left,bottom,corner)", handles.length, 4);
+  var corner = handles[3];
+  corner._l.mousedown[0]({ preventDefault: function () {}, stopPropagation: function () {}, clientX: 100, clientY: 100 });
+  docL.mousemove({ clientX: 150, clientY: 130 });
+  eq("drag corner +50,+30 grows centred box by 2x (width)", box.style.width, "1140px");
+  eq("drag corner height", box.style.height, "760px");
+  docL.mousemove({ clientX: 9999, clientY: 9999 });
+  eq("width clamped to viewport", box.style.width, "1200px");
+  eq("height clamped to viewport", box.style.height, "800px");
+  docL.mousemove({ clientX: -9999, clientY: -9999 });
+  eq("width clamped to min 360", box.style.width, "360px");
+  docL.mouseup();
+  ok("size persisted on mouseup", !!store.dcDocActSize);
+  var mb = hdr.children[0];
+  mb.onclick();
+  eq("maximise fills viewport", box.style.width + " " + box.style.height, "1200px 800px");
+  mb.onclick();
+  eq("restore returns to saved size", box.style.width, "360px");
+  win.innerWidth = 500; winL.resize();
+  ok("window shrink re-clamps box", parseInt(box.style.width, 10) <= 500);
+  ok("mobile media rule makes it full-screen under 700px", /@media \(max-width:700px\)/.test(style.textContent));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);
