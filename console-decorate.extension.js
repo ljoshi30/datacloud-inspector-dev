@@ -19867,7 +19867,13 @@ processJSON();
       }
       function docActAccumFor(id) {
         if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null };
-        return _docActAccum[id];
+        // Back-fill fields added in later versions: the accumulator lives on window and survives
+        // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
+        var a = _docActAccum[id];
+        if (!a.limits) a.limits = {};
+        if (!a.pathChoices) a.pathChoices = {};
+        if (a.showPathsOn === undefined) a.showPathsOn = null;
+        return a;
       }
 
       // queryPathString is a JSON array of hop pairs {objectApiName,fieldApiName}.
@@ -20277,7 +20283,8 @@ processJSON();
         if (detailsNow) acc.detailsSection = detailsNow;
 
         // Limiting + Show Paths (accumulate by owner label — these steps tear down on navigation).
-        var lp = docActReadLimits(raw);
+        var lp = { limits: [], paths: [], showOn: null };
+        try { lp = docActReadLimits(raw); } catch (e) {}   // additive reader: must NEVER block the modal
         lp.limits.forEach(function (l) { acc.limits[l.owner] = l; });
         lp.paths.forEach(function (pc) { acc.pathChoices[pc.owner] = pc; });
         if (lp.showOn != null) acc.showPathsOn = lp.showOn;

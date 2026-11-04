@@ -1019,5 +1019,25 @@ console.log("\n13. BEHAVIOR (real source fns): Provisional Audience Limiting + S
   ok("public build excludes it (dev-only)", !/Related Object Settings/.test(bm));
 }
 
+
+console.log("\n14. REGRESSION: modal must open when window accumulator was created by an OLDER build");
+{
+  const fs = require("fs"), path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  const i = src.indexOf("function docActAccumFor(");
+  let d = 0, k = src.indexOf("{", i), end = k;
+  for (; end < src.length; end++) { if (src[end] === "{") d++; else if (src[end] === "}") { d--; if (d === 0) break; } }
+  const fnSrc = src.slice(i, end + 1);
+  // v1.2.692-shaped accumulator persisted on window (no limits/pathChoices/showPathsOn)
+  const stale = { current: { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null } };
+  const accFor = new Function("_docActAccum", fnSrc + "\nreturn docActAccumFor;")(stale);
+  let acc, threw = false;
+  try { acc = accFor("current"); Object.keys(acc.limits).map(function (k) { return acc.limits[k]; }); Object.keys(acc.pathChoices); } catch (e) { threw = true; }
+  ok("stale (older-build) accumulator does not throw", !threw);
+  ok("new fields back-filled", acc && typeof acc.limits === "object" && typeof acc.pathChoices === "object" && acc.showPathsOn === null);
+  ok("existing captured data preserved", acc && acc.detailsSection === null && Array.isArray(acc.staticRows));
+  ok("limits/paths reader failure cannot block scrape (try/catch)", /try \{ lp = docActReadLimits\(raw\); \} catch/.test(src));
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

@@ -19867,7 +19867,13 @@ processJSON();
       }
       function docActAccumFor(id) {
         if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null };
-        return _docActAccum[id];
+        // Back-fill fields added in later versions: the accumulator lives on window and survives
+        // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
+        var a = _docActAccum[id];
+        if (!a.limits) a.limits = {};
+        if (!a.pathChoices) a.pathChoices = {};
+        if (a.showPathsOn === undefined) a.showPathsOn = null;
+        return a;
       }
 
       // queryPathString is a JSON array of hop pairs {objectApiName,fieldApiName}.
@@ -20277,7 +20283,8 @@ processJSON();
         if (detailsNow) acc.detailsSection = detailsNow;
 
         // Limiting + Show Paths (accumulate by owner label — these steps tear down on navigation).
-        var lp = docActReadLimits(raw);
+        var lp = { limits: [], paths: [], showOn: null };
+        try { lp = docActReadLimits(raw); } catch (e) {}   // additive reader: must NEVER block the modal
         lp.limits.forEach(function (l) { acc.limits[l.owner] = l; });
         lp.paths.forEach(function (pc) { acc.pathChoices[pc.owner] = pc; });
         if (lp.showOn != null) acc.showPathsOn = lp.showOn;
@@ -22940,7 +22947,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.693"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.694"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
