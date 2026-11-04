@@ -19866,7 +19866,7 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {} };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" };
         return _docActAccum[id];
       }
 
@@ -19959,11 +19959,14 @@ processJSON();
         return "";
       }
       // Readable "key: value" dump of an object's scalar fields (fallback only).
+      // UI-state-only keys that mean nothing to a reader (dropdown/index plumbing for an
+      // UNCONFIGURED channel) — never shown as if they were the channel's configured value.
+      var DOCACT_CP_NOISE_KEYS = { disablePathDropdown: 1, pathIndex: 1, disabled: 1, readOnly: 1, isLoading: 1 };
       function docActCpDump(obj) {
         try {
           return Object.keys(obj).filter(function (k) {
             var val = obj[k];
-            return val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
+            return !DOCACT_CP_NOISE_KEYS[k] && val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
           }).map(function (k) { return k + ": " + String(obj[k]); }).join(", ");
         } catch (e) { return ""; }
       }
@@ -19982,7 +19985,10 @@ processJSON();
         }
         var path = docActCpPath(v);
         var value = label || fieldApi || "";
-        var dump = (value || path) ? "" : docActCpDump(v);   // only dump when we got nothing useful
+        var dump = (value || path || entityApi) ? "" : docActCpDump(v);   // only dump when we got nothing useful
+        // A channel the user never configured (e.g. Push/WhatsApp/Address left unset) carries
+        // only UI-state plumbing and nothing meaningful — treat it as NOT present, not as noise.
+        if (!value && !path && !entityApi && !dump) return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
         return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
       }
       // Render a normalized CP value for the modal (never "[object Object]").
@@ -20013,6 +20019,23 @@ processJSON();
       // Applied filters, read ONLY if the DOM exposes them (segment-level criteria or
       // activation filter config). Returns [] when nothing is found → the UI hides the
       // section rather than showing an empty/fabricated one. Each entry: {label, text}.
+      // Refresh Type has NO structured getter anywhere on the summary element (confirmed via
+      // live probe: searching all 278 getters for refresh/schedule-related names found none) —
+      // it's ONLY rendered as sidebar text ("Publish Schedule:Don't refresh") on the Contact
+      // Points step. Reuses the exact small-leaf-element + "Publish Schedule:" pattern already
+      // proven live in the extension-fed exporter (~line 16093), scoped to the DOM-only raw scan.
+      function docActReadRefreshType(raw) {
+        for (var i = 0; i < raw.length; i++) {
+          var el = raw[i];
+          var txt = "";
+          try { txt = (el.children && el.children.length < 5) ? (el.textContent || "").trim() : ""; } catch (e) {}
+          if (/^Publish Schedule:/.test(txt) && txt.length < 60) {
+            return txt.replace(/^Publish Schedule:\s*/i, "").trim();
+          }
+        }
+        return "";
+      }
+
       function docActReadFilters(summaryEl, seg) {
         var out = [];
         function pushText(label, raw) {
@@ -20116,6 +20139,11 @@ processJSON();
           if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
         }
 
+        // Refresh Type — only rendered as sidebar text on the Contact Points step, so
+        // accumulate it like everything else that's step-specific (persists once seen).
+        var sidebarRefresh = docActReadRefreshType(raw);
+        if (sidebarRefresh) acc.refreshType = sidebarRefresh;
+
         var out = {
           recordId: id,
           found: !!summaryEl,
@@ -20144,7 +20172,10 @@ processJSON();
             eventType: segSafeGet(summaryEl, "selectedEventType") || "",
             isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
             // Only populated if the DOM actually exposes them — read conditionally, never fabricated.
-            refreshType: docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
+            // No getter property for this exists anywhere on the summary element (live-probed:
+            // 278 getters, zero refresh-related) — acc.refreshType is the sidebar-text capture
+            // (docActReadRefreshType), which persists once seen on the Contact Points step.
+            refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
                                      seg.refreshType || seg.activationRefreshType || tgt.refreshType),
             processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
             schedule: seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
@@ -20234,6 +20265,26 @@ processJSON();
         out.captured.filterGroups = out.filterGroups.length > 0;
 
         return out;
+      }
+
+      // PASSIVE capture for the filter dialog: docActScrape() only normally runs the instant
+      // the user clicks "Document Activation", but the Edit Filters dialog is typically closed
+      // again by then — so its condition text would never get folded into the accumulator.
+      // This runs docActScrape() silently (discarding the result; it's a pure read+accumulate)
+      // whenever the filter dialog is actually on screen, so the condition is captured the
+      // moment it's visible, not only at export time. Same no-click, no-nav guarantee — it only
+      // ever READS the dialog the user already opened themselves.
+      // Guarded on window (not an IIFE-local), same reasoning as window.__dcNavCapturePoll below:
+      // this whole module body re-executes on every bookmarklet re-run (per-step nav), so a plain
+      // local-scoped setInterval would stack a new poller on every step without this guard.
+      function docActPassiveScan() {
+        try {
+          var hit = collectRaw().some(function (el) { return (el.tagName || "").toLowerCase() === "runtime_cdp-activation-related-attributes-filter-dialog"; });
+          if (hit) docActScrape();
+        } catch (e) {}
+      }
+      if (!window.__dcDocActFilterPoll) {
+        window.__dcDocActFilterPoll = setInterval(docActPassiveScan, 800);
       }
 
       function docActEsc(s) {
@@ -20348,7 +20399,7 @@ processJSON();
           });
         });
 
-        var ws4 = wb.addWorksheet("Static Values");
+        var ws4 = wb.addWorksheet("Campaign Data");
         ws4.getColumn(1).width = 30; ws4.getColumn(2).width = 40; ws4.getColumn(3).width = 30;
         ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
@@ -20386,7 +20437,7 @@ processJSON();
 
         var btnCss = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
         var csvBtn = document.createElement("button"); csvBtn.textContent = "⬇ CSV"; csvBtn.style.cssText = btnCss; csvBtn.title = "Download the attribute list as CSV (Label · Field API · Object/DMO API · Output Name · Category)";
-        var xlsBtn = document.createElement("button"); xlsBtn.textContent = "⬇ Excel"; xlsBtn.style.cssText = btnCss; xlsBtn.title = "Download a multi-sheet .xlsx (Overview · Attributes · Contact Points · Static Values)";
+        var xlsBtn = document.createElement("button"); xlsBtn.textContent = "⬇ Excel"; xlsBtn.style.cssText = btnCss; xlsBtn.title = "Download a multi-sheet .xlsx (Overview · Attributes · Contact Points · Campaign Data)";
         var xBtn = document.createElement("button"); xBtn.textContent = "✕"; xBtn.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;";
         xBtn.onclick = function () { modal.remove(); };
         csvBtn.onclick = function () { docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + "-attributes.csv", "text/csv;charset=utf-8", ["﻿" + docActCsv(data)]); };
@@ -20435,7 +20486,7 @@ processJSON();
             + pill(caps.attributes, "Attributes (" + data.attributes.length + ")")
             + pill(caps.outputNames, "Output names")
             + pill(caps.contactPoints, "Contact points")
-            + pill(caps.staticValues, "Static values")
+            + pill(caps.staticValues, "Campaign Data")
             + "</div>";
           // Captures PERSIST across wizard steps (stored on the window per activation), so this
           // panel shows everything seen so far. Prompt the user honestly: either export now, or
@@ -20522,12 +20573,14 @@ processJSON();
             afHtml += "</div>";
           }
 
-          // Static values. (Only shown when the activation actually has them.)
+          // Campaign Data — this is the exact field-group label Salesforce itself uses on the
+          // Attributes step (confirmed via live DOM probe: "Campaign Data / Campaign Attributes
+          // (N) / Add Campaign Attribute"), NOT an invented name. (Only shown when present.)
           var stHtml = "";
           if (data.staticRows.length) {
             var stTip = "A fixed constant value sent on every activated record — not read from a field. " +
               "Used to tag the audience, e.g. a campaign ID or a source label, so the destination platform can identify where the records came from.";
-            stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Static Values <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span>"
+            stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Campaign Data <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span>"
               + "<span title='" + e(stTip) + "' style='display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;'>?</span></div>";
             stHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Name</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Value</th></tr></thead><tbody>";
             data.staticRows.forEach(function (s) { stHtml += "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(s.name) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 12px SFMono-Regular,monospace;color:#0b5cab;'>" + e(s.value) + "</td></tr>"; });
@@ -22661,7 +22714,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.685"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.686"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

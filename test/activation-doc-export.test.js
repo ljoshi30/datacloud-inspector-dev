@@ -111,11 +111,12 @@ function docActCpPath(obj) {
   } catch (e) {}
   return "";
 }
+var DOCACT_CP_NOISE_KEYS = { disablePathDropdown: 1, pathIndex: 1, disabled: 1, readOnly: 1, isLoading: 1 };
 function docActCpDump(obj) {
   try {
     return Object.keys(obj).filter(function (k) {
       var val = obj[k];
-      return val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
+      return !DOCACT_CP_NOISE_KEYS[k] && val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
     }).map(function (k) { return k + ": " + String(obj[k]); }).join(", ");
   } catch (e) { return ""; }
 }
@@ -132,7 +133,8 @@ function docActCpExtract(v) {
   }
   var path = docActCpPath(v);
   var value = label || fieldApi || "";
-  var dump = (value || path) ? "" : docActCpDump(v);
+  var dump = (value || path || entityApi) ? "" : docActCpDump(v);
+  if (!value && !path && !entityApi && !dump) return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
   return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
 }
 function docActCpText(cpv) {
@@ -207,6 +209,15 @@ function docActParseFilterDialog(dialogText) {
 
 // scrape over a provided list of "elements" + a persistent accumulator (the source keeps one
 // per recordId in _docActAccum; here we pass it in so we can simulate visiting two steps).
+function docActReadRefreshType(raw) {
+  for (var i = 0; i < raw.length; i++) {
+    var el = raw[i];
+    var txt = "";
+    try { txt = (el.children && el.children.length < 5) ? (el.textContent || "").trim() : ""; } catch (e) {}
+    if (/^Publish Schedule:/.test(txt) && txt.length < 60) return txt.replace(/^Publish Schedule:\s*/i, "").trim();
+  }
+  return "";
+}
 function docActScrapeOver(raw, acc) {
   var summaryEl = null, attrTables = [], channelEl = null, attrWizardEl = null, filterDialogEl = null;
   raw.forEach(function (el) {
@@ -226,6 +237,8 @@ function docActScrapeOver(raw, acc) {
     var parsed = docActParseFilterDialog(filterDialogEl.innerText || filterDialogEl.textContent || "");
     if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
   }
+  var sidebarRefresh = docActReadRefreshType(raw);
+  if (sidebarRefresh) acc.refreshType = sidebarRefresh;
 
   var out = {
     found: !!summaryEl, overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
@@ -248,7 +261,7 @@ function docActScrapeOver(raw, acc) {
       businessUnits: (tgt.businessUnits && tgt.businessUnits.slice ? tgt.businessUnits.slice() : []),
       eventType: segSafeGet(summaryEl, "selectedEventType") || "",
       isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
-      refreshType: docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+      refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
       processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
       schedule: seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
       filters: docActReadFilters(summaryEl, seg)
@@ -309,7 +322,7 @@ function docActScrapeOver(raw, acc) {
   out.captured.filterGroups = out.filterGroups.length > 0;
   return out;
 }
-function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {} }; }
+function newAccum() { return { outputByUid: {}, staticRows: [], contactPoints: [], pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" }; }
 
 // CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
@@ -445,6 +458,12 @@ console.log("\n5. [object Object] FIX: object-shaped contact-point props are ext
   // A plain-string channel (older DOM shape) still works (backward compatible).
   var strCp = docActCpExtract("ssot__MobilePhone__c");
   ok("string-form channel stays supported", strCp.present === true && strCp.value === "ssot__MobilePhone__c");
+  // REGRESSION (user-reported from a live screenshot): an UNCONFIGURED channel (user never set
+  // up Push/WhatsApp/Address) is an object carrying only combobox UI-state plumbing, no real
+  // config. Must normalize to not-present — must NOT render "disablePathDropdown: true, pathIndex: -1".
+  var unconfigured = docActCpExtract({ disablePathDropdown: true, pathIndex: -1 });
+  eq("unconfigured channel (only UI-state keys) → not present", unconfigured.present, false);
+  eq("unconfigured channel → no noise dump", unconfigured.dump, "");
 }
 
 console.log("\n6. contact points de-dupe (revisiting the step must not pile up copies)");
@@ -616,6 +635,25 @@ console.log("\n6h. filterGroups MERGE: badge (closed) + condition text (only if 
   eq("captured.filterGroups flips true once any badge is seen", afterBadgeOnly.captured.filterGroups, true);
 }
 
+console.log("\n6i. REFRESH TYPE: sidebar 'Publish Schedule:' text (no getter property exists for this at all)");
+{
+  // Real sidebar leaf-element shape from the live-org probe (Contact Points step):
+  // "Publish Schedule:Don't refresh" rendered as one small-leaf-element's textContent.
+  var scheduleLeaf = { tagName: "div", children: [], textContent: "Publish Schedule:Don't refresh" };
+  var acc = newAccum();
+  var out = docActScrapeOver([summaryEl(), scheduleLeaf], acc);
+  eq("refresh type read from sidebar text (no structured property exists for it)", out.overview.refreshType, "Don't refresh");
+  // Persists once seen, same as output names / contact points / static values — the
+  // Contact Points step (where this text renders) tears down when the user moves on.
+  var afterNextStep = docActScrapeOver([summaryEl()], acc);
+  eq("refresh type persists after navigating away from the Contact Points step", afterNextStep.overview.refreshType, "Don't refresh");
+  // A noisy leaf (too many children / too long / wrong prefix) must never be mistaken for it.
+  var noisyLeaf = { tagName: "div", children: [1, 2, 3, 4, 5], textContent: "Publish Schedule:Don't refresh" };
+  var acc2 = newAccum();
+  var out2 = docActScrapeOver([summaryEl(), noisyLeaf], acc2);
+  eq("a leaf with >=5 children is not read as the sidebar label (avoids matching a big wrapper)", out2.overview.refreshType, "");
+}
+
 console.log("\n7. no summary on the page → found=false, nothing fabricated");
 {
   var out = docActScrapeOver([{ tagName: "div" }, { tagName: "runtime_cdp-activation-attribute-datatable", data: [] }], newAccum());
@@ -713,6 +751,19 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("filter-exists badge parser present and reads the attribute-wizard tag", /function docActParseFilterBadges/.test(src) && /runtime_cdp-activation-attribute-wizard/.test(src));
   ok("applied-filter-dialog parser present and reads the filter-dialog tag (read-only, never auto-opened)", /function docActParseFilterDialog/.test(src) && /runtime_cdp-activation-related-attributes-filter-dialog/.test(src));
   ok("filterGroups merged into scrape output and rendered in the modal", /out\.filterGroups\s*=/.test(src) && /Attribute Filters/.test(src));
+  // PASSIVE FILTER CAPTURE: docActScrape() must ALSO run on a background poll while the Edit
+  // Filters dialog is on screen, not only at the instant the user clicks "Document Activation"
+  // (user-reported bug: by click time the dialog is usually already closed, so the condition
+  // text was never seen). Guarded on window so it survives the bookmarklet's per-step re-runs
+  // without stacking a new interval each time.
+  ok("passive filter-dialog capture poll wired (window-guarded, no stacking)", /__dcDocActFilterPoll/.test(src) && /function docActPassiveScan/.test(src) && /docActScrape\(\)/.test(src.match(/function docActPassiveScan[\s\S]{0,300}/)[0]));
+  // CAMPAIGN DATA RENAME: "Static Values" was an invented label — Salesforce's own Attributes
+  // step renders this field group as "Campaign Data" / "Campaign Attributes (N)" (confirmed via
+  // live DOM probe). The modal/Excel must use SF's real wording, not our own.
+  ok("user-facing label renamed to SF's real 'Campaign Data' wording (modal + Excel sheet)", /Campaign Data/.test(src) && !/>Static Values</.test(src) && !/addWorksheet\("Static Values"\)/.test(src));
+  // REFRESH TYPE: no getter property exists for it at all — reused the proven sidebar
+  // "Publish Schedule:" text pattern (already live-tested in the older extension-fed exporter).
+  ok("refresh type read via the sidebar 'Publish Schedule:' text pattern", /function docActReadRefreshType/.test(src) && /Publish Schedule:/.test(src));
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
