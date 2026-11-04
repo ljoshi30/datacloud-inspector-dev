@@ -915,7 +915,7 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("Email Address Path read via pathComboboxOptions[pathIndex] (live-confirmed shape)", /pathComboboxOptions/.test(src) && /pathIndex/.test(src));
   ok("filter-exists badge parser present and reads the attribute-wizard tag", /function docActParseFilterBadges/.test(src) && /runtime_cdp-activation-attribute-wizard/.test(src));
   ok("applied-filter-dialog parser present and reads the filter-dialog tag (read-only, never auto-opened)", /function docActParseFilterDialog/.test(src) && /runtime_cdp-activation-related-attributes-filter-dialog/.test(src));
-  ok("filterGroups merged into scrape output and rendered in the modal", /out\.filterGroups\s*=/.test(src) && /Attribute Filters/.test(src));
+  ok("filterGroups merged into scrape output and rendered in the modal", /out\.filterGroups\s*=/.test(src) && /fltBadge/.test(src));
   // PASSIVE CAPTURE: docActScrape() must ALSO run on a background poll, UNCONDITIONALLY on every
   // tick (not gated on the filter dialog or any single tag), not only at the instant the user
   // clicks "Document Activation" (user-reported bug: by click time the relevant dialog/page is
@@ -1016,7 +1016,7 @@ console.log("\n13. BEHAVIOR (real source fns): Provisional Audience Limiting + S
   eq("toggle absent -> showOn null (unknown, not false)", readLimits([]).showOn, null);
   ok("limit without header skipped (no placeholder)", readLimits([{ tagName: "runtime_cdp-activation-related-attribute-limit", relatedAttributesLimit: { attributeName: "x" }, parentNode: { children: [] }, shadowRoot: root([]) }]).limits.length === 0);
 
-  ok("wired: scrape accumulates limits/paths, modal + Excel render them", /acc\.limits\[l\.owner\]/.test(src) && /Provisional Audience Limiting/.test(src) && /addWorksheet\("Show Paths"\)/.test(src) && /addWorksheet\("Provisional Audience Limiting"\)/.test(src) && !/Related Object Settings/.test(src));
+  ok("wired: scrape accumulates limits/paths, modal + Excel render them", /acc\.limits\[l\.owner\]/.test(src) && /Max # of Attribute Values/.test(src) && /addWorksheet\("Show Paths"\)/.test(src) && /addWorksheet\("Related Attribute Limits"\)/.test(src) && !/Related Object Settings/.test(src));
   ok("showPaths toggle off hides path choices", /acc\.showPathsOn === false \? \[\]/.test(src));
   const bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.min.js"), "utf8");
   ok("public build excludes it (dev-only)", !/Provisional Audience Limiting/.test(bm) && !/Activation Blueprint/.test(bm));
@@ -1095,6 +1095,19 @@ console.log("\n16. Modal is resizable + responsive (behavior of the real resize 
   win.innerWidth = 500; winL.resize();
   ok("window shrink re-clamps box", parseInt(box.style.width, 10) <= 500);
   ok("mobile media rule makes it full-screen under 700px", /@media \(max-width:700px\)/.test(style.textContent));
+}
+
+console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their object group, not floating cards");
+{
+  var fs2 = require("fs"), p2 = require("path");
+  var s2 = fs2.readFileSync(p2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("no standalone 'Provisional Audience Limiting' card (that's a different, unconfigured SF section)", !/>Provisional Audience Limiting</.test(s2));
+  ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
+  ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
+  ok("Contact Point section carries the Contact Point limit", /contact\\s\*point/.test(s2) && /Contact Point<\/div>/.test(s2));
+  ok("sections ordered like the wizard (overview, filters, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ afHtml \+ cpHtml \+ attrHtml \+ lpHtml \+ stHtml/.test(s2));
+  ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
+  ok("system rows explained, no (unspecified)", /Added automatically by Salesforce for waterfall/.test(s2) && !/\(unspecified\)/.test(s2));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

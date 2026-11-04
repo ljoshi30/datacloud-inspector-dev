@@ -20593,9 +20593,9 @@ processJSON();
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
 
         if ((data.limits || []).length) {
-          var ws5 = wb.addWorksheet("Provisional Audience Limiting");
+          var ws5 = wb.addWorksheet("Related Attribute Limits");
           ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 14; ws5.getColumn(3).width = 30; ws5.getColumn(4).width = 30; ws5.getColumn(5).width = 20;
-          ["Related Object", "Limit", "Sort By", "Sort By API", "Order"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
+          ["Related Object", "Max # of Attribute Values", "Sort By", "Sort By API", "Order"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
           data.limits.forEach(function (l, i) {
             ws5.getCell(i + 2, 1).value = l.owner;
             ws5.getCell(i + 2, 2).value = l.fixed ? l.maxValues + " (fixed)" : l.maxValues;
@@ -20653,7 +20653,18 @@ processJSON();
         xBtn.onclick = function () { modal.remove(); };
         csvBtn.onclick = function () { docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + "-attributes.csv", "text/csv;charset=utf-8", ["﻿" + docActCsv(data)]); };
         xlsBtn.onclick = function () { docActExcel(data); };
-        hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(xBtn);
+        var docBtn = document.createElement("button"); docBtn.textContent = "⬇ Doc"; docBtn.style.cssText = btnCss; docBtn.title = "Download a structured Word-compatible document of the whole activation (sections in wizard order)";
+        docBtn.onclick = function () {
+          var inner = modal.__docSections || "";
+          var html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation Blueprint</title>"
+            + "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#181818;margin:28px;} h1{color:#032d60;font-size:22px;margin:0 0 4px;} .sub{color:#5c5c5c;font-size:12px;margin:0 0 18px;}"
+            + " table{border-collapse:collapse;width:100%;margin:6px 0;} th,td{border:1px solid #d8dde6;padding:5px 8px;font-size:12px;text-align:left;} th{background:#f3f3f3;}"
+            + " code{font-family:Consolas,monospace;}</style></head><body>"
+            + "<h1>" + e(ov.target || ov.segment || "Activation") + "</h1><div class='sub'>Activation Blueprint · generated " + e(new Date().toISOString().slice(0, 10)) + " · read from the Salesforce page</div>"
+            + inner + "</body></html>";
+          docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".doc", "application/msword;charset=utf-8", ["﻿" + html]);
+        };
+        hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(docBtn); hdr.appendChild(xBtn);
 
         // ── Body ──
         var body = document.createElement("div");
@@ -20699,14 +20710,14 @@ processJSON();
             + pill(caps.outputNames, "Output names")
             + pill(caps.contactPoints, "Contact points")
             + pill(caps.staticValues, "Campaign Data")
-            + pill(caps.limits, "Provisional Audience Limiting")
+            + pill(caps.limits, "Related-object limits")
             + pill(caps.paths, "Show Paths")
             + "</div>";
           // How to capture the two Attributes-step extras (read only while visible, then remembered).
           if (!caps.limits || !caps.paths) {
             status += "<div style='font:400 11px/1.6 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:12px;'>"
               + "<b>If this activation uses related attributes</b>, these are read from the screen and remembered, so open them once:"
-              + (!caps.limits ? "<br>• <b>Provisional Audience Limiting</b> — go to the Attributes step and scroll to the Provisional Audience Limiting section." : "")
+              + (!caps.limits ? "<br>• <b>Max # of Attribute Values / Sort By</b> — shown inside each related object on the Attributes (and Contact Point) step; scroll so they are on screen once." : "")
               + (!caps.paths ? "<br>• <b>Show Paths</b> — on the Attributes step click <b>Add Attributes</b> and turn on <b>Show Paths</b> (the Path for each object appears)." : "")
               + "<br>Then reopen this panel. (It never clicks or navigates for you.)</div>";
           }
@@ -20723,37 +20734,79 @@ processJSON();
               + " step, then reopen this panel to capture the rest — then export. (It never navigates for you.)</div>";
           }
 
-          // Attributes table grouped by object, API names inline — Salesforce-like.
-          var byEntity = {};
-          data.attributes.forEach(function (a) { var en = a.objectApi || (a.source === "SYSTEM" ? "System fields (added by Salesforce)" : "Other"); (byEntity[en] = byEntity[en] || []).push(a); });
+          // Attributes grouped by object, in Salesforce's own order. Each object's group carries ITS OWN
+          // "Max # of Attribute Values / Sort By / Order" (the related-attribute limit), its "Show Paths"
+          // path and its filter badge — exactly where the wizard shows them. Nothing floats elsewhere.
+          function normLbl(x) { return String(x || "").toLowerCase().replace(/__(dlm|cio|dll|dls)$/, "").replace(/[^a-z0-9]/g, ""); }
+          var limByObj = {}, pathByObj = {}, fltByObj = {}, usedLim = {}, usedFlt = {};
+          (data.limits || []).forEach(function (l) { limByObj[normLbl(l.owner)] = l; });
+          (data.pathChoices || []).forEach(function (pc) { pathByObj[normLbl(pc.owner)] = pc; });
+          (data.filterGroups || []).forEach(function (g) { fltByObj[normLbl(g.label)] = g; });
+          var lblTxt = "font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;";
+          function limLine(l) {
+            return "<div style='display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;background:#f7f9fb;border:1px solid #e5e7eb;border-radius:6px;padding:7px 10px;margin:0 0 6px;'>"
+              + "<span><span style='" + lblTxt + "'>Max # of Attribute Values</span> <b style='font:700 12px system-ui;'>" + docActEsc(l.maxValues) + "</b>" + (l.fixed ? " <span style='color:#5c5c5c;font-size:11px;'>(fixed)</span>" : "") + "</span>"
+              + "<span><span style='" + lblTxt + "'>Sort By</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.sortLabel) + "</span> " + docActApiChip(l.sortField) + "</span>"
+              + "<span><span style='" + lblTxt + "'>Order</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.orderLabel) + "</span></span></div>";
+          }
+          function fltBadge(g) {
+            if (!g) return "";
+            var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+            return "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Filters</span> "
+              + (g.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>")
+              + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
+          }
           var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes <span style='color:#5c5c5c;font-weight:500;'>(" + data.attributes.length + ")</span></div>";
-          Object.keys(byEntity).sort().forEach(function (en) {
-            var rows = byEntity[en];
+          Object.keys(byEntityOrder(data.attributes)).forEach(function (en) {
+            var rows = byEntityOrder(data.attributes)[en];
             var kind = docActObjKind(en);
             var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
             var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en) && rows.every(function (r) { return !r.objectApi; });
-            attrHtml += "<div style='display:flex;align-items:center;gap:8px;margin:12px 0 6px;'><span style='font:600 12px system-ui;color:#181818;'>" + e(en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")) + "</span>"
-              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>";
-            attrHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
-              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field</th>"
+            var nk = normLbl(en), lim = limByObj[nk], pth = pathByObj[nk], flt = fltByObj[nk];
+            if (lim) usedLim[nk] = 1; if (flt) usedFlt[nk] = 1;
+            attrHtml += "<div style='border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:0 0 12px;'>"
+              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")) + "</span>"
+              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>"
+              + (isSysGroup ? "<div style='font:400 11px system-ui;color:#5c5c5c;margin:-4px 0 8px;'>Added automatically by Salesforce for waterfall activations.</div>" : "")
+              + (lim ? limLine(lim) : "") + fltBadge(flt)
+              + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
+            attrHtml += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
             rows.forEach(function (a) {
               attrHtml += "<tr>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "—") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
             });
-            attrHtml += "</tbody></table>";
+            attrHtml += "</tbody></table></div></div>";
           });
           attrHtml += "</div>";
+          // Group order: primary object first (Salesforce order = as captured), system fields last.
+          function byEntityOrder(list) {
+            if (byEntityOrder._c && byEntityOrder._l === list) return byEntityOrder._c;
+            var m = {}, sys = "System fields (added by Salesforce)", keys = [];
+            list.forEach(function (a) { var en = a.objectApi || (a.source === "SYSTEM" ? sys : "Other"); if (!m[en]) { m[en] = []; keys.push(en); } m[en].push(a); });
+            var out = {};
+            keys.filter(function (k) { return k !== sys; }).forEach(function (k) { out[k] = m[k]; });
+            if (m[sys]) out[sys] = m[sys];
+            byEntityOrder._c = out; byEntityOrder._l = list; return out;
+          }
 
           // Contact points — each channel shows its value + field/entity API + path.
           var cpHtml = "";
-          if (data.contactPoints.length) {
-            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Points</div>";
+          var cpLims = (data.limits || []).filter(function (l) { return /contact\s*point/i.test(l.owner); });
+          if (data.contactPoints.length || cpLims.length) {
+            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point</div>";
+            (data.limits || []).forEach(function (l) {
+              var k = normLbl(l.owner);
+              if (usedLim[k] || !/contact\s*point/i.test(l.owner)) return;
+              usedLim[k] = 1;
+              cpHtml += "<div style='margin:0 0 4px;font:700 12px system-ui;color:#181818;'>" + docActEsc(l.owner) + "</div>" + limLine(l);
+            });
             data.contactPoints.forEach(function (cp) {
               cpHtml += "<div style='display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid #f1f1f1;'>";
               [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) {
@@ -20782,9 +20835,10 @@ processJSON();
           // Attribute filters (from the Attributes-step "Edit/Add Filters" rows). Badge is
           // readable even with the panel closed; condition text only when it was opened once.
           var afHtml = "";
-          if (data.filterGroups && data.filterGroups.length) {
-            afHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attribute Filters <span style='color:#5c5c5c;font-weight:500;'>(" + data.filterGroups.length + ")</span></div>";
-            data.filterGroups.forEach(function (g) {
+          var restFlt = (data.filterGroups || []).filter(function (g) { return !usedFlt[normLbl(g.label)]; });
+          if (restFlt.length) {
+            afHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Filters <span style='color:#5c5c5c;font-weight:500;'>(" + restFlt.length + ")</span></div>";
+            restFlt.forEach(function (g) {
               var badge = g.hasFilter
                 ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>"
                 : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
@@ -20798,33 +20852,16 @@ processJSON();
             afHtml += "</div>";
           }
 
-          // Provisional Audience Limiting — SF's own section/column wording ("Limit", "Sort By").
-          var lpHtml = "";
-          if ((data.limits || []).length) {
-            lpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Provisional Audience Limiting <span style='color:#5c5c5c;font-weight:500;'>(" + data.limits.length + ")</span>"
-              + docActInfoIcon("Define limits and set attribute priority: for each related object, how many related records are sent per profile, and which ones (sorted by).") + "</div>"
-              + "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'>"
-              + ["Related Object", "Limit", "Sort By", "Order"].map(function (h) { return "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>" + h + "</th>"; }).join("")
-              + "</tr></thead><tbody>";
-            data.limits.forEach(function (l) {
-              var td = "padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;";
-              lpHtml += "<tr><td style='" + td + "font-weight:600;'>" + docActEsc(l.owner) + "</td>"
-                + "<td style='" + td + "'>" + docActEsc(l.maxValues) + (l.fixed ? " <span style='color:#5c5c5c;'>(fixed)</span>" : "") + "</td>"
-                + "<td style='" + td + "'>" + docActEsc(l.sortLabel) + " " + docActApiChip(l.sortField) + "</td>"
-                + "<td style='" + td + "'>" + docActEsc(l.orderLabel) + "</td></tr>";
-            });
-            lpHtml += "</tbody></table></div>";
-          }
-          // Show Paths — SF's "Show Paths" toggle + the selected "Path" per related object.
-          var pcHtml = "";
-          if ((data.pathChoices || []).length) {
-            pcHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Show Paths <span style='color:#5c5c5c;font-weight:500;'>(" + data.pathChoices.length + ")</span>"
-              + docActInfoIcon("The join path selected for each related object, from the segment's object to that object.") + "</div>";
-            data.pathChoices.forEach(function (pc) {
-              pcHtml += "<div style='padding:6px 0;border-bottom:1px solid #f1f1f1;'><div style='font:700 11px system-ui;color:#16325c;'>" + docActEsc(pc.owner) + "</div>"
-                + "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pc.text) + "</div></div>";
-            });
-            pcHtml += "</div>";
+          // Anything not attached to a group above (rare): listed honestly under its own name.
+          var lpHtml = "", pcHtml = "";
+          var restLim = (data.limits || []).filter(function (l) { return !usedLim[normLbl(l.owner)]; });
+          var restPth = (data.pathChoices || []).filter(function (pc) { return !attrHasGroup(pc.owner); });
+          function attrHasGroup(o) { return Object.keys(byEntityOrder(data.attributes)).some(function (k) { return normLbl(k) === normLbl(o); }); }
+          if (restLim.length || restPth.length) {
+            lpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Other related-object settings</div>"
+              + restLim.map(function (l) { return "<div style='margin:0 0 4px;font:700 12px system-ui;'>" + docActEsc(l.owner) + "</div>" + limLine(l); }).join("")
+              + restPth.map(function (pc) { return "<div style='margin:0 0 6px;'><b style='font:700 12px system-ui;'>" + docActEsc(pc.owner) + "</b> <span style='" + lblTxt + "'>Path</span> " + docActEsc(pc.text) + "</div>"; }).join("")
+              + "</div>";
           }
 
           // Campaign Data — this is the exact field-group label Salesforce itself uses on the
@@ -20845,8 +20882,11 @@ processJSON();
             stHtml += "</tbody></table></div>";
           }
 
-          var sections = status + ovGrid + attrHtml + cpHtml + flHtml + afHtml + lpHtml + pcHtml + stHtml;
-          body.innerHTML = sections;   // all interpolated values escaped via e()/docActEsc above
+          // Wizard order: Overview → Membership/filters → Contact Point → Attributes (limits, paths, filters inline) → Campaign Data.
+          var docSections = ovGrid + flHtml + afHtml + cpHtml + attrHtml + lpHtml + stHtml;
+          var sections = status + docSections;
+          body.innerHTML = sections;
+          modal.__docSections = docSections;   // all interpolated values escaped via e()/docActEsc above
         }
 
         box.appendChild(hdr); box.appendChild(body);
