@@ -20137,7 +20137,7 @@ processJSON();
               maxValues: lim.maxNumberOfValues != null ? String(lim.maxNumberOfValues) : "",
               fixed: !!segSafeGet(el, "disableRelatedAttributesLimit")
             });
-          } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Limit") {
+          } else if (tag === "lightning-input" && /^\*?\s*Limit$/i.test(String(segSafeGet(el, "label") || "").trim())) {
             var lv = segSafeGet(el, "value"); provLimit = (lv == null ? "" : String(lv));
           } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
             showOn = !!segSafeGet(el, "checked");
@@ -23340,7 +23340,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.714"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.715"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

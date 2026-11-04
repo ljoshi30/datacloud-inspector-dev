@@ -1146,7 +1146,7 @@ console.log("\n20. Draggable header + Limit reader (real source)");
   var fs5 = require("fs"), p5 = require("path");
   var s5 = fs5.readFileSync(p5.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("header drag handler: ignores buttons, moves box via fixed left/top, clamps to viewport", /Draggable \(drag the header/.test(s5) && /closest\("button"\)\) return/.test(s5) && /box\.style\.position = "fixed"/.test(s5));
-  ok("Limit input read into provLimit and persisted in accumulator", /label"\) === "Limit"/.test(s5) && /acc\.provLimit = lp\.provLimit/.test(s5) && /a\.provLimit === undefined/.test(s5));
+  ok("Limit input read into provLimit and persisted in accumulator", /Limit\$\/i\.test/.test(s5) && /acc\.provLimit = lp\.provLimit/.test(s5) && /a\.provLimit === undefined/.test(s5));
 }
 
 console.log("\n21. Contact Point path + filters stay in their own group");

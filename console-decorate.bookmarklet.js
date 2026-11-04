@@ -20137,7 +20137,7 @@ processJSON();
               maxValues: lim.maxNumberOfValues != null ? String(lim.maxNumberOfValues) : "",
               fixed: !!segSafeGet(el, "disableRelatedAttributesLimit")
             });
-          } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Limit") {
+          } else if (tag === "lightning-input" && /^\*?\s*Limit$/i.test(String(segSafeGet(el, "label") || "").trim())) {
             var lv = segSafeGet(el, "value"); provLimit = (lv == null ? "" : String(lv));
           } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
             showOn = !!segSafeGet(el, "checked");
