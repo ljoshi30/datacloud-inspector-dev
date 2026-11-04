@@ -20146,7 +20146,16 @@ processJSON();
         if (filterDialogEl) {
           var dlgText = ""; try { dlgText = filterDialogEl.innerText || filterDialogEl.textContent || ""; } catch (e) {}
           var parsed = docActParseFilterDialog(dlgText);
-          if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
+          // "Last known GOOD value wins" — the dialog's closing animation renders a
+          // transition frame where the title matches but the condition span is cut off
+          // (empty conditions), which would otherwise silently overwrite a previously
+          // captured real condition with nothing the instant the user closes the dialog
+          // (user-reported: filter disappears from the export as soon as the dialog closes).
+          // Only accept a parse that actually found a condition, or when nothing was
+          // captured for this label yet.
+          if (parsed && parsed.entityLabel && (parsed.conditions.length || !acc.filterConditions[parsed.entityLabel])) {
+            acc.filterConditions[parsed.entityLabel] = parsed;
+          }
         }
 
         // Refresh Type — only rendered as sidebar text on the Contact Points step, so
@@ -20277,21 +20286,21 @@ processJSON();
         return out;
       }
 
-      // PASSIVE capture for the filter dialog: docActScrape() only normally runs the instant
-      // the user clicks "Document Activation", but the Edit Filters dialog is typically closed
-      // again by then — so its condition text would never get folded into the accumulator.
-      // This runs docActScrape() silently (discarding the result; it's a pure read+accumulate)
-      // whenever the filter dialog is actually on screen, so the condition is captured the
-      // moment it's visible, not only at export time. Same no-click, no-nav guarantee — it only
-      // ever READS the dialog the user already opened themselves.
-      // Guarded on window (not an IIFE-local), same reasoning as window.__dcNavCapturePoll below:
-      // this whole module body re-executes on every bookmarklet re-run (per-step nav), so a plain
-      // local-scoped setInterval would stack a new poller on every step without this guard.
+      // PASSIVE capture, ALWAYS-ON (not gated on any one dialog/step): docActScrape() only
+      // normally runs the instant the user clicks "Document Activation", by which point
+      // whatever step/dialog had the data on screen may already be gone — the filter dialog
+      // closes, the user navigates off the Contact Points step, etc. User explicitly asked:
+      // "if you are picking anything from anywhere, just show" — i.e. capture continuously
+      // as the user naturally visits/opens things, not only at export time. This silently
+      // re-runs docActScrape() (discarding the result; it's a pure read+accumulate, same
+      // no-click/no-nav guarantee as the export itself) on every tick, regardless of which
+      // step or dialog happens to be open — docActScrape() itself only reads whatever tags
+      // are currently present, so a tick where nothing relevant is on screen is a no-op.
+      // Guarded on window (not an IIFE-local), same reasoning as window.__dcNavCapturePoll
+      // elsewhere: this whole module body re-executes on every bookmarklet re-run (per-step
+      // nav), so a plain local-scoped setInterval would stack a new poller on every step.
       function docActPassiveScan() {
-        try {
-          var hit = collectRaw().some(function (el) { return (el.tagName || "").toLowerCase() === "runtime_cdp-activation-related-attributes-filter-dialog"; });
-          if (hit) docActScrape();
-        } catch (e) {}
+        try { docActScrape(); } catch (e) {}
       }
       if (!window.__dcDocActFilterPoll) {
         window.__dcDocActFilterPoll = setInterval(docActPassiveScan, 800);

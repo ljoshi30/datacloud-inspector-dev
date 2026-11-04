@@ -237,7 +237,9 @@ function docActScrapeOver(raw, acc) {
   }
   if (filterDialogEl) {
     var parsed = docActParseFilterDialog(filterDialogEl.innerText || filterDialogEl.textContent || "");
-    if (parsed && parsed.entityLabel) acc.filterConditions[parsed.entityLabel] = parsed;
+    if (parsed && parsed.entityLabel && (parsed.conditions.length || !acc.filterConditions[parsed.entityLabel])) {
+      acc.filterConditions[parsed.entityLabel] = parsed;
+    }
   }
   var sidebarRefresh = docActReadRefreshType(raw);
   if (sidebarRefresh) acc.refreshType = sidebarRefresh;
@@ -639,6 +641,19 @@ console.log("\n6h. filterGroups MERGE: badge (closed) + condition text (only if 
   ok("condition text persists after the dialog is closed (window-accumulator pattern)",
      cpe2 && cpe2.conditions.length === 1 && cpe2.conditions[0].field === "Email Address" && cpe2.conditions[0].operator === "Has Value");
   eq("captured.filterGroups flips true once any badge is seen", afterBadgeOnly.captured.filterGroups, true);
+
+  // REGRESSION (user-reported): a real condition, once captured, must NOT be silently erased
+  // by a later scrape of the SAME dialog mid-close-transition, where the title still matches
+  // but the condition span is momentarily empty (the dialog re-renders a frame or two while
+  // it's animating shut). The passive poller runs on an interval, so it WILL catch that
+  // transition frame — it must not overwrite the good capture with nothing.
+  var closingFrame = { tagName: "runtime_cdp-activation-related-attributes-filter-dialog",
+    innerText: 'Filter "Contact Point Email" Attributes\nPath\nX.Id > Y.Id\nAttributes (1)' }; // no "Drag and drop..." span this frame
+  docActScrapeOver([summaryEl(), wizardEl, closingFrame], acc);
+  var afterClosingFrame = docActScrapeOver([summaryEl(), wizardEl], acc);
+  var cpe3 = afterClosingFrame.filterGroups.filter(function (g) { return g.label === "Contact Point Email"; })[0];
+  ok("a transition frame with no condition span does NOT erase the previously captured condition",
+     cpe3 && cpe3.conditions.length === 1 && cpe3.conditions[0].field === "Email Address");
 }
 
 console.log("\n6i. REFRESH TYPE: the activation's own 'Activation Refresh Type' field (not the segment's Publish Schedule)");
@@ -770,12 +785,15 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("filter-exists badge parser present and reads the attribute-wizard tag", /function docActParseFilterBadges/.test(src) && /runtime_cdp-activation-attribute-wizard/.test(src));
   ok("applied-filter-dialog parser present and reads the filter-dialog tag (read-only, never auto-opened)", /function docActParseFilterDialog/.test(src) && /runtime_cdp-activation-related-attributes-filter-dialog/.test(src));
   ok("filterGroups merged into scrape output and rendered in the modal", /out\.filterGroups\s*=/.test(src) && /Attribute Filters/.test(src));
-  // PASSIVE FILTER CAPTURE: docActScrape() must ALSO run on a background poll while the Edit
-  // Filters dialog is on screen, not only at the instant the user clicks "Document Activation"
-  // (user-reported bug: by click time the dialog is usually already closed, so the condition
-  // text was never seen). Guarded on window so it survives the bookmarklet's per-step re-runs
-  // without stacking a new interval each time.
-  ok("passive filter-dialog capture poll wired (window-guarded, no stacking)", /__dcDocActFilterPoll/.test(src) && /function docActPassiveScan/.test(src) && /docActScrape\(\)/.test(src.match(/function docActPassiveScan[\s\S]{0,300}/)[0]));
+  // PASSIVE CAPTURE: docActScrape() must ALSO run on a background poll, UNCONDITIONALLY on every
+  // tick (not gated on the filter dialog or any single tag), not only at the instant the user
+  // clicks "Document Activation" (user-reported bug: by click time the relevant dialog/page is
+  // usually already gone, so fields specific to it — filter conditions, Refresh Type on the
+  // detail page — were never seen). Guarded on window so it survives the bookmarklet's per-step
+  // re-runs without stacking a new interval each time.
+  var passiveScanBody = (src.match(/function docActPassiveScan[\s\S]{0,300}/) || [""])[0];
+  ok("passive capture poll wired (window-guarded, no stacking)", /__dcDocActFilterPoll/.test(src) && /function docActPassiveScan/.test(src) && /docActScrape\(\)/.test(passiveScanBody));
+  ok("passive poll runs UNCONDITIONALLY every tick (not gated on the filter-dialog tag)", !/if\s*\([^)]*runtime_cdp-activation-related-attributes-filter-dialog[^)]*\)\s*\{\s*(try\s*\{\s*)?docActScrape/.test(src));
   // CAMPAIGN DATA RENAME: "Static Values" was an invented label — Salesforce's own Attributes
   // step renders this field group as "Campaign Data" / "Campaign Attributes (N)" (confirmed via
   // live DOM probe). The modal/Excel must use SF's real wording, not our own.
