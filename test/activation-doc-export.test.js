@@ -1101,11 +1101,11 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
 {
   var fs2 = require("fs"), p2 = require("path");
   var s2 = fs2.readFileSync(p2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  ok("no standalone 'Provisional Audience Limiting' card (that's a different, unconfigured SF section)", !/>Provisional Audience Limiting</.test(s2));
+  ok("Provisional Audience Limiting is its own section (Limit), not mixed with per-object limits", /pvHtml/.test(s2) && !/Related-object limits<\/div>/.test(s2));
   ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
   ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
-  ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point<\/div>/.test(s2) && /pickBy\(gsecM/.test(s2));
-  ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ afHtml/.test(s2));
+  ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point"/.test(s2) && /pickBy\(gsecM/.test(s2));
+  ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ pvHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
   ok("system rows are plain Attributes rows, no (unspecified)", /sysRows\.concat\(rows\)/.test(s2) && !/\(unspecified\)/.test(s2));
 }
@@ -1139,6 +1139,14 @@ console.log("\n19. Section ownership comes from the wizard DOM order (real sourc
   eq("Unified Individual TDI -> Attributes", g["Unified Individual TDI"], "Attributes");
   eq("Campaign Attributes -> Campaign Data", g["Campaign Attributes"], "Campaign Data");
   eq("'Attributes' column header inside Provisional table is not a section", Object.keys(g).length, 5);
+}
+
+console.log("\n20. Draggable header + Limit reader (real source)");
+{
+  var fs5 = require("fs"), p5 = require("path");
+  var s5 = fs5.readFileSync(p5.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("header drag handler: ignores buttons, moves box via fixed left/top, clamps to viewport", /Draggable \(drag the header/.test(s5) && /closest\("button"\)\) return/.test(s5) && /box\.style\.position = "fixed"/.test(s5));
+  ok("Limit input read into provLimit and persisted in accumulator", /label"\) === "Limit"/.test(s5) && /acc\.provLimit = lp\.provLimit/.test(s5) && /a\.provLimit === undefined/.test(s5));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

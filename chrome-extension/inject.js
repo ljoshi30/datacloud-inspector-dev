@@ -19863,13 +19863,13 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {} };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {}, provLimit: null, provSection: false };
         // Back-fill fields added in later versions: the accumulator lives on window and survives
         // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
         var a = _docActAccum[id];
         if (!a.limits) a.limits = {};
         if (!a.pathChoices) a.pathChoices = {};
-        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {};
+        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {}; if (a.provLimit === undefined) a.provLimit = null; if (a.provSection === undefined) a.provSection = false;
         return a;
       }
 
@@ -20113,7 +20113,7 @@ processJSON();
         return (dot >= 0 ? seg.slice(0, dot) : seg).trim();
       }
       function docActReadLimits(raw) {
-        var limits = [], paths = [], showOn = null;
+        var limits = [], paths = [], showOn = null, provLimit = null;
         raw.forEach(function (el) {
           var tag = (el.tagName || "").toLowerCase();
           if (tag === "runtime_cdp-activation-related-attribute-limit") {
@@ -20137,6 +20137,8 @@ processJSON();
               maxValues: lim.maxNumberOfValues != null ? String(lim.maxNumberOfValues) : "",
               fixed: !!segSafeGet(el, "disableRelatedAttributesLimit")
             });
+          } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Limit") {
+            var lv = segSafeGet(el, "value"); provLimit = (lv == null ? "" : String(lv));
           } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
             showOn = !!segSafeGet(el, "checked");
           } else if (tag === "lightning-combobox" && segSafeGet(el, "label") === "Path") {
@@ -20148,7 +20150,7 @@ processJSON();
             if (txt && po) paths.push({ owner: po, text: txt });
           }
         });
-        return { limits: limits, paths: paths, showOn: showOn };
+        return { limits: limits, paths: paths, showOn: showOn, provLimit: provLimit };
       }
 
       function docActReadFilters(summaryEl, seg) {
@@ -20279,6 +20281,7 @@ processJSON();
           Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
           var mem = docActParseMembership(wizText);
           if (mem) acc.membership = mem;
+          if (/Provisional Audience Limiting/.test(wizText)) acc.provSection = true;
           var gs = docActParseGroupSections(wizText);
           Object.keys(gs).forEach(function (k) { acc.groupSection[k] = gs[k]; });
         }
@@ -20316,6 +20319,7 @@ processJSON();
         lp.limits.forEach(function (l) { acc.limits[l.owner] = l; });
         lp.paths.forEach(function (pc) { acc.pathChoices[pc.owner] = pc; });
         if (lp.showOn != null) acc.showPathsOn = lp.showOn;
+        if (lp.provLimit != null) { acc.provLimit = lp.provLimit; acc.provSection = true; }
 
         var out = {
           recordId: id,
@@ -20469,6 +20473,7 @@ processJSON();
         });
         out.membership = acc.membership || null;
         out.groupSection = acc.groupSection || {};
+        out.provisional = acc.provSection ? { limit: acc.provLimit == null ? "" : acc.provLimit } : null;
         out.captured.filterGroups = out.filterGroups.length > 0;
 
         out.captured.limits = Object.keys(acc.limits).length > 0;
@@ -20520,7 +20525,7 @@ processJSON();
       // mandatory OS delay like the native title= attribute has).
       function docActInfoIcon(tipText) {
         if (!tipText) return "";
-        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;' class='dc-info-ic'>?"
+        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;' class='dc-info-ic'>i"
           + "<span class='dc-info-tip' style='visibility:hidden;opacity:0;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#16325c;color:#fff;font:500 11px/1.4 system-ui;padding:7px 10px;border-radius:6px;white-space:normal;width:260px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:999;transition:opacity .08s;'>" + docActEsc(tipText) + "</span></span>";
       }
 
@@ -20709,13 +20714,23 @@ processJSON();
           var card = "background:#fff;border:1px solid #e5e7eb;border-left:3px solid #0176d3;border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);";
           var secTitle = "font:700 13px system-ui;color:#032d60;margin:0 0 12px;display:flex;align-items:center;gap:8px;letter-spacing:.01em;";
 
+          // Section help — wording paraphrased from Salesforce Help ("Create an Activation…", "Add Filters to the Activation
+          // Membership", "Add Filters to Contact Points in Activation", "Considerations for Selecting Related Attributes").
+          var TIP = {
+            membership: "Activation Membership is the data model object (DMO) whose records are activated. Add filters to refine which of those records are included. Related attributes can be reached up to two relationships away, along a single path.",
+            contact: "Contact points are the channels (email, phone, etc.) the audience is reached on. Max # of Attribute Values is 1 because one value is sent per contact point channel; Sort By decides which value wins. Filters here use the contact point DMO and consent DMOs.",
+            attributes: "The attributes sent for each activated profile, grouped by the object they come from. For related objects, Max # of Attribute Values (up to 25) says how many related records are sent and Sort By says which ones. Output Name is the column name in the activation output.",
+            campaign: "Campaign Data adds fixed, campaign-specific values (up to 20) such as Activation Name, Activation ID, Segment Name, Segment ID or custom values. Each one becomes a new column in the activation output.",
+            provisional: "Provisional Audience Limiting lets you reuse one audience for several fixed-size campaigns with different budgets. Limit (1–10,000) caps the audience, picked randomly; if attributes are ranked (up to three, ascending or descending), the audience is prioritised by that ranking.",
+            overview: "Where this activation reads from and publishes to: data space, segment, activation target, platform, schedule and refresh settings."
+          };
           // Overview as SLDS-style record detail grid.
           function ovItem(lbl, val, api) {
             if (!val && !api) return "";
             return "<div style='min-width:0;'><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;'>" + e(lbl) + "</div>"
               + "<div style='font:500 13px system-ui;color:#181818;word-break:break-word;'>" + e(val || "—") + (api ? " " + docActApiChip(api) : "") + "</div></div>";
           }
-          var ovGrid = "<div style='" + card + "'><div style='" + secTitle + "'>Overview</div>"
+          var ovGrid = "<div style='" + card + "'><div style='" + secTitle + "'>Overview" + docActInfoIcon(TIP.overview) + "</div>"
             + "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px 22px;'>"
             + ovItem("Data Space", ov.dataSpace, ov.dataSpaceApi)
             + ovItem("Segment", ov.segment, ov.segmentApi)
@@ -20809,7 +20824,7 @@ processJSON();
               + (g.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>")
               + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
           }
-          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes</div>";
+          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes" + docActInfoIcon(TIP.attributes) + "</div>";
           function renderGroup(en, rows) {
             var gh = "";
             var kind = docActObjKind(en);
@@ -20871,15 +20886,25 @@ processJSON();
           // Activation Membership — first section of the Attributes step in Salesforce.
           var memHtml = "";
           if (data.membership) {
-            memHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Activation Membership</div>"
+            memHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Activation Membership" + docActInfoIcon(TIP.membership) + "</div>"
               + "<div style='font:700 12px system-ui;color:#181818;margin:0 0 6px;'>" + docActEsc(data.membership.label) + "</div>"
               + fltBadge({ hasFilter: data.membership.hasFilter, conditions: [] })
               + "</div>";
           }
+          // Provisional Audience Limiting — its own section after Campaign Data (Limit; Rank Attributes table).
+          var pvHtml = "";
+          if (data.provisional) {
+            var lv = String(data.provisional.limit || "");
+            pvHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Provisional Audience Limiting" + docActInfoIcon(TIP.provisional) + "</div>"
+              + "<div style='margin:0 0 8px;'><span style='" + lblTxt + "'>Limit</span> "
+              + (lv ? "<b style='font:700 13px system-ui;'>" + docActEsc(Number(lv).toLocaleString ? Number(lv).toLocaleString() : lv) + "</b>" : "<span style='font:500 12px system-ui;color:#5c5c5c;'>Not set</span>") + "</div>"
+              + "<div style='font:400 11px/1.5 system-ui;color:#5c5c5c;'>Rank Attributes (Rank Order · Attribute · Sort By) are set in a pop-up on the Salesforce page; open <b>Rank Attributes</b> there to review them.</div></div>";
+          }
+
           // Contact points — each channel shows its value + field/entity API + path.
           var cpHtml = "";
           if (cpGroupsHtml) {
-            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point</div>" + cpGroupsHtml;
+            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point" + docActInfoIcon(TIP.contact) + "</div>" + cpGroupsHtml;
             cpHtml += "</div>";
           }
 
@@ -20929,14 +20954,14 @@ processJSON();
             // does not show info immediately") that JS can't shorten. A nested span shown
             // via :hover has zero delay.
             stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Campaign Data <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span>"
-              + docActInfoIcon(stTip) + "</div>";
+              + docActInfoIcon(TIP.campaign) + "</div>";
             stHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Name</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Value</th></tr></thead><tbody>";
             data.staticRows.forEach(function (s) { stHtml += "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(s.name) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 12px SFMono-Regular,monospace;color:#0b5cab;'>" + e(s.value) + "</td></tr>"; });
             stHtml += "</tbody></table></div>";
           }
 
           // Wizard order: Overview → Membership/filters → Contact Point → Attributes (limits, paths, filters inline) → Campaign Data.
-          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + stHtml + afHtml;
+          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + stHtml + pvHtml + afHtml;
           var sections = status + docSections;
           body.innerHTML = sections;
           modal.__docSections = docSections;   // all interpolated values escaped via e()/docActEsc above
@@ -20970,7 +20995,7 @@ processJSON();
             maxed = false;
             function mv(m) {
               // box is centred, so each pixel of drag changes the size by 2px to keep the edge under the cursor
-              applySz(dx ? sw + dx * (m.clientX - sx) * 2 : sw, dy ? sh + dy * (m.clientY - sy) * 2 : sh);
+              var k = (box.style.position === "fixed") ? 1 : 2; applySz(dx ? sw + dx * (m.clientX - sx) * k : sw, dy ? sh + dy * (m.clientY - sy) * k : sh);
             }
             function up() { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); saveSz(); }
             document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
@@ -20988,7 +21013,7 @@ processJSON();
         maxBtn.textContent = "⛶"; maxBtn.title = "Maximise / restore"; maxBtn.style.cssText = "border:none;background:none;color:#fff;font-size:16px;cursor:pointer;padding:2px 8px;";
         function toggleMax() {
           if (maxed) { maxed = false; try { var r = JSON.parse(localStorage.getItem(SZ_KEY) || "null"); if (r) applySz(r.w, r.h); else { box.style.width = "min(1040px,96vw)"; box.style.height = ""; } } catch (e3) {} }
-          else { maxed = true; applySz(window.innerWidth, window.innerHeight); }
+          else { maxed = true; applySz(window.innerWidth, window.innerHeight); if (box.style.position === "fixed") { box.style.left = "0px"; box.style.top = "0px"; } }
         }
         maxBtn.onclick = toggleMax;
         hdr.insertBefore(maxBtn, xBtn);
@@ -21002,6 +21027,26 @@ processJSON();
           + "#dc-docact-modal .dc-docact-hdr{flex-wrap:wrap;}"
           + "@media (max-width:700px){#dc-docact-modal{padding:0 !important;}#dc-docact-modal > div{width:100vw !important;height:100vh !important;border-radius:0 !important;}}";
         hdr.classList.add("dc-docact-hdr");
+
+        // ── Draggable (drag the header; buttons stay clickable) ──
+        (function () {
+          hdr.style.cursor = "move";
+          hdr.addEventListener("mousedown", function (ev) {
+            if (ev.target.closest && ev.target.closest("button")) return;
+            if (maxed) return;
+            ev.preventDefault();
+            var rect = box.getBoundingClientRect ? box.getBoundingClientRect() : { left: 0, top: 0 };
+            var sx = ev.clientX, sy = ev.clientY, ox = rect.left, oy = rect.top;
+            box.style.position = "fixed"; box.style.left = ox + "px"; box.style.top = oy + "px"; box.style.margin = "0";
+            function mv(m) {
+              var nx = Math.max(-box.offsetWidth + 80, Math.min(window.innerWidth - 80, ox + m.clientX - sx));
+              var ny = Math.max(0, Math.min(window.innerHeight - 40, oy + m.clientY - sy));
+              box.style.left = nx + "px"; box.style.top = ny + "px";
+            }
+            function up() { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); }
+            document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
+          });
+        })();
         modal.appendChild(box);
         document.body.appendChild(modal);
       }
@@ -23123,7 +23168,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.703"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.704"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
