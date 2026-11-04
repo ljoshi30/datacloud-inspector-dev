@@ -81,9 +81,9 @@ The extension contains no `eval()`, no `new Function()`, no dynamic script loadi
 remote URLs. All code ships in the extension package.
 
 ### No sid in logs
-The session cookie value is never written to `console.log`, `console.warn`, or
-`console.error`. All diagnostic logs are gated behind `DC_DEBUG = false` and emit nothing
-in production. Only `console.warn`/`console.error` for genuine failures remain active.
+The session cookie value is never written to the console or anywhere else. The extension
+code (`inject.js`, `background.js`, `bridge.js`) contains no `console.*` calls at all, and a
+build-time test fails if one is added.
 
 ### AI key isolation
 User-provided AI API keys are stored in `chrome.storage.local` (encrypted at rest by the
@@ -129,4 +129,4 @@ domains + the specific AI gateway hostname. No wildcard `*.sfdc.cl` catch-all.
 - No remote code execution.
 - Privacy policy provided (PRIVACY.md).
 - All permissions justified with specific technical reasons (STORE-LISTING.md).
-- All `console.log` calls gated behind `DC_DEBUG` flag (disabled in production).
+- No `console.*` calls anywhere in the shipped extension code (enforced by a test).
