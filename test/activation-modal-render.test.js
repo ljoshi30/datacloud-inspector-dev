@@ -1,7 +1,7 @@
 const fs=require("fs");
 const src=fs.readFileSync(require("path").join(__dirname,"..","console-decorate.extension.js"),"utf8");
 function grab(name){const i=src.indexOf("function "+name+"(");let d=0,j=src.indexOf("{",i);for(let k=j;k<src.length;k++){if(src[k]=="{")d++;else if(src[k]=="}"){d--;if(!d)return src.slice(i,k+1);}}}
-const names=["docActWordHtml","docActOvTable","docActOvRows","docActEsc","docActApiChip","docActObjKind","docActInfoIcon","docActCpHtml","docActCsv","docActPathText","docActDownload","docActShowModal"].filter(n=>src.includes("function "+n+"("));
+const names=["docActObjSettings","docActWordHtml","docActOvTable","docActOvRows","docActEsc","docActApiChip","docActObjKind","docActInfoIcon","docActCpHtml","docActCsv","docActPathText","docActDownload","docActShowModal"].filter(n=>src.includes("function "+n+"("));
 const code=names.map(grab).join("\n");
 let bodyHtml="";
 function el(){const o={style:{},children:[],classList:{add(){}},_l:{},appendChild(c){o.children.push(c)},insertBefore(c){o.children.push(c)},addEventListener(){},remove(){},closest(){return null},set innerHTML(v){o._h=v;if(o.__body)bodyHtml=v},get innerHTML(){return o._h},offsetWidth:1000,offsetHeight:700};return o}
@@ -37,7 +37,7 @@ must("Activation Membership section shown first (before Contact Point)", html.in
 must("rendered", html.length>500);
 const gi=html.indexOf("TDI_Individual_Additional");const grp=html.slice(gi);
 must("TDI group: attribute table FIRST, then its Limit / Filters / Path panel below", grp.indexOf("Global Exclusion In")>-1 && grp.indexOf("Max # of Attribute Values")>grp.indexOf("Global Exclusion In") && grp.indexOf("Filters")>grp.indexOf("Global Exclusion In") && grp.indexOf(">Path<")>grp.indexOf("Global Exclusion In"));
-must("TDI group shows its Path and its Filtered badge", (grp.indexOf("U.Id")>-1 && grp.indexOf("TDI.Info")>-1) && grp.indexOf("Filtered")>-1);
+must("TDI group shows its Path and its Filtered badge", (grp.indexOf("A.Id")>-1 && grp.indexOf("TDI.Info")>-1) && grp.indexOf("Filtered")>-1);
 must("no Other-settings card (all attached)", !/Other related-object settings/.test(html));
 must("Contact Point limit lives in Contact Point section, ordered before Attributes", html.indexOf("Contact Point Email")>-1 && html.indexOf(">Contact Point<")<html.indexOf(">Attributes"));
 must("Unified Individual group has NO limit line", !/UnifiedIndividual[\s\S]{0,200}Max # of Attribute Values[\s\S]{0,50}FirstName/.test(html.slice(0,html.indexOf("Global Exclusion In"))) );
@@ -45,7 +45,7 @@ must("SubSegmentId is a plain row of the first Attributes group (no separate Sys
 must("Campaign Data after attributes", html.lastIndexOf("Campaign Data")>html.indexOf("Global Exclusion In"));
 
 must("Provisional Audience Limiting is its OWN section after Campaign Data, with Limit", html.indexOf(">Provisional Audience Limiting")>html.lastIndexOf("Campaign Data") && /Limit<\/span> <b[^>]*>5,000/.test(html));
-must("info icon is 'i' (not '?') and every section has a tooltip", !/dc-info-ic'>\?/.test(html) && (html.match(/dc-info-ic'>i/g)||[]).length>=5 && /fixed-size campaigns/.test(html) && /one value is sent per contact point channel/.test(html));
+must("info icon is 'i' (not '?') and every section has a tooltip", !/dc-info-ic'[^>]*>\?/.test(html) && (html.match(/dc-info-ic' tabindex='0'>i/g)||[]).length>=5 && /fixed-size campaigns/.test(html) && /one value is sent per contact point channel/.test(html));
 must("Doc exported with .doc name + msword type", !!globalThis.__dl && /\.doc$/.test(globalThis.__dl.n) && /msword/.test(globalThis.__dl.m));
 must("Doc has NO tooltip text / bubbles", docOut.length>500 && !/dc-info-tip|dc-info-ic|fixed-size campaigns|one value is sent per contact point/.test(docOut));
 must("Doc has NO flex/grid layout (Word ignores them)", !/display:flex|display:grid|grid-template/.test(docOut));
@@ -75,3 +75,10 @@ const tdiPanel=grp.slice(grp.indexOf("Global Exclusion In"), grp.indexOf("Global
 must("each filter condition is its own numbered chip (2 conditions → 2 chips, field + operator separated)", /Global Exclusion In<\/b> <span[^>]*>Equals<\/span>/.test(tdiPanel) && /Segment Code<\/b> <span[^>]*>Has Value<\/span>/.test(tdiPanel));
 must("path hops are separate numbered steps joined by an arrow", /&rarr;/.test(tdiPanel) && /A\.Id/.test(tdiPanel) && /TDI\.Info/.test(tdiPanel));
 must("Doc carries the same panel with the table before it", docOut.indexOf("Equals")>docOut.indexOf("Global Exclusion In"));
+
+const osFn=new Function(grab("docActObjSettings")+"\nreturn docActObjSettings;")();
+const osr=osFn(Object.assign({},data,{contactPoints:[{email:{path:"CPE.Party > Ind.Id"}}]}));
+const byObj=(n)=>osr.filter(r=>r.object===n)[0]||{};
+must("Excel Object Settings: Contact Point Email = Contact Point section, Filtered, fixed limit, path from Contact Points step", byObj("Contact Point Email").section==="Contact Point" && byObj("Contact Point Email").filter==="Filtered" && /fixed/.test(byObj("Contact Point Email").max) && byObj("Contact Point Email").path==="CPE.Party > Ind.Id");
+must("Excel Object Settings: TDI Individual Additional carries limit + 2 numbered conditions + path", byObj("TDI Individual Additional").sortBy==="Last Modified Date" && /1\. Global Exclusion In Equals; 2\. Segment Code Has Value/.test(byObj("TDI Individual Additional").cond) && /A\.Id/.test(byObj("TDI Individual Additional").path));
+must("Excel Object Settings ordered like the wizard (Membership, Contact Point, Attributes)", osr.map(r=>r.section).join(",").indexOf("Activation Membership")<osr.map(r=>r.section).join(",").indexOf("Contact Point") && osr.map(r=>r.section).join(",").indexOf("Contact Point")<osr.map(r=>r.section).join(",").indexOf("Attributes"));

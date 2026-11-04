@@ -901,7 +901,7 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   // PERSISTENCE: the accumulator must live on window, not in an IIFE-local that the per-step re-run wipes.
   ok("accumulator persisted on window.__dcDocActAccum (survives per-step bookmarklet re-runs)", /window\.__dcDocActAccum/.test(src));
   // STATIC DE-DUPE: because the accumulator persists, static rows must be de-duped on push (or re-runs pile up copies).
-  ok("static rows de-duped by content before push (no 'Static Values (12)' = 3×4 duplication)", /acc\.staticRows\.some\(function \(x\) \{ return \(x\.name/.test(src));
+  ok("Campaign Data: de-duped within a read, and the current read REPLACES stored rows (no pile-up, no stale rows)", /staticNow\.some\(function \(x\) \{ return \(x\.name/.test(src) && /if \(staticNow\.length \|\| attrTables\.length\) acc\.staticRows = staticNow;/.test(src) && !/acc\.staticRows\.push\(/.test(src));
   // LAUNCHER GATE: the exporter launcher must register on ANY activation page (wizard OR /view), not wizard-only.
   (function () {
     // The exporter branch must be reachable for detailPageType === "Activation" without an AND on isActivationWizardPage().
@@ -1167,6 +1167,26 @@ console.log("\n22. Page behind the modal stays scrollable");
   ok("overlay is click-through (pointer-events:none) so wheel/clicks reach the page", !!ov22 && /pointer-events:none/.test(ov22[1]));
   ok("modal box itself stays interactive (pointer-events:auto)", !!bx22);
   ok("overlay no longer traps the page with a heavy dim", !!ov22 && !/rgba\(15,23,42,\.55\)/.test(ov22[1]));
+}
+
+console.log("\n23. Info icon tooltip: floating, never a '?' cursor, not clippable");
+{
+  var s23 = require("fs").readFileSync(require("path").join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var ic23 = s23.slice(s23.indexOf("function docActInfoIcon("), s23.indexOf("function docActCsv("));
+  ok("icon does not use the help (question-mark) cursor", !/cursor:help/.test(ic23));
+  ok("tooltip text is kept in a hidden source span (stripped for Word)", /class='dc-info-tip' style='display:none/.test(ic23));
+  ok("hover shows a position:fixed bubble placed from the icon rect (cannot be clipped by the scrolling modal)", /tipBubble\.style\.cssText = "position:fixed/.test(s23) && /getBoundingClientRect\(\)/.test(s23) && /addEventListener\("mouseover"/.test(s23));
+  ok("keyboard focus also shows it", /addEventListener\("focusin"/.test(s23));
+}
+
+console.log("\n24. Campaign Data reflects ONLY what the page shows now (behavior)");
+{
+  // Mirror of the accumulator update rule in docActScrape.
+  function applyCampaign(acc, attrTablesLen, reads) { var now = []; reads.forEach(function (d) { var k = d.name + "|" + d.value; if (!now.some(function (x) { return x.name + "|" + x.value === k; })) now.push(d); }); if (now.length || attrTablesLen) acc.staticRows = now; return acc.staticRows; }
+  var acc24 = { staticRows: [{ name: "Campaign Name", value: "Multiline adhoc giftcard" }, { name: "Waver Number", value: "1" }, { name: "Segment Name", value: "1234_Gift" }, { name: "Segment Name", value: "*Gift_Card*" }] };
+  eq("stale rows replaced by the single row now on the page", applyCampaign(acc24, 1, [{ name: "Segment Name", value: "*Gift_Card*" }, { name: "Segment Name", value: "*Gift_Card*" }]).length, 1);
+  eq("Attributes step visible but no Campaign rows → cleared", applyCampaign({ staticRows: [{ name: "x", value: "y" }] }, 1, []).length, 0);
+  eq("other step (no datatable) → keep what was captured", applyCampaign({ staticRows: [{ name: "x", value: "y" }] }, 0, []).length, 1);
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

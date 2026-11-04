@@ -20397,6 +20397,7 @@ processJSON();
 
         // Attributes step: fold datatable .data[] into the accumulator (output names,
         // join paths) and capture any static-value tables. Only present on that step.
+        var staticNow = [];   // Campaign Data rows visible in THIS read are authoritative
         attrTables.forEach(function (el) {
           var data = segSafeGet(el, "data");
           if (!data || !data.length) return;
@@ -20412,7 +20413,7 @@ processJSON();
               // Attributes step (every bookmarklet re-run) would otherwise append the same rows again
               // (the "Static Values (12)" = 3 unique × 4 re-runs bug). Same name+value+object = same row.
               var sKey = srow.name + "" + srow.value + "" + srow.objectApi;
-              if (!acc.staticRows.some(function (x) { return (x.name + "" + x.value + "" + x.objectApi) === sKey; })) acc.staticRows.push(srow);
+              if (!staticNow.some(function (x) { return (x.name + "" + x.value + "" + x.objectApi) === sKey; })) staticNow.push(srow);
               return;
             }
             if (!d.uid) return;
@@ -20452,6 +20453,10 @@ processJSON();
             }
           }
         }
+
+        // Campaign Data is a live table: what the page shows NOW replaces rows left by an earlier read, an edited/removed
+        // row, or another activation (otherwise old rows pile up and never go away).
+        if (staticNow.length || attrTables.length) acc.staticRows = staticNow;   // Attributes step visible + no Campaign rows = none configured
 
         // Merge accumulated extras onto the attribute rows.
         out.attributes.forEach(function (row) {
@@ -20525,8 +20530,8 @@ processJSON();
       // mandatory OS delay like the native title= attribute has).
       function docActInfoIcon(tipText) {
         if (!tipText) return "";
-        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;' class='dc-info-ic'>i"
-          + "<span class='dc-info-tip' style='visibility:hidden;opacity:0;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#16325c;color:#fff;font:500 11px/1.4 system-ui;padding:7px 10px;border-radius:6px;white-space:normal;width:260px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:999;transition:opacity .08s;'>" + docActEsc(tipText) + "</span></span>";
+        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:default;margin-left:6px;vertical-align:middle;' class='dc-info-ic' tabindex='0'>i"
+          + "<span class='dc-info-tip' style='display:none;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#16325c;color:#fff;font:500 11px/1.4 system-ui;padding:7px 10px;border-radius:6px;white-space:normal;width:260px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:999;transition:opacity .08s;'>" + docActEsc(tipText) + "</span></span>";
       }
 
       // The CSV: ATTRIBUTES ONLY — one row per included attribute (per user: the CSV
@@ -20555,7 +20560,7 @@ processJSON();
       // order, headings, tables, API-name chips and badges (inline styles are kept; layout containers become blocks/tables).
       function docActWordHtml(inner) {
         var h = String(inner || "");
-        h = h.replace(/<span style='position:relative[^']*' class='dc-info-ic'>[\s\S]*?<\/span><\/span>/g, "");   // drop "i" tooltip bubbles
+        h = h.replace(/<span style='position:relative[^']*' class='dc-info-ic'[^>]*>[\s\S]*?<\/span><\/span>/g, "");   // drop "i" tooltip bubbles
         h = h.replace(/display:grid;grid-template-columns:[^;]*;gap:[^;]*;/g, "");
         h = h.replace(/display:flex;[^'"]*?(?=['"])/g, function (m) { return m.replace(/display:flex;|flex-wrap:wrap;|align-items:[^;]*;|gap:[^;]*;|flex-direction:[^;]*;|flex-shrink:0;|flex:1;/g, ""); });
         h = h.replace(/<(div|span)([^>]*)\bmin-width:\d+px;/g, "<$1$2");
@@ -20597,6 +20602,33 @@ processJSON();
         if (data.membership) rows.push(["Activation Membership", data.membership.label + (data.membership.hasFilter ? " — Filtered" : " — No filter"), ""]);
         if (data.provisional) rows.push(["Provisional Audience Limiting — Limit", String(data.provisional.limit || "") || "Not set", ""]);
         return rows;
+      }
+
+      // One row per object/group, joined by SF label: [section, object, maxValues, sortBy, sortApi, order, filter, conditions, path].
+      // Same data the modal's per-object panel shows (Excel "Object Settings" sheet).
+      function docActObjSettings(data) {
+        function nk(x) { return String(x || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+        var m = {}, order = [];
+        function row(label) { var k = nk(label); if (!k) return null; if (!m[k]) { m[k] = { section: "", object: label, max: "", sortBy: "", sortApi: "", ord: "", filter: "", cond: "", path: "" }; order.push(k); } return m[k]; }
+        var gs = data.groupSection || {};
+        Object.keys(gs).forEach(function (l) { var r = row(l); if (r) r.section = gs[l]; });
+        (data.limits || []).forEach(function (l) { var r = row(l.owner); if (r) { r.max = l.fixed ? l.maxValues + " (fixed)" : l.maxValues; r.sortBy = l.sortLabel; r.sortApi = l.sortField; r.ord = l.orderLabel; } });
+        (data.filterGroups || []).forEach(function (g) {
+          var r = row(g.label); if (!r) return;
+          r.filter = g.hasFilter ? "Filtered" : "No filter";
+          r.cond = (g.conditions || []).map(function (c, i) { return (i + 1) + ". " + (c.text ? c.text : (c.field + " " + c.operator)); }).join("; ");
+        });
+        (data.pathChoices || []).forEach(function (pc) { var r = row(pc.owner); if (r) r.path = pc.text; });
+        // Contact Point path is chosen on the Contact Points step — attach it to its channel's group.
+        (data.contactPoints || []).forEach(function (cp) {
+          [["email", "email"], ["phone", "phone"], ["push", "push"], ["whatsApp", "whatsapp"], ["address", "address"]].forEach(function (c) {
+            var v = cp[c[0]]; if (!v || !v.path) return;
+            order.forEach(function (k) { var r = m[k]; if (!r.path && r.section === "Contact Point" && nk(r.object).indexOf("contactpoint" + c[1]) > -1) r.path = v.path; });
+          });
+        });
+        if (data.membership) { var rm = row(data.membership.label); if (rm) { rm.section = "Activation Membership"; rm.filter = data.membership.hasFilter ? "Filtered" : "No filter"; } }
+        var rank = { "Activation Membership": 0, "Contact Point": 1, "Attributes": 2, "Campaign Data": 3, "Provisional Audience Limiting": 4 };
+        return order.map(function (k) { return m[k]; }).sort(function (a, b) { return (rank[a.section] == null ? 9 : rank[a.section]) - (rank[b.section] == null ? 9 : rank[b.section]); });
       }
 
       function docActExcel(data) {
@@ -20659,6 +20691,13 @@ processJSON();
         ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
         data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
 
+        var os = docActObjSettings(data);
+        if (os.length) {
+          var wsO = wb.addWorksheet("Object Settings");
+          [24, 38, 18, 26, 28, 16, 12, 50, 110].forEach(function (w, i) { wsO.getColumn(i + 1).width = w; });
+          ["Section", "Object", "Max # of Attribute Values", "Sort By", "Sort By API", "Order", "Filters", "Filter Conditions", "Path"].forEach(function (h, i) { wsO.getCell(1, i + 1).value = h; wsO.getCell(1, i + 1).font = hdrFont; wsO.getCell(1, i + 1).fill = hdrFill; });
+          os.forEach(function (r, i) { [r.section, r.object, r.max, r.sortBy, r.sortApi, r.ord, r.filter, r.cond, r.path].forEach(function (v, c) { wsO.getCell(i + 2, c + 1).value = v || ""; }); });
+        }
         if ((data.limits || []).length) {
           var ws5 = wb.addWorksheet("Related Attribute Limits");
           ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 14; ws5.getColumn(3).width = 30; ws5.getColumn(4).width = 30; ws5.getColumn(5).width = 20;
@@ -20698,8 +20737,26 @@ processJSON();
         modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.remove(); });
 
         var style = document.createElement("style");
-        style.textContent = ".dc-info-ic:hover .dc-info-tip{visibility:visible;opacity:1;}";
+        style.textContent = ".dc-info-ic:hover{background:#cbd5e1!important;}";
         modal.appendChild(style);
+        // Floating tooltip: one position:fixed bubble placed from the icon's screen rect, so the scrolling/overflow-hidden
+        // modal can never clip it (the old in-flow bubble was cut off, esp. for the first section).
+        var tipBubble = document.createElement("div");
+        tipBubble.style.cssText = "position:fixed;display:none;max-width:300px;background:#16325c;color:#fff;font:500 12px/1.45 system-ui;padding:8px 11px;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:2147483647;pointer-events:none;";
+        modal.appendChild(tipBubble);
+        function dcTipShow(ic) {
+          var src = ic.querySelector && ic.querySelector(".dc-info-tip"); if (!src) return;
+          tipBubble.textContent = src.textContent; tipBubble.style.display = "block";
+          var r = ic.getBoundingClientRect(), bw = tipBubble.offsetWidth || 280, bh = tipBubble.offsetHeight || 60;
+          var left = Math.max(8, Math.min(r.left + r.width / 2 - bw / 2, window.innerWidth - bw - 8));
+          var top = r.top - bh - 8; if (top < 8) top = r.bottom + 8;
+          tipBubble.style.left = left + "px"; tipBubble.style.top = top + "px";
+        }
+        function dcTipHide() { tipBubble.style.display = "none"; }
+        modal.addEventListener("mouseover", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipShow(ic); });
+        modal.addEventListener("mouseout", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipHide(); });
+        modal.addEventListener("focusin", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipShow(ic); });
+        modal.addEventListener("focusout", dcTipHide);
 
         var box = document.createElement("div");
         box.style.cssText = "pointer-events:auto;background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
