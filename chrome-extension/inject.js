@@ -19863,13 +19863,13 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null };
         // Back-fill fields added in later versions: the accumulator lives on window and survives
         // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
         var a = _docActAccum[id];
         if (!a.limits) a.limits = {};
         if (!a.pathChoices) a.pathChoices = {};
-        if (a.showPathsOn === undefined) a.showPathsOn = null;
+        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null;
         return a;
       }
 
@@ -20193,6 +20193,13 @@ processJSON();
         }
         return out;
       }
+      // "Activation Membership" block: header, the segment-on object label, then Add/Edit Filters
+      // (no "(N)" count here, so the generic badge regex never sees it).
+      function docActParseMembership(wizardText) {
+        if (!wizardText) return null;
+        var m = /Activation Membership\s*\n\s*([^\n]+?)\s*\n\s*(Add Filters|Edit Filters)/.exec(wizardText);
+        return m ? { label: m[1].trim(), hasFilter: m[2] === "Edit Filters" } : null;
+      }
       // Known SF filter-condition operator phrases, used only to SPLIT the dialog's plain
       // innerText into {field, operator} — never to fabricate a condition that isn't in the text.
       var DOCACT_FILTER_OPS = ["Has Value", "Is Null", "Is Not Null", "Does Not Contain", "Not Equal To",
@@ -20250,6 +20257,8 @@ processJSON();
           var wizText = ""; try { wizText = attrWizardEl.innerText || attrWizardEl.textContent || ""; } catch (e) {}
           var badges = docActParseFilterBadges(wizText);
           Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
+          var mem = docActParseMembership(wizText);
+          if (mem) acc.membership = mem;
         }
         // Applied filter condition content — read ONLY while the "Edit/Add Filters" dialog
         // is actually open (per user constraint: never auto-open it).
@@ -20436,6 +20445,7 @@ processJSON();
           var cond = acc.filterConditions[label];
           return { label: label, count: g.count, hasFilter: g.hasFilter, conditions: cond ? cond.conditions : [], path: cond ? cond.path : "" };
         });
+        out.membership = acc.membership || null;
         out.captured.filterGroups = out.filterGroups.length > 0;
 
         out.captured.limits = Object.keys(acc.limits).length > 0;
@@ -20796,6 +20806,14 @@ processJSON();
             byEntityOrder._c = out; byEntityOrder._l = list; return out;
           }
 
+          // Activation Membership — first section of the Attributes step in Salesforce.
+          var memHtml = "";
+          if (data.membership) {
+            memHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Activation Membership</div>"
+              + "<div style='font:700 12px system-ui;color:#181818;margin:0 0 6px;'>" + docActEsc(data.membership.label) + "</div>"
+              + fltBadge({ hasFilter: data.membership.hasFilter, conditions: [] })
+              + "</div>";
+          }
           // Contact points — each channel shows its value + field/entity API + path.
           var cpHtml = "";
           var cpLims = (data.limits || []).filter(function (l) { return /contact\s*point/i.test(l.owner); });
@@ -20805,7 +20823,8 @@ processJSON();
               var k = normLbl(l.owner);
               if (usedLim[k] || !/contact\s*point/i.test(l.owner)) return;
               usedLim[k] = 1;
-              cpHtml += "<div style='margin:0 0 4px;font:700 12px system-ui;color:#181818;'>" + docActEsc(l.owner) + "</div>" + limLine(l);
+              var cf = fltByObj[k]; if (cf) usedFlt[k] = 1;
+              cpHtml += "<div style='margin:0 0 4px;font:700 12px system-ui;color:#181818;'>" + docActEsc(l.owner) + "</div>" + limLine(l) + fltBadge(cf);
             });
             data.contactPoints.forEach(function (cp) {
               cpHtml += "<div style='display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid #f1f1f1;'>";
@@ -20852,17 +20871,7 @@ processJSON();
             afHtml += "</div>";
           }
 
-          // Anything not attached to a group above (rare): listed honestly under its own name.
           var lpHtml = "", pcHtml = "";
-          var restLim = (data.limits || []).filter(function (l) { return !usedLim[normLbl(l.owner)]; });
-          var restPth = (data.pathChoices || []).filter(function (pc) { return !attrHasGroup(pc.owner); });
-          function attrHasGroup(o) { return Object.keys(byEntityOrder(data.attributes)).some(function (k) { return normLbl(k) === normLbl(o); }); }
-          if (restLim.length || restPth.length) {
-            lpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Other related-object settings</div>"
-              + restLim.map(function (l) { return "<div style='margin:0 0 4px;font:700 12px system-ui;'>" + docActEsc(l.owner) + "</div>" + limLine(l); }).join("")
-              + restPth.map(function (pc) { return "<div style='margin:0 0 6px;'><b style='font:700 12px system-ui;'>" + docActEsc(pc.owner) + "</b> <span style='" + lblTxt + "'>Path</span> " + docActEsc(pc.text) + "</div>"; }).join("")
-              + "</div>";
-          }
 
           // Campaign Data — this is the exact field-group label Salesforce itself uses on the
           // Attributes step (confirmed via live DOM probe: "Campaign Data / Campaign Attributes
@@ -20883,7 +20892,7 @@ processJSON();
           }
 
           // Wizard order: Overview → Membership/filters → Contact Point → Attributes (limits, paths, filters inline) → Campaign Data.
-          var docSections = ovGrid + flHtml + afHtml + cpHtml + attrHtml + lpHtml + stHtml;
+          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + stHtml + afHtml;
           var sections = status + docSections;
           body.innerHTML = sections;
           modal.__docSections = docSections;   // all interpolated values escaped via e()/docActEsc above
@@ -23070,7 +23079,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.700"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.701"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

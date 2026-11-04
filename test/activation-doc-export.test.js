@@ -1105,9 +1105,24 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
   ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
   ok("Contact Point section carries the Contact Point limit", /contact\\s\*point/.test(s2) && /Contact Point<\/div>/.test(s2));
-  ok("sections ordered like the wizard (overview, filters, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ afHtml \+ cpHtml \+ attrHtml \+ lpHtml \+ stHtml/.test(s2));
+  ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
   ok("system rows explained, no (unspecified)", /Added automatically by Salesforce for waterfall/.test(s2) && !/\(unspecified\)/.test(s2));
+}
+
+console.log("\n18. Activation Membership parser (real source fn, verbatim innerText shape)");
+{
+  var fs3 = require("fs"), p3 = require("path");
+  var s3 = fs3.readFileSync(p3.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  var i3 = s3.indexOf("function docActParseMembership("), d3 = 0, j3 = s3.indexOf("{", i3), k3;
+  for (k3 = j3; k3 < s3.length; k3++) { if (s3[k3] === "{") d3++; else if (s3[k3] === "}") { d3--; if (!d3) break; } }
+  var pm = new Function(s3.slice(i3, k3 + 1) + "\nreturn docActParseMembership;")();
+  var t1 = "Add Attributes and Filters to Your Activation\nHelp\nAdd Attributes\nActivation Membership\nUnified Individual TDI\nAdd Filters\nAdd filters to refine the activation membership.\nContact Point\nContact Point Email (1)\nEdit Filters";
+  var r1 = pm(t1);
+  eq("label", r1 && r1.label, "Unified Individual TDI");
+  eq("Add Filters => no filter", r1 && r1.hasFilter, false);
+  eq("Edit Filters => filtered", pm(t1.replace("Add Filters\nAdd filters", "Edit Filters\nAdd filters")).hasFilter, true);
+  eq("absent => null", pm("Contact Point\nContact Point Email (1)\nEdit Filters"), null);
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

@@ -5,7 +5,7 @@ const names=["docActEsc","docActApiChip","docActObjKind","docActInfoIcon","docAc
 const code=names.map(grab).join("\n");
 let bodyHtml="";
 function el(){const o={style:{},children:[],classList:{add(){}},_l:{},appendChild(c){o.children.push(c)},insertBefore(c){o.children.push(c)},addEventListener(){},remove(){},closest(){return null},set innerHTML(v){o._h=v;if(o.__body)bodyHtml=v},get innerHTML(){return o._h},offsetWidth:1000,offsetHeight:700};return o}
-const data={found:true,overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
+const data={found:true,membership:{label:"Unified Individual TDI",hasFilter:false},overview:{target:"Mkt Cloud",segment:"S",filters:[]},captured:{attributes:true,outputNames:true,contactPoints:true,limits:true,paths:true,staticValues:true},
 attributes:[
 {label:"SubSegmentId",objectApi:"",source:"SYSTEM",category:"System"},
 {label:"First Name",fieldApi:"FirstName__c",objectApi:"UnifiedIndividual__dlm",outputName:"FirstName",category:"Profile"},
@@ -27,6 +27,7 @@ f();
 const html=created.map(c=>c._h||"").join("");
 const must=(n,c)=>{console.log((c?"✓ ":"✗ ")+n);if(!c)process.exitCode=1};
 
+must("Activation Membership section shown first (before Contact Point)", html.indexOf("Activation Membership")>-1 && html.indexOf("Activation Membership")<html.indexOf(">Contact Point<"));
 must("rendered", html.length>500);
 must("no standalone Provisional Audience Limiting heading", !/Provisional Audience Limiting/.test(html));
 const gi=html.indexOf("TDI_Individual_Additional");const grp=html.slice(gi);
