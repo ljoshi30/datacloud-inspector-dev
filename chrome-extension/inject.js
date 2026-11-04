@@ -20627,7 +20627,7 @@ processJSON();
         function row(label) { var k = nk(label); if (!k) return null; if (!m[k]) { m[k] = { section: "", object: label, max: "", sortBy: "", sortApi: "", ord: "", filter: "", cond: "", path: "" }; order.push(k); } return m[k]; }
         var gs = data.groupSection || {};
         Object.keys(gs).forEach(function (l) { var r = row(l); if (r) r.section = gs[l]; });
-        (data.limits || []).forEach(function (l) { var r = row(l.owner); if (r) { r.max = l.fixed ? l.maxValues + " (fixed)" : l.maxValues; r.sortBy = l.sortLabel; r.sortApi = l.sortField; r.ord = l.orderLabel; } });
+        (data.limits || []).forEach(function (l) { var r = row(l.owner); if (r) { r.max = l.maxValues; r.sortBy = l.sortLabel; r.sortApi = l.sortField; r.ord = l.orderLabel; } });
         (data.filterGroups || []).forEach(function (g) {
           var r = row(g.label); if (!r) return;
           r.filter = g.hasFilter ? "Filtered" : "No filter";
@@ -20726,7 +20726,7 @@ processJSON();
           ["Related Object", "Max # of Attribute Values", "Sort By", "Sort By API", "Order"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
           data.limits.forEach(function (l, i) {
             ws5.getCell(i + 2, 1).value = l.owner;
-            ws5.getCell(i + 2, 2).value = l.fixed ? l.maxValues + " (fixed)" : l.maxValues;
+            ws5.getCell(i + 2, 2).value = l.maxValues;
             ws5.getCell(i + 2, 3).value = l.sortLabel;
             ws5.getCell(i + 2, 4).value = l.sortField;
             ws5.getCell(i + 2, 5).value = l.orderLabel;
@@ -20921,7 +20921,7 @@ processJSON();
           var lblTxt = "font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;";
           function limLine(l) {
             return "<div style='display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;background:#f7f9fb;border:1px solid #e5e7eb;border-radius:6px;padding:7px 10px;margin:0 0 6px;'>"
-              + "<span><span style='" + lblTxt + "'>Max # of Attribute Values</span> <b style='font:700 12px system-ui;'>" + docActEsc(l.maxValues) + "</b>" + (l.fixed ? " <span style='color:#5c5c5c;font-size:11px;'>(fixed)</span>" : "") + "</span>"
+              + "<span><span style='" + lblTxt + "'>Max # of Attribute Values</span> <b style='font:700 12px system-ui;'>" + docActEsc(l.maxValues) + "</b>" + "</span>"
               + "<span><span style='" + lblTxt + "'>Sort By</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.sortLabel) + "</span> " + docActApiChip(l.sortField) + "</span>"
               + "<span><span style='" + lblTxt + "'>Order</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.orderLabel) + "</span></span></div>";
           }
@@ -20940,7 +20940,7 @@ processJSON();
             var lab = "display:block;font:600 11px system-ui;color:#5c5c5c;margin:0 0 3px;";
             var val = "font:600 13px system-ui;color:#181818;";
             return "<table style='width:100%;border-collapse:collapse;background:#f7f9fb;border:1px solid #e5e7eb;margin:0 0 8px;'><tbody><tr>"
-              + "<td style='" + cell + "width:24%;'><span style='" + lab + "'>Max. # of Attribute Values</span><span style='" + val + "'>" + docActEsc(lim.maxValues) + "</span>" + (lim.fixed ? " <span style='color:#8a8a8a;font-size:11px;'>(fixed)</span>" : "") + "</td>"
+              + "<td style='" + cell + "width:24%;'><span style='" + lab + "'>Max. # of Attribute Values</span><span style='" + val + "'>" + docActEsc(lim.maxValues) + "</span>" + "</td>"
               + "<td style='" + cell + "'><span style='" + lab + "'>Sort By</span><span style='" + val + "'>" + docActEsc(lim.sortLabel) + "</span> " + docActApiChip(lim.sortField) + "</td>"
               + "<td style='" + cell + "width:22%;border-right:0;'><span style='" + lab + "'>Order</span><span style='" + val + "'>" + docActEsc(lim.orderLabel) + "</span></td>"
               + "</tr></tbody></table>";
@@ -21006,7 +21006,7 @@ processJSON();
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
             rows.forEach(function (a, ri) {
               gh += "<tr><td style='padding:6px 6px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + (ri + 1) + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.category ? " <span style='font:500 10px system-ui;color:#8a8a8a;'>· " + e(a.category) + "</span>" : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
@@ -23348,7 +23348,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.716"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.717"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

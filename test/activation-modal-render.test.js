@@ -80,9 +80,12 @@ must("Doc carries the same panel with the table before it", docOut.indexOf("Equa
 const osFn=new Function(grab("docActObjSettings")+"\nreturn docActObjSettings;")();
 const osr=osFn(Object.assign({},data,{contactPoints:[{email:{path:"CPE.Party > Ind.Id"}}]}));
 const byObj=(n)=>osr.filter(r=>r.object===n)[0]||{};
-must("Excel Object Settings: Contact Point Email = Contact Point section, Filtered, fixed limit, path from Contact Points step", byObj("Contact Point Email").section==="Contact Point" && byObj("Contact Point Email").filter==="Filtered" && /fixed/.test(byObj("Contact Point Email").max) && byObj("Contact Point Email").path==="CPE.Party > Ind.Id");
+must("Excel Object Settings: Contact Point Email = Contact Point section, Filtered, limit, path from Contact Points step", byObj("Contact Point Email").section==="Contact Point" && byObj("Contact Point Email").filter==="Filtered" && byObj("Contact Point Email").max==="1" && byObj("Contact Point Email").path==="CPE.Party > Ind.Id");
 must("Excel Object Settings: TDI Individual Additional carries limit + 2 numbered conditions + path", byObj("TDI Individual Additional").sortBy==="Last Modified Date" && /1\. Global Exclusion In Equals; 2\. Segment Code Has Value/.test(byObj("TDI Individual Additional").cond) && /A\.Id/.test(byObj("TDI Individual Additional").path));
 must("Excel Object Settings ordered like the wizard (Membership, Contact Point, Attributes)", osr.map(r=>r.section).join(",").indexOf("Activation Membership")<osr.map(r=>r.section).join(",").indexOf("Contact Point") && osr.map(r=>r.section).join(",").indexOf("Contact Point")<osr.map(r=>r.section).join(",").indexOf("Attributes"));
 
 must("Provisional section lists Rank Attributes rows (Rank Order / Attribute / Sort By), no pop-up note", /Birth Date - dlm/.test(html) && /Birth Date Year - dlm/.test(html) && />ASC</.test(html) && />DESC</.test(html) && !/pop-up/.test(html));
 must("Doc carries the Rank Attributes table too", /Birth Date - dlm/.test(docOut) && /Rank Order/.test(docOut));
+
+must("no invented 'fixed' wording anywhere in the modal or Doc (not in Salesforce's UI)", !/\(fixed\)|>fixed</.test(html) && !/\(fixed\)|>fixed</.test(docOut));
+must("no source-system category tag (e.g. sf_c360_sb_profile_attribute) next to attribute labels", !/sf_c360_sb_profile_attribute/.test(html));
