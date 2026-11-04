@@ -19866,7 +19866,7 @@ processJSON();
         try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
       }
       function docActAccumFor(id) {
-        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" };
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null };
         return _docActAccum[id];
       }
 
@@ -20041,6 +20041,43 @@ processJSON();
         return best ? best.replace(/^Activation Refresh Type\s*/i, "").trim() : "";
       }
 
+      // The "Add a name and description" step (runtime_cdp-activation-details-section) exposes
+      // Refresh Type + the two exclude-records options as REAL structured props — found via
+      // live probe, confirmed on a real activation (activationRefreshType: "INCREMENTAL",
+      // excludeUpdates/excludeDeletes: booleans). Superior to the Contact-Points sidebar-text
+      // reader (docActReadRefreshType) above, which only gives the enum's plain-English phrase
+      // with no structured exclude-flags. Labels are read from the sibling lightning-radio-group/
+      // lightning-checkbox-group `options[]` (never hardcoded "Full Refresh"/"Incremental Refresh"
+      // text) so this stays correct even if SF changes the wording or the org is localized.
+      function docActOptionLabel(options, value) {
+        if (!Array.isArray(options) || value == null) return "";
+        var hit = options.filter(function (o) { return o && o.value === value; })[0];
+        return hit ? (hit.label || "") : "";
+      }
+      function docActReadDetailsSection(raw) {
+        var sectionEl = null, radioEl = null, checkboxEl = null;
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-details-section") sectionEl = sectionEl || el;
+          else if (tag === "lightning-radio-group" && segSafeGet(el, "name") === "refreshTypeRadioButton") radioEl = radioEl || el;
+          else if (tag === "lightning-checkbox-group" && segSafeGet(el, "name") === "incrementalOptInOptions") checkboxEl = checkboxEl || el;
+        });
+        if (!sectionEl) return null;
+        var refreshType = segSafeGet(sectionEl, "activationRefreshType") || "";
+        var excludeUpdates = !!segSafeGet(sectionEl, "excludeUpdates");
+        var excludeDeletes = !!segSafeGet(sectionEl, "excludeDeletes");
+        var radioOptions = radioEl ? (segSafeGet(radioEl, "options") || []) : [];
+        var checkboxOptions = checkboxEl ? (segSafeGet(checkboxEl, "options") || []) : [];
+        var excludeLabels = [];
+        if (excludeUpdates) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_UPDATES") || "Exclude records modified since the last refresh");
+        if (excludeDeletes) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_DELETES") || "Exclude records removed since the last refresh");
+        return {
+          refreshType: refreshType,
+          refreshTypeLabel: docActOptionLabel(radioOptions, refreshType) || refreshType,
+          excludeUpdates: excludeUpdates, excludeDeletes: excludeDeletes, excludeLabels: excludeLabels
+        };
+      }
+
       function docActReadFilters(summaryEl, seg) {
         var out = [];
         function pushText(label, raw) {
@@ -20163,6 +20200,12 @@ processJSON();
         var sidebarRefresh = docActReadRefreshType(raw);
         if (sidebarRefresh) acc.refreshType = sidebarRefresh;
 
+        // "Add a name and description" step — structured Refresh Type + exclude-records
+        // options (persists once seen, same step-specific accumulation pattern as everything
+        // else above; this step tears down like any other on navigation).
+        var detailsNow = docActReadDetailsSection(raw);
+        if (detailsNow) acc.detailsSection = detailsNow;
+
         var out = {
           recordId: id,
           found: !!summaryEl,
@@ -20194,8 +20237,15 @@ processJSON();
             // No getter property for this exists anywhere on the summary element (live-probed:
             // 278 getters, zero refresh-related) — acc.refreshType is the sidebar-text capture
             // (docActReadRefreshType), which persists once seen on the Contact Points step.
-            refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
+            // acc.detailsSection (from the "Add a name and description" step) is the
+            // STRUCTURED reader (live-probed real props) and wins when it's been seen,
+            // since its label is read from the live radio-group options (never hardcoded).
+            refreshType: (acc.detailsSection && acc.detailsSection.refreshTypeLabel) || acc.refreshType ||
+                         docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
                                      seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+            // Only populated once the "Add a name and description" step has been visited —
+            // never fabricated for activations where it hasn't been captured yet.
+            excludeOptions: (acc.detailsSection && acc.detailsSection.excludeLabels) || [],
             processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
             // seg.segmentSchedule is a raw enum ("TWENTY_FOUR"); seg.segmentScheduleLabel is
             // the human text SF itself renders ("24 hours") — live-probed on a real waterfall
@@ -20348,6 +20398,13 @@ processJSON();
         if (!api) return "";
         return "<code style='font:500 10px/1.4 SFMono-Regular,Menlo,Consolas,monospace;color:#0b5cab;background:#eef4fb;border:1px solid #d6e3f3;border-radius:4px;padding:1px 5px;white-space:nowrap;'>" + docActEsc(api) + "</code>";
       }
+      // CSS-only "?" info icon — appears INSTANTLY on hover via :hover (no JS listeners, no
+      // mandatory OS delay like the native title= attribute has).
+      function docActInfoIcon(tipText) {
+        if (!tipText) return "";
+        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;' class='dc-info-ic'>?"
+          + "<span class='dc-info-tip' style='visibility:hidden;opacity:0;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#16325c;color:#fff;font:500 11px/1.4 system-ui;padding:7px 10px;border-radius:6px;white-space:normal;width:260px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:999;transition:opacity .08s;'>" + docActEsc(tipText) + "</span></span>";
+      }
 
       // The CSV: ATTRIBUTES ONLY — one row per included attribute (per user: the CSV
       // should carry the attribute list, not the whole activation; Excel keeps the rest).
@@ -20396,6 +20453,7 @@ processJSON();
           ["Business Units", (ov.businessUnits || []).join("; "), ""],
           ["Publish Type", ov.publishType, ""],
           ["Refresh Type", ov.refreshType, ""],
+          ["Exclude Options", (ov.excludeOptions || []).join("; "), ""],
           ["Processing Type", ov.processingType, ""],
           ["Schedule", ov.schedule, ""],
           ["Waterfall", ov.isWaterfall ? ((data.waterfall || []).join(", ") || "Yes") : "No", ""]
@@ -20467,6 +20525,10 @@ processJSON();
         modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;";
         modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.remove(); });
 
+        var style = document.createElement("style");
+        style.textContent = ".dc-info-ic:hover .dc-info-tip{visibility:visible;opacity:1;}";
+        modal.appendChild(style);
+
         var box = document.createElement("div");
         box.style.cssText = "background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
 
@@ -20515,6 +20577,7 @@ processJSON();
             + ovItem("Business Units", (ov.businessUnits || []).join(", "), "")
             + ovItem("Publish Type", ov.publishType, "")
             + ovItem("Refresh Type", ov.refreshType, "")
+            + ((ov.excludeOptions || []).length ? ovItem("Exclude Options", ov.excludeOptions.join(", "), "") : "")
             + ovItem("Processing Type", ov.processingType, "")
             + ovItem("Schedule", ov.schedule, "")
             + ovItem("Segment Membership", (ov.segmentCount === "" ? "" : Number(ov.segmentCount).toLocaleString() + " (as shown)"), "")
@@ -20624,8 +20687,12 @@ processJSON();
           if (data.staticRows.length) {
             var stTip = "A fixed constant value sent on every activated record — not read from a field. " +
               "Used to tag the audience, e.g. a campaign ID or a source label, so the destination platform can identify where the records came from.";
+            // CSS-only hover tooltip (not the native title= attribute): title= has a
+            // mandatory OS-level hover delay before it appears (user-reported: "tool tips
+            // does not show info immediately") that JS can't shorten. A nested span shown
+            // via :hover has zero delay.
             stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Campaign Data <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span>"
-              + "<span title='" + e(stTip) + "' style='display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:help;margin-left:2px;'>?</span></div>";
+              + docActInfoIcon(stTip) + "</div>";
             stHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Name</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Value</th></tr></thead><tbody>";
             data.staticRows.forEach(function (s) { stHtml += "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(s.name) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 12px SFMono-Regular,monospace;color:#0b5cab;'>" + e(s.value) + "</td></tr>"; });
             stHtml += "</tbody></table></div>";
@@ -22758,7 +22825,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.690"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.691"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

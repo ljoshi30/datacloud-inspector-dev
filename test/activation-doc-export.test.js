@@ -220,6 +220,33 @@ function docActReadRefreshType(raw) {
   }
   return best ? best.replace(/^Activation Refresh Type\s*/i, "").trim() : "";
 }
+function docActOptionLabel(options, value) {
+  if (!Array.isArray(options) || value == null) return "";
+  var hit = options.filter(function (o) { return o && o.value === value; })[0];
+  return hit ? (hit.label || "") : "";
+}
+function docActReadDetailsSection(raw) {
+  var sectionEl = null, radioEl = null, checkboxEl = null;
+  raw.forEach(function (el) {
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "runtime_cdp-activation-details-section") sectionEl = sectionEl || el;
+    else if (tag === "lightning-radio-group" && segSafeGet(el, "name") === "refreshTypeRadioButton") radioEl = radioEl || el;
+    else if (tag === "lightning-checkbox-group" && segSafeGet(el, "name") === "incrementalOptInOptions") checkboxEl = checkboxEl || el;
+  });
+  if (!sectionEl) return null;
+  var refreshType = segSafeGet(sectionEl, "activationRefreshType") || "";
+  var excludeUpdates = !!segSafeGet(sectionEl, "excludeUpdates");
+  var excludeDeletes = !!segSafeGet(sectionEl, "excludeDeletes");
+  var radioOptions = radioEl ? (segSafeGet(radioEl, "options") || []) : [];
+  var checkboxOptions = checkboxEl ? (segSafeGet(checkboxEl, "options") || []) : [];
+  var excludeLabels = [];
+  if (excludeUpdates) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_UPDATES") || "Exclude records modified since the last refresh");
+  if (excludeDeletes) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_DELETES") || "Exclude records removed since the last refresh");
+  return {
+    refreshType: refreshType, refreshTypeLabel: docActOptionLabel(radioOptions, refreshType) || refreshType,
+    excludeUpdates: excludeUpdates, excludeDeletes: excludeDeletes, excludeLabels: excludeLabels
+  };
+}
 function docActScrapeOver(raw, acc) {
   var summaryEl = null, attrTables = [], channelEl = null, attrWizardEl = null, filterDialogEl = null;
   raw.forEach(function (el) {
@@ -243,6 +270,8 @@ function docActScrapeOver(raw, acc) {
   }
   var sidebarRefresh = docActReadRefreshType(raw);
   if (sidebarRefresh) acc.refreshType = sidebarRefresh;
+  var detailsNow = docActReadDetailsSection(raw);
+  if (detailsNow) acc.detailsSection = detailsNow;
 
   var out = {
     found: !!summaryEl, overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
@@ -265,7 +294,9 @@ function docActScrapeOver(raw, acc) {
       businessUnits: (tgt.businessUnits && tgt.businessUnits.slice ? tgt.businessUnits.slice() : []),
       eventType: segSafeGet(summaryEl, "selectedEventType") || "",
       isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
-      refreshType: acc.refreshType || docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+      refreshType: (acc.detailsSection && acc.detailsSection.refreshTypeLabel) || acc.refreshType ||
+                   docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") || seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+      excludeOptions: (acc.detailsSection && acc.detailsSection.excludeLabels) || [],
       processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
       schedule: seg.segmentScheduleLabel || seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
       filters: docActReadFilters(summaryEl, seg)
@@ -343,7 +374,7 @@ function docActScrapeOver(raw, acc) {
   out.captured.filterGroups = out.filterGroups.length > 0;
   return out;
 }
-function newAccum() { return { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "" }; }
+function newAccum() { return { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null }; }
 
 // CSV = ATTRIBUTES ONLY (per the user's feedback): no overview/contact/static rows, no Join Path col.
 function docActCsv(data) {
@@ -732,6 +763,32 @@ console.log("\n6i. REFRESH TYPE: the activation's own 'Activation Refresh Type' 
   eq("without the small leaf present, the big wrapper alone yields nothing (never misread)", out4.overview.refreshType, "");
 }
 
+console.log("\n6j. STRUCTURED Refresh Type + exclude options (live-probed real shape, 'Add a name and description' step)");
+{
+  // Real shape confirmed on a live org: runtime_cdp-activation-details-section exposes
+  // activationRefreshType/excludeUpdates/excludeDeletes as real props; the sibling
+  // lightning-radio-group/lightning-checkbox-group carry the label text SF renders for
+  // each enum value (never hardcoded, so this stays correct if SF changes the wording).
+  var detailsEl = { tagName: "runtime_cdp-activation-details-section", activationRefreshType: "INCREMENTAL", excludeUpdates: true, excludeDeletes: false };
+  var radioEl = { tagName: "lightning-radio-group", name: "refreshTypeRadioButton", options: [{ label: "Full Refresh", value: "FULL_REFRESH" }, { label: "Incremental Refresh", value: "INCREMENTAL" }] };
+  var checkboxEl = { tagName: "lightning-checkbox-group", name: "incrementalOptInOptions", options: [{ label: "Exclude records modified since the last refresh", value: "EXCLUDE_UPDATES" }, { label: "Exclude records removed since the last refresh", value: "EXCLUDE_DELETES" }] };
+  var acc = newAccum();
+  var out = docActScrapeOver([summaryEl(), detailsEl, radioEl, checkboxEl], acc);
+  eq("structured refresh type label read from the live radio-group options", out.overview.refreshType, "Incremental Refresh");
+  eq("exclude-updates label captured (only the TRUE flag, read from the checkbox options)", out.overview.excludeOptions.join(","), "Exclude records modified since the last refresh");
+  // structured reader (this step) wins over the sidebar-text reader (Contact Points step) when both are seen.
+  var scheduleLeaf2 = { tagName: "div", children: [], textContent: "Activation Refresh TypeFull Refresh" };
+  var acc2 = newAccum();
+  var out2 = docActScrapeOver([summaryEl(), scheduleLeaf2, detailsEl, radioEl, checkboxEl], acc2);
+  eq("structured reader wins over the sidebar-text reader when both are present", out2.overview.refreshType, "Incremental Refresh");
+  // persists once seen, same as everything else.
+  var afterNav = docActScrapeOver([summaryEl()], acc);
+  eq("structured refresh type persists after navigating away from the step", afterNav.overview.refreshType, "Incremental Refresh");
+  // never fabricated when the step hasn't been visited.
+  var neverVisited = docActScrapeOver([summaryEl()], newAccum());
+  eq("no exclude options invented when the step was never visited", neverVisited.overview.excludeOptions.length, 0);
+}
+
 console.log("\n7. no summary on the page → found=false, nothing fabricated");
 {
   var out = docActScrapeOver([{ tagName: "div" }, { tagName: "runtime_cdp-activation-attribute-datatable", data: [] }], newAccum());
@@ -873,6 +930,12 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   // "Activation Refresh Type" record-detail label+value text (NOT the segment's unrelated
   // "Publish Schedule:" text, which was the prior approach's bug — it read the wrong field).
   ok("refresh type read via the activation's own 'Activation Refresh Type' field text", /function docActReadRefreshType/.test(src) && /Activation Refresh Type/.test(src));
+  // STRUCTURED refresh type + exclude options: reads runtime_cdp-activation-details-section's
+  // real props, and looks the HUMAN LABEL up live from the sibling radio/checkbox group's own
+  // options[] array (never a hardcoded English string) so it stays correct across orgs/locales.
+  ok("structured details-section reader present (refresh type + exclude options, dynamic label lookup)", /function docActReadDetailsSection/.test(src) && /function docActOptionLabel/.test(src) && /runtime_cdp-activation-details-section/.test(src));
+  ok("exclude-options labels looked up live from the checkbox-group's own options (not hardcoded)", /incrementalOptInOptions/.test(src) && /excludeUpdates/.test(src) && /excludeDeletes/.test(src));
+  ok("tooltip is a CSS-only hover span, not the native title= attribute (fixes the hover-delay complaint)", /dc-info-tip/.test(src) && /function docActInfoIcon/.test(src));
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
