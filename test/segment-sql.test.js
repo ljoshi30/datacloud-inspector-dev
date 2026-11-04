@@ -324,22 +324,23 @@ console.log("\n6. source presence — fixed function wired dev-only into the seg
   ok("NestedSegment: SNAPSHOT (useLastPublishedMembership) reads the membership TABLE; LIVE/dynamic inlines criteria (the 797-vs-25k fix)",
     /function nestedSql\(node, depth\)/.test(src) && /var isSnapshot = \/lastpublished\|snapshot\/i\.test/.test(src) && /if \(isSnapshot\) \{/.test(src) && /function inlineCriteria\(\)/.test(src) && /function membershipSubquery\(\)/.test(src));
   ok("membership subquery = current members only (Delta_Type__c='existing' excludes churned 'removed' rows — backend-verified)",
-    /Delta_Type__c = 'existing'/.test(src) && /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src));
+    /Delta_Type__c = 'existing'/.test(src) && /SELECT DISTINCT Id__c FROM " \+ resolved\.membershipTable/.test(src));
   ok("SNAPSHOT never silently inlines when the table is unresolvable (would give a different population) — blocks instead",
     /its membership table couldn't be resolved here — its live criteria would give a DIFFERENT population, so it's not safe to inline/.test(src));
   ok("inline path keeps the cycle guard + depth cap", /seenSegs\[key\]/.test(src) && /MAX_NEST_DEPTH/.test(src) && /walk\(critObj, \(depth \|\| 0\) \+ 1\)/.test(src));
   ok("resolver provides the nested segment's own criteria (decoded) for inlining", /criteria = the nested segment's OWN include criteria/.test(src) && /crit = JSON\.parse\(dsEsc\(raw\)\)/.test(src));
   ok("renderer maps REAL operator enums (equal/contains/in/greaterThanOrEqual/between/isTrue…)",
     /case "equal":/.test(src) && /case "contains":/.test(src) && /case "greaterthanorequal":/.test(src) && /case "between":/.test(src) && /case "istrue":/.test(src));
-  ok("renderer captures JOIN keys from path[] (the thing the DOM lacked)", /function notePath\(path\)/.test(src) && /Join keys \(from the criteria's path\)/.test(src));
+  ok("renderer builds CORRELATED subqueries from path[] (join keys go INSIDE the SQL, not a header list)",
+    /function buildCorrelation\(path, container\)/.test(src) && /c\.joinPreds\.concat/.test(src));
   ok("renderer marks UNHANDLED nodes as a VALID placeholder predicate + blocks runnability (never silently wrong, never dangling AND)",
     /UNSUPPORTED_NODE\('/.test(src) && /flags\.blockers\.push\("unsupported criteria node/.test(src));
   ok("renderer NEVER emits a bare comment as a predicate (no dangling-AND syntax error)",
     /IS_MEMBER_OF_SEGMENT\('/.test(src) && !/return "\/\* " \+ facts/.test(src));
-  ok("runnability is tracked honestly (blockers → LOGIC VIEW, else ✅ runnable)",
-    /var flags = \{ blockers: \[\], verify: \[\] \}/.test(src) && /LOGIC VIEW — NOT directly runnable/.test(src) && /Intended to be runnable as-is/.test(src));
+  ok("runnability is tracked honestly (blockers → LOGIC VIEW, else runnable)",
+    /var flags = \{ blockers: \[\], verify: \[\] \}/.test(src) && /LOGIC VIEW — not directly runnable/.test(src) && /Runnable against Data Cloud/.test(src));
   ok("nested membership uses the VERIFIED schema (Id__c member key + 15-char Segment_Id + Delta_Type='existing')",
-    /SELECT Id__c FROM " \+ resolved\.membershipTable/.test(src) && /Segment_Id__c = " \+ q\(segId15\)/.test(src) && /segId\.slice\(0, 15\)/.test(src) && /Delta_Type__c = 'existing'/.test(src));
+    /SELECT DISTINCT Id__c FROM " \+ resolved\.membershipTable/.test(src) && /Segment_Id__c = " \+ q\(segId15\)/.test(src) && /segId\.slice\(0, 15\)/.test(src) && /Delta_Type__c = 'existing'/.test(src));
   ok("Copy SQL PREFERS API criteria when extension present, DOM fallback otherwise",
     /typeof window\.__dcGetSegmentDef !== "function"/.test(src) && /segmentApiCriteriaToSql\(crit, segName, currentModalTab, fromObj, resolver\)/.test(src) && /var domFallback = function/.test(src));
   ok("caller threads real FROM (seg.segmentOnApiName) + nested resolver into the renderer",

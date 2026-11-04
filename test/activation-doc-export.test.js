@@ -1105,9 +1105,9 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
   ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
   ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point"/.test(s2) && /pickBy\(gsecM/.test(s2));
-  ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ pvHtml \+ afHtml/.test(s2));
+  ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ relHtml \+ stHtml \+ pvHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
-  ok("system rows are plain Attributes rows, no (unspecified)", /sysRows\.concat\(rows\)/.test(s2) && !/\(unspecified\)/.test(s2));
+  ok("system rows are plain Attributes rows, no (unspecified)", /sysRows\.concat\(primRows\)/.test(s2) && !/\(unspecified\)/.test(s2));
 }
 
 console.log("\n18. Activation Membership parser (real source fn, verbatim innerText shape)");
@@ -1147,6 +1147,15 @@ console.log("\n20. Draggable header + Limit reader (real source)");
   var s5 = fs5.readFileSync(p5.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("header drag handler: ignores buttons, moves box via fixed left/top, clamps to viewport", /Draggable \(drag the header/.test(s5) && /closest\("button"\)\) return/.test(s5) && /box\.style\.position = "fixed"/.test(s5));
   ok("Limit input read into provLimit and persisted in accumulator", /label"\) === "Limit"/.test(s5) && /acc\.provLimit = lp\.provLimit/.test(s5) && /a\.provLimit === undefined/.test(s5));
+}
+
+console.log("\n21. Contact Point path + filters stay in their own group");
+{
+  var s21 = require("fs").readFileSync(require("path").join(__dirname, "..", "console-decorate.extension.js"), "utf8");
+  ok("CP group falls back to Contact Points-step path", /sameObj\(v\.entityApi, en\)/.test(s21));
+  ok("Path combobox label matched loosely", /\^Path\\b\/i\.test/.test(s21));
+  ok("group Path falls back to its rows' queryPathString path", /rows\.filter\(function \(r\) \{ return r\.path; \}\)/.test(s21));
+  ok("unused-filter card keyed by SF label", /!usedFlt\[g\.label\]/.test(s21));
 }
 
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");

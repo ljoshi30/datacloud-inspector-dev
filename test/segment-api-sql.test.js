@@ -62,7 +62,7 @@ function bodyHasNoBlockComment(sql) {
 }
 // helper: no UNKNOWN_* / placeholder leaking where a real identifier should be, UNLESS flagged LOGIC VIEW
 function placeholdersImplyLogicView(sql) {
-  const hasPlaceholder = /\b(UNKNOWN_FIELD|UNKNOWN_OBJECT|UNSUPPORTED_NODE|IS_MEMBER_OF_SEGMENT)\b/.test(sql.slice(sql.indexOf("\nSELECT ")));
+  const hasPlaceholder = /\b(UNKNOWN_FIELD|UNKNOWN_OBJECT|UNSUPPORTED_NODE|IS_MEMBER_OF_SEGMENT|CORRELATE)\b/.test(sql.slice(sql.indexOf("\nSELECT ")));
   return !hasPlaceholder || /LOGIC VIEW/.test(sql);
 }
 
@@ -76,8 +76,8 @@ function placeholdersImplyLogicView(sql) {
   ok("★ NO comment-only predicate after AND (the reported bug)", noCommentPredicate(sql), sql);
   ok("NestedSegment (unresolved) → VALID named pseudo-predicate, not a bare comment", /IS_MEMBER_OF_SEGMENT\('TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind'\)/.test(sql), sql);
   ok("★ SQL BODY has NO inline /* */ comment (facts live in the -- header only)", bodyHasNoBlockComment(sql), sql);
-  ok("unresolved nested → whole query marked LOGIC VIEW (not claimed runnable)", /LOGIC VIEW — NOT directly runnable/.test(sql), sql);
-  ok("NestedSegment devName + member count appear in the HEADER (not the body)", /TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind/.test(sql) && /96239/.test(sql), sql);
+  ok("unresolved nested → whole query marked LOGIC VIEW (not claimed runnable)", /LOGIC VIEW — not directly runnable/.test(sql), sql);
+  ok("unresolved nested → devName named in the LOGIC-VIEW reason (so the user knows which segment)", /TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind/.test(sql), sql);
 }
 
 // (1b) ★ SNAPSHOT nested segment (useLastPublishedMembership) → MUST read the published membership
@@ -89,7 +89,7 @@ function placeholdersImplyLogicView(sql) {
   const resolver = (dev) => dev === "TDI_SF_PM_GI_SUPP_Cust_Mkt_Contact_Ind"
     ? { membershipTable: "Individual_Unified_SMH_123__dlm", segmentId: "1sgHo000000wkgRIAQ", criteria: nestedCriteria } : null;
   const sql = render(multiline, "SF_PM_GI_TRGT__Multiline", "Include", "TDI_UnifiedIndividualApp6__dlm", resolver);
-  ok("★ snapshot nested → reads membership TABLE, does NOT inline the live criteria", /IN \(SELECT Id__c FROM Individual_Unified_SMH_123__dlm/.test(sql) && !/TDI_Marketing_Contactable__c/.test(sql), sql);
+  ok("★ snapshot nested → reads membership TABLE, does NOT inline the live criteria", /IN \(SELECT DISTINCT Id__c FROM Individual_Unified_SMH_123__dlm/.test(sql) && !/TDI_Marketing_Contactable__c/.test(sql), sql);
   ok("★ snapshot nested → current members only (Delta_Type__c = 'existing' — excludes churned rows)", /Delta_Type__c = 'existing'/.test(sql), sql);
   ok("★ snapshot nested → 15-char Segment_Id (18-char returns 0 rows)", /Segment_Id__c = '1sgHo000000wkgR'/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
   ok("snapshot nested → NO dangling AND, valid chain", noDanglingBool(sql), sql);
@@ -130,7 +130,7 @@ function placeholdersImplyLogicView(sql) {
   const resolver = () => ({ membershipTable: "Individual_Unified_SMH_123__dlm", segmentId: "1sgHo000000wkgRIAQ", criteria: null });  // 18-char, no criteria
   const sql = render(multiline, "s", "Include", "TDI_UnifiedIndividualApp6__dlm", resolver);
   ok("★ membership subquery: 15-CHAR id + Delta_Type__c='existing' (current members only, live-verified)",
-    /Id__c IN \(SELECT Id__c FROM Individual_Unified_SMH_123__dlm WHERE Segment_Id__c = '1sgHo000000wkgR' AND Delta_Type__c = 'existing'\)/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
+    /Id__c IN \(SELECT DISTINCT Id__c FROM Individual_Unified_SMH_123__dlm WHERE Segment_Id__c = '1sgHo000000wkgR' AND Delta_Type__c = 'existing'\)/.test(sql) && !/1sgHo000000wkgRIAQ/.test(sql), sql);
   ok("membership subquery → NO dangling AND + no body comment", noDanglingBool(sql) && bodyHasNoBlockComment(sql), sql);
 }
 
@@ -145,9 +145,51 @@ const agg = {
 {
   const sql = render(agg, "SP_Test", "Include", "UnifiedIndividual__dlm");
   ok("D4 aggregation renders COUNT(*) subquery (not silently dropped)", /\(SELECT COUNT\(\*\) FROM ssot__ProductBrowseEngagement__dlm/.test(sql), sql);
-  ok("D4 aggregation inner filter preserved", /WHERE ssot__ProductBrowseEngagement__dlm\.ssot__ProductId__c = 'product_2'/.test(sql), sql);
+  ok("D4 aggregation inner filter preserved", /AND ssot__ProductBrowseEngagement__dlm\.ssot__ProductId__c = 'product_2'/.test(sql), sql);
   ok("D2+D5 threshold op 'greater than or equal' + scalar 1 → >= 1", /\) >= 1/.test(sql), sql);
-  ok("join PATH captured from the aggregation", /UnifiedIndividual__dlm\.ssot__Id__c = IndividualIdentityLink__dlm\.UnifiedRecordId__c/.test(sql), sql);
+  // ★ the 92,416 'returns everyone' fix: the subquery is now CORRELATED to the outer individual via the
+  //   path join keys (verified live that Data Cloud supports this), NOT an uncorrelated COUNT(whole org).
+  ok("★ aggregation subquery CORRELATES to the outer individual (real join pred, not uncorrelated)",
+    /WHERE UnifiedIndividual__dlm\.ssot__Id__c = IndividualIdentityLink__dlm\.UnifiedRecordId__c/.test(sql), sql);
+  ok("★ NO fake CORRELATE() placeholder anymore", !/CORRELATE\(/.test(sql), sql);
+  ok("★ aggregation WITH a usable path → marked RUNNABLE (not LOGIC VIEW)", !/LOGIC VIEW/.test(sql), sql);
+  ok("subquery FROM lists the container (+ intermediate hop objects when multi-hop)", /\(SELECT COUNT\(\*\) FROM ssot__ProductBrowseEngagement__dlm/.test(sql), sql);
+}
+// (2b) ★ OR/AND rails + CORRELATED aggregations (the real SF_PM_GI_TRGT__Cust Mkt Contact Ind shape).
+//   email/phone = 1-hop (PartyId = Individual.Id); consent = 3-hop (via link + source individual).
+{
+  const emailAgg = { type: "NumberAggregation", aggregateFunction: "count", containerObjectApiName: "EmailCP__dlm",
+    filter: { type: "TextComparison", subject: { objectApiName: "EmailCP__dlm", fieldApiName: "EmailAddress__c" }, operator: "has value" },
+    comparison: { type: "NumberComparison", subject: { objectApiName: "EmailCP__dlm", fieldApiName: "Id__c" }, operator: "greater than or equal", value: 1 },
+    path: [[{ objectApiName: "U__dlm", fieldApiName: "Id__c" }, { objectApiName: "EmailCP__dlm", fieldApiName: "PartyId__c" }]] };
+  const phoneAgg = { type: "NumberAggregation", aggregateFunction: "count", containerObjectApiName: "PhoneCP__dlm",
+    comparison: { type: "NumberComparison", subject: { objectApiName: "PhoneCP__dlm", fieldApiName: "Id__c" }, operator: "greater than or equal", value: 1 },
+    path: [[{ objectApiName: "U__dlm", fieldApiName: "Id__c" }, { objectApiName: "PhoneCP__dlm", fieldApiName: "PartyId__c" }]] };
+  const consentAgg = { type: "NumberAggregation", aggregateFunction: "count", containerObjectApiName: "Consent__dlm",
+    filter: { type: "BooleanComparison", subject: { objectApiName: "Consent__dlm", fieldApiName: "Marketing_Consent__c" }, operator: "equal", value: true },
+    comparison: { type: "NumberComparison", subject: { objectApiName: "Consent__dlm", fieldApiName: "Id__c" }, operator: "greater than or equal", value: 1 },
+    path: [[{ objectApiName: "U__dlm", fieldApiName: "Id__c" }, { objectApiName: "Link__dlm", fieldApiName: "UnifiedRecordId__c" }],
+           [{ objectApiName: "Link__dlm", fieldApiName: "SourceRecordId__c" }, { objectApiName: "Src__dlm", fieldApiName: "Id__c" }],
+           [{ objectApiName: "Src__dlm", fieldApiName: "Id__c" }, { objectApiName: "Consent__dlm", fieldApiName: "SrcId__c" }]] };
+  const crit = { type: "LogicalComparison", operator: "and", filters: [
+    { type: "LogicalComparison", operator: "or", filters: [emailAgg, phoneAgg] },
+    consentAgg
+  ] };
+  const sql = render(crit, "CustMktContactInd", "Include", "U__dlm");
+  ok("★ OR group parenthesized, AND joins it to consent (rails handled)", /\(\(SELECT COUNT\(\*\) FROM EmailCP__dlm[\s\S]*OR \(SELECT COUNT\(\*\) FROM PhoneCP__dlm[\s\S]*\)\s*\n\s*AND \(SELECT COUNT\(\*\) FROM Consent__dlm/.test(sql), sql);
+  ok("★ email agg correlated: U.Id = EmailCP.PartyId", /U__dlm\.Id__c = EmailCP__dlm\.PartyId__c/.test(sql), sql);
+  ok("★ consent agg MULTI-HOP: FROM lists all 3 chain objects + all 3 hop joins", /FROM Consent__dlm, Link__dlm, Src__dlm/.test(sql) && /U__dlm\.Id__c = Link__dlm\.UnifiedRecordId__c/.test(sql) && /Link__dlm\.SourceRecordId__c = Src__dlm\.Id__c/.test(sql) && /Src__dlm\.Id__c = Consent__dlm\.SrcId__c/.test(sql), sql);
+  ok("★ all aggregations correlated → query RUNNABLE (not a 92,416 LOGIC VIEW)", !/LOGIC VIEW/.test(sql), sql);
+  ok("no fake CORRELATE() placeholder", !/CORRELATE\(/.test(sql), sql);
+  ok("no dangling bool / valid chain", noDanglingBool(sql), sql);
+}
+// (2c) aggregation with NO path → cannot correlate → honest LOGIC VIEW fallback (not an uncorrelated count).
+{
+  const noPathAgg = { type: "NumberAggregation", aggregateFunction: "count", containerObjectApiName: "Orphan__dlm",
+    comparison: { type: "NumberComparison", subject: { objectApiName: "Orphan__dlm", fieldApiName: "Id__c" }, operator: "greater than or equal", value: 1 } };
+  const sql = render(noPathAgg, "NoPath", "Include", "U__dlm");
+  ok("★ no-path aggregation → LOGIC VIEW (never an uncorrelated 'matches everyone' COUNT)", /LOGIC VIEW/.test(sql) && /no join path/.test(sql), sql);
+  ok("★ no-path aggregation → valid placeholder (UNCORRELATED_COUNT), no dangling bool", /UNCORRELATED_COUNT\(Orphan__dlm\)/.test(sql) && noDanglingBool(sql), sql);
 }
 
 // (3) "has value" operator — real Test_Segment_in_SP inner subject (no values at all).
@@ -178,7 +220,11 @@ const ci = {
 {
   const sql = render(ci, "TDI_5_random_control", "Include", "TDI_UnifiedIndividualTdir__dlm");
   ok("CI leaf → real col = 'T'", /TDI_Independent_Audience_Splits__cio\.Control_5_Pct__c = 'T'/.test(sql), sql);
-  ok("CI join PATH captured", /TDI_UnifiedIndividualTdir__dlm\.Id__c = TDI_Independent_Audience_Splits__cio\.Unified_Individual_ID__c/.test(sql), sql);
+  // ★ CI is on a DIFFERENT object than the segment's FROM → must be a CORRELATED EXISTS (not a bare
+  //   predicate referencing an unjoined table, which would be invalid SQL).
+  ok("★ cross-object CI leaf → correlated EXISTS (joins CI object to the individual, runnable)",
+    /EXISTS \(SELECT 1 FROM TDI_Independent_Audience_Splits__cio\s*\n\s*WHERE TDI_UnifiedIndividualTdir__dlm\.Id__c = TDI_Independent_Audience_Splits__cio\.Unified_Individual_ID__c/.test(sql), sql);
+  ok("★ CI query marked runnable (correlated, not LOGIC VIEW)", !/LOGIC VIEW/.test(sql), sql);
 }
 
 // (5) SAFETY — a genuinely unknown node must be surfaced + block runnability, never silently wrong,
@@ -199,7 +245,7 @@ const ci = {
     { type: "BooleanComparison", subject: { objectApiName: "U__dlm", fieldApiName: "b__c" }, operator: "equal", value: false }
   ] };
   const sql = render(simple, "simple", "Include", "U__dlm");
-  ok("simple segment → marked runnable (✅, no LOGIC VIEW)", /Intended to be runnable/.test(sql) && !/LOGIC VIEW/.test(sql), sql);
+  ok("simple segment → marked runnable (no LOGIC VIEW)", /Runnable against Data Cloud/.test(sql) && !/LOGIC VIEW/.test(sql), sql);
   ok("simple segment → = 'X' AND = FALSE, valid chain", /a__c = 'X'[\s\S]*AND[\s\S]*b__c = FALSE/.test(sql) && noDanglingBool(sql), sql);
 }
 

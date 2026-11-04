@@ -20141,7 +20141,7 @@ processJSON();
             var lv = segSafeGet(el, "value"); provLimit = (lv == null ? "" : String(lv));
           } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
             showOn = !!segSafeGet(el, "checked");
-          } else if (tag === "lightning-combobox" && segSafeGet(el, "label") === "Path") {
+          } else if (tag === "lightning-combobox" && /^Path\b/i.test(String(segSafeGet(el, "label") || ""))) {
             var txt = docActOptionLabel(segSafeGet(el, "options"), segSafeGet(el, "value"));
             if (!txt) {
               try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? String(c.textContent || "").replace(/\s+/g, " ").trim() : ""; } catch (e) {}
@@ -20861,6 +20861,15 @@ processJSON();
             var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en);
             var pl = pickBy(limByObj, en), pp = pickBy(pathByObj, en), pf = pickBy(fltByObj, en);
             var lim = pl && pl.v, pth = pp && pp.v, flt = pf && pf.v;
+            if (!pth) {   // the group's own datatable rows carry queryPathString (the join path SF shows under Show Paths)
+              var rp = rows.filter(function (r) { return r.path; }).map(function (r) { return r.path; });
+              if (rp.length) pth = { text: rp[0] };
+            }
+            if (!pth) {   // contact-point objects: path captured at the Contact Points step (same object as this group)
+              (data.contactPoints || []).forEach(function (cp) { ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
+                var v = cp[k]; if (!pth && v && v.path && v.entityApi && sameObj(v.entityApi, en)) pth = { text: v.path };
+              }); });
+            }
             if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
             gh += "<div style='margin:0 0 16px;'>"
               + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(pl ? pl.key : (pf ? pf.key : (pp ? pp.key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")))) + "</span>"
@@ -20893,14 +20902,17 @@ processJSON();
           // SubSegmentId / SubSegmentName are part of Salesforce's "Attributes Included" list, so they are plain rows of the
           // first Attributes group (no separate section).
           var sysRows = (data.attributes || []).filter(function (a) { return !a.objectApi && a.source === "SYSTEM"; });
-          var sysPlaced = false;
+                    // Salesforce: the Attributes card is ONE primary table (DMO + calculated-insight rows together, numbered);
+          // related objects (those with Max # / Sort By) are separate cards after it.
+          var relHtml = "", primRows = [], primEn = "";
           Object.keys(ordered).forEach(function (en) {
             if (isCpObj(en)) { cpGroupsHtml += renderGroup(en, ordered[en]); return; }
-            var rows = ordered[en];
-            if (!sysPlaced && sysRows.length) { rows = sysRows.concat(rows); sysPlaced = true; }
-            attrCount += rows.length; attrHtml += renderGroup(en, rows);
+            if (pickBy(limByObj, en)) { relHtml += "<div style='" + card + "'>" + renderGroup(en, ordered[en]) + "</div>"; attrCount += ordered[en].length; return; }
+            if (!primEn) primEn = en;
+            primRows = primRows.concat(ordered[en]);
           });
-          if (!sysPlaced && sysRows.length) attrHtml += renderGroup("Attributes", sysRows);
+          if (sysRows.length) primRows = sysRows.concat(primRows);
+          if (primRows.length) { attrCount += primRows.length; attrHtml += renderGroup(primEn || "Attributes", primRows); }
           attrHtml += "</div>";
           // Group order: primary object first (Salesforce order = as captured), system fields last.
           function byEntityOrder(list) {
@@ -20952,7 +20964,7 @@ processJSON();
           // Attribute filters (from the Attributes-step "Edit/Add Filters" rows). Badge is
           // readable even with the panel closed; condition text only when it was opened once.
           var afHtml = "";
-          var restFlt = (data.filterGroups || []).filter(function (g) { return !usedFlt[normLbl(g.label)]; });
+          var restFlt = (data.filterGroups || []).filter(function (g) { return !usedFlt[g.label]; });
           if (restFlt.length) {
             afHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Filters <span style='color:#5c5c5c;font-weight:500;'>(" + restFlt.length + ")</span></div>";
             restFlt.forEach(function (g) {
@@ -20990,11 +21002,11 @@ processJSON();
           }
 
           // Wizard order: Overview → Membership/filters → Contact Point → Attributes (limits, paths, filters inline) → Campaign Data.
-          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + stHtml + pvHtml + afHtml;
+          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + relHtml + stHtml + pvHtml + afHtml;
           var sections = status + docSections;
           body.innerHTML = sections;
           modal.__docSections = docSections;
-          modal.__docSectionsNoOv = flHtml + memHtml + cpHtml + attrHtml + stHtml + pvHtml + afHtml;   // all interpolated values escaped via e()/docActEsc above
+          modal.__docSectionsNoOv = flHtml + memHtml + cpHtml + attrHtml + relHtml + stHtml + pvHtml + afHtml;   // all interpolated values escaped via e()/docActEsc above
         }
 
         box.appendChild(hdr); box.appendChild(body);
