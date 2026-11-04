@@ -20814,14 +20814,13 @@ processJSON();
             var gh = "";
             var kind = docActObjKind(en);
             var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
-            var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en) && rows.every(function (r) { return !r.objectApi; });
+            var isSysGroup = !/__(dlm|cio|dll|dls)$/.test(en);
             var pl = pickBy(limByObj, en), pp = pickBy(pathByObj, en), pf = pickBy(fltByObj, en);
             var lim = pl && pl.v, pth = pp && pp.v, flt = pf && pf.v;
             if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
             gh += "<div style='margin:0 0 16px;'>"
               + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(pl ? pl.key : (pf ? pf.key : (pp ? pp.key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, "")))) + "</span>"
-              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.length + ")</span></div>"
-              + (isSysGroup ? "<div style='font:400 11px system-ui;color:#5c5c5c;margin:-4px 0 8px;'>Added automatically by Salesforce for waterfall activations.</div>" : "")
+              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span></div>"
               + (lim ? limLine(lim) : "") + fltBadge(flt)
               + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
             gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:26%'><col style='width:26%'><col style='width:20%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'>"
@@ -20847,19 +20846,25 @@ processJSON();
           function isCpObj(en) { var d = pickBy(gsecM, en); return d ? d.v === "Contact Point" : !!cpSet[normLbl(en)]; }
           var cpGroupsHtml = "", attrCount = 0;
           var ordered = byEntityOrder(data.attributes);
+          // SubSegmentId / SubSegmentName are part of Salesforce's "Attributes Included" list, so they are plain rows of the
+          // first Attributes group (no separate section).
+          var sysRows = (data.attributes || []).filter(function (a) { return !a.objectApi && a.source === "SYSTEM"; });
+          var sysPlaced = false;
           Object.keys(ordered).forEach(function (en) {
-            if (isCpObj(en)) cpGroupsHtml += renderGroup(en, ordered[en]);
-            else { attrCount += ordered[en].length; attrHtml += renderGroup(en, ordered[en]); }
+            if (isCpObj(en)) { cpGroupsHtml += renderGroup(en, ordered[en]); return; }
+            var rows = ordered[en];
+            if (!sysPlaced && sysRows.length) { rows = sysRows.concat(rows); sysPlaced = true; }
+            attrCount += rows.length; attrHtml += renderGroup(en, rows);
           });
+          if (!sysPlaced && sysRows.length) attrHtml += renderGroup("Attributes", sysRows);
           attrHtml += "</div>";
           // Group order: primary object first (Salesforce order = as captured), system fields last.
           function byEntityOrder(list) {
             if (byEntityOrder._c && byEntityOrder._l === list) return byEntityOrder._c;
-            var m = {}, sys = "System fields (added by Salesforce)", keys = [];
-            list.forEach(function (a) { var en = a.objectApi || (a.source === "SYSTEM" ? sys : "Other"); if (!m[en]) { m[en] = []; keys.push(en); } m[en].push(a); });
+            var m = {}, keys = [];
+            list.forEach(function (a) { if (!a.objectApi && a.source === "SYSTEM") return; var en = a.objectApi || "Other"; if (!m[en]) { m[en] = []; keys.push(en); } m[en].push(a); });
             var out = {};
-            keys.filter(function (k) { return k !== sys; }).forEach(function (k) { out[k] = m[k]; });
-            if (m[sys]) out[sys] = m[sys];
+            keys.forEach(function (k) { out[k] = m[k]; });
             byEntityOrder._c = out; byEntityOrder._l = list; return out;
           }
 
@@ -23118,7 +23123,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.702"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.703"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

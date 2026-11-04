@@ -37,7 +37,7 @@ must("TDI group shows its Path and Filtered badge", grp.indexOf("U.Id &gt; TDI.I
 must("no Other-settings card (all attached)", !/Other related-object settings/.test(html));
 must("Contact Point limit lives in Contact Point section, ordered before Attributes", html.indexOf("Contact Point Email")>-1 && html.indexOf(">Contact Point<")<html.indexOf(">Attributes"));
 must("Unified Individual group has NO limit line", !/UnifiedIndividual[\s\S]{0,200}Max # of Attribute Values[\s\S]{0,50}FirstName/.test(html.slice(0,html.indexOf("Global Exclusion In"))) );
-must("System fields group last + explained, no (unspecified)", html.indexOf("System fields (added by Salesforce)")>html.indexOf("Global Exclusion In") && !/unspecified/.test(html));
+must("SubSegmentId is a plain row of the first Attributes group (no separate System section)", !/System fields|unspecified|Added automatically/.test(html) && html.indexOf("SubSegmentId")>-1 && html.indexOf("SubSegmentId")<html.indexOf("Global Exclusion In") && html.indexOf("SubSegmentId")>html.indexOf(">Attributes<"));
 must("Campaign Data after attributes", html.lastIndexOf("Campaign Data")>html.indexOf("Global Exclusion In"));
 
 const ci=html.indexOf(">Contact Point<"), ai=html.indexOf(">Attributes<");

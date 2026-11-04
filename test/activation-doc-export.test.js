@@ -895,7 +895,7 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("CSV + Excel (MiniXLSX) exports wired", /function docActCsv/.test(src) && /function docActExcel/.test(src) && /SEGX\.MiniXLSX/.test(src));
   ok("Copy-table button REMOVED per feedback", !/Copy table/.test(src));
   ok("CSV header carries Join Path in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category", "Join Path"\]/.test(src));
-  ok("no '(unspecified)' group: system rows get an honest label", !/\(unspecified\)/.test(src) && /System fields \(added by Salesforce\)/.test(src));
+  ok("no '(unspecified)' / separate system group: system rows fold into Attributes", !/\(unspecified\)/.test(src) && !/System fields \(added by Salesforce\)/.test(src) && /sysRows/.test(src));
   ok("honest 'captured vs not yet visited' status in the modal", /not yet visited|captured|Visit the/.test(src) && /captured\.outputNames/.test(src));
   ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));
   // PERSISTENCE: the accumulator must live on window, not in an IIFE-local that the per-step re-run wipes.
@@ -1107,7 +1107,7 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point<\/div>/.test(s2) && /pickBy\(gsecM/.test(s2));
   ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ stHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
-  ok("system rows explained, no (unspecified)", /Added automatically by Salesforce for waterfall/.test(s2) && !/\(unspecified\)/.test(s2));
+  ok("system rows are plain Attributes rows, no (unspecified)", /sysRows\.concat\(rows\)/.test(s2) && !/\(unspecified\)/.test(s2));
 }
 
 console.log("\n18. Activation Membership parser (real source fn, verbatim innerText shape)");
