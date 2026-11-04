@@ -1102,8 +1102,8 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   var fs2 = require("fs"), p2 = require("path");
   var s2 = fs2.readFileSync(p2.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
   ok("Provisional Audience Limiting is its own section (Limit), not mixed with per-object limits", /pvHtml/.test(s2) && !/Related-object limits<\/div>/.test(s2));
-  ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /limLine\(lim\)/.test(s2) && /Max # of Attribute Values/.test(s2));
-  ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /fltBadge\(flt\)/.test(s2));
+  ok("per-object group renders limit line (Max # of Attribute Values / Sort By / Order)", /metaBox\(lim, flt, pth/.test(s2) && /Max # of Attribute Values/.test(s2));
+  ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /metaBox\(lim, flt, pth/.test(s2) && /var metaHtml/.test(s2));
   ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point"/.test(s2) && /pickBy\(gsecM/.test(s2));
   ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ relHtml \+ stHtml \+ pvHtml \+ afHtml/.test(s2));
   ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));

@@ -20853,6 +20853,38 @@ processJSON();
               + (g.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>")
               + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
           }
+          // One labelled settings panel per object: Limit / Filters / Path rows (table → also valid in Word).
+          function metaBox(lim, flt, pth, hint) {
+            var th = "padding:7px 12px;width:84px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #eef0f2;" + lblTxt;
+            var td = "padding:7px 12px;vertical-align:top;border-bottom:1px solid #eef0f2;font:500 12px/1.6 system-ui;color:#181818;";
+            var chip = "display:inline-block;margin:0 6px 4px 0;padding:2px 8px;border:1px solid #d8dde3;border-radius:5px;background:#fff;";
+            var rows = "";
+            if (lim) {
+              rows += "<tr><th style='" + th + "'>Limit</th><td style='" + td + "'>"
+                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Max # of Attribute Values</span> <b>" + docActEsc(lim.maxValues) + "</b>" + (lim.fixed ? " <span style='color:#8a8a8a;font-size:11px;'>fixed</span>" : "") + "</span>"
+                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Sort by</span> <b>" + docActEsc(lim.sortLabel) + "</b> " + docActApiChip(lim.sortField) + "</span>"
+                + "<span style='" + chip + "'><span style='color:#5c5c5c;'>Order</span> <b>" + docActEsc(lim.orderLabel) + "</b></span></td></tr>";
+            }
+            if (flt) {
+              var conds = (flt.conditions || []).filter(function (c) { return c.text || c.field; });
+              var fb = flt.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;margin-right:8px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
+              var cc = conds.map(function (c, i) {
+                return "<span style='" + chip + "'><span style='color:#8a8a8a;'>" + (i + 1) + "</span> " + (c.text ? docActEsc(c.text) : "<b>" + docActEsc(c.field) + "</b> <span style='color:#0b5cab;'>" + docActEsc(c.operator) + "</span>") + "</span>";
+              }).join("");
+              var note = (flt.hasFilter && !conds.length) ? "<span style='font:500 11px system-ui;color:#8a6d00;'>conditions not captured — open this object's Edit Filters once, then re-run</span>" : "";
+              rows += "<tr><th style='" + th + "'>Filters</th><td style='" + td + "'>" + fb + cc + note + "</td></tr>";
+            }
+            if (pth && pth.text) {
+              var steps = String(pth.text).split(/\s>\s/).filter(Boolean);
+              var pc = steps.map(function (st, i) {
+                var parts = st.split(/,\s/).filter(Boolean);
+                return "<span style='" + chip + "background:#f7f9fb;'><span style='color:#8a8a8a;'>" + (i + 1) + "</span> " + parts.map(docActEsc).join("<br>&nbsp;&nbsp;&nbsp;") + "</span>" + (i < steps.length - 1 ? "<span style='color:#8a8a8a;margin-right:6px;'>&rarr;</span>" : "");
+              }).join("");
+              rows += "<tr><th style='" + th + "'>Path</th><td style='" + td + "'>" + pc + "</td></tr>";
+            }
+            if (hint) rows += "<tr><th style='" + th + "'>Path</th><td style='" + td + "font-size:11px;color:#8a6d00;'>" + hint + "</td></tr>";
+            return rows ? "<table style='width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;background:#fbfcfd;margin:0 0 10px;'><tbody>" + rows + "</tbody></table>" : "";
+          }
           var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes" + docActInfoIcon(TIP.attributes) + "</div>";
           function renderGroup(en, rows, titleOverride) {
             var gh = "";
@@ -20877,10 +20909,9 @@ processJSON();
             gh += "<div style='margin:0 0 16px;'>"
               + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(titleOverride ? titleOverride : pl ? pl.key : (pf ? pf.key : (pp ? pp.key : (pickBy(gsecM, en) ? pickBy(gsecM, en).key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, ""))))) + "</span>"
               + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + (rows.length ? "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span>" : "") + "</div>"
-              + (lim ? limLine(lim) : "") + fltBadge(flt)
-              + (!pth && isCpObj(en) && !(data.contactPoints || []).length ? "<div style='margin:0 0 6px;font:500 11px system-ui;color:#8a6d00;'>Path is set on the Contact Points step — open that step once, then re-run to capture it.</div>" : "")
-              + (pth ? "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Path</span> <span style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + docActEsc(pth.text) + "</span></div>" : "");
-            if (!rows.length) return gh + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div></div>";
+              + "";
+            var metaHtml = metaBox(lim, flt, pth, (!pth && isCpObj(en) && !(data.contactPoints || []).length) ? "Set on the Contact Points step — open that step once, then re-run to capture it." : "");
+            if (!rows.length) return gh + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div>" + metaHtml + "</div>";
             gh += "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:4%'><col style='width:24%'><col style='width:25%'><col style='width:20%'><col style='width:27%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
@@ -20893,7 +20924,7 @@ processJSON();
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
             });
-            gh += "</tbody></table></div></div>";
+            gh += "</tbody></table></div>" + metaHtml + "</div>";
           return gh; }
           // Contact Point groups are the standard contact-point objects (from the Contact Points step, or
           // ssot__ContactPoint*); everything else is an Attributes group. Salesforce shows them in separate sections.
@@ -23224,7 +23255,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.711"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.712"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

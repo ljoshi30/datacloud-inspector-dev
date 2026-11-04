@@ -14,8 +14,8 @@ attributes:[
 {label:"Global Exclusion In",fieldApi:"G__c",objectApi:"TDI_Individual_Additional__dlm",outputName:"TDI_G",path:"A.B > C.D"}],
 contactPoints:[],groupSection:{"Contact Point Email":"Contact Point","TDI Individual Additional":"Attributes","Unified Individual":"Attributes","Unified Indv Contact Point Address TDI":"Attributes"},staticRows:[{name:"journey",value:"16 sep",objectApi:""}],waterfall:[],
 limits:[{owner:"Unified Indv Contact Point Address TDI",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"TDI Individual Additional",maxValues:"1",sortField:"LastModifiedDate__c",sortLabel:"Last Modified Date",orderLabel:"Most Recent",fixed:false},{owner:"Contact Point Email",maxValues:"1",sortField:"Id__c",sortLabel:"Contact Point Email Id",orderLabel:"Ascending",fixed:true}],
-pathChoices:[{owner:"TDI Individual Additional",text:"U.Id > TDI.Info"}],
-filterGroups:[{label:"Contact Point Email",hasFilter:true,conditions:[]},{label:"TDI Individual Additional",hasFilter:false,conditions:[]},{label:"Unified Indv Contact Point Address TDI",hasFilter:false,conditions:[]}]};
+pathChoices:[{owner:"TDI Individual Additional",text:"A.Id > B.Id, C.Id > TDI.Info"}],
+filterGroups:[{label:"Contact Point Email",hasFilter:true,conditions:[]},{label:"TDI Individual Additional",hasFilter:true,conditions:[{field:"Global Exclusion In",operator:"Equals"},{field:"Segment Code",operator:"Has Value"}]},{label:"Unified Indv Contact Point Address TDI",hasFilter:false,conditions:[]}]};
 let mod;
 const docActOvRowsFn=new Function(grab('docActOvRows')+'\nreturn docActOvRows;')();
 const document={getElementById(){return null},createElement(t){const o=el();return o},body:{appendChild(m){mod=m},contains(){return true}},addEventListener(){},removeEventListener(){}};
@@ -36,8 +36,8 @@ const must=(n,c)=>{console.log((c?"✓ ":"✗ ")+n);if(!c)process.exitCode=1};
 must("Activation Membership section shown first (before Contact Point)", html.indexOf("Activation Membership")>-1 && html.indexOf("Activation Membership")<html.indexOf(">Contact Point<"));
 must("rendered", html.length>500);
 const gi=html.indexOf("TDI_Individual_Additional");const grp=html.slice(gi);
-must("TDI group has Max # / Sort By inside it, before its first attribute row", grp.indexOf("Max # of Attribute Values")>-1 && grp.indexOf("Max # of Attribute Values")<grp.indexOf("Global Exclusion In"));
-must("TDI group shows its Path and its own No filter badge", grp.indexOf("U.Id &gt; TDI.Info")>-1 && grp.indexOf("No filter")>-1);
+must("TDI group: attribute table FIRST, then its Limit / Filters / Path panel below", grp.indexOf("Global Exclusion In")>-1 && grp.indexOf("Max # of Attribute Values")>grp.indexOf("Global Exclusion In") && grp.indexOf("Filters")>grp.indexOf("Global Exclusion In") && grp.indexOf(">Path<")>grp.indexOf("Global Exclusion In"));
+must("TDI group shows its Path and its Filtered badge", (grp.indexOf("U.Id")>-1 && grp.indexOf("TDI.Info")>-1) && grp.indexOf("Filtered")>-1);
 must("no Other-settings card (all attached)", !/Other related-object settings/.test(html));
 must("Contact Point limit lives in Contact Point section, ordered before Attributes", html.indexOf("Contact Point Email")>-1 && html.indexOf(">Contact Point<")<html.indexOf(">Attributes"));
 must("Unified Individual group has NO limit line", !/UnifiedIndividual[\s\S]{0,200}Max # of Attribute Values[\s\S]{0,50}FirstName/.test(html.slice(0,html.indexOf("Global Exclusion In"))) );
@@ -69,3 +69,9 @@ must("primary table titled with the segment object (SF label), not the first API
 must("rows are numbered 1..n in the primary table", /<td[^>]*>1<\/td><td[^>]*>SubSegmentId/.test(html) && /<td[^>]*>3<\/td><td[^>]*>Control_05_Random/.test(html));
 if(process.env.DBG){const i=html.indexOf(">Filters <span");console.log(html.slice(i,i+900).replace(/<[^>]+>/g," ").replace(/\s+/g," "));}
 if(process.env.DBG){const a=html.indexOf(">Attributes<");console.log(html.slice(a,a+3500).replace(/<[^>]+>/g,"|").replace(/\|+/g,"|"));}
+
+
+const tdiPanel=grp.slice(grp.indexOf("Global Exclusion In"), grp.indexOf("Global Exclusion In")+6000);
+must("each filter condition is its own numbered chip (2 conditions → 2 chips, field + operator separated)", /Global Exclusion In<\/b> <span[^>]*>Equals<\/span>/.test(tdiPanel) && /Segment Code<\/b> <span[^>]*>Has Value<\/span>/.test(tdiPanel));
+must("path hops are separate numbered steps joined by an arrow", /&rarr;/.test(tdiPanel) && /A\.Id/.test(tdiPanel) && /TDI\.Info/.test(tdiPanel));
+must("Doc carries the same panel with the table before it", docOut.indexOf("Equals")>docOut.indexOf("Global Exclusion In"));
