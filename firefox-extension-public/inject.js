@@ -5978,7 +5978,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.694"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.695"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -6074,7 +6074,6 @@ processJSON();
     }
     function markOrgBlocked() {
       try { localStorage.setItem(blockedKey(), "1"); } catch (e) { _memBlocked[blockedKey()] = true; }
-      /* [in-development features removed from public build] */
     }
     // Beacon "dead" for this org — set when a beacon tab was opened but NEVER confirmed back (i.e. the
     // destination is blocked by a corporate web filter / shows a block page). Once dead, we stop opening
@@ -6084,7 +6083,6 @@ processJSON();
     }
     function markBeaconDead() {
       try { localStorage.setItem(beaconDeadKey(), "1"); } catch (e) { _memBeaconDead[beaconDeadKey()] = true; }
-      /* [in-development features removed from public build] */
     }
     // Listen ONCE for the /beacon page's confirmation. If it arrives, the beacon truly reached our worker
     // → clear any "dead" flag and remember it works. (Bound once per page via a window flag.)
@@ -6096,7 +6094,6 @@ processJSON();
             if (ev && ev.data && ev.data.__dcBeacon === "ok") {
               _beaconConfirmed[orgHost()] = true;
               try { localStorage.removeItem(beaconDeadKey()); } catch (e) {}
-              /* [in-development features removed from public build] */
             }
           } catch (e) {}
         }, false);
@@ -6120,7 +6117,6 @@ processJSON();
         _beaconConfirmed[orgHost()] = false;   // reset; the /beacon page will flip this via postMessage
         var w = window.open(beaconUrl(feature), "dc_usage_beacon", "width=360,height=140,left=" + (screen.width - 380) + ",top=" + (screen.height - 220));
         if (w) {
-          /* [in-development features removed from public build] */
           // If the worker's /beacon page doesn't confirm within 4s, the destination was blocked (corporate
           // web filter / block page) → mark the beacon dead for this org so we NEVER flash a tab here again.
           try {
@@ -6198,10 +6194,8 @@ processJSON();
             _inFlight[feature] = false;
             if (r && r.ok) {
               try { markSent(feature); } catch (e) {}            // throttle ONLY on confirmed success
-              /* [in-development features removed from public build] */
               return true;
             }
-            /* [in-development features removed from public build] */
             return false;                                        // non-2xx → do NOT burn the throttle
           })
           .catch(function (err) {
@@ -6210,7 +6204,6 @@ processJSON();
             // uses the beacon-tab fallback (which must open synchronously on the gesture — can't do it
             // from here, this is async and the user-gesture is already gone). Do NOT burn the throttle.
             try { markOrgBlocked(); } catch (e2) {}
-            /* [in-development features removed from public build] */
             return false;
           });
       } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
@@ -6228,7 +6221,6 @@ processJSON();
         if (optedOut()) return false;              // user choice wins
         var feature = pingPageType();
         if (sentToday(feature)) {                  // THIS feature already captured today
-          /* [in-development features removed from public build] */
           return false;
         }
         if (orgKnownBlocked()) {
@@ -6236,7 +6228,6 @@ processJSON();
           // destination), do NOT open a tab — the user would just get a scary "Unauthorized Access"
           // flash with no capture. Give up silently (this org simply can't be measured externally).
           if (beaconDead()) {
-            /* [in-development features removed from public build] */
             return false;
           }
           // beacon not yet known-dead → try it ONCE (synchronous, inside the click gesture). If it turns

@@ -317,10 +317,7 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("failure paths leave the throttle unset; the CSP/CASB-block path learns the org is blocked",
     /return false;\s*\/\/ non-2xx/.test(src) && /try \{ markOrgBlocked\(\); \} catch/.test(src));
   ok("in-flight guard prevents duplicate concurrent sends for the same feature", /var _inFlight = \{\}/.test(src) && /if \(_inFlight\[feature\]\) return Promise\.resolve\(false\)/.test(src));
-  ok("DEV-ONLY visibility: logs '[dc usage] captured …' on write + 'throttled' on skip (so you can SEE it in dev)",
-    /\[dc usage\] captured/.test(src) && /already captured today \(throttled\)/.test(src));
-  ok("DEV-ONLY: the usage console logs are STRIPPED from the public build (silent for real users)",
-    (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/\[dc usage\]/.test(strip); })());
+  ok("NO console output from the usage module (silent in every build, dev included)", !/\[dc usage\]/.test(src) && !/console\.(log|info|warn|error|debug|table)/.test(src));
   ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
     /function maybeReportOnFabOpen/.test(src) && /var feature = pingPageType\(\);/.test(src) && /if \(sentToday\(feature\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",

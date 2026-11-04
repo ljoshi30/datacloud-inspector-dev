@@ -82,7 +82,7 @@ console.log("\n4. source presence — harness shape, VDI-safety, and the 3 modul
   ok("ZERO cost when OFF (crawl early-returns, pass passes the fn through)",
     /crawl: function \(label, nodes\) \{ if \(!ON\) return;/.test(src) && /pass: function \(label, fn\) \{ if \(!ON\) return fn\(\);/.test(src));
   ok("pass RETURNS the fn's value (behavior-preserving wrap, never swallows output)", /return fn\(\);/.test(src) && /try \{ return fn\(\); \} finally/.test(src));
-  ok("report via console.table (+ fallback)", /report: function/.test(src) && /console\.table/.test(src) && /console\.log\(rows\)/.test(src));
+  ok("report RETURNS the rows and prints nothing (no console output)", /report: function/.test(src) && /return rows;/.test(src) && !/console\./.test(src.slice(src.indexOf("dcPerfHarness"), src.indexOf("dcPerfHarness") + 3000)));
 
   // the universal prototype must be GONE
   ok("REMOVED: universal module no longer present", !/function dcUniversalApiModule/.test(src) && !/__dcToggleUniversalApi/.test(src) && !/dc-uni-bar/.test(src) && !/dc-uni-api/.test(src));

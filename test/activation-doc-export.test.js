@@ -1039,5 +1039,16 @@ console.log("\n14. REGRESSION: modal must open when window accumulator was creat
   ok("limits/paths reader failure cannot block scrape (try/catch)", /try \{ lp = docActReadLimits\(raw\); \} catch/.test(src));
 }
 
+
+console.log("\n15. NO console output anywhere in shipped source");
+{
+  const fs = require("fs"), path = require("path");
+  ["console-decorate.extension.js", "console-decorate.bookmarklet.js", path.join("chrome-extension", "background.js")].forEach(function (f) {
+    const t = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
+    const hits = (t.match(/console\.(log|info|warn|error|debug|table|trace|group)/g) || []).length;
+    ok(f + " has no console.* calls", hits === 0, hits + " found");
+  });
+}
+
 console.log("\n" + (fail === 0 ? "✅ ALL PASS" : "❌ FAILURES") + ": " + pass + " passed, " + fail + " failed\n");
 process.exit(fail === 0 ? 0 : 1);

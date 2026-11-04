@@ -358,7 +358,6 @@ async function runDcSegmentDef(req) {
     // ── BY-ID / BY-NAME: single GET, no paging ──
     if (!isList) {
       var one = base + encodeURIComponent(idOrName) + (req.dataspace ? "?dataspace=" + encodeURIComponent(req.dataspace) : "");
-      try { console.log("[dcSegmentDef] GET " + one); } catch (e) {}
       var res1 = await getJson(one);
       if (res1.err) return { ok: false, error: "fetch " + res1.err };
       if (res1.status !== 200) return httpError(res1);
@@ -373,7 +372,6 @@ async function runDcSegmentDef(req) {
     var all = [], offset = 0, total = null, first = null, pages = 0;
     for (; pages < 100; pages++) {
       var u = base + qs(offset);
-      try { console.log("[dcSegmentDef] GET " + u); } catch (e) {}
       var res = await getJson(u);
       if (res.err) { if (all.length) break; return { ok: false, error: "fetch " + res.err }; }   // keep what we have
       if (res.status !== 200) { if (all.length) break; return httpError(res); }
@@ -387,7 +385,6 @@ async function runDcSegmentDef(req) {
       if (total != null && offset >= total) break;   // read everything
       if (segs.length < step) break;                 // short page → last page
     }
-    try { console.log("[dcSegmentDef] LIST paged: " + all.length + " segments over " + (pages + 1) + " page(s)" + (total != null ? " (totalSize " + total + ")" : "")); } catch (e) {}
     // Return the same shape callers expect ({segments:[...]}), but with the FULL set.
     var merged = first ? Object.assign({}, first, { segments: all, offset: 0, batchSize: all.length }) : { segments: all };
     return { ok: true, data: merged };

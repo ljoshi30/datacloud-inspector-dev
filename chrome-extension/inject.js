@@ -14421,8 +14421,8 @@
           var fm = sql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
           var table = fm ? fm[1] : "";
           out.table = table; out.sqlSeen = sql.slice(0, 160);
-          if (!table) { out.error = "No table — type SELECT * FROM \"YourTable\" in the editor first."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
-          if (!_auraSniff.context || !_auraSniff.token) { out.error = "No live session — click SF Run Query once, then re-run."; resolve(out); try { console.log("%c__dcProbeOffset", "color:#4338ca;font-weight:700", out); } catch (e) {} return; }
+          if (!table) { out.error = "No table — type SELECT * FROM \"YourTable\" in the editor first."; resolve(out); return; }
+          if (!_auraSniff.context || !_auraSniff.token) { out.error = "No live session — click SF Run Query once, then re-run."; resolve(out); return; }
           var base = 'SELECT * FROM "' + table + '"';
           // Signature of a row = JSON of ALL its column values (null-proof — a null first
           // column previously made every batch look identical). We keep a SET of signatures
@@ -14461,7 +14461,6 @@
                 ? "OFFSET PAGING WORKS (" + distinct + " distinct rows, no overlap) → fix qeFetchExport to keep paging on short batches, up to the cap"
                 : "OFFSET did NOT advance (distinct=" + distinct + ", dups b2=" + b1dup + " b3=" + b2dup + ") → bookmarklet can't deep-page; cap honestly + use extension";
               resolve(out);
-              try { console.log("%c__dcProbeOffset RESULT", "color:#4338ca;font-weight:700", out); } catch (e) {}
               try { navigator.clipboard && navigator.clipboard.writeText(JSON.stringify(out, null, 2)); } catch (e) {}
             });
         });
@@ -16302,9 +16301,7 @@
   }
   try {
     window.__dcGetSegmentDef = function (segmentApiNameOrId, dataspace) {
-      return fetchSegmentDefViaExtension(segmentApiNameOrId, dataspace)
-        .then(function (r) { try { console.log("%c[dc segment-def] ok", "color:#0d9488"); console.log(JSON.stringify(r, null, 2)); } catch (e) {} return r; })
-        .catch(function (e) { try { console.log("%c[dc segment-def] ERROR: " + e.message, "color:#b45309"); } catch (_) {} throw e; });
+      return fetchSegmentDefViaExtension(segmentApiNameOrId, dataspace);
     };
   } catch (e) {}
   /* @strip:end */
@@ -21939,7 +21936,7 @@ processJSON();
    * The someday codebase optimization pass needs NUMBERS, not hunches. Our real bottleneck is
    * DOM crawls + retained nodes (not algorithmic big-O — our data sets are tiny). This counts
    * shadow-DOM crawls (+ nodes visited) and times decorate passes per module. ZERO cost unless
-   * turned on (window.__dcPerf.on()). Inspect with window.__dcPerf.report() (console.table).
+   * turned on (window.__dcPerf.on()). Inspect with window.__dcPerf.report() (returns the rows).
    * Modules opt in by calling __dcPerf.crawl('id', nodes) / __dcPerf.pass('id', fn) — guarded so
    * they no-op (and cost nothing) when the harness is off or absent in the public build.
    */
@@ -21948,7 +21945,7 @@ processJSON();
     function slot(label) { return stats[label] || (stats[label] = { crawls: 0, nodes: 0, passes: 0, totalMs: 0, maxMs: 0 }); }
     function now() { try { return (window.performance && performance.now) ? performance.now() : Date.now(); } catch (e) { return 0; } }
     var api = {
-      on: function () { ON = true; try { console.log("[dcPerf] ON — interact, then __dcPerf.report()"); } catch (e) {} return true; },
+      on: function () { ON = true; return true; },
       off: function () { ON = false; return false; },
       isOn: function () { return ON; },
       reset: function () { stats = {}; return true; },
@@ -21957,7 +21954,6 @@ processJSON();
       pass: function (label, fn) { if (!ON) return fn(); var t = now(); try { return fn(); } finally { var d = now() - t; var s = slot(label); s.passes++; s.totalMs += d; if (d > s.maxMs) s.maxMs = d; } },
       report: function () {
         var rows = Object.keys(stats).map(function (k) { var s = stats[k]; return { module: k, crawls: s.crawls, nodesVisited: s.nodes, passes: s.passes, avgMs: s.passes ? +(s.totalMs / s.passes).toFixed(2) : 0, maxMs: +s.maxMs.toFixed(2) }; });
-        try { console.table(rows); } catch (e) { try { console.log(rows); } catch (e2) {} }
         return rows;
       }
     };
@@ -22947,7 +22943,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.694"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.695"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -23045,7 +23041,6 @@ processJSON();
     }
     function markOrgBlocked() {
       try { localStorage.setItem(blockedKey(), "1"); } catch (e) { _memBlocked[blockedKey()] = true; }
-      /* @strip:start dev */ try { console.log("%c[dc usage] learned this org blocks the silent write → will try the beacon tab next time", "color:#b45309"); } catch (e) {} /* @strip:end */
     }
     // Beacon "dead" for this org — set when a beacon tab was opened but NEVER confirmed back (i.e. the
     // destination is blocked by a corporate web filter / shows a block page). Once dead, we stop opening
@@ -23055,7 +23050,6 @@ processJSON();
     }
     function markBeaconDead() {
       try { localStorage.setItem(beaconDeadKey(), "1"); } catch (e) { _memBeaconDead[beaconDeadKey()] = true; }
-      /* @strip:start dev */ try { console.log("%c[dc usage] beacon was blocked here (no confirmation) → disabling the beacon tab for this org (no more flashes)", "color:#b45309"); } catch (e) {} /* @strip:end */
     }
     // Listen ONCE for the /beacon page's confirmation. If it arrives, the beacon truly reached our worker
     // → clear any "dead" flag and remember it works. (Bound once per page via a window flag.)
@@ -23067,7 +23061,6 @@ processJSON();
             if (ev && ev.data && ev.data.__dcBeacon === "ok") {
               _beaconConfirmed[orgHost()] = true;
               try { localStorage.removeItem(beaconDeadKey()); } catch (e) {}
-              /* @strip:start dev */ try { console.log("%c[dc usage] beacon CONFIRMED by worker (stored=" + ev.data.stored + ") — beacon works in this org", "color:#0d9488"); } catch (e) {} /* @strip:end */
             }
           } catch (e) {}
         }, false);
@@ -23091,7 +23084,6 @@ processJSON();
         _beaconConfirmed[orgHost()] = false;   // reset; the /beacon page will flip this via postMessage
         var w = window.open(beaconUrl(feature), "dc_usage_beacon", "width=360,height=140,left=" + (screen.width - 380) + ",top=" + (screen.height - 220));
         if (w) {
-          /* @strip:start dev */ try { console.log("%c[dc usage] beacon tab opened for '" + feature + "' (locked-org fallback) — awaiting confirmation…", "color:#2563eb"); } catch (e) {} /* @strip:end */
           // If the worker's /beacon page doesn't confirm within 4s, the destination was blocked (corporate
           // web filter / block page) → mark the beacon dead for this org so we NEVER flash a tab here again.
           try {
@@ -23169,10 +23161,8 @@ processJSON();
             _inFlight[feature] = false;
             if (r && r.ok) {
               try { markSent(feature); } catch (e) {}            // throttle ONLY on confirmed success
-              /* @strip:start dev */ try { console.log("%c[dc usage] captured '" + feature + "' → HTTP " + r.status, "color:#0d9488"); } catch (e) {} /* @strip:end */
               return true;
             }
-            /* @strip:start dev */ try { console.log("%c[dc usage] NOT captured '" + feature + "' → HTTP " + (r && r.status) + " (not marked; will retry on next FAB open)", "color:#b45309"); } catch (e) {} /* @strip:end */
             return false;                                        // non-2xx → do NOT burn the throttle
           })
           .catch(function (err) {
@@ -23181,7 +23171,6 @@ processJSON();
             // uses the beacon-tab fallback (which must open synchronously on the gesture — can't do it
             // from here, this is async and the user-gesture is already gone). Do NOT burn the throttle.
             try { markOrgBlocked(); } catch (e2) {}
-            /* @strip:start dev */ try { console.log("%c[dc usage] FAILED '" + feature + "' → " + (err && err.message || err) + " (silent write blocked here; learned → beacon tab will be used next click. Throttle not burned.)", "color:#b45309"); } catch (e) {} /* @strip:end */
             return false;
           });
       } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
@@ -23199,7 +23188,6 @@ processJSON();
         if (optedOut()) return false;              // user choice wins
         var feature = pingPageType();
         if (sentToday(feature)) {                  // THIS feature already captured today
-          /* @strip:start dev */ try { console.log("%c[dc usage] '" + feature + "' already captured today (throttled) — no re-send", "color:#64748b"); } catch (e) {} /* @strip:end */
           return false;
         }
         if (orgKnownBlocked()) {
@@ -23207,7 +23195,6 @@ processJSON();
           // destination), do NOT open a tab — the user would just get a scary "Unauthorized Access"
           // flash with no capture. Give up silently (this org simply can't be measured externally).
           if (beaconDead()) {
-            /* @strip:start dev */ try { console.log("%c[dc usage] org blocks both the silent write AND the beacon — not capturable externally here (no tab shown)", "color:#64748b"); } catch (e) {} /* @strip:end */
             return false;
           }
           // beacon not yet known-dead → try it ONCE (synchronous, inside the click gesture). If it turns
