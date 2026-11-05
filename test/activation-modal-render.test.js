@@ -74,7 +74,7 @@ if(process.env.DBG){const a=html.indexOf(">Attributes<");console.log(html.slice(
 
 const tdiPanel=grp.slice(grp.indexOf("Global Exclusion In"), grp.indexOf("Global Exclusion In")+6000);
 must("each filter condition is its own numbered chip (2 conditions → 2 chips, field + operator separated)", /Global Exclusion In<\/b> <span[^>]*>Equals<\/span>/.test(tdiPanel) && /Segment Code<\/b> <span[^>]*>Has Value<\/span>/.test(tdiPanel));
-must("path hops are separate numbered steps joined by an arrow", /&rarr;/.test(tdiPanel) && /A\.Id/.test(tdiPanel) && /TDI\.Info/.test(tdiPanel));
+must("path hops are separate labelled 'Step N' rows; no Join Path column; filters unnumbered with a count", /Step 1/.test(tdiPanel) && /Step 2/.test(tdiPanel) && !/Join Path/.test(grp) && /2 conditions/.test(tdiPanel) && /A\.Id/.test(tdiPanel) && /TDI\.Info/.test(tdiPanel));
 must("Doc carries the same panel with the table before it", docOut.indexOf("Equals")>docOut.indexOf("Global Exclusion In"));
 
 const osFn=new Function(grab("docActObjSettings")+"\nreturn docActObjSettings;")();

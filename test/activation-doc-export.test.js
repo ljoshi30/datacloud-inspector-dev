@@ -380,7 +380,7 @@ function newAccum() { return { outputByUid: {}, staticRows: [], contactPoint: nu
 function docActCsv(data) {
   function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
   var lines = [];
-  lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].map(q).join(","));
+  lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
   data.attributes.forEach(function (a) { lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path].map(q).join(",")); });
   return lines.join("\r\n");
 }
@@ -803,13 +803,13 @@ console.log("\n8. CSV is ATTRIBUTES-ONLY now (per user): 5 columns, one row per 
   var out = docActScrapeOver([summaryEl(), channelEl()], acc);   // full picture
   var csv = docActCsv(out);
   var rows = csv.split("\r\n");
-  eq("header is the attribute columns incl. Join Path", rows[0], "Label,Field API,Object / DMO API,Output Name,Category,Join Path");
+  eq("header is the attribute columns (no Join Path)", rows[0], "Label,Field API,Object / DMO API,Output Name,Category");
   ok("CRLF line endings (Excel-friendly)", csv.indexOf("\r\n") !== -1);
   eq("exactly header + one row per attribute (3 attrs → 4 lines)", rows.length, 4);
   ok("no Overview/Contact Point/Static Value rows in the CSV", !/Overview|Contact Point|Static Value/.test(csv));
   ok("field API name present in CSV", csv.indexOf("ssot__EmailAddress__c") !== -1);
   ok("output name present in CSV", /,email,/.test(csv));
-  ok("Join Path column present in CSV", rows[0].indexOf("Join Path") !== -1);
+  ok("Join Path column absent from CSV", rows[0].indexOf("Join Path") === -1);
   // a value containing a comma must still be quoted
   var out2 = { attributes: [{ label: "A, B, C", fieldApi: "X__c", objectApi: "Y__dlm", outputName: "", category: "" }] };
   ok("comma-bearing value is CSV-quoted", docActCsv(out2).indexOf('"A, B, C"') !== -1);
@@ -894,7 +894,7 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
   ok("launcher is rebuild-aware so the dev row appears after the dev block registers the fn", /function ensureActivationLauncher\(rebuild\)/.test(src) && /ensureActivationLauncher\(true\)/.test(src));
   ok("CSV + Excel (MiniXLSX) exports wired", /function docActCsv/.test(src) && /function docActExcel/.test(src) && /SEGX\.MiniXLSX/.test(src));
   ok("Copy-table button REMOVED per feedback", !/Copy table/.test(src));
-  ok("CSV header carries Join Path in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category", "Join Path"\]/.test(src));
+  ok("CSV header has no Join Path in source", /\["Label", "Field API", "Object \/ DMO API", "Output Name", "Category"\]/.test(src));
   ok("no '(unspecified)' / separate system group: system rows fold into Attributes", !/\(unspecified\)/.test(src) && !/System fields \(added by Salesforce\)/.test(src) && /sysRows/.test(src));
   ok("honest 'captured vs not yet visited' status in the modal", /not yet visited|captured|Visit the/.test(src) && /captured\.outputNames/.test(src));
   ok("static-values explanatory tooltip present", /fixed constant value sent on every activated record/.test(src));

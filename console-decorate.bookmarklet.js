@@ -20554,9 +20554,9 @@ processJSON();
       function docActCsv(data) {
         function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
         var lines = [];
-        lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].map(q).join(","));
+        lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
         data.attributes.forEach(function (a) {
-          lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category, a.path].map(q).join(","));
+          lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category].map(q).join(","));
         });
         return lines.join("\r\n");
       }
@@ -20672,7 +20672,7 @@ processJSON();
 
         var ws2 = wb.addWorksheet("Attributes");
         ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 30; ws2.getColumn(3).width = 30; ws2.getColumn(4).width = 32; ws2.getColumn(5).width = 30; ws2.getColumn(6).width = 16; ws2.getColumn(7).width = 90;
-        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category", "Join Path"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
+        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
         data.attributes.forEach(function (a, i) {
           var r = i + 2;
           ws2.getCell(r, 1).value = i + 1;
@@ -20681,7 +20681,6 @@ processJSON();
           ws2.getCell(r, 4).value = a.objectApi || "";
           ws2.getCell(r, 5).value = a.outputName || "";
           ws2.getCell(r, 6).value = a.category || "";
-          ws2.getCell(r, 7).value = a.path || "";
         });
 
         var ws3 = wb.addWorksheet("Contact Points");
@@ -20947,15 +20946,15 @@ processJSON();
           }
           // Below the table: Filters (numbered conditions) and Path (numbered steps).
           function metaBox(flt, pth, hint) {
-            var th = "padding:7px 12px;width:84px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #eef0f2;" + lblTxt;
-            var td = "padding:7px 12px;vertical-align:top;border-bottom:1px solid #eef0f2;font:500 12px/1.6 system-ui;color:#181818;";
+            var th = "padding:12px 14px;width:84px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #eef0f2;" + lblTxt;
+            var td = "padding:12px 14px;vertical-align:top;border-bottom:1px solid #eef0f2;font:500 12px/1.6 system-ui;color:#181818;";
             var chip = "display:inline-block;margin:0 6px 4px 0;padding:2px 8px;border:1px solid #d8dde3;border-radius:5px;background:#fff;";
             var rows = "";
             if (flt) {
               var conds = (flt.conditions || []).filter(function (c) { return c.text || c.field; });
-              var fb = flt.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;margin-right:8px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
+              var fb = flt.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;margin-right:8px;'>Filtered" + (conds.length ? " &middot; " + conds.length + (conds.length === 1 ? " condition" : " conditions") : "") + "</span><br>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
               var cc = conds.map(function (c, i) {
-                return "<span style='" + chip + "'><span style='color:#8a8a8a;'>" + (i + 1) + "</span> " + (c.text ? docActEsc(c.text) : "<b>" + docActEsc(c.field) + "</b> <span style='color:#0b5cab;'>" + docActEsc(c.operator) + "</span>") + "</span>";
+                return "<span style='" + chip + "'>" + (c.text ? docActEsc(c.text) : "<b>" + docActEsc(c.field) + "</b> <span style='color:#0b5cab;'>" + docActEsc(c.operator) + "</span>") + "</span>";
               }).join("");
               var note = (flt.hasFilter && !conds.length) ? "<span style='font:500 11px system-ui;color:#8a6d00;'>conditions not captured — open this object's Edit Filters once, then re-run</span>" : "";
               rows += "<tr><th style='" + th + "'>Filters</th><td style='" + td + "'>" + fb + cc + note + "</td></tr>";
@@ -20964,7 +20963,7 @@ processJSON();
               var steps = String(pth.text).split(/\s>\s/).filter(Boolean);
               var pc = steps.map(function (st, i) {
                 var parts = st.split(/,\s/).filter(Boolean);
-                return "<span style='" + chip + "background:#f7f9fb;'><span style='color:#8a8a8a;'>" + (i + 1) + "</span> " + parts.map(docActEsc).join("<br>&nbsp;&nbsp;&nbsp;") + "</span>" + (i < steps.length - 1 ? "<span style='color:#8a8a8a;margin-right:6px;'>&rarr;</span>" : "");
+                return "<div style='margin:0 0 5px;'><span style='display:inline-block;min-width:48px;font:600 11px system-ui;color:#8a8a8a;'>Step " + (i + 1) + "</span><span style='" + chip + "background:#f7f9fb;'>" + parts.map(docActEsc).join("<br>") + "</span></div>";
               }).join("");
               rows += "<tr><th style='" + th + "'>Path</th><td style='" + td + "'>" + pc + "</td></tr>";
             }
@@ -20999,17 +20998,17 @@ processJSON();
             var limHtml = limBox(lim);
             var metaHtml = metaBox(flt, pth, (!pth && isCpObj(en) && !(data.contactPoints || []).length) ? "Set on the Contact Points step — open that step once, then re-run to capture it." : "");
             if (!rows.length) return gh + limHtml + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div>" + metaHtml + "</div>";
-            gh += limHtml + "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:4%'><col style='width:24%'><col style='width:25%'><col style='width:20%'><col style='width:27%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
+            gh += limHtml + "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:5%'><col style='width:35%'><col style='width:32%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
               + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
-              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Join Path</th></tr></thead><tbody>";
+              + "</tr></thead><tbody>";
             rows.forEach(function (a, ri) {
               gh += "<tr><td style='padding:6px 6px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + (ri + 1) + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.objectApi && docActObjKind(a.objectApi) === "CI" ? "<div style='margin-top:3px;'>" + docActApiChip(a.objectApi) + "</div>" : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
                 + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
-                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 11px/1.4 system-ui;color:#444;word-break:break-word;'>" + (a.path ? e(a.path) : "") + "</td></tr>";
+                + "</tr>";
             });
             gh += "</tbody></table></div>" + metaHtml + "</div>";
           return gh; }
