@@ -2,7 +2,7 @@
 // Reads bookmarklet.txt (uncompressed, the shipped one), writes bookmarklet-gzip.txt.
 const fs = require("fs"), zlib = require("zlib");
 const bm = fs.readFileSync("bookmarklet.txt", "utf8").trim().replace(/^javascript:/, "");
-const m = bm.match(/^eval\(decodeURIComponent\(atob\(%22([^%]+)%22\)\)\)$/);
+const m = bm.match(/^eval\(decodeURIComponent\(atob\(%22(.+)%22\)\)\)$/);
 if (!m) throw new Error("unexpected bookmarklet shape");
 const js = decodeURIComponent(Buffer.from(decodeURIComponent(m[1]), "base64").toString("binary"));
 const gz = zlib.gzipSync(Buffer.from(js, "utf8"), { level: 9 }).toString("base64");
