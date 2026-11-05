@@ -3235,10 +3235,8 @@
   // On detail pages, show a single "Download fields CSV" button instead.
   // ── Segment rules readers ─────────────────────────────────────────────────
 
-  /* @strip:start dev
-   * IN-DEVELOPMENT FEATURES — Segment rule export + Data Explorer column tooling.
-   * Physically removed from the public build by build.js (@strip markers). The
-   * full source keeps them so we can keep iterating; do not remove the markers. */
+  /* Segment export + Data Explorer (public). The SQL-export helpers, the transform viewer and the Query Editor tooling
+   * inside this region are wrapped in their own strip blocks below and stay dev-only. */
   function shadowEls(el) {
     try { const sr = el.shadowRoot; if (!sr) return []; return Array.from(sr.querySelectorAll("*")); } catch (e) { return []; }
   }
@@ -5408,6 +5406,7 @@
   })();
 
 
+  /* @strip:start dev */
   /* ── Segment criteria → APPROXIMATE Data Cloud SQL (dev-only; already inside the dev-gated segment
    *    region, so NO own @strip markers — nesting @strip blocks breaks the non-greedy stripper) ──
    * Translates the captured condition TREE (the same {type:set|simple|aggregation|ci|nested-segment}
@@ -5884,6 +5883,7 @@
     if (!where) return header + "-- (no include criteria)";
     return header + "SELECT *\nFROM " + from + "\nWHERE " + where + ";";
   }
+  /* @strip:end */
 
   // ── Segment export modal ──────────────────────────────────────────────────
 
@@ -6444,7 +6444,7 @@
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
         "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
         "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
-        "<button class='sec' id='dc-d-sql' title='Copy this tab&apos;s criteria as SQL. With the extension it uses Salesforce&apos;s real stored criteria (accurate joins/operators); as a bookmarklet it reconstructs from the page (approximate).'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL</button>" +
+/* @strip:start dev */"<button class='sec' id='dc-d-sql' title='Copy this tab&apos;s criteria as SQL. With the extension it uses Salesforce&apos;s real stored criteria (accurate joins/operators); as a bookmarklet it reconstructs from the page (approximate).'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL</button>" +/* @strip:end */
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
@@ -6523,6 +6523,7 @@
       }
     })();
 
+    /* @strip:start dev */
     // Copy APPROXIMATE SQL for the CURRENT tab's criteria tree (illustrative — verify before running).
     // (dev-only via the enclosing segment region — no own @strip marker; nesting @strip breaks the stripper.)
     (function () {
@@ -6636,6 +6637,7 @@
           });
       };
     })();
+    /* @strip:end */
 
     detailExportEl.querySelector("#dc-d-copy").onclick = (e) => {
       const d = tabData[currentModalTab] || {};
@@ -8801,6 +8803,7 @@
     buildChunk();
   }
 
+  /* @strip:start dev */
   // ── "Understand this transform" — plain-language view of a Data Transform ──────
   // Reads the definition (batch node-graph or streaming SQL) and renders sources →
   // steps/joins → output, so you don't have to read raw JSON. Extension-only (the read
@@ -9545,6 +9548,7 @@
       xfHdr.addEventListener("pointerup", function () { _xfDragging = false; });
     }
   }
+  /* @strip:end */
 
   // Render the tool's OWN full-width, scrollable results table showing EVERY selected
   // column with real data (from one queryAllColumns call). This is what removes the
@@ -11426,7 +11430,7 @@
     sortBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:#1e3a5f;white-space:nowrap;flex-shrink:0;";
     const updateSortLabel = () => { sortBtn.textContent = sortAsc ? "A → Z" : "Z → A"; };
     updateSortLabel();
-    sortBtn.onclick = () => { sortAsc = !sortAsc; updateSortLabel(); renderList(searchInput.value); };
+    sortBtn.onclick = () => { sortAsc = !sortAsc; updateSortLabel(); if (activeTab === "available") renderAvailable(searchInput.value); };
 
     searchRow.appendChild(searchInput);
     searchRow.appendChild(sortBtn);
@@ -11734,6 +11738,8 @@
 
     // ── SOQL Editor panel ─────────────────────────────────────────────────────
     let soqlPanelEl = null;
+    // LIKE-escape for the filter fallback below (the sibling copy lives in showAllColumnsTable's scope, not this one).
+    function escapeLike(s) { return s.replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_"); }
     let soqlAcDropEl = null;
     // _savedSoqlText / _savedSoqlRanOk / _savedSoqlObjName are module-scoped (declared above
     // showAllColumnsTable) so background rebuilds of _buildExploreModal don't reset them.
@@ -11896,7 +11902,7 @@
         }
         // Use current rowsInput value as the LIMIT (editable by user)
         var lim = DC_MAX_FETCH_ROWS;
-        try { var ri = panel.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
+        try { var ri = soqlPanelEl && soqlPanelEl.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
         return "SELECT " + fieldStr + "\nFROM " + sqlQuoteIdent(from) + whereClause + "\nLIMIT " + lim;
       };
 
@@ -12037,7 +12043,7 @@
             runBtn.disabled = false; runBtn.style.opacity = "1";
             var connectWrap = document.createElement("div");
             connectWrap.style.cssText = "margin-top:8px;";
-            var statusEl = panel.querySelector(".dc-soql-status") || panel;
+            var statusEl = (soqlPanelEl && soqlPanelEl.querySelector(".dc-soql-status")) || soqlPanelEl;
             statusEl.textContent = "";
             statusEl.appendChild(connectWrap);
             renderConnectButton(connectWrap, function () { runBtn.click(); });
@@ -12722,6 +12728,7 @@
   // so no background watcher is needed — object changes are handled on demand.
   function watchExploreObjectChange() { /* no-op: was a costly idle poll; removed for perf */ }
 
+  /* @strip:start dev */
   // ── Data Transform launcher (FAB) ─────────────────────────────────────────
   // The transform editor is a standalone Aura app; we add a minimal launcher with a
   // single "Understand this transform" action that reads the definition (extension
@@ -15905,6 +15912,7 @@
     wrap.appendChild(fab); wrap.appendChild(btnRow); wrap.appendChild(card);
     document.body.appendChild(wrap);
   }
+  /* @strip:end */
 
   // ── Data Explore launcher (FAB) ───────────────────────────────────────────
   function ensureExploreLauncher() {
@@ -16012,7 +16020,7 @@
 
     watchExploreObjectChange();
   }
-  /* @strip:end */
+  // (end of Data Explorer / Segment export region)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // Activation Export feature (extension-only)
@@ -16115,6 +16123,9 @@
     return result;
   }
 
+  // Declared here (hoisted, unassigned) so reads are safe in the PUBLIC build, where the dev block that
+  // assigns them is stripped. Previously an unguarded read threw ReferenceError there.
+  var _auraSniff, _dcBridgeSeq;
   function fetchActivationViaAura(activationId) {
     return new Promise(function(resolve, reject) {
       // Capture Aura token by intercepting XHR (same approach as our successful probes)

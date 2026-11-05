@@ -617,6 +617,15 @@ function verifyHtml(html, loader, label) {
 // Bookmarklet payload comes from the BOOKMARKLET source (already ext-only-free, per
 // the drift check). Public = that source with in-dev @strip blocks removed.
 const publicBmCode = stripDev(bmSource);
+// ---- PUBLIC RELEASE GUARD: deferred features must never reach the public payload ----
+(function publicGuard() {
+  const banned = ["Copy SQL", "dc-d-sql", "segmentTreeToSql", "segmentApiCriteriaToSql"];
+  const hit = banned.filter(function (b) { return publicBmCode.indexOf(b) !== -1; });
+  if (hit.length) {
+    console.error("ERROR: deferred feature code leaked into the PUBLIC build: " + hit.join(", ") + " — aborting.");
+    process.exit(1);
+  }
+})();
 const pub = makePayload(minifyForBookmarklet(publicBmCode, "public"), "public");
 fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);

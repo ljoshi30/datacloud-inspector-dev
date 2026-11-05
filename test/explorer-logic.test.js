@@ -209,10 +209,29 @@ function dcDistinctValues(rows, fieldName) {
   ok("dcDistinctValues present in source", /function dcDistinctValues\(rows, fieldName\)/.test(src));
   ok("distinct-values popover present (Σ button → copyable list + Copy IN)", /function dcShowDistinct/.test(src) && /Copy IN/.test(src) && /thDistinct/.test(src));
   ok("distinct computed from loaded rows, warns when set is incomplete", /rows\.__serverRowCount && rows\.__serverRowCount > rows\.length/.test(src));
-  ok("Data Explorer distinct code is dev-only (stripped from the public bookmarklet)", (function () {
+  ok("Data Explorer distinct code SHIPS in the public bookmarklet (release decision: Data Explorer is public)", (function () {
     var bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
     var stripped = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
-    return /function dcDistinctValues/.test(bm) && !/function dcDistinctValues/.test(stripped);
+    return /function dcDistinctValues/.test(stripped) && /function showAllColumnsTable/.test(stripped) && /function ensureExploreLauncher/.test(stripped);
+  })());
+  ok("Segment export SHIPS public, but Copy SQL is DEFERRED: no SQL generators, button or handler in the public payload", (function () {
+    var bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+    var stripped = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
+    return /function openSegmentExport/.test(stripped)
+      && !/segmentTreeToSql|segmentApiCriteriaToSql|dc-d-sql|Copy SQL|Copy APPROXIMATE SQL/.test(stripped);
+  })());
+  ok("Copy SQL stays in the dev build (so it can keep being fixed)", (function () {
+    var bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+    return /function segmentTreeToSql/.test(bm) && /function segmentApiCriteriaToSql/.test(bm) && /dc-d-sql/.test(bm);
+  })());
+  ok("Query Editor tooling + transform viewer remain dev-only (not in this release)", (function () {
+    var bm = fs.readFileSync(path.join(__dirname, "..", "console-decorate.bookmarklet.js"), "utf8");
+    var stripped = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
+    return /function openQeDiffModal/.test(bm) && !/function openQeDiffModal|function showTransformSummary|function ensureQueryEditorLauncher/.test(stripped);
+  })());
+  ok("build.js has the public-release guard that aborts if Copy SQL leaks", (function () {
+    var b = fs.readFileSync(path.join(__dirname, "..", "build.js"), "utf8");
+    return /publicGuard/.test(b) && /"Copy SQL"/.test(b) && /process\.exit\(1\)/.test(b.slice(b.indexOf("publicGuard")));
   })());
 }
 
