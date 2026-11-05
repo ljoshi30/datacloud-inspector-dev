@@ -42,7 +42,7 @@ console.log("\n2. Dev-only accordion rows are gated behind includeDev");
   // The open-in-new-tab row covers ALL lists + nav and documents the lookup-column safeguard.
   ok("new-tab row describes ALL lists/nav + the lookup-column safeguard",
     /in <b>any<\/b> object list/.test(b) && /ignores lookup columns/.test(b));
-  ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{devRows\}/.test(b));
+  ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{includeDev \? "" : explorerRowPub \+ segmentRowPub\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
   ok("ERD is dev-only (not in the always-shared rows)", !/sharedRows[\s\S]{0,600}Data Model \(ERD\)/.test(b));
@@ -50,7 +50,7 @@ console.log("\n2. Dev-only accordion rows are gated behind includeDev");
 
 console.log("\n3. The forbidden list covers the stripped features + internal examples");
 {
-  ok("guards against a Segment accordion row", /acc-nm">Segment</.test(b));
+  ok("Data Explorer + Segment export are released: public page carries them, Copy SQL is guarded", /explorerRowPub/.test(b) && /segmentRowPub/.test(b) && /\/Copy SQL\//.test(b));
   ok("guards against Data Model (ERD) leaking public", /Data Model \\\(ERD\\\)/.test(b));
   ok("guards against a Data Graph accordion row (dev-only)", /acc-nm">Data Graph</.test(b));
   ok("guards against a Formula-fields accordion row (dev-only)", /acc-nm">Formula fields/.test(b));

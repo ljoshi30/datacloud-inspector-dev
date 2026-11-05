@@ -42,7 +42,7 @@ function assertNoInternal(dir) {
   const inj = path.join(dir, "inject.js");
   if (!fs.existsSync(inj)) return;
   const code = fs.readFileSync(inj, "utf8");
-  ["function openSegmentExport", "function ensureExploreLauncher"].forEach((sym) => {
+  ["function segmentTreeToSql", "function segmentApiCriteriaToSql"].forEach((sym) => {
     if (code.includes(sym)) {
       console.error("ERROR: public extension inject.js still defines '" + sym + "' — refusing to publish. Rebuild with `node build.js`.");
       process.exit(1);

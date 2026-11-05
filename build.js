@@ -160,8 +160,8 @@ try { new Function(publicCode); } catch (e) {
   console.error("ERROR: public (stripped) code has a syntax error: " + e.message + "; aborting.");
   process.exit(1);
 }
-// sanity: no in-dev entry points survive in the public code
-["openSegmentExport", "ensureExploreLauncher", "openExploreModal", "readSegmentRules", "openFocusPanel", "hideOtherForDmo", "segApiInfo", "toggleSegApi", "segBuildUidResolver"].forEach(sym => {
+// sanity: no in-dev entry points survive in the public code (Data Explorer + Segment export are now public by decision; list only what must stay dev-only)
+["openFocusPanel", "hideOtherForDmo", "segApiInfo", "toggleSegApi", "segBuildUidResolver"].forEach(sym => {
   if (new RegExp("function\\s+" + sym + "\\b").test(publicCode)) {
     console.error("ERROR: in-dev function '" + sym + "' still defined in public build; aborting.");
     process.exit(1);
@@ -246,7 +246,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
         <div class="acc-body">${desc}</div>
       </details>`;
   }
-  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"]
+  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment"])
     .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
@@ -290,6 +290,25 @@ function makeHtml(hrefSafe, includeDev, buildId) {
     "<span class=\"gi\"><b>Credits:</b> Data Cloud bills by rows <b>processed</b> (scanned), not returned &mdash; a heavy JOIN or GROUP BY can cost more than its result size suggests. The toolbar shows your org&rsquo;s rate and an estimate, and <b>reuses results</b>: re-running the same query or re-downloading a fetched file is free, and re-running an Export ALL warns you first so you don&rsquo;t pay twice.</span>" +
     "<span class=\"gi\"><b>Big results:</b> a CSV holds any number of rows, but Excel caps at ~<b>1,048,576</b> rows and Google Sheets at ~<b>10&nbsp;million cells</b>. Past that, export in slices (e.g. by date range) &mdash; the tool warns you before you&rsquo;d silently lose data.</span>");
 
+  // Public rows released from dev: Data Explorer + Segment export (no hover API names, no Copy SQL).
+  const explorerRowPub =
+    acc("&#128202;", "Data Explorer", ["Columns", "Distinct values", "Export CSV"],
+      "<p><b>The gap:</b> Data Explorer shows only ~10 columns at a time and a small slice of rows &mdash; hard to see or take the whole picture.</p>" +
+      "<ul>" +
+      "<li><b>Columns</b> &mdash; choose exactly which fields to show (well past the 10-column limit), reorder them, and save the set for next time; then view all their data in one table.</li>" +
+      "<li><b>Sort, multi-filter, and a live row count</b> on the results, plus <b>Edit SQL</b> to tweak the underlying query.</li>" +
+      "<li><b>Distinct values (&Sigma;)</b> &mdash; hover a column header, click <b>&Sigma;</b>, and get every distinct value in that column with its row count, each with <b>Copy</b> (plus <b>Copy IN (&hellip;)</b> for all of them). The fast way to grab a value for a WHERE clause instead of querying records to find it. Computed from the loaded rows &mdash; instant, no credits.</li>" +
+      "<li><b>Export CSV</b> &mdash; download the rows, fetched in batches up to <b>500,000</b>, cancellable partway.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">Saved column choices stay in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>");
+  const segmentRowPub =
+    acc("&#127937;", "Segment", ["Export Rules", "Container Path"],
+      "<p><b>The gap:</b> the segment builder shows rules by friendly <b>label</b> &mdash; but the same label can mean different fields on different objects, so you can&rsquo;t be sure which field a rule actually targets. The <b>API name</b> makes it exact &mdash; and there&rsquo;s no way to take the rules with you.</p>" +
+      "<ul>" +
+      "<li><b>Export</b> every condition &mdash; Include, Exclude, Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters intact, plus object and field API-name columns. Colored <b>Excel</b> or <b>Copy for Sheets</b> for review, or a flat <b>CSV</b> built for scripts/automation (every row fully filled &mdash; tab, group #, join, condition #, API names &mdash; no merged cells).</li>" +
+      "<li><b>Container Path</b> shows which related record a rule actually points at, read straight from the open edit panel.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">Everything is read from what&rsquo;s on screen &mdash; the Container Path is never reconstructed or guessed; if Data Cloud doesn&rsquo;t show it, neither does the tool.</span>");
   const devRows = !includeDev ? "" :
     acc("&#128376;&#65039;", "Data Graph", ["Hover", "Filters", "Copy"],
       "<p><b>The gap:</b> the Data Graph builder shows only <b>labels</b> for the objects and fields you add &mdash; and labels repeat. So as you build, you can&rsquo;t be sure which exact field you selected, or which one a filter is on. The unique <b>API name</b> tells you &mdash; but it&rsquo;s nowhere on screen. Turn on <b>API names</b> from the &#9678; button (bottom-right).</p>" +
@@ -363,8 +382,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li>Hover any <b>left-menu or top-bar</b> item for the same <b>&#10697;</b> &mdash; covers every destination, including newer ones.</li>" +
       "</ul>" +
       "<span class=\"gi\">It reads each row&rsquo;s own record id and ignores lookup columns (e.g. a &ldquo;Data Space&rdquo; cell), so it always opens the row&rsquo;s record &mdash; never a related one. Works as you navigate, no re-clicking needed.</span>");
-  const roadmapNote = includeDev ? "" : `
-    <p style="font-size:12px;color:var(--muted);margin:12px 2px 0"><strong>Coming soon:</strong> segment rule export &amp; Data Explorer column tooling &mdash; rolling out in upcoming versions.</p>`;
+  const roadmapNote = "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -494,7 +512,7 @@ ${includeDev ? "" : `<!-- Cloudflare Web Analytics (PUBLIC install page ONLY —
     <h2>What it does, page by page</h2>
     <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Open any Data Cloud page below and the launcher shows just that page&rsquo;s tools. Each row names the Data Cloud gap it closes &mdash; click to expand. Everything is read-only.</p>
     <div class="chips" style="margin-bottom:10px">${chips}</div>
-    ${sharedRows}${devRows}
+    ${sharedRows}${includeDev ? "" : explorerRowPub + segmentRowPub}${devRows}
     <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Panels are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; click the bookmark again to remove the tool completely.</p>${roadmapNote}
   </div>
   <details class="acc" style="margin-top:16px">
@@ -638,8 +656,6 @@ verifyHtml(pubHtml, pub.loader, "public");
   // Dev-only page/feature names & buttons that must never appear on the public page,
   // in ANY markup (accordion row name, chip, or button pill).
   const forbidden = [
-    [/acc-nm">Data Explorer</, "Data Explorer accordion row (stripped from public)"],
-    [/acc-nm">Segment</, "Segment accordion row (stripped from public)"],
     [/acc-nm">Query Editor</, "Query Editor accordion row (stripped from public)"],
     [/acc-nm">Data Transform</, "Data Transform accordion row (stripped from public)"],
     [/Data Model \(ERD\)/, "Data Model / ERD (dev-only, stripped from public)"],
@@ -651,9 +667,7 @@ verifyHtml(pubHtml, pub.loader, "public");
     [/chip">Data Space Filters</, "Data Space Filters chip (dev-only, stripped from public)"],
     [/acc-nm">Identity Resolution/, "Identity Resolution accordion row (dev-only, stripped from public)"],
     [/chip">Identity Resolution</, "Identity Resolution chip (dev-only, stripped from public)"],
-    [/chip">Data Explorer</, "Data Explorer chip (stripped from public)"],
-    [/chip">Segment</, "Segment chip (stripped from public)"],
-    [/Export Rules/, "Export Rules launcher (Segment)"],
+    [/Copy SQL/, "Segment Copy SQL (deferred)"],
     [/Export ALL/, "Export ALL launcher (Query Editor)"],
     [/Helpful Queries/, "Helpful Queries launcher (Query Editor)"],
     [/View Definition/, "View Definition launcher (Data Transform)"],
