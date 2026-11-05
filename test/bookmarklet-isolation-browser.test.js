@@ -8,7 +8,7 @@ const T=(p,ms)=>Promise.race([p,new Promise(r=>setTimeout(()=>r(null),ms))]);
 let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?"  ✓ ":"  ✗ ")+n+(c||!x?"":"  -> "+x))};
 async function run(file){
   const bm=fs.readFileSync(path.join(root,file),"utf8").trim().replace(/^javascript:/,"");
-  const expr=file.includes("gzip")?bm:decodeURIComponent(bm);
+  const expr=decodeURIComponent(bm);
   const srv=http.createServer((q,s)=>{s.setHeader("content-type","text/html");s.end("<!doctype html><body><h1 id=host>host</h1><style>#host{color:red}</style>")});
   await new Promise(r=>srv.listen(0,r));
   const dbg=9600+Math.floor(Math.random()*150),prof=fs.mkdtempSync("/tmp/chr-sm-");
@@ -48,6 +48,6 @@ async function run(file){
 }
 (async()=>{
   await run("bookmarklet.txt");
-  if(fs.existsSync(path.join(root,"bookmarklet-gzip.txt")))await run("bookmarklet-gzip.txt");
+  await run("bookmarklet-full.txt");
   console.log(fail?"\n❌ "+pass+" passed, "+fail+" failed":"\n✅ ALL PASS: "+pass);process.exit(fail?1:0);
 })();

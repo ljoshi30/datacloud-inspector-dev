@@ -10,7 +10,7 @@ let pass=0,fail=0;const ok=(n,c,x)=>{c?pass++:fail++;console.log((c?"  ✓ ":"  
 const HOOK=`window.__pings=[];var _f=window.fetch;window.fetch=function(u,o){try{window.__pings.push({k:"fetch",u:String(u&&u.url||u),b:String(o&&o.body||"")})}catch(e){}return Promise.resolve(new Response("{}",{status:200}))};var _o=window.open;window.open=function(u){window.__pings.push({k:"open",u:String(u),b:""});return null};var _sb=navigator.sendBeacon;navigator.sendBeacon=function(u,b){window.__pings.push({k:"beacon",u:String(u),b:String(b)});return true};var _x=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(b){window.__pings.push({k:"xhr",u:"",b:String(b)});};`;
 async function run(file,optOut){
   const bm=fs.readFileSync(path.join(root,file),"utf8").trim().replace(/^javascript:/,"");
-  const expr=decodeURIComponent(bm);
+  const expr=decodeURIComponent(bm);const gz=true;
   const srv=http.createServer((q,s)=>{s.setHeader("content-type","text/html");s.end("<!doctype html><body><h1>x</h1>")});
   await new Promise(r=>srv.listen(0,r));
   const dbg=9300+Math.floor(Math.random()*150),prof=fs.mkdtempSync("/tmp/chr-sm-");
@@ -25,7 +25,7 @@ async function run(file,optOut){
   await send("Page.navigate",{url:"http://127.0.0.1:"+srv.address().port+"/lightning/r/DataStream/1234567890abcde/view"});
   await new Promise(r=>setTimeout(r,500));
   if(optOut)await ev("localStorage.setItem('dc_usage_optout','1');typeof __dcUsageOptOut==='function'");
-  await T(send("Runtime.evaluate",{expression:expr}),20000);await new Promise(r=>setTimeout(r,700));
+  await T(send("Runtime.evaluate",{expression:expr,awaitPromise:true}),20000);await new Promise(r=>setTimeout(r,900));
   if(optOut)await ev("typeof window.__dcUsageOptOut==='function'&&window.__dcUsageOptOut()");
   const before=JSON.parse(await ev("JSON.stringify(window.__pings)")||"[]").length;
   const click="(function(){var f=document.getElementById('dc-fab');if(!f)return 'nofab';f.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true}));return 'clicked'})()";

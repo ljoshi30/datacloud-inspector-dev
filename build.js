@@ -197,6 +197,7 @@ try { new Function(publicCode); } catch (e) {
 // Runtime loader decodes in reverse and evals. atob() means NO percent signs in
 // the payload, avoiding the double-decode trap on javascript: URLs.
 function makePayload(code, label) {
+  // (1) plain loader — still used for console-decorate*.min.js (DevTools-console paste file).
   const enc = encodeURIComponent(code);
   const b64 = Buffer.from(enc, "latin1").toString("base64");
   const loader = 'eval(decodeURIComponent(atob("' + b64 + '")))';
@@ -209,13 +210,26 @@ function makePayload(code, label) {
     console.error("ERROR [" + label + "]: unexpected char in base64 payload; aborting.");
     process.exit(1);
   }
-  const bm = "javascript:" + encodeURIComponent(loader);
-  if (decodeURIComponent(bm.replace(/^javascript:/, "")) !== loader) {
+  // (2) the BOOKMARKLET: gzip-compressed payload + a tiny DecompressionStream loader. ~5x smaller than
+  // the plain bookmarklet, leaving room under the browser's 2 MB bookmark-URL cap. Needs
+  // DecompressionStream (Chrome/Edge 80+, Firefox 113+). No fallback bookmarklet is offered (product
+  // decision); on an unsupported browser the user gets a clear message instead of a silent failure.
+  const gz = require("zlib").gzipSync(Buffer.from(code, "utf8"), { level: 9 });
+  const gzb64 = gz.toString("base64");
+  if (require("zlib").gunzipSync(Buffer.from(gzb64, "base64")).toString("utf8") !== code) {
+    console.error("ERROR [" + label + "]: gzip payload does not round-trip; aborting.");
+    process.exit(1);
+  }
+  const bmLoader = 'void(async function(){try{var a=atob("' + gzb64 + '"),b=new Uint8Array(a.length),i=0;for(;i<a.length;i++)b[i]=a.charCodeAt(i);' +
+    'var t=await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream("gzip"))).text();(0,eval)(t)}' +
+    'catch(e){alert("Data 360 Inspector could not start in this browser ("+e+"). Please use a current version of Chrome, Edge or Firefox.")}}())';
+  const bm = "javascript:" + encodeURIComponent(bmLoader);
+  if (decodeURIComponent(bm.replace(/^javascript:/, "")) !== bmLoader) {
     console.error("ERROR [" + label + "]: bookmarklet does not decode to the loader; aborting.");
     process.exit(1);
   }
   const hrefSafe = bm.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return { b64, loader, bm, hrefSafe };
+  return { b64, loader, bmLoader, bm, hrefSafe };
 }
 
 // ---- install.html builder (feature list gated by includeDev) ----
@@ -658,7 +672,7 @@ const pub = makePayload(minifyForBookmarklet(publicBmCode, "public"), "public");
 fs.writeFileSync(path.join(dir, "console-decorate.min.js"), pub.loader + "\n");
 fs.writeFileSync(path.join(dir, "bookmarklet.txt"), pub.bm);
 const pubHtml = makeHtml(pub.hrefSafe, false, buildIdOf(pub.b64));
-verifyHtml(pubHtml, pub.loader, "public");
+verifyHtml(pubHtml, pub.bmLoader, "public");
 // Accuracy guard: the PUBLIC page must not advertise features stripped from the
 // public bookmarklet, nor leak internal example field names. Checked on the fresh
 // HTML string (not a stale file) so it can never ship wrong.
@@ -725,7 +739,7 @@ fs.writeFileSync(path.join(dir, "bookmarklet-full.txt"), full.bm);
   }
 })();
 const fullHtml = makeHtml(full.hrefSafe, true, buildIdOf(full.b64));
-verifyHtml(fullHtml, full.loader, "full");
+verifyHtml(fullHtml, full.bmLoader, "full");
 fs.writeFileSync(path.join(dir, "install-full.html"), fullHtml);
 // Also write the internal-named copy people actually drag the bookmarklet from.
 // Same document as install-full.html; kept in sync so the bookmarklet is never stale.
