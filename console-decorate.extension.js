@@ -13272,7 +13272,7 @@
     try { makeDraggable(box, hdr); } catch (e) {}
   }
 
-  // ── Snapshot/Compare in-tool help ("?") ───────────────────────────────────
+  // ── Snapshot/Compare in-tool help ("i") ───────────────────────────────────
   // A self-contained guide so a new user can understand + TEST the activation-history
   // compare without any external doc: what Compare diffs, how to choose the Key (incl.
   // the JSON/hash trap), what a "bucket" is, step-by-step day-1/2/3 test steps, and the
@@ -15777,8 +15777,8 @@
       csvCmpBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
       // "?" help — opens the full how-it-works + testing-steps guide (no org calls).
       var helpBtn = document.createElement("button");
-      helpBtn.textContent = "?"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
-      helpBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:50%;width:24px;height:24px;cursor:pointer;font:700 13px system-ui;flex:none;";
+      helpBtn.textContent = "i"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
+      helpBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:50%;width:24px;height:24px;cursor:pointer;font:italic 700 13px Georgia,serif;flex:none;";
       helpBtn.onclick = function () { try { openQeSnapHelp(); } catch (e) {} };
       // Inline hint line (other-bucket notice + key-quality warning). Lives under the bar.
       var snapHint = document.createElement("div");
@@ -15788,13 +15788,13 @@
         var list = qeSnapList(snapSql);
         if (!list.length) {
           var others = qeSnapOtherBucketCount(snapSql);
-          if (others > 0) bits.push("No snapshots saved for the query you just ran. You do have snapshots from " + others + " other quer" + (others === 1 ? "y" : "ies") + " — a snapshot only shows up when you run the <b>same query</b> it was saved with. Click <b>?</b> for details.");
+          if (others > 0) bits.push("No snapshots saved for the query you just ran. You do have snapshots from " + others + " other quer" + (others === 1 ? "y" : "ies") + " — a snapshot only shows up when you run the <b>same query</b> it was saved with. Click <b>i</b> for details.");
         }
         // key quality on the CURRENT rows
         var kq = qeKeyQuality(rows, keySel.value);
         if (kq.total) {
-          if (kq.dups > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> — " + kq.dups + " of " + kq.total + " rows share the same value, so the comparison won't be reliable. Pick a column with a unique value per row (usually an ID). Click <b>?</b>.");
-          else if (kq.jsonish > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like a JSON or hash value, which usually changes when the record changes. If that happens, edited rows show up as <b>removed + added</b> instead of <b>changed</b>. Prefer an ID column instead. Click <b>?</b>.");
+          if (kq.dups > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> — " + kq.dups + " of " + kq.total + " rows share the same value, so the comparison won't be reliable. Pick a column with a unique value per row (usually an ID). Click <b>i</b>.");
+          else if (kq.jsonish > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like a JSON or hash value, which usually changes when the record changes. If that happens, edited rows show up as <b>removed + added</b> instead of <b>changed</b>. Prefer an ID column instead. Click <b>i</b>.");
         }
         snapHint.innerHTML = bits.join("<br>");
         snapHint.style.display = bits.length ? "block" : "none";
