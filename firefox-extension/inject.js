@@ -4622,7 +4622,7 @@
       return zipStore(files);
     };
 
-    var api = { Workbook: Workbook };
+    var api = { Workbook: Workbook, zipStore: zipStore, utf8: utf8 };
     { root.MiniXLSX = api; }
   })(SEGX_NS);
 
@@ -20646,6 +20646,81 @@ processJSON();
         return order.map(function (k) { return m[k]; }).sort(function (a, b) { return (rank[a.section] == null ? 9 : rank[a.section]) - (rank[b.section] == null ? 9 : rank[b.section]); });
       }
 
+
+      // Native Word document (.docx = OOXML zip) built straight from the captured data — no HTML-in-.doc.
+      function docActDocx(data) {
+        var M = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+        if (!M || !M.zipStore) return null;
+        function x(t) { return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ""); }
+        function run(t, o) {
+          o = o || {};
+          return "<w:r><w:rPr>" + (o.mono ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>' : "") + (o.b ? "<w:b/>" : "") + (o.color ? '<w:color w:val="' + o.color + '"/>' : "") + (o.sz ? '<w:sz w:val="' + o.sz + '"/>' : "") + '</w:rPr><w:t xml:space="preserve">' + x(t) + "</w:t></w:r>";
+        }
+        function para(t, o) { o = o || {}; return "<w:p><w:pPr><w:spacing w:before=\"" + (o.before || 0) + "\" w:after=\"" + (o.after == null ? 80 : o.after) + "\"/></w:pPr>" + (Array.isArray(t) ? t.join("") : run(t, o)) + "</w:p>"; }
+        function h1(t) { return para(t, { b: 1, sz: 40, color: "032D60", after: 60 }); }
+        function h2(t) { return para(t, { b: 1, sz: 28, color: "032D60", before: 280, after: 100 }); }
+        function h3(t) { return para(t, { b: 1, sz: 22, before: 160, after: 60 }); }
+        function cell(t, w, hdr) {
+          var runs = Array.isArray(t) ? t.join("") : run(t, hdr ? { b: 1, color: "FFFFFF", sz: 20 } : { sz: 20 });
+          return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (hdr ? '<w:shd w:val="clear" w:color="auto" w:fill="0176D3"/>' : "") + "</w:tcPr><w:p><w:pPr><w:spacing w:before=\"20\" w:after=\"20\"/></w:pPr>" + runs + "</w:p></w:tc>";
+        }
+        function table(headers, rows, widths) {
+          var b = '<w:tblBorders>' + ["top", "left", "bottom", "right", "insideH", "insideV"].map(function (k) { return '<w:' + k + ' w:val="single" w:sz="4" w:space="0" w:color="D8DDE6"/>'; }).join("") + "</w:tblBorders>";
+          var out = '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>' + b + '<w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>' + widths.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join("") + "</w:tblGrid>";
+          if (headers) out += '<w:tr><w:trPr><w:tblHeader/></w:trPr>' + headers.map(function (h, i) { return cell(h, widths[i], true); }).join("") + "</w:tr>";
+          rows.forEach(function (r) { out += "<w:tr>" + r.map(function (c, i) { return cell(c, widths[i]); }).join("") + "</w:tr>"; });
+          return out + "</w:tbl>" + para("", { after: 60 });
+        }
+        var ov = data.overview || {}, body = "";
+        body += h1(ov.target || ov.segment || "Activation");
+        body += para("Activation Blueprint · generated " + new Date().toISOString().slice(0, 10) + " · read from the Salesforce page", { color: "5C5C5C", sz: 20 });
+        var ovr = docActOvRows(data).filter(function (r) { return r[1] || r[2]; });
+        if (ovr.length) { body += h2("Overview"); body += table(null, ovr.map(function (r) { return [[run(r[0], { b: 1, sz: 20 })], [run(r[1], { sz: 20 })].concat(r[2] ? [run("  " + r[2], { mono: 1, sz: 18, color: "0B5CAB" })] : [])]; }), [3000, 6400]); }
+        if (data.membership) body += h2("Activation Membership") + para(data.membership.label + " — " + (data.membership.hasFilter ? "Filtered" : "No filter"));
+        var cpRows = [];
+        (data.contactPoints || []).forEach(function (cp) { [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) { var v = p[1]; if (!v || !v.present) return; cpRows.push([p[0], v.value || v.dump || "Configured", (v.fieldApi && v.fieldApi !== v.value) ? v.fieldApi : "", v.path || ""]); }); });
+        if (cpRows.length) body += h2("Contact Points") + table(["Channel", "Value", "Field API", "Path"], cpRows, [1300, 2800, 2600, 2700]);
+        var attrs = data.attributes || [];
+        if (attrs.length) {
+          body += h2("Attributes");
+          var groups = [], gi = {};
+          attrs.forEach(function (a) { var k = a.objectApi || "\u0000sys"; if (!(k in gi)) { gi[k] = groups.length; groups.push({ obj: a.objectApi || "", rows: [] }); } groups[gi[k]].rows.push(a); });
+          groups.forEach(function (g) {
+            if (g.obj) body += h3(g.obj + " (" + g.rows.length + ")");
+            body += table(["#", "Attribute", "Field API", "Output Name"], g.rows.map(function (a, i) { return [String(i + 1), a.label || a.fieldApi || "", a.fieldApi || "", a.outputName || ""]; }), [500, 3200, 3000, 2700]);
+          });
+        }
+        var os = docActObjSettings(data);
+        if (os.length) {
+          body += h2("Object Settings");
+          os.forEach(function (r) {
+            body += h3(r.object + (r.section ? "  ·  " + r.section : ""));
+            var rows = [];
+            if (r.max || r.sortBy || r.ord) rows.push(["Limit", [run("Max. # of Attribute Values: " + (r.max || "") + "   Sort By: " + (r.sortBy || ""), { sz: 20 })].concat(r.sortApi ? [run("  " + r.sortApi, { mono: 1, sz: 18, color: "0B5CAB" })] : []).concat([run("   Order: " + (r.ord || ""), { sz: 20 })])]);
+            if (r.filter) {
+              var cs = (r.cond || "").split("; ").filter(Boolean);
+              rows.push(["Filters", r.filter + (cs.length ? " · " + cs.length + (cs.length === 1 ? " condition" : " conditions") : "") + (cs.length ? ":  " + cs.map(function (c) { return c.replace(/^\d+\.\s*/, ""); }).join("  |  ") : "")]);
+            }
+            if (r.path) rows.push(["Path", r.path.split(/\s>\s/).filter(Boolean).map(function (st, i) { return "Step " + (i + 1) + ": " + st; }).join("\n")]);
+            if (rows.length) body += table(null, rows.map(function (rw) { return [[run(rw[0], { b: 1, sz: 20 })], Array.isArray(rw[1]) ? rw[1] : String(rw[1]).split("\n").map(function (ln) { return run(ln, { sz: 20 }) + "<w:r><w:br/></w:r>"; }).slice(0)]; }), [1500, 7900]);
+          });
+        }
+        if ((data.staticRows || []).length) { body += h2("Campaign Data") + table(["Name", "Value", "Object API"], data.staticRows.map(function (s) { return [s.name || "", s.value || "", s.objectApi || ""]; }), [3000, 3600, 2800]); }
+        if (data.provisional) {
+          body += h2("Provisional Audience Limiting") + para("Limit: " + (String(data.provisional.limit || "") || "Not set"));
+          var rk = data.provisional.rank || [];
+          body += rk.length ? table(["Rank Order", "Attribute", "Sort By"], rk.map(function (r) { return [String(r.order || ""), r.attribute || "", r.sortBy || ""]; }), [1500, 5000, 2900]) : para("No ranking attributes set");
+        }
+        var W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+        var doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + W + "><w:body>" + body + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000" w:header="500" w:footer="500" w:gutter="0"/></w:sectPr></w:body></w:document>';
+        var hdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+        return M.zipStore([
+          { name: "[Content_Types].xml", data: M.utf8(hdr + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>') },
+          { name: "_rels/.rels", data: M.utf8(hdr + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>') },
+          { name: "word/document.xml", data: M.utf8(doc) }
+        ]);
+      }
+
       function docActExcel(data) {
         var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
         if (!_MiniXLSX) { segToast("Excel builder not available in this build"); return; }
@@ -20798,16 +20873,11 @@ processJSON();
         xBtn.onclick = function () { modal.remove(); };
         csvBtn.onclick = function () { docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + "-attributes.csv", "text/csv;charset=utf-8", ["﻿" + docActCsv(data)]); };
         xlsBtn.onclick = function () { docActExcel(data); };
-        var docBtn = document.createElement("button"); docBtn.textContent = "⬇ Doc"; docBtn.style.cssText = btnCss; docBtn.title = "Download a structured Word-compatible document of the whole activation (sections in wizard order)";
+        var docBtn = document.createElement("button"); docBtn.textContent = "⬇ Doc"; docBtn.style.cssText = btnCss; docBtn.title = "Download a Word (.docx) document of the whole activation";
         docBtn.onclick = function () {
-          var inner = docActWordHtml(modal.__docSectionsNoOv || "");
-          var html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Activation Blueprint</title>"
-            + "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#181818;margin:28px;} h2{page-break-after:avoid;} code{background:#eef4fb;border:1px solid #d6e3f3;padding:0 3px;} h1{color:#032d60;font-size:22px;margin:0 0 4px;} .sub{color:#5c5c5c;font-size:12px;margin:0 0 18px;}"
-            + " table{border-collapse:collapse;width:100%;margin:6px 0;} th,td{border:1px solid #d8dde6;padding:5px 8px;font-size:12px;text-align:left;} th{background:#f3f3f3;}"
-            + " code{font-family:Consolas,monospace;}</style></head><body>"
-            + "<h1>" + e(ov.target || ov.segment || "Activation") + "</h1><div class='sub'>Activation Blueprint · generated " + e(new Date().toISOString().slice(0, 10)) + " · read from the Salesforce page</div>"
-            + docActOvTable(data) + inner + "</body></html>";
-          docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".doc", "application/msword;charset=utf-8", ["﻿" + html]);
+          var bytes = docActDocx(data);
+          if (!bytes) { segToast("Word builder not available in this build"); return; }
+          docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", [bytes]);
         };
         hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(docBtn); hdr.appendChild(xBtn);
 
@@ -23347,7 +23417,7 @@ processJSON();
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.718"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.719"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

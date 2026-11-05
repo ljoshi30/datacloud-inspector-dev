@@ -1106,7 +1106,7 @@ console.log("\n17. Layout follows the wizard: limits/paths/filters INSIDE their 
   ok("per-object group renders its Path and filter badge", /pth\.text/.test(s2) && /metaBox\(flt, pth/.test(s2) && /var metaHtml/.test(s2));
   ok("Contact Point section is built from DOM-derived section map (groupSection), not name guesses", /docActParseGroupSections/.test(s2) && /Contact Point"/.test(s2) && /pickBy\(gsecM/.test(s2));
   ok("sections ordered like the wizard (overview, membership, contact point, attributes, campaign)", /ovGrid \+ flHtml \+ memHtml \+ cpHtml \+ attrHtml \+ relHtml \+ stHtml \+ pvHtml \+ afHtml/.test(s2));
-  ok("Doc download button exists, reuses same sections", /docBtn/.test(s2) && /modal\.__docSections/.test(s2) && /application\/msword/.test(s2));
+  ok("Doc download button exists and builds a native .docx", /docBtn/.test(s2) && /docActDocx\(data\)/.test(s2) && /\.docx"/.test(s2));
   ok("system rows are plain Attributes rows, no (unspecified)", /sysRows\.concat\(primRows\)/.test(s2) && !/\(unspecified\)/.test(s2));
 }
 
