@@ -23447,8 +23447,7 @@ processJSON();
    * hostname, no PII, no page data), the tool version, the page TYPE bucket (e.g. "DMO"/"Segment")
    * and the build tag — never a record id or URL. Throttled to ONCE PER DAY per browser via
    * localStorage. Uses sendBeacon/no-cors so it can't read any response. Fully fire-and-forget.
-   * USER CONTROL: a one-time disclosure notice + opt-out (__dcUsageOptOut()); opted-out browsers
-   * never ping. Disclosed on the install page too.
+   * DISCLOSURE: described on the install page's Privacy section. No in-tool opt-out (product decision).
    */
   (function dcUsagePingModule() {
     // SILENT AUTO-CAPTURE via FIRESTORE (the breakthrough, proven 2026-10-30):
@@ -23478,17 +23477,7 @@ processJSON();
     var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
     var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle) — set ONLY after a confirmed HTTP success
     var _inFlight = {};              // per-feature in-flight guard (prevents duplicate concurrent sends)
-    var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
-    var LS_NOTICE = "dc_usage_noticed"; // "1" = the one-time disclosure notice has been shown
 
-    // GATE 3 — the user's choice always wins, even when the tool is fully live.
-    function optedOut() { try { return localStorage.getItem(LS_OPTOUT) === "1"; } catch (e) { return false; } }
-    // public controls so a user (or the install page) can opt out / back in and check state.
-    try {
-      window.__dcUsageOptOut = function () { try { localStorage.setItem(LS_OPTOUT, "1"); } catch (e) {} return true; };
-      window.__dcUsageOptIn  = function () { try { localStorage.removeItem(LS_OPTOUT); } catch (e) {} return false; };
-      window.__dcUsageIsOptedOut = function () { return optedOut(); };
-    } catch (e) {}
 
     // Coarse feature/page bucket — NEVER a record id or full URL. Covers EVERY surface the tool
     // supports so the ping always reports which feature was used (Query Editor, Activation, Mapping
@@ -23623,32 +23612,6 @@ processJSON();
     }
 
 
-    // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
-    // (no point disclosing something that's off), only once (LS_NOTICE), and never if already
-    // opted out. A small dismissible banner with a one-click "Turn off" (opt-out). Zero cost today
-    // because PING_ENABLED is false → this never renders in the shipped build.
-    function showDisclosureOnce() {
-      try {
-        if (!FS_URL) return;                                // no receiver → nothing to disclose
-        if (optedOut()) return;                             // respect an existing opt-out
-        if (localStorage.getItem(LS_NOTICE) === "1") return; // already shown
-        if (!document.body) { return; }
-        var bar = document.createElement("div");
-        bar.id = "dc-usage-notice";
-        bar.style.cssText = "position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483647;max-width:480px;background:#111827;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.5);padding:12px 14px;font:12px/1.5 -apple-system,sans-serif;";
-        bar.innerHTML = "<div style='display:flex;gap:10px;align-items:flex-start;'>" +
-          "<span style='font-size:15px;'>&#9432;</span><div>" +
-          "<b>Data 360 Inspector</b> records an <b>anonymous</b> usage count about once a day (a random id + tool version + page type only — no record, field, personal, or org data) so the team can measure adoption. It's silent — nothing opens. " +
-          "<a href='#' id='dc-usage-off' style='color:#5eead4;'>Turn off</a> &middot; " +
-          "<a href='#' id='dc-usage-ok' style='color:#94a3b8;'>OK</a></div></div>";
-        document.body.appendChild(bar);
-        var done = function () { try { localStorage.setItem(LS_NOTICE, "1"); } catch (e) {} try { bar.remove(); } catch (e) {} };
-        var off = bar.querySelector("#dc-usage-off"), okb = bar.querySelector("#dc-usage-ok");
-        if (off) off.onclick = function (e) { e.preventDefault(); try { window.__dcUsageOptOut(); } catch (er) {} done(); };
-        if (okb) okb.onclick = function (e) { e.preventDefault(); done(); };
-      } catch (e) {}
-    }
-
     // ── SILENT usage capture — NO tab, NO navigation, fully automatic ─────────────────────────
     // Our own domain is CSP-blocked on every transport, and window.open always opens a visible tab.
     // The working channel is a normal CORS+JSON fetch to firestore.googleapis.com (CSP-allowed via
@@ -23662,7 +23625,6 @@ processJSON();
     // out for the rest of the day — the "new user never captured" bug.)
     function reportUsage() {
       if (!PING_ENABLED) return Promise.resolve(false);   // master kill-switch (documented gate — now ENFORCED)
-      if (optedOut()) return Promise.resolve(false);
       if (!FS_URL) return Promise.resolve(false);
       var feature;
       try {
@@ -23710,7 +23672,6 @@ processJSON();
     // locked orgs flash ~once/feature/day and ARE captured.
     function maybeReportOnFabOpen() {
       try {
-        if (optedOut()) return false;              // user choice wins
         var feature = pingPageType();
         if (sentToday(feature)) {                  // THIS feature already captured today
           return false;
@@ -23777,9 +23738,8 @@ processJSON();
     } catch (e) {}
 
     // On load: NO in-tool disclosure popup (per decision — silent in-tool). Disclosure instead lives
-    // on the install page's Privacy section, and __dcUsageOptOut() remains available as the opt-out.
+    // on the install page's Privacy section.
     // The capture fires on the first FAB-open per feature per day (silent Firestore write).
-    // (showDisclosureOnce is retained but intentionally NOT called here.)
   })();
 
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which

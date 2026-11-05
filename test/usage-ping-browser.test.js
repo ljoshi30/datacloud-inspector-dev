@@ -1,6 +1,6 @@
 // Real-Chrome: clicking the FAB launcher must fire ONE usage ping, tagged with the right build
-// (public bookmarklet => "public", full/dev => "dev"), page-type only, throttled once/feature/day,
-// and NOT fire when the user opted out.
+// (public bookmarklet => "public", full/dev => "dev"), page-type only, throttled once/feature/day.
+// There is NO opt-out (product decision).
 const fs=require("fs"),http=require("http"),cp=require("child_process"),path=require("path");
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 if(!fs.existsSync(CHROME)){console.log("SKIP: no Chrome");process.exit(0)}
@@ -48,8 +48,5 @@ async function run(file,optOut){
     ok("2nd FAB-open the same day does NOT ping again (throttle, same code path as the click)",!r.hung&&r.p2.length===r.p1.length,r.p1.length+" -> "+r.p2.length);
     ok("payload carries no field/object names (page-type only)",!/TDI_|__c|__dlm|__dll/.test(mine));
   }
-  console.log("\n== opt-out");
-  const o=await run("bookmarklet.txt",true);
-  ok("opted-out user: click fires NO ping",o.p1.length===0,JSON.stringify(o.p1).slice(0,200));
   console.log(fail?"\n❌ "+pass+" passed, "+fail+" failed":"\n✅ ALL PASS: "+pass);process.exit(fail?1:0);
 })();

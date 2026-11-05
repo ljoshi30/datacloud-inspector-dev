@@ -21,7 +21,6 @@ function makePinger(opts) {
   var sent = []; // records payloads that would have been transmitted
   var store = opts.store || {};
   var today = opts.today || "2026-10-30";
-  function optedOut() { try { return store.dc_usage_optout === "1"; } catch (e) { return false; } }
   function key(feature) { return "dc_usage_last::" + (feature || "other") + "::" + today; }
   function sentToday(feature) { try { return store[key(feature)] === "1"; } catch (e) { return true; } }
   function markSent(feature) { store[key(feature)] = "1"; }
@@ -32,7 +31,6 @@ function makePinger(opts) {
   function sendPing(feature) {
     feature = feature || opts.page || "DMO";
     if (!PING_ENABLED || !PING_ENDPOINT) return false;   // gates 1+2
-    if (optedOut()) return false;                         // gate 3: user choice
     if (sentToday(feature)) return false;                 // per-feature/day throttle
     var httpOk = opts.httpOk !== false;                   // simulate the fetch result
     if (!httpOk) return false;                            // FAILED write → do NOT mark sent, do NOT record
@@ -206,17 +204,10 @@ console.log("\n2c. STORAGE-BLOCKED (VDI/incognito) — real users stay DISTINCT,
     /return _memSent\[k\] === true;/.test(src0) && /_memSent\[k\] = true;/.test(src0));
 }
 
-console.log("\n2b. OPT-OUT (gate 3) — user's choice always wins, even when fully live");
+console.log("\n2b. NO OPT-OUT (product decision) — a stale opt-out flag in storage has no effect");
 {
   var p = makePinger({ enabled: true, endpoint: "https://x", store: { dc_usage_optout: "1" } });
-  eq("opted-out user → no ping even with both gates cleared", p.sendPing(), false);
-  eq("nothing transmitted for an opted-out user", p.sent.length, 0);
-  // opting back in re-enables
-  var store = { dc_usage_optout: "1" };
-  var p2 = makePinger({ enabled: true, endpoint: "https://x", store: store });
-  eq("still opted out → no send", p2.sendPing(), false);
-  delete store.dc_usage_optout;                 // user opts back in
-  eq("after opt back in → sends", p2.sendPing(), true);
+  eq("legacy dc_usage_optout flag is ignored → still pings", p.sendPing(), true);
 }
 
 console.log("\n3. ANONYMOUS BY CONSTRUCTION — payload carries no org / host / record / url / PII");
@@ -318,8 +309,8 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
     /return false;\s*\/\/ non-2xx/.test(src) && /try \{ markOrgBlocked\(\); \} catch/.test(src));
   ok("in-flight guard prevents duplicate concurrent sends for the same feature", /var _inFlight = \{\}/.test(src) && /if \(_inFlight\[feature\]\) return Promise\.resolve\(false\)/.test(src));
   ok("NO console output from the usage module (silent in every build, dev included)", !/\[dc usage\]/.test(src) && !/console\.(log|info|warn|error|debug|table)/.test(src));
-  ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature + opt-out)",
-    /function maybeReportOnFabOpen/.test(src) && /var feature = pingPageType\(\);/.test(src) && /if \(sentToday\(feature\)\) \{/.test(src) && /if \(optedOut\(\)\) return false;/.test(src));
+  ok("AUTO-CAPTURE on FAB open, per-feature/day (maybeReportOnFabOpen → throttled by feature)",
+    /function maybeReportOnFabOpen/.test(src) && /var feature = pingPageType\(\);/.test(src) && /if \(sentToday\(feature\)\) \{/.test(src));
   ok("ONE global FAB-click listener covers all FABs (not per-handler)",
     /function onAnyFabClick/.test(src) && /document\.addEventListener\("click", onAnyFabClick, true\)/.test(src) && /function isFabClick/.test(src));
   ok("MASTER KILL-SWITCH enforced: reportUsage bails when PING_ENABLED is false (documented gate is REAL now)",
@@ -331,11 +322,10 @@ console.log("\n5. source presence — gates, anonymity, throttle, sendBeacon, DE
   ok("FAB matcher is ROBUST: matches dc-*-bar / dc-*-fab PATTERN (catches every + future FAB, incl. ERD), not a hand id list",
     /\/\^dc-\(\[a-z0-9\]\+-\)\?bar\$\//.test(src) && /\/\^dc-\(\[a-z0-9\]\+-\)\?fab\$\//.test(src));
   ok("NO visible 'Report usage' FAB row (capture is silent/automatic — row removed)", !/dc-report-usage-row/.test(src));
-  ok("GATE: opt-out checked before any capture (user choice always wins)", /if \(optedOut\(\)\) return false;/.test(src) && /function optedOut/.test(src) && /dc_usage_optout/.test(src));
-  ok("opt-out/opt-in controls STILL exposed (hidden opt-out retained)", /window\.__dcUsageOptOut/.test(src) && /window\.__dcUsageOptIn/.test(src) && /window\.__dcUsageIsOptedOut/.test(src));
+  ok("NO opt-out anywhere in the usage module (no gate, no console controls, no stored flag)",
+    !/optedOut|__dcUsageOptOut|__dcUsageOptIn|__dcUsageIsOptedOut|LS_OPTOUT/.test(src));
   ok("capture global exposed (auto-on-fab)", /window\.__dcReportUsageOnFabOpen/.test(src));
-  ok("in-tool disclosure popup NOT shown on load (silent in-tool; disclosure lives on install page)",
-    !/try \{ showDisclosureOnce\(\); \} catch/.test(src) && /intentionally NOT called/.test(src));
+  ok("no in-tool disclosure popup code at all (disclosure lives on the install page)", !/showDisclosureOnce|dc-usage-notice|LS_NOTICE/.test(src));
   ok("PER-FEATURE/day throttle (namespaced key feature+day → different features each ping)",
     /function throttleKey\(feature\)/.test(src) && /LS_LAST \+ "::" \+ \(feature \|\| "other"\) \+ "::" \+ todayStamp\(\)/.test(src) && /function sentToday\(feature\)/.test(src) && /function markSent\(feature\)/.test(src));
   ok("page detector covers ALL feature surfaces (QueryEditor/Transform/Activation/Explorer/MappingCanvas/ERD, not just DMO)",
