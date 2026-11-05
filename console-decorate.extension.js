@@ -49,7 +49,7 @@
       try {
         var _offT = document.createElement("div");
         _offT.id = "dc-off-toast";
-        _offT.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
+        _offT.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
         _offT.innerHTML = "<span style='color:#f87171;font-size:15px;line-height:1'>&#9711;</span>Data 360 Inspector turned off";
         document.body.appendChild(_offT);
         requestAnimationFrame(function () { _offT.style.opacity = "1"; });
