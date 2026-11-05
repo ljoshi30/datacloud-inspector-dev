@@ -928,8 +928,11 @@ console.log("NOTE: obfuscation only DETERS copying; the @strip mechanism PHYSICA
 // Local file copy only (no git). Keeps datacloud-inspector-extension-dev (private)
 // and datacloud-inspector-extension (public) working dirs current after every
 // build. Wrapped so a missing/failed sync never aborts the build itself.
+// Extensions are NOT live (blocked by company policy) — bookmarklet-only for now. The sync is
+// OPT-IN (SYNC_EXTENSIONS=1) so a normal build never rewrites the extension repos.
 try {
-  require("./publish-extensions.js");
+  if (process.env.SYNC_EXTENSIONS === "1") require("./publish-extensions.js");
+  else console.log("NOTE: extension sync skipped (bookmarklet-only mode). Set SYNC_EXTENSIONS=1 to enable.");
 } catch (e) {
   console.warn("NOTE: extension sync skipped (" + e.message + "). Run `node publish-extensions.js` manually if needed.");
 }

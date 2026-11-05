@@ -22240,7 +22240,7 @@ processJSON();
   })();
   /* @strip:end */
 
-  /* @strip:start dev
+  /* (released to public) 
    * ── DMO detail: badge each field as Standard / Custom / System (dev-only) ───────────────────
    * The Fields tab never tells you whether a field is product-given or hand-created. SF's own
    * component data carries it per field as `creationType` — exactly the value our export already
@@ -22413,7 +22413,6 @@ processJSON();
     // them once so a re-toggle/reload never shows two badges per field (not a per-pass crawl).
     try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-do-badge")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
   })();
-  /* @strip:end */
 
   /* @strip:start dev
    * ── VDI PERF HARNESS (dev-only) — measure, don't guess ──────────────────────────────────────

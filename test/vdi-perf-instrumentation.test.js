@@ -106,8 +106,7 @@ console.log("\n4. source presence — harness shape, VDI-safety, and the 3 modul
 
   // dev-only
   ok("DEV-ONLY: perf harness module stripped from public", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/function dcPerfHarness/.test(strip); })());
-  ok("DEV-ONLY: no __dcPerf reference survives the strip (the wired modules are all dev-only too)",
-    (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/__dcPerf/.test(strip); })());
+  ok("public: every surviving __dcPerf reference is guarded (harness absent => no throw)", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); var lines = strip.split("\n").filter(function (l) { return /__dcPerf/.test(l); }); return lines.every(function (l) { return /if \(window\.__dcPerf\)|window\.__dcPerf &&|typeof window\.__dcPerf|try \{ if \(window\.__dcPerf/.test(l) || /^\s*(\/\/|\*)/.test(l); }); })());
   ok("present in the FULL bookmarklet build (synced)", /function dcPerfHarness\(\)/.test(bm));
   ok("strip markers stay balanced after the universal removal", (bm.match(/@strip:start/g) || []).length === (bm.match(/@strip:end/g) || []).length);
 }

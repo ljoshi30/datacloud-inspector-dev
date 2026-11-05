@@ -174,9 +174,9 @@ console.log("\n7. source presence — proven props, org-agnostic, VDI-safe scaff
   // (it's the shared launcher), so that string legitimately survives — exactly like the segment
   // (__dcToggleSegApi) and formula (__dcToggleDsFormula) rows. The correct dev-only assertion is
   // therefore: the module definition is absent, AND no code DEFINES the toggle (only references it).
-  ok("DEV-ONLY: module definition stripped from the public bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/function dcDmoOriginModule/.test(strip); })());
-  ok("DEV-ONLY: public build never DEFINES the toggle (only the guarded FAB reference remains)",
-    (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/window\.__dcToggleDmoOrigin\s*=[^=]/.test(strip) && !/function doStart/.test(strip); })());
+  // RELEASED to public: the module now ships. The FAB row stays runtime-gated (default OFF).
+  ok("RELEASED: module definition ships in the public bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return /function dcDmoOriginModule/.test(strip); })());
+  ok("RELEASED: public build defines the toggle", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return /window\.__dcToggleDmoOrigin\s*=[^=]/.test(strip); })());
   // sanity: this module is gated the same way the shipped seg/formula rows are (consistency)
   ok("same runtime-gating pattern as the already-shipped seg/formula FAB rows",
     (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return /typeof window\.__dcToggleDmoOrigin === "function"/.test(strip); })());
