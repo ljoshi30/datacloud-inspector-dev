@@ -2135,7 +2135,7 @@
       if (/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DataStream";
       if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
       if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
-      /* @strip:start dev */
+      // (Segment page detection — public: needed for the Segment export launcher.)
       // Segment by URL always wins. The component-DOM fallback (for wizard routes that don't
       // name Segment in the URL) is only trusted when BOTH: (a) the URL isn't clearly ANOTHER
       // detail page, AND (b) the URL is a plausible builder route — a /cmp/ lightning-component
@@ -2149,7 +2149,6 @@
       if (looksLikeBuilderRoute
           && !(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
           && (findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0)) return "Segment";
-      /* @strip:end */
     } catch (e) {}
     return null;
   }
