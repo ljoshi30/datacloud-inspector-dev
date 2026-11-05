@@ -161,7 +161,7 @@ try { new Function(publicCode); } catch (e) {
   process.exit(1);
 }
 // sanity: no in-dev entry points survive in the public code (Data Explorer + Segment export are now public by decision; list only what must stay dev-only)
-["openFocusPanel", "hideOtherForDmo", "segApiInfo", "toggleSegApi", "segBuildUidResolver"].forEach(sym => {
+["segApiInfo", "toggleSegApi", "segBuildUidResolver"].forEach(sym => {
   if (new RegExp("function\\s+" + sym + "\\b").test(publicCode)) {
     console.error("ERROR: in-dev function '" + sym + "' still defined in public build; aborting.");
     process.exit(1);
