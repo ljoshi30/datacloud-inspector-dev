@@ -161,7 +161,7 @@ try { new Function(publicCode); } catch (e) {
   process.exit(1);
 }
 // sanity: no in-dev entry points survive in the public code (Data Explorer + Segment export are now public by decision; list only what must stay dev-only)
-["segApiInfo", "toggleSegApi", "segBuildUidResolver"].forEach(sym => {
+[].forEach(sym => {
   if (new RegExp("function\\s+" + sym + "\\b").test(publicCode)) {
     console.error("ERROR: in-dev function '" + sym + "' still defined in public build; aborting.");
     process.exit(1);
@@ -246,7 +246,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
         <div class="acc-body">${desc}</div>
       </details>`;
   }
-  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment"])
+  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment", "Activation"])
     .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
@@ -302,13 +302,23 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "</ul>" +
       "<span class=\"gi\">Saved column choices stay in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>");
   const segmentRowPub =
-    acc("&#127937;", "Segment", ["Export Rules", "Container Path"],
+    acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
       "<p><b>The gap:</b> the segment builder shows rules by friendly <b>label</b> &mdash; but the same label can mean different fields on different objects, so you can&rsquo;t be sure which field a rule actually targets. The <b>API name</b> makes it exact &mdash; and there&rsquo;s no way to take the rules with you.</p>" +
       "<ul>" +
+      "<li><b>Hover</b> any attribute or rule for its object and field API name; press <kbd>C</kbd> to copy.</li>" +
       "<li><b>Export</b> every condition &mdash; Include, Exclude, Rank &amp; Limit &mdash; with the full AND/OR logic, nested segments, and sub-filters intact, plus object and field API-name columns. Colored <b>Excel</b> or <b>Copy for Sheets</b> for review, or a flat <b>CSV</b> built for scripts/automation (every row fully filled &mdash; tab, group #, join, condition #, API names &mdash; no merged cells).</li>" +
       "<li><b>Container Path</b> shows which related record a rule actually points at, read straight from the open edit panel.</li>" +
       "</ul>" +
       "<span class=\"gi\">Everything is read from what&rsquo;s on screen &mdash; the Container Path is never reconstructed or guessed; if Data Cloud doesn&rsquo;t show it, neither does the tool.</span>");
+  const activationRowPub =
+    acc("&#127919;", "Activation", ["API Names", "Blueprint", "Export"],
+      "<p><b>The gap:</b> same label-only problem as Segment, in the <b>activation wizard</b> where you choose attributes.</p>" +
+      "<ul>" +
+      "<li><b>Hover</b> any attribute in the main table or in &ldquo;Add Additional Attributes&rdquo; for its object and field API name.</li>" +
+      "<li><b>Activation Blueprint</b> &mdash; one click reads the whole activation from the page (no API): overview, attributes with object and field API names, filters, audience limits, rank order and the join path to each object. Download as <b>Excel</b>, <b>CSV</b> or a native <b>Word (.docx)</b> document.</li>" +
+      "<li><b>Export</b> the activation&rsquo;s included attributes with their object and field API names in one click.</li>" +
+      "</ul>" +
+      "<span class=\"gi\">API-name hints live on the wizard (where attributes exist). A finished activation&rsquo;s read-only page has no attributes to label, so it offers Export only.</span>");
   const devRows = !includeDev ? "" :
     acc("&#128376;&#65039;", "Data Graph", ["Hover", "Filters", "Copy"],
       "<p><b>The gap:</b> the Data Graph builder shows only <b>labels</b> for the objects and fields you add &mdash; and labels repeat. So as you build, you can&rsquo;t be sure which exact field you selected, or which one a filter is on. The unique <b>API name</b> tells you &mdash; but it&rsquo;s nowhere on screen. Turn on <b>API names</b> from the &#9678; button (bottom-right).</p>" +
@@ -512,7 +522,7 @@ ${includeDev ? "" : `<!-- Cloudflare Web Analytics (PUBLIC install page ONLY —
     <h2>What it does, page by page</h2>
     <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Open any Data Cloud page below and the launcher shows just that page&rsquo;s tools. Each row names the Data Cloud gap it closes &mdash; click to expand. Everything is read-only.</p>
     <div class="chips" style="margin-bottom:10px">${chips}</div>
-    ${sharedRows}${includeDev ? "" : explorerRowPub + segmentRowPub}${devRows}
+    ${sharedRows}${includeDev ? "" : explorerRowPub + segmentRowPub + activationRowPub}${devRows}
     <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Panels are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; click the bookmark again to remove the tool completely.</p>${roadmapNote}
   </div>
   <details class="acc" style="margin-top:16px">

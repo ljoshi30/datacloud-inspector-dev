@@ -942,11 +942,11 @@ console.log("\n11. SOURCE wiring: DOM-only exporter defined, launcher row added,
 
   // DEV-ONLY: the whole feature definition must be stripped from the PUBLIC build.
   const pub = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, "");
-  ok("DEV-ONLY: exporter definition stripped from the public bookmarklet", !/function docActShowModal/.test(pub));
-  ok("DEV-ONLY: public build never DEFINES __dcDocActivation (only the guarded launcher reference may remain)", !/window\.__dcDocActivation\s*=/.test(pub));
-  ok("DEV-ONLY: the 'Document Activation' launcher ROW is inside a strip block (not in public menu)", !/dc-act-doc-row/.test(pub));
-  ok("DEV-ONLY: contact-point extractor stripped from public build", !/function docActCpExtract/.test(pub));
-  ok("DEV-ONLY: filter badge/dialog parsers stripped from public build", !/function docActParseFilterBadges/.test(pub) && !/function docActParseFilterDialog/.test(pub));
+  ok("RELEASED: exporter definition ships in the public bookmarklet", /function docActShowModal/.test(pub));
+  ok("RELEASED: public build defines __dcDocActivation", /window\.__dcDocActivation\s*=/.test(pub));
+  ok("RELEASED: the 'Activation Blueprint' launcher row is in the public menu", /dc-act-doc-row/.test(pub));
+  ok("RELEASED: contact-point extractor ships", /function docActCpExtract/.test(pub));
+  ok("RELEASED: filter badge/dialog parsers ship", /function docActParseFilterBadges/.test(pub) && /function docActParseFilterDialog/.test(pub));
 
   // present in the FULL (dev) bookmarklet build — this is the artifact the client actually runs.
   ok("present in the FULL bookmarklet (synced from ext)", /function docActShowModal/.test(bm) && /dc-act-doc-row/.test(bm) && /function docActCpExtract/.test(bm));

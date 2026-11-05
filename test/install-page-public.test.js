@@ -42,7 +42,7 @@ console.log("\n2. Dev-only accordion rows are gated behind includeDev");
   // The open-in-new-tab row covers ALL lists + nav and documents the lookup-column safeguard.
   ok("new-tab row describes ALL lists/nav + the lookup-column safeguard",
     /in <b>any<\/b> object list/.test(b) && /ignores lookup columns/.test(b));
-  ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{includeDev \? "" : explorerRowPub \+ segmentRowPub\}\$\{devRows\}/.test(b));
+  ok("body renders sharedRows + devRows accordion (not the old 3 sections)", /\$\{sharedRows\}\$\{includeDev \? "" : explorerRowPub \+ segmentRowPub \+ activationRowPub\}\$\{devRows\}/.test(b));
   ok("old redundant sections removed (no 'Features by page' / 'Launcher menu' headings)",
     !/<h2>Features by page<\/h2>/.test(b) && !/<h2>Launcher menu<\/h2>/.test(b));
   ok("ERD is dev-only (not in the always-shared rows)", !/sharedRows[\s\S]{0,600}Data Model \(ERD\)/.test(b));

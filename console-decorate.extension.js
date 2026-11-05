@@ -17304,7 +17304,7 @@ processJSON();
       menu.appendChild(exportRow);
     }
 
-    /* @strip:start dev
+    /* (released to public) 
      * Dev-only "Document Activation" row — DOM-only (bookmarklet-safe, no bridge/API).
      * Reads the activation straight from the page and opens a Salesforce-styled export
      * modal with API names inline + CSV/Excel. Gated on the exporter fn (dev build only).
@@ -17332,7 +17332,6 @@ processJSON();
       };
       menu.appendChild(apiRow);
     }
-    /* @strip:end */
 
     // Nothing to show (no bridge AND no dev toggle) → don't render an empty FAB.
     if (!menu.childElementCount) return;
@@ -19427,7 +19426,7 @@ processJSON();
     }, 1000);
   }
 
-  /* @strip:start dev
+  /* (released to public) 
    * SEGMENT + ACTIVATION API-NAME DECORATOR (dev-only until approved for public).
    * Shows the real API name of each attribute on the Segment builder AND the Activation
    * wizard — left palette (runtime_cdp-attribute-row / -attribute-group-row), used rules
@@ -21332,7 +21331,6 @@ processJSON();
       }
     })();
   }
-  /* @strip:end */
 
   /* @strip:start dev
    * ── DATA GRAPH builder: inline API names (dev-only) ─────────────────────────────────
