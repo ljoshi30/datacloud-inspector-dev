@@ -22021,7 +22021,7 @@ processJSON();
   })();
   /* @strip:end */
 
-  /* @strip:start dev
+  /* (released to public) 
    * ── DATA STREAM / DLO: hover the Formula-column checkmark to see & copy its formula (dev-only) ─
    * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never on
    * the page (you must open our export modal). This shows it in a hover popover with a Copy button.
@@ -22107,7 +22107,7 @@ processJSON();
     }
 
     // ── one shared popover (built once, only when first needed) ───────────────────────
-    var _fmPop = null, _fmPopFor = null, _fmHideT = null;
+    var _fmPop = null, _fmPopFor = null, _fmHideT = null, _fmRaw = "", _fmSelecting = false, _fmBridge = null;
     function fmBuildPopover() {
       if (_fmPop) return _fmPop;
       var p = document.createElement("div");
@@ -22121,13 +22121,20 @@ processJSON();
       head.appendChild(ttl); head.appendChild(copy);
       var body = document.createElement("pre"); body.id = "dc-fm-body";
       body.style.cssText = "margin:0;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:11px/1.5 'SF Mono',Menlo,Consolas,monospace;color:#e5edff;";
+      // Invisible hover BRIDGE spanning the gap between the cell and the popover, so moving the
+      // pointer from the cell onto the popover never crosses dead space (that gap used to close it).
+      var br = document.createElement("div"); br.id = "dc-fm-bridge";
+      br.style.cssText = "position:absolute;left:0;right:0;height:10px;background:transparent;";
+      p.appendChild(br); _fmBridge = br;
       p.appendChild(head); p.appendChild(body);
       // keep open while the pointer is over the popover (so you can click Copy / select text)
       p.addEventListener("pointerenter", function () { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
       p.addEventListener("pointerleave", function () { fmScheduleHide(); });
+      // A press inside the popover = the user is selecting/copying: never auto-hide until release.
+      p.addEventListener("pointerdown", function () { _fmSelecting = true; if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
       copy.addEventListener("click", function (e) {
         e.stopPropagation();
-        var txt = body.textContent || "";
+        var txt = _fmRaw || body.textContent || "";   // the exact stored formula, not re-read from the DOM
         function flash() { copy.textContent = "✓ Copied"; setTimeout(function () { copy.textContent = "Copy"; }, 900); }
         try { navigator.clipboard.writeText(txt).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
         catch (e3) { flash(); }
@@ -22136,7 +22143,16 @@ processJSON();
       _fmPop = p;
       return p;
     }
-    function fmScheduleHide() { if (_fmHideT) clearTimeout(_fmHideT); _fmHideT = setTimeout(function () { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; }, 180); }
+    function fmHideNow() { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; _fmSelecting = false; }
+    function fmScheduleHide() {
+      if (_fmHideT) clearTimeout(_fmHideT);
+      _fmHideT = setTimeout(function () {
+        _fmHideT = null;
+        if (_fmSelecting) return;                       // mid-selection / mid-click: stay open
+        if (_fmPop && _fmPop.matches && _fmPop.matches(":hover")) return;   // pointer is on the popover
+        fmHideNow();
+      }, 300);
+    }
     function fmShowPopover(anchorRect, label, formula) {
       var p = fmBuildPopover();
       p.querySelector("#dc-fm-ttl").textContent = "ƒ " + (label || "Formula");
@@ -22148,6 +22164,9 @@ processJSON();
       var ph = p.offsetHeight || 120;
       if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 6);
       p.style.left = left + "px"; p.style.top = top + "px";
+      _fmRaw = String(formula);
+      // bridge sits on whichever edge faces the cell
+      if (_fmBridge) { var above = top < anchorRect.top; _fmBridge.style.top = above ? "" : "-10px"; _fmBridge.style.bottom = above ? "-10px" : ""; }
     }
 
     // Build {label,formula} from a data record IF it's a formula field with a formula, else null.
@@ -22224,10 +22243,20 @@ processJSON();
       _fmWired = true;
       try { document.addEventListener("pointerover", fmOnOver, true); } catch (e) {}
       try { document.addEventListener("pointerout", fmOnOut, true); } catch (e) {}
+      // selection ends on release anywhere; Esc and a click outside close the popover
+      try { document.addEventListener("pointerup", function () { if (_fmSelecting) { _fmSelecting = false; if (_fmPop && _fmPop.style.display !== "none" && !(_fmPop.matches && _fmPop.matches(":hover"))) fmScheduleHide(); } }, true); } catch (e) {}
+      try { document.addEventListener("keydown", function (e) { if (e.key === "Escape" && _fmPop && _fmPop.style.display !== "none") fmHideNow(); }, true); } catch (e) {}
+      try { document.addEventListener("pointerdown", function (e) {
+        if (!_fmPop || _fmPop.style.display === "none") return;
+        var path = (e.composedPath && e.composedPath()) || [];
+        if (path.indexOf(_fmPop) >= 0) return;
+        var c = fmClimb(path[0] || e.target); if (c && c.cell && c.cell === _fmPopFor) return;
+        fmHideNow();
+      }, true); } catch (e) {}
     }
 
     try {
-      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; } return FM_ON; };
+      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { fmHideNow(); } return FM_ON; };
       window.__dcDsFormulaIsOn = function () { return FM_ON; };
       // how many formula fields exist (so the launcher only OFFERS the toggle when there are any).
       // Read on demand (menu open) — not polled.
@@ -22238,7 +22267,6 @@ processJSON();
       };
     } catch (e) {}
   })();
-  /* @strip:end */
 
   /* (released to public) 
    * ── DMO detail: badge each field as Standard / Custom / System (dev-only) ───────────────────

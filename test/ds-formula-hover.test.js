@@ -178,7 +178,7 @@ console.log("\n5. source presence — on-demand (no inject, no poll), dev-only, 
     /openDsExport\(\)/.test(src) && /dc-detail-btn/.test(src));
 
   // dev-only: stripped from the public bookmarklet
-  ok("module is DEV-ONLY (absent from the public/stripped bookmarklet)", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return !/dcDsFormulaModule/.test(strip); })());
+  ok("RELEASED: formula module ships in the public bookmarklet", (function () { var strip = bm.replace(/\/\* @strip:start[\s\S]*?@strip:end \*\//g, ""); return /function dcDsFormulaModule/.test(strip); })());
   ok("module present in the FULL bookmarklet build (synced)", /function dcDsFormulaModule\(\)/.test(bm));
 }
 
