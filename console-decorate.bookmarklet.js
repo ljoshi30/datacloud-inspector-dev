@@ -6966,9 +6966,29 @@
     // would match the STALE record-list component left mounted from the previous Explorer
     // page (Lightning SPA doesn't unmount on in-tab nav) → wrong FAB until reload.
     if (typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "DataExplore")) return false;
-    // DOM check: the record-list LWC component is definitive for a real Explorer page
-    if (findRecordListEl()) return true;
+    // one.app HASH routes (the Mapping Canvas, Explorer, etc.) carry no path to match. When the
+    // hash decodes to a componentDef, the URL IS authoritative: it is Data Explorer only if it
+    // names the dataViewTab. This stops a record-list component left MOUNTED from an earlier
+    // Explorer visit in the same tab (SPA doesn't unmount) from showing the Explorer launcher
+    // on the Mapping Canvas or any other hash page (reported bug).
+    var hashDecoded = (typeof decodeHashRoute === "function") ? decodeHashRoute(h) : "";
+    if (hashDecoded) return /dataViewTab/i.test(hashDecoded);
+    // The Mapping Canvas is never Data Explorer, even if a stale record list is still mounted.
+    try { if (typeof findVisibleByTag === "function" && findVisibleByTag(TAGGING_CMP).length) return false; } catch (e) {}
+    // DOM check: a VISIBLE record-list LWC component (hidden/stale copies don't count)
+    var rl = findRecordListEl();
+    if (rl && isVisible(rl)) return true;
     return false;
+  }
+
+  // Decode a one.app "#<base64 JSON>" route to its text, or "" if the URL has no such hash.
+  function decodeHashRoute(h) {
+    try {
+      var m = String(h || location.href).match(/#([A-Za-z0-9+\/=_-]{20,})$/);
+      if (!m) return "";
+      var b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      try { return decodeURIComponent(escape(atob(b))); } catch (e) { return atob(b); }
+    } catch (e) { return ""; }
   }
 
   // ── Safety limits for the Data Explorer query/render (prevents browser freeze) ──
