@@ -3275,11 +3275,16 @@
 
   /* Segment export + Data Explorer (public). The SQL-export helpers, the transform viewer and the Query Editor tooling
    * inside this region are wrapped in their own strip blocks below and stay dev-only. */
+  // Salesforce's drag handles carry a screen-reader instruction ("Press Spacebar to start reordering this
+  // filter, then use the Up and Down arrow keys to move it.") inside the rule's DOM. It is UI help text,
+  // never data, so every text reader drops it — otherwise it leaks into labels (container titles, rule rows).
+  var DC_A11Y_NOISE = /Press\s+Spacebar\s+to\s+start\s+reordering\s+this\s+(?:filter|item|row|attribute)[^.]*?(?:to\s+move\s+it|move\s+it)\.?/gi;
+  function dcCleanUiText(t) { return t ? String(t).replace(DC_A11Y_NOISE, " ").replace(/\s+/g, " ").trim() : ""; }
   function shadowEls(el) {
     try { const sr = el.shadowRoot; if (!sr) return []; return Array.from(sr.querySelectorAll("*")); } catch (e) { return []; }
   }
   function shadowTexts(el) {
-    return shadowEls(el).map(e => (e.textContent || "").trim().replace(/\s+/g, " ")).filter(Boolean);
+    return shadowEls(el).map(e => dcCleanUiText((e.textContent || "").trim().replace(/\s+/g, " "))).filter(Boolean);
   }
   // Leaf-only shadow text tokens (childless elements), shadow-piercing, de-duped
   // in DOM order. Avoids the concatenated container blobs shadowTexts() returns.
@@ -3290,7 +3295,7 @@
       try {
         if (ch.shadowRoot) return;
         if ((ch.childElementCount || 0) > 0) return;
-        const t = (ch.textContent || "").trim().replace(/\s+/g, " ");
+        const t = dcCleanUiText((ch.textContent || "").trim().replace(/\s+/g, " "));
         if (t && t.length < 160 && out[out.length - 1] !== t) out.push(t);
       } catch (e) {}
     });
@@ -3312,7 +3317,7 @@
         else if (c.nodeType === 1) { out += " "; walk(c); }
       }
     })(el);
-    return out.replace(/\s+/g, " ").trim();
+    return dcCleanUiText(out);
   }
 
   // ── Container Path capture cache (for the EXPORT) ───────────────────────────────────
