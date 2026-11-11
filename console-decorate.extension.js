@@ -8799,7 +8799,10 @@
       return;
     }
     const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const header = ["Id"].concat(columns);
+    // Header = exactly the columns shown. An "Id" column is added ONLY if the rows really carry
+    // one (Data Cloud objects usually have none → it was always an empty column), and never twice.
+    const header = (columns.indexOf("Id") < 0 && rows.some(r => r && Object.prototype.hasOwnProperty.call(r, "Id")))
+      ? ["Id"].concat(columns) : columns.slice();
     const doDownload = (parts) => {
       const blob = new Blob(parts, { type: "text/csv" });
       const a = document.createElement("a");
@@ -9995,6 +9998,9 @@
       var raw = parseInt(rowsInput.value, 10) || 1000;
       var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
       if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
+      // Large loads: ask first. Each query is billed by rows PROCESSED, and loading in several
+      // batches re-reads earlier rows, so the cost can exceed the row count. Also slow in VDI.
+      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nThis can take a while (especially in VDI) and uses Data Cloud credits — billed by rows processed, and loading in batches re-reads earlier rows, so it can cost more than the row count.\n\nTip: Download CSV saves what is loaded; Export All saves the whole table.")) return;
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       showTableSpinner(panel, "Loading " + want + " rows…");
       const sub = panel.querySelector(".dc-ac-sub");
