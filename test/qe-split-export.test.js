@@ -102,6 +102,33 @@ const lines = (f) => text(f).split("\n").filter(Boolean);
     ok(ids.length === TOTAL && ids.every((v, i) => v === i), "bookmarklet path: continuous, no gap/dup across part boundaries");
     ok(n.every(k => files[k].closed && files[k].chunks.join("").startsWith("Id,Name\n")), "bookmarklet path: each part has header and is closed"); }
 
+  console.log("10. EARLY-STOP guard: empty page before the expected total (the 15,728-of-1.96M report)");
+  function bmEnv(TOTAL, emptyFrom, emptyTimes) {
+    const files = {}; let emptyServed = 0;
+    const mkW = (n) => { files[n] = { chunks: [], closed: false }; return { write: async (x) => { files[n].chunks.push(x); }, close: async () => { files[n].closed = true; } }; };
+    const dir = { getFileHandle: async (n) => ({ createWritable: async () => mkW(n) }) };
+    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], DC_PAGE_SIZE: 49999,
+      fetch: async (url, o) => { const msg = JSON.parse(decodeURIComponent(/message=([^&]*)/.exec(o.body)[1])); const sql = msg.actions[0].params.sql;
+        const off = (/OFFSET (\d+)/.exec(sql) || [0, 0])[1] | 0; let n = Math.max(0, Math.min(15000, TOTAL - off));
+        if (off >= emptyFrom && emptyServed < emptyTimes) { emptyServed++; n = 0; }
+        const rows = []; for (let i = 0; i < n; i++) rows.push([off + i, "v"]);
+        return { text: async () => JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: { metadata: [{ name: "Id" }, { name: "Name" }], dataRows: rows, status: { completionStatus: "Finished", rowsProcessed: 0 } } }] }) }; } };
+    const run = new Function("env", "with(env){ return (" + fnSrc.replace(/^\s*function qeStreamFullExport/, "function") + "); }")(env);
+    return { run, files, dir };
+  }
+  { const e = bmEnv(60000, 15000, 2);   // server returns an empty page twice at offset 15000, then recovers
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "E", folderName: "F", shortWaitMs: 1 }, 60000);
+    ok(r.totalRows === 60000 && !r.incomplete, "transient empty page is retried → all 60,000 rows, not flagged incomplete (got " + r.totalRows + ")"); }
+  { const e = bmEnv(60000, 15000, 999);  // server never recovers
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "E", folderName: "F", shortWaitMs: 1 }, 60000);
+    ok(r.incomplete === true && r.totalRows === 15000 && r.expected === 60000, "permanent early stop is FLAGGED incomplete with the shortfall, not reported as success"); }
+  { const e = bmEnv(15000, 99999999, 0);   // genuinely the end of the data
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "E", folderName: "F", shortWaitMs: 1 }, 15000);
+    ok(r.totalRows === 15000 && !r.incomplete, "true end of data (count matches) → complete, no retries"); }
+  { const e = bmEnv(15000, 99999999, 0);   // no expected count (count unavailable) → old behaviour
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "E", folderName: "F" });
+    ok(r.totalRows === 15000 && !r.incomplete, "no expected count → unchanged behaviour"); }
+
   console.log("\n" + (fail ? "✗ FAILED: " + fail : "✅ ALL PASS: " + pass));
   process.exit(fail ? 1 : 0);
 })();

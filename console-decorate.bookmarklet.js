@@ -14072,6 +14072,17 @@
     // AND it reliably reads the count whether the row comes back as an array [n] or an
     // object {col:n}. Resolves { count, ok }; ok=false = value genuinely not in response.
     // Reuses the read-only session (_auraSniff) + dataspace candidates, same as fetch.
+    // A plain "SELECT * FROM <table> [WHERE ...]" is counted directly as SELECT COUNT(*) FROM <table> [WHERE ...]
+    // (what Salesforce's own editor does, a few seconds on millions of rows). Wrapping it in a subquery
+    // forces Data Cloud to build the whole result first and does not finish in time on big tables.
+    // Anything with JOIN / GROUP BY / ORDER BY / LIMIT / subquery / UNION keeps the safe wrapper.
+    function qeDirectCountSql(inner) {
+      var m = /^\s*SELECT\s+\*\s+FROM\s+("[^"]+"|[A-Za-z0-9_]+)(\s+WHERE\s+[\s\S]+)?$/i.exec(String(inner || ""));
+      if (!m) return null;
+      var w = m[2] || "";
+      if (/\b(JOIN|GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET|UNION|HAVING|INTERSECT|EXCEPT|SELECT)\b|[;()]/i.test(w)) return null;
+      return "SELECT COUNT(*) AS TotalRows FROM " + m[1] + w;
+    }
     function runQeCount(countSql, ds) {
       return new Promise(function (resolve, reject) {
         // Extension path: the documented endpoint returns clean array rows, so the shared
@@ -14092,7 +14103,7 @@
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
         if (cands.indexOf("default") < 0) cands.push("default");
-        var MAX_POLL = 1;   // one quick retry; if the COUNT(*) wrapper still isn't ready,
+        var MAX_POLL = 4;   // a few retries (~6s total) — a big table's COUNT can take several seconds; if the COUNT(*) wrapper still isn't ready,
                             // the caller falls back to Fetch-style row counting (which works).
         function tryDs(i, attempt) {
           attempt = attempt || 0;
@@ -14427,7 +14438,11 @@
     // written as several CSV files (part001, part002 …) of at most `partRows` data rows each, every part with
     // its own header row. Parts open lazily (no empty trailing file) and each finished part is closed, so
     // a cancel / failure / disk-full leaves every completed part intact and readable.
-    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split) {
+    // `expected` (optional) = row count from the pre-count. When given, an EMPTY page before that many rows
+    // have been written is NOT treated as end-of-data (Data Cloud can return an empty page while a later
+    // page is still being prepared): the same page is retried a few times, and if it stays empty the
+    // result is flagged `incomplete` with the shortfall instead of reporting a clean success.
+    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split, expected) {
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       return new Promise(function (resolve, reject) {
         var writer = null, cols = null, got = 0, closed = false;
@@ -14448,7 +14463,7 @@
         // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
         // partial export look "complete" and get memoized as if the whole table was exported
         // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
-        function result() { return { totalRows: got, cancelled: cancelled(), columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
+        function result() { var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
@@ -14550,6 +14565,7 @@
           var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
           var ASK = 49999;
           var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
+          var SHORT_RETRIES = (split && split.shortRetries != null) ? split.shortRetries : 5, SHORT_WAIT_MS = (split && split.shortWaitMs != null) ? split.shortWaitMs : 2000;
           var dsi = 0, POLL_MS = 1500, MAX_POLL = 6;   // ~9s cold-start ceiling (was 30s) — fail fast on empty
           function batch(offset, pollAttempt) {
             pollAttempt = pollAttempt || 0;
@@ -14585,6 +14601,8 @@
                 // batch is the true end of data → finish now. (Same regression as the Fetch path:
                 // without the got===0 gate, a small result polled ~30s at the end.)
                 if (arr.length === 0 && got === 0 && !scanDone && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
+                // Empty page BEFORE the expected total: not the end of the table. Retry the same page.
+                if (arr.length === 0 && got > 0 && expected > 0 && cap === HARD && got < expected && !cancelled() && pollAttempt < SHORT_RETRIES) { setTimeout(function () { batch(offset, pollAttempt + 1); }, SHORT_WAIT_MS); return; }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
                   prog();
                   if (arr.length === 0 || got >= cap) { finishOk(); }
@@ -15247,7 +15265,7 @@
       // touch ORDER BY — leaving it inside the subquery is valid and avoids fragile regex
       // that broke on ORDER BY expressions containing parentheses (e.g. ORDER BY COUNT(x)).
       var innerSql = cleanSql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
-      var countSql = isAlreadyCount ? cleanSql : "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper";
+      var countSql = isAlreadyCount ? cleanSql : (qeDirectCountSql(innerSql) || "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper");
       // CACHE HIT: same query already counted → show stored result, no API/credits.
       // Keyed on the CLEANED sql (comments/whitespace-insensitive) so cosmetic edits match.
       var _cntKey = normSqlKey(cleanSql);
@@ -15618,7 +15636,7 @@
         // query; cheap vs. a wasted full export + file prompt.
         cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Checking for rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
         var _innerForCount = sql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
-        var _preCountSql = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(_innerForCount) ? _innerForCount : "SELECT COUNT(*) AS TotalRows FROM (" + _innerForCount + ") AS countWrapper";
+        var _preCountSql = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(_innerForCount) ? _innerForCount : (qeDirectCountSql(_innerForCount) || "SELECT COUNT(*) AS TotalRows FROM (" + _innerForCount + ") AS countWrapper");
         var _precount = (typeof runQeCount === "function")
           ? runQeCount(_preCountSql, ds).then(function (r) { return r; }, function () { return { ok: false, count: -1 }; })
           : Promise.resolve({ ok: false, count: -1 });
@@ -15634,6 +15652,7 @@
           // picker → unchanged single-file flow.
           var EXCEL_ROWS = 1048576;
           var canSplit = false; try { canSplit = typeof window.showDirectoryPicker === "function"; } catch (e) {}
+          _expectedRows = (pc && pc.ok && pc.count > 0) ? pc.count : 0;
           if (canSplit && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count); return; }
           startExportStream();
         });
@@ -15657,6 +15676,7 @@
         document.getElementById("dc-split-one").onclick = function () { startExportStream(); };
         document.getElementById("dc-split-go").onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ partRows: n }); };
       }
+      var _expectedRows = 0;
       function startExportStream(splitOpt) {
         var handle, splitCfg = null;
         var startT = Date.now();
@@ -15693,7 +15713,7 @@
             if (card.style.display !== "none") renderStreamCard();
           }
           renderStreamCard();
-          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg);
+          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg, _expectedRows);
         }).then(function (res) {
           streamBtn.disabled = false;
           setExportBusy(false);
@@ -15727,10 +15747,11 @@
               + "<br>For the full data use <b>Power Query</b>, a database, or split/filter the query."
               + "</div>";
           }
+          var incompleteNote = res.incomplete ? "<div style='margin-top:8px;font-size:11px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:6px 8px;line-height:1.5;'><b>Incomplete:</b> the table has about <b>" + res.expected.toLocaleString() + "</b> rows but Data Cloud stopped returning rows after <b>" + res.totalRows.toLocaleString() + "</b>. The file(s) hold what was received. Click <b>Export ALL</b> again to retry, or export in slices with a <b>WHERE</b> filter.</div>" : "";
           var finalHtml = ""
-            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
+            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:" + (res.incomplete ? "#ef4444" : "#10b981") + ";'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : (res.incomplete ? "Export incomplete" : "Export complete")) + "</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to " + (nParts ? "your chosen folder" : "your chosen file") + " in " + secs + "s.</div>"
-            + viewerNote
+            + incompleteNote + viewerNote
             + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
           // Persist the final result so re-opening the panel / ℹ shows it (not a stale card).
           _streamState = { status: res.cancelled ? "cancelled" : "done", rows: res.totalRows, finalHtml: finalHtml };
