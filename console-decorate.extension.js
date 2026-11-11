@@ -12359,8 +12359,8 @@
         "<div style='background:#fff7ed;border:1px solid #fb923c;border-left:4px solid #ea580c;border-radius:8px;padding:9px 11px;color:#7c2d12;font-size:12px;line-height:1.45;'>" +
         "<div style='font-weight:700;color:#c2410c;margin-bottom:4px;'>⚠ One quick step to load your data</div>" +
         "<div style='margin-bottom:5px;'>To read this object's data, the tool needs Salesforce to load it once. Sorting the table triggers that:</div>" +
-        "<div><b style='color:#c2410c'>1.</b> In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> so the rows re-sort.</div>" +
-        "<div><b style='color:#c2410c'>2.</b> Then click <b style='background:#2563eb;color:#fff;border-radius:4px;padding:1px 6px;'>" + again + "</b> again.</div>" +
+        "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:5px;'><span style='flex:none;width:18px;height:18px;border-radius:50%;background:#ea580c;color:#fff;font:700 11px/18px -apple-system,sans-serif;text-align:center;'>1</span><span>In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> so the rows re-sort.</span></div>" +
+        "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='flex:none;width:18px;height:18px;border-radius:50%;background:#ea580c;color:#fff;font:700 11px/18px -apple-system,sans-serif;text-align:center;'>2</span><span>Press <span style='display:inline-block;background:#fff;border:1.5px solid #ea580c;color:#9a3412;font-weight:700;border-radius:999px;padding:0 9px;'>↻ " + again + "</span> once more.</span></div>" +
         "</div>";
     }
 
