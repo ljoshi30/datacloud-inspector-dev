@@ -63,6 +63,21 @@
   // clear any prior toggle-OFF flag so the persistent ⧉ overlays resume.
   try { window.__dcOff = false; } catch (e) {}
 
+  // Shared ON indicator for FAB toggle rows: green "● ON" on the title + soft green tint (same look as
+  // API Tooltip / Field origin). Idempotent; OFF removes it. Pure cosmetics, never throws.
+  window.__dcPaintOn = function (row, on) {
+    try {
+      if (!row) return;
+      var t = row.querySelector("span:first-child"); if (!t) return;
+      var old = t.querySelector(".dc-on-badge"); if (old) old.remove();
+      if (on) {
+        var b = document.createElement("span"); b.className = "dc-on-badge";
+        b.style.cssText = "color:#34d399;font-size:11px;font-weight:700;margin-left:6px;";
+        b.textContent = "● ON"; t.appendChild(b);
+      }
+      row.style.background = on ? "rgba(52,211,153,.12)" : "";
+    } catch (e) {}
+  };
   // ── "Open in new tab" ⧉ enable flag — PERSISTED so a user can silence just the ⧉ (not the
   // whole tool) from the FAB menu on a page that has one, and it carries to nav pages that
   // don't. localStorage so it survives reloads. Default ON. Exposed as window.__dcNewTabEnabled
@@ -17348,8 +17363,10 @@ processJSON();
       apiRow.onclick = function (e) {
         e.stopPropagation();
         var on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
-        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓";
+        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+        window.__dcPaintOn(apiRow, on);
       };
+      window.__dcPaintOn(apiRow, onNow);
       menu.appendChild(apiRow);
     }
 
@@ -23262,7 +23279,8 @@ processJSON();
         segApiRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
-          if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓";
+          if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+          window.__dcPaintOn(segApiRow, on);
           // leave the menu open so the user sees the state flip; closes on outside click
         };
       }
@@ -23282,7 +23300,9 @@ processJSON();
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleDsFormula(); } catch (err) {}
           if (fxSub) fxSub.textContent = on ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓";
+          window.__dcPaintOn(fmRow, on);
         };
+        window.__dcPaintOn(fmRow, fxOnNow);
       }
 
       // DMO-only "Field origin" entry — TOGGLES the Standard/Custom/System badges (no panel).
