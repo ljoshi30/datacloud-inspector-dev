@@ -20347,7 +20347,15 @@ processJSON();
         var flat = dialogText.replace(/\s+/g, " ").trim();
         var titleM = /Filter "([^"]+)" Attributes/.exec(flat);
         var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(flat);
-        var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(flat);
+        // Condition span = text between the start marker and "...another Attribute here".
+        // Start marker: "Drag and drop" (older layout) OR the "<Entity Label>:" sub-heading
+        // (layout seen when the editor is a full page). End marker accepts Add/Drag/Drop wording.
+        var END = "(?:Add |Drag |Drop )?another Attribute here";
+        var spanM = new RegExp("Drag and drop\\s+(.+?)\\s+" + END).exec(flat);
+        if (!spanM && titleM) {
+          var ent = titleM[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          spanM = new RegExp(ent + ":\\s+(.+?)\\s+" + END).exec(flat);
+        }
         var conditions = [];
         if (spanM && spanM[1]) {
           var span = spanM[1].trim();
@@ -20370,6 +20378,7 @@ processJSON();
 
         var summaryEl = null, attrTables = [], channelEl = null, wizardEl = null, staticTables = [];
         var attrWizardEl = null, filterDialogEl = null;
+        var filterFallbackEls = [];
         raw.forEach(function (el) {
           var tag = (el.tagName || "").toLowerCase();
           if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
@@ -20378,7 +20387,16 @@ processJSON();
           else if (tag === "runtime_cdp-market-segment-activation-wizard") wizardEl = wizardEl || el;
           else if (tag === "runtime_cdp-activation-attribute-wizard") attrWizardEl = attrWizardEl || el;
           else if (tag === "runtime_cdp-activation-related-attributes-filter-dialog") filterDialogEl = filterDialogEl || el;
+          else if (!filterDialogEl && /^runtime_cdp-/.test(tag) && /filter/.test(tag) && /activation|attribute/.test(tag) && !/badge|condition-row/.test(tag)) filterFallbackEls.push(el);
         });
+        // Fallback: if the exact dialog tag isn't present (Salesforce renamed/relocated it, or the editor opens as a
+        // full page), accept any activation filter component whose text is the "Filter "<x>" Attributes" editor.
+        if (!filterDialogEl) {
+          for (var fi = 0; fi < filterFallbackEls.length; fi++) {
+            var ft = ""; try { ft = filterFallbackEls[fi].innerText || filterFallbackEls[fi].textContent || ""; } catch (e) {}
+            if (/Filter\s+"[^"]+"\s+Attributes/.test(ft)) { filterDialogEl = filterFallbackEls[fi]; break; }
+          }
+        }
 
         // Filter-exists badges (Edit Filters vs Add Filters, read closed) — accumulate like
         // output names/paths since this step tears down on navigation.
