@@ -8177,7 +8177,10 @@
             return obj;
           }).filter(Boolean);
           allRows = allRows.concat(batchRows);
-          if (batchRows.length < Math.min(BM_BATCH, bmWant - offset) || allRows.length >= bmWant) {
+          // The server caps each RESPONSE by payload size, so a page can come back SHORTER than
+          // asked while more rows still exist. A short page is therefore NOT the end: keep paging
+          // by OFFSET until we have `bmWant` rows, an empty page, or the true total (when known).
+          if (batchRows.length === 0 || allRows.length >= bmWant || (bmServerTotal && allRows.length >= bmServerTotal)) {
             allRows.__serverRowCount = bmServerTotal || allRows.length;
             resolve(allRows);
           } else {
@@ -9972,7 +9975,7 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(wantRows || rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
+    rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads the whole table.";
     rowsInput.addEventListener("input", function () {
       var v = parseInt(rowsInput.value, 10);
       if (!v || v < 1) {
@@ -9981,7 +9984,7 @@
         rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
         rowsInput.value = String(DC_MAX_FETCH_ROWS);
       } else {
-        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads the whole table.";
       }
     });
     const reloadBtn = document.createElement("button");
@@ -11335,8 +11338,12 @@
     // just means the data set has fewer records than requested (not a silent cap).
     if (wantRows && rows.length < wantRows) {
       const sub = panel.querySelector(".dc-ac-sub");
+      var _srvTot = rows.__serverRowCount || 0;
+      var _moreOnServer = _srvTot > rows.length;
       if (sub) sub.innerHTML = rows.length.toLocaleString() + " rows &times; " + columns.length + " columns &bull; " +
-        "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but only " + rows.length.toLocaleString() + " records exist (or the source capped it).</span>";
+        (_moreOnServer
+          ? "<span style='color:#b8860b'>loaded " + rows.length.toLocaleString() + " of " + _srvTot.toLocaleString() + " in the table — the server returned fewer rows than requested (" + wantRows.toLocaleString() + "). Click Reload to try again, or use Export All for every row.</span>"
+          : "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but the table only has " + rows.length.toLocaleString() + " records.</span>");
     }
     if (typeof makeDraggable === "function") try { makeDraggable(panel, hdr); } catch (e) {}
     if (typeof addResizeHandle === "function") try { addResizeHandle(panel, 480, 300); } catch (e) {}
