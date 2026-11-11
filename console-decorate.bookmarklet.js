@@ -1336,13 +1336,10 @@
 
   // Make an element draggable by a handle (pointer-based; sets left/top).
   function makeDraggable(el, handle) {
-    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
-    const down = (e) => {
-      // ignore drags that start on interactive controls or selectable text
-      const tg = e.target;
-      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,[style*='user-select:text'],.dc-ac-sub")) return;
-      if (tg && window.getComputedStyle(tg).userSelect === "text") return;
-      dragging = true;
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, armed = false, pid = null;
+    const THRESH = 4;   // px of movement before a press on selectable text becomes a drag
+    const begin = () => {
+      dragging = true; armed = false;
       const r = el.getBoundingClientRect();
       // pin to left/top and drop any centering transform
       el.style.setProperty("left", r.left + "px", "important");
@@ -1350,13 +1347,31 @@
       el.style.setProperty("right", "auto", "important");
       el.style.setProperty("bottom", "auto", "important");
       el.style.setProperty("transform", "none", "important");
-      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
-      e.preventDefault();
+      ox = r.left; oy = r.top;
+      try { window.getSelection().removeAllRanges(); } catch (e) {}
+      try { handle.setPointerCapture(pid); } catch (e) {}
+      document.documentElement.style.setProperty("user-select", "none", "important");
+    };
+    const down = (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const tg = e.target;
+      // never hijack real controls
+      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,label")) return;
+      sx = e.clientX; sy = e.clientY; pid = e.pointerId;
+      // Title / info text stays selectable on a plain click or double-click, but dragging
+      // from it moves the panel (after a few px) — so the WHOLE header is a drag handle.
+      armed = true;
       window.addEventListener("pointermove", move, true);
       window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", up, true);
     };
     const move = (e) => {
-      if (!dragging) return;
+      if (!dragging) {
+        if (!armed) return;
+        if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < THRESH) return;
+        begin();
+      }
+      e.preventDefault();
       let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
       // keep on-screen
       const w = el.offsetWidth || 200, h = 40;
@@ -1365,8 +1380,15 @@
       el.style.setProperty("left", nx + "px", "important");
       el.style.setProperty("top", ny + "px", "important");
     };
-    const up = () => { dragging = false; window.removeEventListener("pointermove", move, true); window.removeEventListener("pointerup", up, true); };
+    const up = () => {
+      if (dragging) { try { handle.releasePointerCapture(pid); } catch (e) {} document.documentElement.style.removeProperty("user-select"); }
+      dragging = false; armed = false;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+    };
     handle.style.cursor = "move";
+    handle.style.touchAction = "none";
     handle.addEventListener("pointerdown", down, true);
   }
 
@@ -9954,7 +9976,7 @@
     const hdr = document.createElement("div");
     hdr.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;flex-shrink:0;cursor:move;";
     const titleWrap = document.createElement("div");
-    titleWrap.style.cssText = "flex:1;user-select:text;cursor:text;";
+    titleWrap.style.cssText = "flex:1;user-select:text;cursor:move;";
     var serverTotal = rows.__serverRowCount || 0;
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var filteredTotal = _filterCount[objectName] || 0;
