@@ -9800,6 +9800,7 @@
   var _originalRows = {};
   var _originalColumns = {};
   var _originalWantRows = {};
+  var _originalTotal = {};   // server total of the unfiltered table, restored by Clear / Back to original
   // Per-object set of fieldNames the user has hidden via the column-visibility toggle.
   // Pure view filter — doesn't affect the in-memory data or CSV export.
   var _hiddenColumns = {};
@@ -9928,6 +9929,7 @@
       _originalRows[objectName] = rows;
       _originalColumns[objectName] = columns;
       _originalWantRows[objectName] = wantRows;
+      if (rows.__serverRowCount) _originalTotal[objectName] = rows.__serverRowCount;
     }
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     // Field label lookup from whatever we discovered (falls back to the api name).
@@ -9950,7 +9952,7 @@
     var serverTotal = rows.__serverRowCount || 0;
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var filteredTotal = _filterCount[objectName] || 0;
-    var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? " (filtered)" : "") + " &times; " + columns.length + " cols";
+    var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? ((_filterState[objectName].fromSql && !_filterState[objectName].where) ? " (query result)" : " (filtered)") : "") + " &times; " + columns.length + " cols";
     if (isFiltered && filteredTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span> — Download CSV will fetch all";
     } else if (serverTotal > rows.length) {
@@ -10126,6 +10128,7 @@
           // the footer text if the hint updater is available.
           try {
             rows.__serverRowCount = cnt;
+            if (!(_filterState[objectName] && _filterState[objectName].active)) _originalTotal[objectName] = cnt;
             var _hintEl = panel.querySelector(".dc-scroll-hint");
             if (_hintEl) {
               var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total (Download CSV for all)" : "";
@@ -10938,6 +10941,7 @@
         fStatus.textContent = "";
         var origCols = _originalColumns[objectName] || columns;
         var origWant = _originalWantRows[objectName] || wantRows;
+        if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
         showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, allColumns);
       } else {
         // No cache — fall back to re-query
@@ -10960,6 +10964,7 @@
         _filterState[objectName] = null;
         _filterCount[objectName] = 0;
         if (_originalRows[objectName] && _originalRows[objectName].length) {
+          if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
           showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, allColumns);
         } else {
           // No cache — re-query without filter
@@ -11878,7 +11883,7 @@
       titleWrap.style.cssText = "flex:1;min-width:0;";
       titleWrap.innerHTML =
         "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SQL Editor</div>" +
-        "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(recList.objectName || "") + "</div>";
+        "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(objectName || recList.objectName || "") + "</div>";
       const scb = document.createElement("button");
       scb.innerHTML = "&#x2715;";
       scb.style.cssText = "border:none;background:rgba(255,255,255,.06);cursor:pointer;font-size:13px;color:#94a3b8;padding:4px 7px;border-radius:6px;line-height:1;flex-shrink:0;transition:background .15s;";
@@ -11893,13 +11898,10 @@
       // ── Editor: highlight layer + transparent textarea ────────────────────
       const buildInitialSoql = () => {
         const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
-        // Strip dataspace prefix from table name for SQL (dataspace passed separately)
-        var rawObjName = recList.objectName || "Unknown__c";
-        var ds0 = (typeof resolveDataSpace === "function") ? resolveDataSpace(rawObjName) : "";
+        // FROM = EXACTLY the table the user selected (the same name shown in the table header and
+        // used by Count / Export). Never stripped or rewritten, whatever the org or Data Space.
+        var rawObjName = objectName || recList.objectName || "Unknown__c";
         var from = rawObjName;
-        if (ds0 && rawObjName.indexOf(ds0 + "_") === 0) {
-          from = rawObjName.slice(ds0.length + 1);
-        }
         const fieldStr = fields.length ? fields.map(function(fn){ return '"' + fn.replace(/"/g,'""') + '"'; }).join(", ") : '"Id"';
         // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
@@ -12064,7 +12066,7 @@
         var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
         if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
         var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/^"|"$/g, "").replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
-        var objName = (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
+        var objName = objectName || (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
         // Run the user's REAL SQL server-side (WHERE / ORDER BY / LIMIT all honored) via
         // the documented endpoint (extension) or /aura (bookmarklet), then render the
         // result in OUR own table — the same table with View/Copy/hide-empty features.
@@ -12090,11 +12092,12 @@
           // Extract FROM table from the actual (auto-quoted) SQL so COUNT uses same name as data query
           var fromMatch = soql.match(/\bFROM\s+("(?:[^"]|"")*"|\S+)/i);
           var fromTable = fromMatch ? fromMatch[1] : sqlQuoteIdent(objName);
-          _filterState[objName] = null; // Reset first (FIX 8: clear any UI filter)
-          runRawSql(soql, ds, askRows).then(function (res) {
-            runBtn.disabled = false; runBtn.style.opacity = "1";
-            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-            // FIX 7: If SQL had WHERE, store it as filter state and run COUNT before rendering
+          // Shared success handler (normal run AND the auto-retry after dropping an unknown column).
+          // The previous filter/original state is only replaced HERE, after a query really succeeded,
+          // so a failed/cancelled run can never leave the table and its filter state out of sync.
+          function finishOk(res) {
+            // Keep the user's Rows setting — never replace it with how many rows this query returned.
+            var keepWant = _originalWantRows[objName] || res.rows.length;
             if (whereMatch && whereMatch[1]) {
               var whereClause2 = whereMatch[1].trim();
               _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
@@ -12106,19 +12109,26 @@
                 if (cnt > res.rows.length) res.rows.__serverRowCount = cnt;
                 _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
-                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
               }).catch(function () {
                 _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
-                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
               });
             } else {
-              _filterState[objName] = null;
+              // No WHERE (e.g. a plain LIMIT): still a QUERY RESULT, not the table's original rows —
+              // flag it so it is never cached as "original" and "Back to original" is offered.
+              _filterState[objName] = { active: true, where: "", conds: null, fromSql: true };
               _filterCount[objName] = 0;
               _savedSoqlRanOk = true;
               try { closeSoqlEditor(); } catch (e) {}
-              showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+              showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
             }
+          }
+          runRawSql(soql, ds, askRows).then(function (res) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+            finishOk(res);
           }).catch(function handleSqlErr(err) {
             var errMsg = String(err && err.message || err);
             // Unknown column: auto-strip bad SELECT columns one at a time, retrying until
@@ -12161,11 +12171,9 @@
                       ? "\"" + stripped[0] + "\" removed (not on this object)"
                       : stripped.length + " columns removed (not on this object): " + stripped.join(", ");
                     setStatus(stripMsg + " — showing " + res2.columns.length + " columns.", "warn");
-                    _savedSoqlRanOk = true;
                     textarea.value = retrySql;
                     syncHighlight();
-                    try { closeSoqlEditor(); } catch(e) {}
-                    showAllColumnsTable(objName, res2.columns, res2.rows, res2.rows.length, res2.columns);
+                    finishOk(res2);
                   }).catch(handleSqlErr); // recurse — strip next bad column if any
                   return;
                 }
