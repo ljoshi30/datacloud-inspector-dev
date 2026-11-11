@@ -15654,10 +15654,22 @@
           var canSplit = false; try { canSplit = typeof window.showDirectoryPicker === "function"; } catch (e) {}
           _expectedRows = (pc && pc.ok && pc.count > 0) ? pc.count : 0;
           if (canSplit && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count); return; }
+          // The browser only opens the save dialog shortly after a click. If the count took longer than
+          // that, opening it now would fail ("Must be handling a user gesture"), so ask for one more click.
+          var gestureLive = true; try { if (navigator.userActivation) gestureLive = !!navigator.userActivation.isActive; } catch (e) {}
+          if (!gestureLive) { showReadyToSave(pc && pc.ok ? pc.count : 0); return; }
           startExportStream();
         });
       };
       // The actual save-picker + stream, factored out so the count-first gate can call it.
+      function showReadyToSave(total) {
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 13px -apple-system,sans-serif;'>Ready to export" + (total ? ": " + total.toLocaleString() + " rows" : "") + "</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>The row count took a moment, so your browser needs one more click before it will let you choose where to save the file. Nothing has been exported yet and no export credits have been used.</div>"
+          + "<button id='dc-ready-save' style='width:100%;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Save CSV…</button>";
+        var rb = document.getElementById("dc-ready-save");
+        if (rb) rb.onclick = function () { startExportStream(); };
+      }
       function showSplitChoice(total) {
         var DEF = 1000000, MAXP = 1048575;   // 1,048,576 sheet rows minus the header row
         var parts0 = Math.ceil(total / DEF);
@@ -15761,7 +15773,9 @@
           setExportBusy(false);
           var m = String(err && err.message || err);
           var finalHtml;
-          if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
+          if (/user gesture|user activation/i.test(m)) {
+            finalHtml = "<div style='color:#92400e;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>One more click needed</div><div style='font-size:12px;color:#475569;line-height:1.6;'>Your browser only lets a page open the save dialog right after a click, and that moment passed. Click <b>Export ALL</b> again, then <b>Save CSV…</b>. No credits were used.</div>";
+          } else if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
             finalHtml = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>";
           } else if ((err && err.fileLocked) || /create or truncate|truncate file|NoModificationAllowed/i.test(m)) {
             // The chosen file couldn't be overwritten — almost always because it's still OPEN

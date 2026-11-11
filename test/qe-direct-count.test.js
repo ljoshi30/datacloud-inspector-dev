@@ -7,4 +7,12 @@ ok(f("select * from Foo__dlm where a = 1 and b='x'")==="SELECT COUNT(*) AS Total
 for(const q of ['SELECT * FROM a JOIN b ON a.x=b.x','SELECT * FROM a ORDER BY x','SELECT a, b FROM t','SELECT * FROM t WHERE x IN (SELECT y FROM z)','SELECT * FROM t GROUP BY x','SELECT * FROM t WHERE a=1 ORDER BY b','SELECT DISTINCT x FROM t','SELECT * FROM a UNION SELECT * FROM b',''])ok(f(q)===null,"keeps safe wrapper for: "+(q||"(empty)"));
 ok(/qeDirectCountSql\(innerSql\)/.test(src)&&/qeDirectCountSql\(_innerForCount\)/.test(src),"used by both Count and Export ALL pre-count");
 ok(/var MAX_POLL = 4;\s+\/\/ a few retries/.test(src),"count retry window widened");
+// --- save-dialog user-gesture guard (behavior: run the real branch logic against a fake navigator) ---
+const g=src.indexOf("var gestureLive = true;");const ge=src.indexOf("if (!gestureLive)",g);
+const snippet=src.slice(g,ge);
+const run=(nav)=>new Function("navigator",snippet+";return gestureLive;")(nav);
+ok(run({userActivation:{isActive:false}})===false,"expired click → NOT live → ask for a fresh click (no failing picker call)");
+ok(run({userActivation:{isActive:true}})===true,"fresh click → open picker straight away");
+ok(run({})===true,"browser without userActivation API → old behaviour (try picker)");
+ok(/showReadyToSave\(pc && pc\.ok \? pc\.count : 0\)/.test(src)&&/user gesture\|user activation/.test(src),"ready card + friendly error wired");
 console.log(fail?"FAILED "+fail:"✅ ALL PASS: "+pass);process.exit(fail?1:0);
