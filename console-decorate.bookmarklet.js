@@ -12352,6 +12352,18 @@
     const savedColObjs = lsLoad(objectName);
     const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
+    // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
+    // steps, the exact next click highlighted. `again` = the button name to press afterwards.
+    function showSortHelp(again) {
+      savedNote.innerHTML =
+        "<div style='background:#fff7ed;border:1px solid #fb923c;border-left:4px solid #ea580c;border-radius:8px;padding:9px 11px;color:#7c2d12;font-size:12px;line-height:1.45;'>" +
+        "<div style='font-weight:700;color:#c2410c;margin-bottom:4px;'>⚠ One quick step needed</div>" +
+        "<div style='margin-bottom:5px;'>Salesforce hasn't told us this object's Data Space yet. Sorting the table once fixes it:</div>" +
+        "<div><b style='color:#c2410c'>1.</b> In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> (e.g. a name like “Birth Date”) so the rows re-sort.</div>" +
+        "<div><b style='color:#c2410c'>2.</b> Then click <b style='background:#2563eb;color:#fff;border-radius:4px;padding:1px 6px;'>" + again + "</b> again.</div>" +
+        "</div>";
+    }
+
     footer.appendChild(savedNote);
 
     // Data Explorer credit-awareness note (self-contained — separate from Query Editor).
@@ -12577,8 +12589,7 @@
             // object likely isn't queryable from any detectable dataspace — give a clear,
             // action-oriented message instead of the raw SQL error.
             if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
-              msg = "Couldn't load this object — its Data Space couldn't be determined automatically.\n\n" +
-                    "Fix: in the Salesforce Data Explorer table (to the left / behind this picker — it stays open), click a column's ▾ menu and choose Sort. Once the table re-sorts, click \"Show selected columns' data\" again. That one sort tells the tool which Data Space this object uses.";
+              showSortHelp("Show selected columns' data"); return;
             }
             savedNote.textContent = msg;
           });
@@ -12630,7 +12641,7 @@
             hideSpinner();
             var rmsg = String(err && err.message || err);
             if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
-              rmsg = "Couldn't load the saved set — Data Space couldn't be determined automatically. In the Salesforce table (to the left / behind this picker), sort any column via its ▾ menu, then click Restore again.";
+              showSortHelp("Restore saved"); return;
             }
             savedNote.textContent = rmsg;
           });
