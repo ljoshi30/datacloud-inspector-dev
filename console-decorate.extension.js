@@ -12365,12 +12365,13 @@
     // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
     // steps, the exact next click highlighted. `again` = the button name to press afterwards.
     function showSortHelp(again) {
+      var num = "flex:none;width:18px;height:18px;border-radius:50%;background:#e2e8f0;color:#334155;font:600 11px/18px -apple-system,sans-serif;text-align:center;";
       savedNote.innerHTML =
-        "<div style='background:#fff7ed;border:1px solid #fb923c;border-left:4px solid #ea580c;border-radius:8px;padding:9px 11px;color:#7c2d12;font-size:12px;line-height:1.45;'>" +
-        "<div style='font-weight:700;color:#c2410c;margin-bottom:4px;'>⚠ One quick step to load your data</div>" +
-        "<div style='margin-bottom:5px;'>To read this object's data, the tool needs Salesforce to load it once. Sorting the table triggers that:</div>" +
-        "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:5px;'><span style='flex:none;width:18px;height:18px;border-radius:50%;background:#ea580c;color:#fff;font:700 11px/18px -apple-system,sans-serif;text-align:center;'>1</span><span>In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> so the rows re-sort.</span></div>" +
-        "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='flex:none;width:18px;height:18px;border-radius:50%;background:#ea580c;color:#fff;font:700 11px/18px -apple-system,sans-serif;text-align:center;'>2</span><span>Press <span style='display:inline-block;background:#fff;border:1.5px solid #ea580c;color:#9a3412;font-weight:700;border-radius:999px;padding:0 9px;'>↻ " + again + "</span> once more.</span></div>" +
+        "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;color:#334155;font-size:12px;line-height:1.5;'>" +
+        "<div style='font-weight:600;color:#0f172a;margin-bottom:2px;'>One quick step to load your data</div>" +
+        "<div style='color:#64748b;margin-bottom:8px;'>Salesforce needs to load this table once before we can read it.</div>" +
+        "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;'><span style='" + num + "'>1</span><span>Click any <b>column header</b> in the Salesforce table behind this panel.</span></div>" +
+        "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='" + num + "'>2</span><span>Then press <b style='color:#0f172a;border-bottom:1.5px solid #94a3b8;'>" + again + "</b> again.</span></div>" +
         "</div>";
     }
 
