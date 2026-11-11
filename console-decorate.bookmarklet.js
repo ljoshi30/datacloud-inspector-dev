@@ -20359,6 +20359,11 @@ processJSON();
         var conditions = [];
         if (spanM && spanM[1]) {
           var span = spanM[1].trim();
+          // Salesforce puts an instruction sentence before the first condition, e.g.
+          // "Drag and drop … then use the Up and Down arrow keys to move it. <Field> <Operator>".
+          // Drop everything up to and including that sentence so it never ends up in a field name.
+          var mv = span.lastIndexOf("to move it.");
+          if (mv >= 0) span = span.slice(mv + "to move it.".length).trim();
           var opAlt = DOCACT_FILTER_OPS.map(function (o) { return o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|");
           var condRe = new RegExp("([A-Za-z0-9 _.]+?)\\s+(" + opAlt + ")(?=\\s+[A-Z]|$)", "g");
           var cm;

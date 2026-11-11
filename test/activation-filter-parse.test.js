@@ -21,4 +21,10 @@ ok("two conditions captured",r&&r.conditions.length===2,JSON.stringify(r&&r.cond
 r=parse('Filter "Contact Point Email" Attributes\nPath\nX.Id > Y.Id\nAttributes (1)');
 ok("transition frame: no invented condition",r&&r.conditions.length===0,JSON.stringify(r));
 ok("empty text → null",parse("")===null);
+// REAL layout from the live page: instruction sentence precedes the condition (user screenshot)
+const I='Drag and drop attributes to reorder, then use the Up and Down arrow keys to move it. ';
+r=parse(P+'Contact Point Email:\n'+I+'Email Address\nHas Value\nAdd another Attribute here');
+ok("instruction sentence is NOT part of the field name",r&&r.conditions.length===1&&r.conditions[0].field==="Email Address"&&r.conditions[0].operator==="Has Value",JSON.stringify(r&&r.conditions));
+r=parse(P+'Drag and drop\n'+I+'\nEmail Address\nHas Value\nParty\nIs Not Null\nAdd another Attribute here');
+ok("instruction + two conditions",r&&r.conditions.length===2&&r.conditions[0].field==="Email Address"&&r.conditions[1].field==="Party",JSON.stringify(r&&r.conditions));
 console.log(fail?"\n❌ "+fail+" failed":"\n✅ ALL PASS: "+pass);process.exit(fail?1:0);
