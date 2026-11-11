@@ -75,7 +75,13 @@
         b.style.cssText = "color:#34d399;font-size:11px;font-weight:700;margin-left:6px;";
         b.textContent = "● ON"; t.appendChild(b);
       }
-      row.style.background = on ? "rgba(52,211,153,.12)" : "";
+      // OFF must restore the launcher's dark row colour — an empty string would delete the inline
+      // background and let the browser's default (white) button colour show on first load.
+      var base = on ? "rgba(52,211,153,.12)" : "#111827";
+      row.style.background = base;
+      // Hover handlers elsewhere reset to plain dark on leave, which would drop the green ON tint
+      // after one hover. Re-assert the correct resting colour for the current state instead.
+      row.onmouseleave = function () { row.style.background = base; };
     } catch (e) {}
   };
   // ── "Open in new tab" ⧉ enable flag — PERSISTED so a user can silence just the ⧉ (not the
@@ -10585,7 +10591,39 @@
     }
 
     if (changeColsBtn) hdr.appendChild(changeColsBtn);
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
+    // Full screen / restore — same idea as the Activation panel's ⛶. Pure layout: it only changes the
+    // panel's size/position (the table re-windows itself via its ResizeObserver); no data is touched.
+    const fsBtn = document.createElement("button");
+    fsBtn.textContent = "⛶";
+    fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+    fsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 14px -apple-system,sans-serif;color:#1e3a5f;line-height:1;";
+    var _fsOn = false, _fsSaved = null;
+    var _fsProps = ["left", "top", "right", "bottom", "width", "height", "max-width", "transform", "border-radius"];
+    function setFullScreen(on) {
+      if (on === _fsOn) return;
+      if (on) {
+        _fsSaved = _fsProps.map(function (k) { return [k, panel.style.getPropertyValue(k), panel.style.getPropertyPriority(k)]; });
+        panel.style.setProperty("left", "0", "important"); panel.style.setProperty("top", "0", "important");
+        panel.style.setProperty("right", "auto", "important"); panel.style.setProperty("bottom", "auto", "important");
+        panel.style.setProperty("width", "100vw", "important"); panel.style.setProperty("height", "100vh", "important");
+        panel.style.setProperty("max-width", "100vw", "important"); panel.style.setProperty("transform", "none", "important");
+        panel.style.setProperty("border-radius", "0", "important");
+        fsBtn.textContent = "🗗"; fsBtn.title = "Restore the previous size (or press Esc).";
+      } else {
+        _fsProps.forEach(function (k) { panel.style.removeProperty(k); });
+        (_fsSaved || []).forEach(function (t) { if (t[1]) panel.style.setProperty(t[0], t[1], t[2]); });
+        fsBtn.textContent = "⛶"; fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+      }
+      _fsOn = on;
+    }
+    fsBtn.onclick = function () { setFullScreen(!_fsOn); };
+    // Esc restores (only while this panel is full screen and nothing inside it is being edited).
+    var _fsEsc = function (ev) {
+      if (!panel.isConnected) { document.removeEventListener("keydown", _fsEsc, true); return; }
+      if (ev.key === "Escape" && _fsOn) { setFullScreen(false); ev.stopPropagation(); }
+    };
+    document.addEventListener("keydown", _fsEsc, true);
+    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
