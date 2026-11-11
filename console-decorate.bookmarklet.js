@@ -10362,7 +10362,7 @@
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
     const sqlBtn = document.createElement("button");
     sqlBtn.textContent = "Edit SQL";
-    sqlBtn.title = "Open a SQL editor to write your own query for this object (single-table SELECT). Advanced alternative to the filter bar.";
+    sqlBtn.title = "Write or edit the SQL for this table yourself (single-table SELECT). Use it when the filter bar is not flexible enough.";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
     sqlBtn.onclick = () => {
       var activeFilter = _filterState[objectName];
@@ -11435,7 +11435,7 @@
     hdr.innerHTML = "<div><div style='font-weight:700;font-size:13px'>Column Selector</div><div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(objectName) + " &bull; " + all.length + " fields available</div></div>";
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&#x2715;";
-    closeBtn.title = "Close the column selector (your picks are saved)";
+    closeBtn.title = "Close the column selector";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:15px;color:#5c6b8a;padding:2px 6px;border-radius:4px;line-height:1;";
     closeBtn.onclick = closeExploreModal;
     hdr.appendChild(closeBtn);
@@ -11804,6 +11804,9 @@
       all.forEach(c => { allFieldMap[c.fieldName] = c; });
 
       // ── Highlighter: mirror technique — textarea is transparent, pre shows colors ──
+      // Built ONCE (longest names first so a long field wins over a shorter prefix), not per keystroke.
+      const _fldRe = allFieldNames.length ? new RegExp("\\b(?:" + allFieldNames.slice().sort((a, b) => b.length - a.length)
+        .map(fn => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "g") : null;
       function highlightSoql(raw) {
         const escaped = raw.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
         const ranges = [];
@@ -11820,14 +11823,14 @@
         add(SOQL_KW,  "kw");
         add(SOQL_FN,  "fn");
         add(SOQL_NUM, "num");
-        allFieldNames.forEach(fn => {
-          const re = new RegExp("\\b" + fn.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + "\\b", "g");
-          re.lastIndex = 0; let m2;
-          while ((m2 = re.exec(escaped)) !== null) {
+        if (_fldRe) {
+          _fldRe.lastIndex = 0; let m2;
+          while ((m2 = _fldRe.exec(escaped)) !== null) {
             const s = m2.index, e = m2.index + m2[0].length;
             if (!ranges.some(r => r.s < e && r.e > s)) ranges.push({s, e, cls:"fld"});
+            if (m2[0].length === 0) _fldRe.lastIndex++;
           }
-        });
+        }
         ranges.sort((a,b) => a.s - b.s);
         // Vibrant palette on dark
         const C = {
@@ -11874,7 +11877,7 @@
       const titleWrap = document.createElement("div");
       titleWrap.style.cssText = "flex:1;min-width:0;";
       titleWrap.innerHTML =
-        "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SOQL Editor</div>" +
+        "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SQL Editor</div>" +
         "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(recList.objectName || "") + "</div>";
       const scb = document.createElement("button");
       scb.innerHTML = "&#x2715;";
@@ -11943,7 +11946,7 @@
       // The highlight <pre> sits behind; textarea is on top with color:transparent
       const hlPre = document.createElement("pre");
       hlPre.setAttribute("aria-hidden","true");
-      hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:hidden;pointer-events:none;z-index:1;box-sizing:border-box;";
+      hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;scrollbar-color:transparent transparent;pointer-events:none;z-index:1;box-sizing:border-box;border:0;";
 
       const textarea = document.createElement("textarea");
       _savedSoqlRanOk = false; // reset — must run successfully to save on next close
@@ -11955,7 +11958,7 @@
       textarea.autocorrect = "off";
       textarea.autocapitalize = "off";
       // color:transparent is the key — lets the hlPre colors show through
-      textarea.style.cssText = "position:relative;z-index:2;display:block;width:100%;box-sizing:border-box;height:160px;min-height:80px;resize:vertical;border:none;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;color:transparent;caret-color:#a5b4fc;outline:none;background:transparent;tab-size:2;";
+      textarea.style.cssText = "position:relative;z-index:2;display:block;width:100%;box-sizing:border-box;height:160px;min-height:80px;resize:vertical;border:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;color:transparent;caret-color:#a5b4fc;outline:none;background:transparent;margin:0;";
 
       const syncHighlight = () => {
         hlPre.innerHTML = highlightSoql(textarea.value) + "\n ";
@@ -12314,7 +12317,8 @@
         if (acDrop.style.display !== "none") {
           if (e.key==="ArrowDown") { e.preventDefault(); acIdx=Math.min(acIdx+1,acItems.length-1); highlightAcRow(); return; }
           if (e.key==="ArrowUp")   { e.preventDefault(); acIdx=Math.max(acIdx-1,0); highlightAcRow(); return; }
-          if ((e.key==="Enter"||e.key==="Tab") && acIdx>=0 && acItems[acIdx]) {
+          // Only TAB accepts a suggestion (as the hint bar says). Enter always inserts a normal new line.
+          if (e.key==="Tab" && acIdx>=0 && acItems[acIdx]) {
             e.preventDefault();
             insertAcItem(acItems[acIdx], getWordAtCursor(textarea.value,textarea.selectionStart).word);
             return;
@@ -12324,6 +12328,12 @@
         if ((e.ctrlKey||e.metaKey) && e.key==="Enter") { e.preventDefault(); e.stopPropagation(); runBtn.click(); }
       });
       textarea.addEventListener("blur", () => setTimeout(hideAc, 150));
+      // Any caret move that is NOT typing closes the list, so it can never act on a stale position
+      // (this was why Enter/Tab/arrows edited the wrong place after clicking elsewhere).
+      textarea.addEventListener("mousedown", hideAc);
+      textarea.addEventListener("keyup", (e) => {
+        if (["ArrowLeft","ArrowRight","Home","End","PageUp","PageDown"].indexOf(e.key) >= 0) hideAc();
+      });
 
       makeDraggable(soqlPanelEl, sh);
       addResizeHandle(soqlPanelEl, 460, 240);
@@ -12438,7 +12448,7 @@
     const restoreBtn = mkFootBtn("Restore saved", false, null, "Re-apply the column set you previously saved for this object.");
     const clearBtn   = mkFootBtn("Clear saved", false, null, "Delete the saved column set for this object.");
     const exportBtn  = mkFootBtn("Export CSV", false, null, "Download the selected columns' data as a CSV file (runs a query / uses Data Cloud credits).");
-    const soqlEdBtn  = mkFootBtn("Edit SOQL", false, null, "Open a SQL editor to write/adjust the query for these columns (single-table SELECT).");
+    const soqlEdBtn  = mkFootBtn("Edit SQL", false, null, "Open the SQL editor, pre-filled with a SELECT for the columns you ticked. Edit it and press Run (⌘/Ctrl + Enter) — single table only; uses Data Cloud credits.");
 
     // Grey out restore if nothing saved
     if (!savedColObjs || !savedColObjs.length) {
