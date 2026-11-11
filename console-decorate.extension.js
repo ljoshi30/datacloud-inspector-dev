@@ -10000,7 +10000,7 @@
       if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
       // Large loads: ask first. Each query is billed by rows PROCESSED, and loading in several
       // batches re-reads earlier rows, so the cost can exceed the row count. Also slow in VDI.
-      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nThis can take a while (especially in VDI) and uses Data Cloud credits — billed by rows processed, and loading in batches re-reads earlier rows, so it can cost more than the row count.\n\nTip: Download CSV saves what is loaded; Export All saves the whole table.")) return;
+      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nLarge loads take longer and use more Data Cloud credits. Credits are billed by rows processed, and rows fetched in several batches may be read more than once.\n\nYou can also use Download CSV to save the rows already loaded, or Export All to save the whole table.")) return;
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       showTableSpinner(panel, "Loading " + want + " rows…");
       const sub = panel.querySelector(".dc-ac-sub");
