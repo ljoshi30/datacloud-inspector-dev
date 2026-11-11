@@ -13895,7 +13895,7 @@
         cardBody.innerHTML = ""
           + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Exporting to your file…</span></div>"
           + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
-          + "<div style='color:#64748b;font-size:11px;'><b>" + (s.rows || 0).toLocaleString() + "</b> rows written so far… <span style='color:#94a3b8;'>(keeps running if you close this)</span></div>"
+          + "<div style='color:#64748b;font-size:11px;'><b>" + (s.rows || 0).toLocaleString() + "</b> rows written so far" + (s.files ? " (file " + s.files + ")" : "") + "… <span style='color:#94a3b8;'>(keeps running if you close this)</span></div>"
           + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
         if (!streamCancelBtn) streamCancelBtn = makeStreamCancelBtn();
         cardBody.appendChild(streamCancelBtn);
@@ -14423,36 +14423,83 @@
     // onProgress(fetched). isCancelled() lets the user stop. Resolves { totalRows, cancelled }.
     // Requires showSaveFilePicker (Chromium). Caller checks qeCanStream() first.
     function qeCanStream() { try { return typeof window.showSaveFilePicker === "function"; } catch (e) { return false; } }
-    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled) {
+    // `split` (optional, bookmarklet-safe): { dirHandle, partRows, baseName } → ONE continuous scan that is
+    // written as several CSV files (part001, part002 …) of at most `partRows` data rows each, every part with
+    // its own header row. Parts open lazily (no empty trailing file) and each finished part is closed, so
+    // a cancel / failure / disk-full leaves every completed part intact and readable.
+    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split) {
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       return new Promise(function (resolve, reject) {
         var writer = null, cols = null, got = 0, closed = false;
+        var headerLine = "", partIdx = 0, inPart = 0, partFiles = [];
+        var partRows = split ? Math.max(1, split.partRows | 0) : 0;
+        function prog() { if (onProgress) onProgress(got, split ? { part: partIdx, files: partFiles.length } : null); }
         var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var HARD = 100000000;   // 100M absolute backstop (still bounded — never truly infinite)
         var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
         var cap = ul > 0 ? ul : HARD;
-        function fail(err) { try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {} reject(err instanceof Error ? err : new Error(String(err))); }
+        function fail(err) {
+          try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {}
+          var er = err instanceof Error ? err : new Error(String(err));
+          if (split) { try { er.partsDone = partFiles.slice(); er.rowsWritten = got; } catch (e) {} }
+          reject(er);
+        }
         // Report the REAL cancel state. finishOk() is called on BOTH normal end-of-data AND on
         // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
         // partial export look "complete" and get memoized as if the whole table was exported
         // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
-        function result() { return { totalRows: got, cancelled: cancelled(), columns: cols || [] }; }
+        function result() { return { totalRows: got, cancelled: cancelled(), columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
           cols = (metadata || []).map(function (m) { return m && m.name; });
-          if (cols.length) return writer.write(cols.map(esc).join(",") + "\n");
+          if (cols.length) {
+            headerLine = cols.map(esc).join(",") + "\n";
+            if (split) return;                    // split mode: each part writes its own header when it opens
+            return writer.write(headerLine);
+          }
+        }
+        function pad3(n) { n = String(n); while (n.length < 3) n = "0" + n; return n; }
+        // Close the finished part, then open the next one lazily (only when a row actually needs it).
+        function closePart() { var w = writer; writer = null; closed = true; return w ? w.close() : Promise.resolve(); }
+        function openNextPart() {
+          partIdx++; inPart = 0;
+          var name = split.baseName + "_part" + pad3(partIdx) + ".csv";
+          return Promise.resolve().then(function () { return split.dirHandle.getFileHandle(name, { create: true }); })
+            .then(function (h) { return h.createWritable(); })
+            .then(function (w) { writer = w; closed = false; partFiles.push(name); return headerLine ? w.write(headerLine) : undefined; });
         }
         function writeRows(data) {
-          // Build ONE string for the whole batch, write once (fewer awaits), then release it.
-          var buf = "";
-          for (var i = 0; i < data.length; i++) {
-            var row = data[i]; if (!Array.isArray(row)) continue;
-            if (got >= cap) break;
-            buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
-            got++;
+          if (!split) {
+            // Build ONE string for the whole batch, write once (fewer awaits), then release it.
+            var buf = "";
+            for (var i = 0; i < data.length; i++) {
+              var row = data[i]; if (!Array.isArray(row)) continue;
+              if (got >= cap) break;
+              buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
+              got++;
+            }
+            return buf ? writer.write(buf) : Promise.resolve();
           }
-          return buf ? writer.write(buf) : Promise.resolve();
+          // Split mode: same batching, but rotate to a new file whenever the current part is full.
+          var idx = 0;
+          function step() {
+            var buf = "";
+            while (idx < data.length) {
+              var row = data[idx];
+              if (!Array.isArray(row)) { idx++; continue; }
+              if (got >= cap) { idx = data.length; break; }
+              if (!writer || inPart >= partRows) {
+                var pending = buf; buf = "";
+                var flush = (pending && writer) ? writer.write(pending) : Promise.resolve();
+                return flush.then(function () { return writer ? closePart() : undefined; }).then(openNextPart).then(step);
+              }
+              buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
+              got++; inPart++; idx++;
+            }
+            return buf ? writer.write(buf) : Promise.resolve();
+          }
+          return step();
         }
 
         // open the file stream (user already picked the file → fileHandle).
@@ -14473,7 +14520,7 @@
               throw err;
             });
         }
-        openWritable(0).then(function (w) {
+        (split ? Promise.resolve(null) : openWritable(0)).then(function (w) {
           writer = w;
           // ── EXTENSION cursor path (efficient — no re-scan) ──
           if (typeof extBridgePresent === "function" && extBridgePresent()) {
@@ -14482,7 +14529,7 @@
               Promise.resolve(writeHeader(first.metadata)).then(function () {
                 return writeRows(first.data || []);
               }).then(function () {
-                if (onProgress) onProgress(got);
+                prog();
                 var total = first.rowCount || got;
                 if (!first.queryId || !first.data || first.data.length === 0 || got >= cap || got >= total) { finishOk(); return; }
                 var queryId = first.queryId;
@@ -14490,7 +14537,7 @@
                   if (cancelled() || got >= cap) { finishOk(); return; }
                   fetchPageViaBridge(queryId, got, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (pg) {
                     if (!pg.data || pg.data.length === 0) { finishOk(); return; }
-                    writeRows(pg.data).then(function () { if (onProgress) onProgress(got); setTimeout(page, 0); }, fail);
+                    writeRows(pg.data).then(function () { prog(); setTimeout(page, 0); }, fail);
                   }).catch(fail);
                 }
                 setTimeout(page, 0);
@@ -14539,7 +14586,7 @@
                 // without the got===0 gate, a small result polled ~30s at the end.)
                 if (arr.length === 0 && got === 0 && !scanDone && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
-                  if (onProgress) onProgress(got);
+                  prog();
                   if (arr.length === 0 || got >= cap) { finishOk(); }
                   else { setTimeout(function () { batch(offset + arr.length); }, 0); }
                 }, fail);
@@ -15582,16 +15629,52 @@
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>This query returns <b>0 rows</b>, so there&rsquo;s nothing to save — no file was created and no credits were used for an export.</div>";
             return;   // never open the save dialog for an empty result
           }
-          // >0 rows (or count unavailable) → proceed to the save picker + stream.
+          // Over Excel's per-sheet row limit AND the browser can write into a folder → let the user
+          // choose one big CSV or several Excel-sized parts. Count unknown / smaller / no folder
+          // picker → unchanged single-file flow.
+          var EXCEL_ROWS = 1048576;
+          var canSplit = false; try { canSplit = typeof window.showDirectoryPicker === "function"; } catch (e) {}
+          if (canSplit && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count); return; }
           startExportStream();
         });
       };
       // The actual save-picker + stream, factored out so the count-first gate can call it.
-      function startExportStream() {
-        var handle;
+      function showSplitChoice(total) {
+        var DEF = 1000000, MAXP = 1048575;   // 1,048,576 sheet rows minus the header row
+        var parts0 = Math.ceil(total / DEF);
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Large result: " + total.toLocaleString() + " rows</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;'>Excel shows at most <b>1,048,576</b> rows per sheet, so one file this big would be cut off when opened in Excel. You can save it as one file, or split it into several Excel-sized files.</div>"
+          + "<div style='font-size:11px;color:#475569;background:#f8fafc;border-radius:6px;padding:8px 9px;margin-bottom:10px;line-height:1.6;'>Rows per file: <input id='dc-split-rows' type='number' min='1000' max='" + MAXP + "' value='" + DEF + "' style='width:100px;border:1px solid #cbd5e1;border-radius:4px;padding:2px 4px;font:600 11px -apple-system,sans-serif;'> <span id='dc-split-info' style='color:#0369a1;font-weight:600;'></span><br><span style='color:#64748b;'>It is still one pass over the table (no extra credits for splitting). Each file has its own header row. You pick a folder; the files are saved inside a new sub-folder, so nothing is overwritten.</span></div>"
+          + "<div style='display:flex;gap:8px;'>"
+          + "<button id='dc-split-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Split into files…</button>"
+          + "<button id='dc-split-one' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>One file</button>"
+          + "</div>";
+        var inp = document.getElementById("dc-split-rows"), info = document.getElementById("dc-split-info");
+        function readN() { var n = parseInt(inp.value, 10); if (!(n > 0)) n = DEF; return Math.max(1000, Math.min(MAXP, n)); }
+        function upd() { var n = readN(); info.textContent = "→ " + Math.ceil(total / n).toLocaleString() + " files"; }
+        inp.oninput = upd; upd();
+        document.getElementById("dc-split-one").onclick = function () { startExportStream(); };
+        document.getElementById("dc-split-go").onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ partRows: n }); };
+      }
+      function startExportStream(splitOpt) {
+        var handle, splitCfg = null;
         var startT = Date.now();
         var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
-        Promise.resolve().then(function () { return window.showSaveFilePicker(opts); }).then(function (h) {
+        var pick = splitOpt
+          ? function () {
+              return window.showDirectoryPicker({ mode: "readwrite" }).then(function (dir) {
+                var d = new Date(), z = function (n) { return (n < 10 ? "0" : "") + n; };
+                var base = tableName.replace(/[^a-zA-Z0-9_]/g, "") + "_" + todayStr();
+                var folder = base + "_split_" + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds());
+                return dir.getDirectoryHandle(folder, { create: true }).then(function (sub) {
+                  splitCfg = { dirHandle: sub, partRows: splitOpt.partRows, baseName: base, folderName: folder };
+                  return null;
+                });
+              });
+            }
+          : function () { return window.showSaveFilePicker(opts); };
+        Promise.resolve().then(pick).then(function (h) {
           handle = h;
           window.__dcStreamCancel = false;
           startT = Date.now();   // reset to the moment the user actually picked the file
@@ -15603,14 +15686,14 @@
           // Mark the export as running so closing the card (×) / panel and re-opening — or
           // re-clicking Export ALL — re-shows this progress instead of a blank/stale card.
           _streamState = { status: "running", rows: 0, finalHtml: "" };
-          function renderProgress(n) {
-            if (_streamState) { _streamState.rows = n; }
+          function renderProgress(n, info) {
+            if (_streamState) { _streamState.rows = n; if (info) _streamState.files = info.files; }
             // Only repaint if the card is actually visible — if the user closed it, we keep
             // the state updated silently and re-render on demand (renderStreamCard).
             if (card.style.display !== "none") renderStreamCard();
           }
           renderStreamCard();
-          return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });
+          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg);
         }).then(function (res) {
           streamBtn.disabled = false;
           setExportBusy(false);
@@ -15628,7 +15711,15 @@
           var overExcel = res.totalRows > EXCEL_MAX;
           var overSheets = nCols > 0 && res.totalRows > sheetsMax;
           var viewerNote = "";
-          if (!res.cancelled && (overExcel || overSheets)) {
+          var nParts = (res.parts && res.parts.length) || 0;
+          if (nParts) {
+            var cellsPerPart = res.partRows * nCols;
+            viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
+              + "📁 Saved in folder <b>" + String(res.folderName).replace(/</g, "&lt;") + "</b>: <b>" + nParts + "</b> file" + (nParts === 1 ? "" : "s") + " (<b>" + res.parts[0] + "</b>" + (nParts > 1 ? " … <b>" + res.parts[nParts - 1] + "</b>" : "") + "), up to " + res.partRows.toLocaleString() + " rows each, in order, each with its own header row."
+              + "<br>Every file opens fully in Excel." + (nCols > 0 && cellsPerPart > SHEETS_CELLS ? "<br>Google Sheets holds ~10M cells per file, so use a smaller rows-per-file for Sheets." : "")
+              + (res.cancelled ? "<br><b>Stopped early:</b> the last file is partial; the files before it are complete." : "")
+              + "</div>";
+          } else if (!res.cancelled && (overExcel || overSheets)) {
             viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
               + "📄 The CSV has <b>all " + res.totalRows.toLocaleString() + "</b> rows, but viewers truncate:"
               + "<br>• <b>Excel</b> shows max " + EXCEL_MAX.toLocaleString() + " rows" + (overExcel ? " — <b>this file is larger</b>" : "")
@@ -15638,7 +15729,7 @@
           }
           var finalHtml = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
-            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to " + (nParts ? "your chosen folder" : "your chosen file") + " in " + secs + "s.</div>"
             + viewerNote
             + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
           // Persist the final result so re-opening the panel / ℹ shows it (not a stale card).
@@ -15660,6 +15751,9 @@
               + "<b>Fix:</b> close the file in Excel (or pick a <b>new file name</b>), then click <b>Export ALL</b> again. No credits were used.</div>";
           } else {
             finalHtml = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
+          }
+          if (err && err.partsDone && err.partsDone.length) {
+            finalHtml += "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.5;'>" + err.rowsWritten.toLocaleString() + " rows were already saved in " + err.partsDone.length + " file" + (err.partsDone.length === 1 ? "" : "s") + " (" + err.partsDone[0] + (err.partsDone.length > 1 ? " … " + err.partsDone[err.partsDone.length - 1] : "") + "). The last one may be incomplete; the rest are intact.</div>";
           }
           _streamState = { status: "error", rows: (_streamState && _streamState.rows) || 0, finalHtml: finalHtml };
           if (card.style.display !== "none") renderStreamCard();

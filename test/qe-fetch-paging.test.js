@@ -213,7 +213,8 @@ console.log("\n8. streaming full export present + guarded");
   // when count !== 0 (or count unavailable).
   ok("Export ALL counts before prompting for a file (count-first gate)", /Checking for rows…/.test(src) && /runQeCount\(_preCountSql, ds\)/.test(src));
   ok("Export ALL with 0 rows shows 'Nothing to export' and does NOT open the save dialog", /pc && pc\.ok && pc\.count === 0/.test(src) && /Nothing to export/.test(src) && /return;\s*\/\/ never open the save dialog for an empty result/.test(src));
-  ok("save-picker is gated behind the count (startExportStream called only when not-0)", /startExportStream\(\);\s*\n\s*\}\);/.test(src) && /function startExportStream\(\)/.test(src));
+  ok("save-picker is gated behind the count (startExportStream called only when not-0)", /startExportStream\(\);\s*\n\s*\}\);/.test(src) && /function startExportStream\(splitOpt\)/.test(src) && src.indexOf("pc.count === 0") < src.indexOf("showSplitChoice(pc.count)") && src.indexOf("showSplitChoice(pc.count)") < src.lastIndexOf("startExportStream();\n        });"));
+  ok("split choice also comes AFTER the 0-row gate and only when the browser has showDirectoryPicker", /canSplit && pc && pc\.ok && pc\.count > EXCEL_ROWS/.test(src) && /typeof window\.showDirectoryPicker === "function"/.test(src));
   // Poll ceilings cut from ~30s to ~9s so a genuinely-empty/0-row table fails fast (reported 35s).
   ok("fetch cold-start poll ceiling reduced to ~9s (FE_MAX_POLL = 6)", /var FE_MAX_POLL = 6;/.test(src));
   ok("stream cold-start poll ceiling reduced to ~9s (MAX_POLL = 6)", /POLL_MS = 1500, MAX_POLL = 6;/.test(src));
