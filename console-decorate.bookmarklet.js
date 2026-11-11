@@ -13864,6 +13864,12 @@
     // stream's progress callback repaints every batch → the two cards flicker and clobber each
     // other, and the Count/Fetch result is unreadable until the stream ends. Dim them too so
     // it's visually clear they're paused. Re-enabled on every terminal path (done/cancel/error).
+    // Count, Fetch & Export and Export ALL each own their engine and state but share ONE result card, so only
+    // one of them may run at a time: while Count or Fetch runs, Export ALL is locked (setExportBusy does the
+    // reverse). Pure UI lock — no data or flags are shared.
+    function lockExportAll(on) {
+      try { if (streamBtn) { streamBtn.disabled = !!on; streamBtn.style.opacity = on ? "0.45" : "1"; streamBtn.style.pointerEvents = on ? "none" : ""; } } catch (e) {}
+    }
     function setExportBusy(on) {
       try {
         [countBtn, runBtn].forEach(function (b) {
@@ -14448,6 +14454,7 @@
         var writer = null, cols = null, got = 0, closed = false;
         var headerLine = "", partIdx = 0, inPart = 0, partFiles = [];
         var partRows = split ? Math.max(1, split.partRows | 0) : 0;
+        var lastEmpty = null;   // what Data Cloud reported on the last empty page (shown if the export ends early)
         function prog() { if (onProgress) onProgress(got, split ? { part: partIdx, files: partFiles.length } : null); }
         var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var HARD = 100000000;   // 100M absolute backstop (still bounded — never truly infinite)
@@ -14463,7 +14470,7 @@
         // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
         // partial export look "complete" and get memoized as if the whole table was exported
         // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
-        function result() { var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
+        function result() { var le = lastEmpty; var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), lastEmpty: (exp && got < exp) ? le : null, columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
@@ -14565,7 +14572,7 @@
           var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
           var ASK = 49999;
           var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
-          var SHORT_RETRIES = (split && split.shortRetries != null) ? split.shortRetries : 5, SHORT_WAIT_MS = (split && split.shortWaitMs != null) ? split.shortWaitMs : 2000;
+          var SHORT_RETRIES = (split && split.shortRetries != null) ? split.shortRetries : 5, SHORT_WAIT_MS = (split && split.shortWaitMs != null) ? split.shortWaitMs : 2000, LONG_RETRIES = (split && split.longRetries != null) ? split.longRetries : 30;
           var dsi = 0, POLL_MS = 1500, MAX_POLL = 6;   // ~9s cold-start ceiling (was 30s) — fail fast on empty
           function batch(offset, pollAttempt) {
             pollAttempt = pollAttempt || 0;
@@ -14602,7 +14609,12 @@
                 // without the got===0 gate, a small result polled ~30s at the end.)
                 if (arr.length === 0 && got === 0 && !scanDone && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
                 // Empty page BEFORE the expected total: not the end of the table. Retry the same page.
-                if (arr.length === 0 && got > 0 && expected > 0 && cap === HARD && got < expected && !cancelled() && pollAttempt < SHORT_RETRIES) { setTimeout(function () { batch(offset, pollAttempt + 1); }, SHORT_WAIT_MS); return; }
+                if (arr.length === 0 && got > 0 && expected > 0 && cap === HARD && got < expected) {
+                  lastEmpty = { offset: offset, status: cs == null ? "" : String(cs), progress: (typeof st.progress === "number" ? st.progress : null), rowsProcessed: isNaN(rpS) ? null : rpS };
+                  // Data Cloud says it is still working on this page → keep waiting much longer; otherwise a short retry.
+                  var maxTries = running ? LONG_RETRIES : SHORT_RETRIES;
+                  if (!cancelled() && pollAttempt < maxTries) { setTimeout(function () { batch(offset, pollAttempt + 1); }, SHORT_WAIT_MS); return; }
+                }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
                   prog();
                   if (arr.length === 0 || got >= cap) { finishOk(); }
@@ -15274,13 +15286,13 @@
         cardBody.innerHTML = countResultHtml(_lastCount.count, _lastCount.rowsProcessed, _lastCount.tableName || tableName, _lastCount.ds || ds, true);
         return;
       }
-      countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
+      countBtn.disabled = true; lockExportAll(true); countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
       cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
       ensureQueryContext(function (ready) {
         if (!ready) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
+          countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
           cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>One-time setup needed</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>To connect, run any query using Salesforce\\'s <b>Run Query</b> button once. This establishes a session that our tool uses.</div>"
             + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Steps:</b><br>1. Write or select a query in the editor<br>2. Click SF\\'s <b>Run Query</b> button<br>3. Once results appear, use our Count / Fetch buttons</div>";
@@ -15298,7 +15310,7 @@
             // to get the number is to run the FULL query and tally rows (same work — and
             // same Data Cloud credits — as Fetch & Export). Make the user OPT IN so Count
             // never silently burns fetch-level credits when they expected a cheap count.
-            countBtn.disabled = false; countBtn.textContent = "# Count";
+            countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
             cardBody.innerHTML = ""
               + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Fast count not possible</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>This query aggregates a large joined result, so a quick count won't complete. We can still get the exact number by running the full query and counting the rows — but that uses <b>the same Data Cloud credits as Fetch &amp; Export</b> (it does the same work).</div>"
@@ -15312,7 +15324,7 @@
             };
             var runBtnEl = document.getElementById("dc-cnt-run");
             if (runBtnEl) runBtnEl.onclick = function () {
-              countBtn.disabled = true;
+              countBtn.disabled = true; lockExportAll(true);
               cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
               // Use QE's OWN fetch path (not the shared Data Explorer exportPaginatedCsv) so
               // Query Editor stays fully independent. We only need the row count here, so we
@@ -15329,7 +15341,7 @@
           showCount(0, err);
         });
         function showCount(cnt, err, couldntParse, rowsProcessed) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
+          countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
           // Distinguish "genuinely 0 rows" from "we couldn't read the count value" — the
           // latter should NOT masquerade as 0. Surface it so the user retries rather than
@@ -15433,7 +15445,7 @@
         ds = dsCandidates[0] || "";
       }
 
-      runBtn.disabled = true; runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
+      runBtn.disabled = true; lockExportAll(true); runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       downloadBtn.style.display = "none"; viewBtn.style.display = "none"; setLastResult(null);
       // Cancel button for long-running exports
@@ -15442,7 +15454,7 @@
       cancelBtn.textContent = "Cancel";
       cancelBtn.title = "Stop the fetch/export in progress";
       cancelBtn.style.cssText = "border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;margin-left:8px;";
-      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; window.__dcStreamCancel = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
+      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
       card.style.display = "block";
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
@@ -15454,7 +15466,7 @@
 
       ensureQueryContext(function (ready) {
         if (!ready) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
@@ -15486,7 +15498,7 @@
           cardBody.appendChild(cancelBtn);
         }, function () { return window.__dcQueryExportCancelled === true; }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           if (res.totalRows === 0) {
             setLastResult(null);
@@ -15530,7 +15542,7 @@
           viewBtn.style.display = "inline-block";
           infoBtn.style.display = "flex";
         }).catch(function (err) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           var errMsg = String(err && err.message || err);
           // Handle cancel gracefully
@@ -15759,7 +15771,7 @@
               + "<br>For the full data use <b>Power Query</b>, a database, or split/filter the query."
               + "</div>";
           }
-          var incompleteNote = res.incomplete ? "<div style='margin-top:8px;font-size:11px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:6px 8px;line-height:1.5;'><b>Incomplete:</b> the table has about <b>" + res.expected.toLocaleString() + "</b> rows but Data Cloud stopped returning rows after <b>" + res.totalRows.toLocaleString() + "</b>. The file(s) hold what was received. Click <b>Export ALL</b> again to retry, or export in slices with a <b>WHERE</b> filter.</div>" : "";
+          var incompleteNote = res.incomplete ? "<div style='margin-top:8px;font-size:11px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:6px 8px;line-height:1.5;'><b>Incomplete:</b> the table has about <b>" + res.expected.toLocaleString() + "</b> rows but Data Cloud stopped returning rows after <b>" + res.totalRows.toLocaleString() + "</b>." + (res.lastEmpty ? " Data Cloud's last reply: status <b>" + (res.lastEmpty.status || "none") + "</b>" + (res.lastEmpty.progress != null ? ", progress " + res.lastEmpty.progress + "%" : "") + " at row " + res.lastEmpty.offset.toLocaleString() + "." : "") + " The file(s) hold what was received. Click <b>Export ALL</b> again to retry, or export in slices with a <b>WHERE</b> filter.</div>" : "";
           var finalHtml = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:" + (res.incomplete ? "#ef4444" : "#10b981") + ";'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : (res.incomplete ? "Export incomplete" : "Export complete")) + "</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to " + (nParts ? "your chosen folder" : "your chosen file") + " in " + secs + "s.</div>"

@@ -178,7 +178,7 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("already-exported guard warns + saves credits (memo by normalized SQL)", /var _lastStreamExport = null/.test(src) && /_lastStreamExport && _lastStreamExport\.sqlKey === sqlKey/.test(src) && /Already exported/.test(src));
   ok("memo only set on real non-cancelled result (not on cancel/0 rows)", /!res\.cancelled && res\.totalRows > 0[\s\S]{0,80}_lastStreamExport = \{ sqlKey: sqlKey/.test(src));
   ok("viewer-limit heads-up: warns when export exceeds Excel (1,048,576) / Sheets (10M cells/cols)", /var EXCEL_MAX = 1048576, SHEETS_CELLS = 10000000/.test(src) && /sheetsMax = nCols > 0 \? Math\.floor\(SHEETS_CELLS \/ nCols\)/.test(src) && /viewers truncate/.test(src));
-  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), columns: cols/.test(src));
+  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ var le = lastEmpty; var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
@@ -198,9 +198,9 @@ console.log("\n8. streaming full export present + guarded");
   // BUG FIX: result() must report the REAL cancel state (was hardcoded false → a cancelled
   // partial export looked "complete" and got memoized as a full export, then wrongly warned
   // "already exported, don't re-run"). finishOk runs on both end-of-data AND cancel.
-  ok("stream result() reports the real cancel flag (not hardcoded false)", /function result\(\) \{ var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), columns: cols/.test(src));
+  ok("stream result() reports the real cancel flag (not hardcoded false)", /function result\(\) \{ var le = lastEmpty; var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
   ok("no leftover hardcoded cancelled:false in the stream result", !/cancelled: false, columns: cols/.test(src));
-  ok("cancel-state fix synced into the bookmarklet build too", /cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), columns: cols/.test(bm));
+  ok("cancel-state fix synced into the bookmarklet build too", /cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(bm));
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
   ok("stream button hidden unless browser supports streaming", /qeCanStream\(\)\) streamBtn\.style\.display = "block"/.test(src));
   ok("stream handler confirms + warns on no-LIMIT whole-table export", /No LIMIT — this fetches the WHOLE table/.test(src));

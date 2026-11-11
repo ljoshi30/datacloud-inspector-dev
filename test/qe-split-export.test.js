@@ -129,6 +129,27 @@ const lines = (f) => text(f).split("\n").filter(Boolean);
     const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "E", folderName: "F" });
     ok(r.totalRows === 15000 && !r.incomplete, "no expected count → unchanged behaviour"); }
 
+  console.log("11. Data Cloud says it is still RUNNING on the empty page → wait much longer (the 244,154-of-1.96M report)");
+  function runningEnv(TOTAL, stallPages) {
+    const files = {}; let served = 0;
+    const mkW = (n) => { files[n] = { chunks: [], closed: false }; return { write: async (x) => { files[n].chunks.push(x); }, close: async () => { files[n].closed = true; } }; };
+    const dir = { getFileHandle: async (n) => ({ createWritable: async () => mkW(n) }) };
+    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], DC_PAGE_SIZE: 49999,
+      fetch: async (url, o) => { const msg = JSON.parse(decodeURIComponent(/message=([^&]*)/.exec(o.body)[1])); const sql = msg.actions[0].params.sql;
+        const off = (/OFFSET (\d+)/.exec(sql) || [0, 0])[1] | 0; let n = Math.max(0, Math.min(20000, TOTAL - off)); let st = { completionStatus: "Finished", rowsProcessed: 0 };
+        if (off >= 40000 && served < stallPages) { served++; n = 0; st = { completionStatus: "Running", progress: 40 }; }
+        const rows = []; for (let i = 0; i < n; i++) rows.push([off + i, "v"]);
+        return { text: async () => JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: { metadata: [{ name: "Id" }, { name: "Name" }], dataRows: rows, status: st } }] }) }; } };
+    const run = new Function("env", "with(env){ return (" + fnSrc.replace(/^\s*function qeStreamFullExport/, "function") + "); }")(env);
+    return { run, dir };
+  }
+  { const e = runningEnv(100000, 12);   // 12 "still running" replies — more than the 5 short retries, fewer than 30
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "R", folderName: "F", shortWaitMs: 1 }, 100000);
+    ok(r.totalRows === 100000 && !r.incomplete, "12 consecutive 'Running' empty pages are waited out → all 100,000 rows (got " + r.totalRows + ")"); }
+  { const e = runningEnv(100000, 9999);  // never finishes
+    const r = await e.run("SELECT * FROM t", "default", null, null, () => false, { dirHandle: e.dir, partRows: 1000000, baseName: "R", folderName: "F", shortWaitMs: 1 }, 100000);
+    ok(r.incomplete === true && r.lastEmpty && r.lastEmpty.status === "Running" && r.lastEmpty.offset === 40000, "never-finishing server → flagged incomplete WITH Data Cloud's last status/offset for diagnosis"); }
+
   console.log("\n" + (fail ? "✗ FAILED: " + fail : "✅ ALL PASS: " + pass));
   process.exit(fail ? 1 : 0);
 })();
