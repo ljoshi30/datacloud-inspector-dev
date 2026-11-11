@@ -3451,7 +3451,7 @@
     result.segmentType = readSegmentType();
     // Read ONLY from real SF label->value form structures (slds-form-element /
     // test-id__field-label). We deliberately do NOT do fuzzy CSS-class substring
-    // matching (e.g. class contains "publish") — that used to grab the Chatter
+    // matching — that used to grab the Chatter
     // publisher's "Share an update…Share this" as the Publish Schedule. Every value
     // below is keyed by the literal on-screen label, so it's what SF actually shows.
     const pairs = readAllFormPairs();
@@ -4425,7 +4425,7 @@
       }
 
       // ── row heights: wrap-aware, honouring BOTH merge directions ──────────────
-      // A vertically-merged wrapped cell (e.g. the per-block Notes) is satisfied by
+      // A vertically-merged wrapped cell is satisfied by
       // the SUM of its spanned rows, so distribute its needed height across them
       // instead of forcing it all onto the first row.
       var LINE = 15, self = this;
@@ -4977,7 +4977,7 @@
         if (rec.groups.length > 1) paintBar(MID, rec.start, rec.end, rec.groupOp || "OR", "medium", false);
       }
       // Outer rail joins top-level blocks — only meaningful when there are 2+.
-      // A single block (e.g. one nested segment / one condition) joins nothing.
+      // A single block joins nothing.
       if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true, tree.seqEntity);
 
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
@@ -5686,7 +5686,7 @@
     }
     // leafSql(node, ctxObj): ctxObj = the object this leaf is being rendered WITHIN (defaults to the
     // segment's FROM individual). A leaf whose object == ctxObj is a plain predicate. A leaf on a
-    // DIFFERENT object (e.g. a Calculated Insight on another object, at top level) must be a CORRELATED
+    // DIFFERENT object must be a CORRELATED
     // EXISTS over its path — a bare reference to an unjoined table would be invalid SQL. When a leaf is
     // the INNER filter of an aggregation, the caller passes ctxObj=container, so it stays a bare predicate
     // (it's already inside that subquery's FROM) and is NOT wrongly re-correlated.
@@ -6885,7 +6885,7 @@
   }
 
   // Small transient toast near the Explorer launcher — used to tell the user why an
-  // action can't run (e.g. no object selected) instead of the button doing nothing.
+  // action can't run instead of the button doing nothing.
   function dcExploreToast(msg) {
     try {
       var existing = document.getElementById("dc-explore-toast");
@@ -7802,7 +7802,7 @@
   }
 
   // Read the dataspace from the Query Editor page header.
-  // The page shows "Data Space" label with the value (e.g. "TDI") nearby.
+  // The page shows "Data Space" label with the value nearby.
   // A valid dataspace is short, alphanumeric (may have underscores/hyphens), no spaces.
   var _pageDataSpaceLabel = "";
   function readPageDataSpace() {
@@ -8238,7 +8238,7 @@
       columns.forEach(function (c) { if (c && !seen[c]) { seen[c] = 1; base.push(c); } });
 
       // Build (table, dataspace) combos to try. Probe 9 PROVED the winner is the FULL
-      // object name (e.g. "TDI_TDI_GI_..._dlm") + the REAL data space (e.g. "TDI").
+      // object name + the REAL data space (e.g. "TDI").
       // So try that FIRST, then variants only as fallbacks. The wrong data space — not
       // the name — is the usual "table does not exist" cause.
       // Data space: use ALL authoritative candidates (captured per-object spaces, then
@@ -8292,7 +8292,7 @@
 
   // Credit-saving cache around loadColumnsData: the last successful result is kept in
   // memory keyed by object + exact column set + row count. Re-viewing the SAME selection
-  // (e.g. after accidentally closing the results table) returns the cached rows WITHOUT
+  // returns the cached rows WITHOUT
   // another Data Cloud query. `force:true` (the Refresh button) bypasses the cache.
   // Returns a Promise<rows>; rows carry a non-enumerable __fromCache flag when reused.
   function _dataCacheKey(columns, want) {
@@ -8813,7 +8813,7 @@
       return;
     }
     // Large result → build the CSV string in non-blocking chunks so a wide/tall dataset
-    // (e.g. 50k rows × 117 cols) can't trigger "page unresponsive". Accumulate into a
+    // can't trigger "page unresponsive". Accumulate into a
     // parts array (each part = one chunk of joined lines) and hand it all to Blob at the end.
     const CHUNK = 2000;
     const parts = [header.map(esc).join(",") + "\n"];
@@ -10940,7 +10940,7 @@
         var origWant = _originalWantRows[objectName] || wantRows;
         showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, allColumns);
       } else {
-        // No cache (e.g. page was refreshed mid-session) — fall back to re-query
+        // No cache — fall back to re-query
         runFilter(null);
       }
     };
@@ -11105,7 +11105,7 @@
     });
     thead.appendChild(htr); table.appendChild(thead);
     // body — RENDER CAP: only build DOM for the first DC_MAX_RENDER_ROWS rows so a huge
-    // result (e.g. 50k) can't freeze the tab. ALL rows stay in `rows` for CSV export.
+    // result can't freeze the tab. ALL rows stay in `rows` for CSV export.
     const tbody = document.createElement("tbody");
     const fmt = (v) => v == null ? "" : (typeof v === "boolean" ? (v ? "true" : "false") : String(v));
     // PERF: build LEAN cells — no per-cell buttons or listeners. For a wide table
@@ -12359,7 +12359,7 @@
         "<div style='background:#fff7ed;border:1px solid #fb923c;border-left:4px solid #ea580c;border-radius:8px;padding:9px 11px;color:#7c2d12;font-size:12px;line-height:1.45;'>" +
         "<div style='font-weight:700;color:#c2410c;margin-bottom:4px;'>⚠ One quick step needed</div>" +
         "<div style='margin-bottom:5px;'>Salesforce hasn't told us this object's Data Space yet. Sorting the table once fixes it:</div>" +
-        "<div><b style='color:#c2410c'>1.</b> In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> (e.g. a name like “Birth Date”) so the rows re-sort.</div>" +
+        "<div><b style='color:#c2410c'>1.</b> In the <b>Salesforce table behind this panel</b>, click any <b>column header</b> so the rows re-sort.</div>" +
         "<div><b style='color:#c2410c'>2.</b> Then click <b style='background:#2563eb;color:#fff;border-radius:4px;padding:1px 6px;'>" + again + "</b> again.</div>" +
         "</div>";
     }
@@ -13374,7 +13374,7 @@
   }
 
   // ── Compare two CSV files ─────────────────────────────────────────────────
-  // Diff ANY two CSVs (e.g. two "Download CSV" exports from different runs) with the
+  // Diff ANY two CSVs with the
   // same key + added/removed/changed engine the snapshot compare uses. No row cap and
   // no browser-storage limit — this is the complete-data path for big results, and it
   // works for files from any query/machine/teammate. Reuses qeDiffSnapshots +
@@ -14138,7 +14138,7 @@
         // Query Editor and Data Explorer are kept fully independent (user requirement): this
         // path owns its own page size + default cap so changing one feature can't affect the
         // other. The /aura endpoint caps each RESPONSE by payload (~100k cells), so a page of
-        // "49999" actually returns ~rows=100000/columns (e.g. 3k at 35 cols) — paging via
+        // "49999" actually returns ~rows=100000/columns — paging via
         // OFFSET is what gets the rest (proven working: __dcProbeOffset showed 5,993 distinct
         // rows over 3 offset batches). We ASK for a big LIMIT but let the server decide the
         // real page size, and keep paging on the ACTUAL rows returned.
@@ -14181,7 +14181,7 @@
           var blob = new Blob(csvOut, { type: "text/csv" });
           var url = URL.createObjectURL(blob);
           // MEMORY: the Blob is an independent snapshot of the CSV, so the big line array is
-          // now redundant — drop it immediately so a large export (e.g. 285k rows) doesn't hold
+          // now redundant — drop it immediately so a large export doesn't hold
           // the same data TWICE in RAM. This is the main thing that kept the tab (esp. on VDI,
           // which is RAM/render-constrained) smooth during/after a big Fetch & Export. The
           // 2,000-row `rowData` preview is intentionally kept (View Results needs it; it's tiny).
@@ -14268,7 +14268,7 @@
                 return;
               }
               // Header from metadata (first batch that has columns). Also remember each
-              // column's SQL type (e.g. "date", "timestamp", "text") so callers can filter
+              // column's SQL type so callers can filter
               // a column dropdown to only date/timestamp fields — avoids "cannot compare
               // 'text' and 'timestamp'" from picking a non-date column as a date filter.
               if (!cols2.length && meta && meta.length) {
@@ -14292,7 +14292,7 @@
               if (!isNaN(rpNum)) { if (rpNum > rowsProcessed) rowsProcessed = rpNum; sawRp = true; }
               if (onProgress) onProgress(totalFetched, userLimit || totalFetched);
               // TERMINATION (fixed): the /aura endpoint caps each response by PAYLOAD, so a
-              // batch is almost ALWAYS "short" (e.g. 3k rows for a 35-col table) even when
+              // batch is almost ALWAYS "short" even when
               // millions remain. The old code stopped on any short batch → quit after the
               // first ~3k of a 1.7M table (the reported bug). Correct rule: keep paging via
               // OFFSET as long as the batch returned ANY rows (proven to advance — see
@@ -18195,7 +18195,7 @@ processJSON();
     // Dataspace priority: the LIVE dropdown selection wins (what the user currently has
     // chosen), THEN the value captured at XHR time, THEN cached data. Previously the
     // captured value won — so after the first load the label stayed stuck on that
-    // dataspace (e.g. "TDI") even after switching the dropdown to "default".
+    // dataspace even after switching the dropdown to "default".
     var dsName = "";
     (function findDs(root, depth) {
       if (depth > 8 || dsName) return;
@@ -20042,7 +20042,7 @@ processJSON();
         var path = docActCpPath(v);
         var value = label || fieldApi || "";
         var dump = (value || path || entityApi) ? "" : docActCpDump(v);   // only dump when we got nothing useful
-        // A channel the user never configured (e.g. Push/WhatsApp/Address left unset) carries
+        // A channel the user never configured carries
         // only UI-state plumbing and nothing meaningful — treat it as NOT present, not as noise.
         if (!value && !path && !entityApi && !dump) return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
         return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
@@ -21649,7 +21649,7 @@ processJSON();
       var lbl = ""; try { lbl = String(el.label || ""); } catch (e) {}
       return /^(sort field|field)$/i.test(lbl.trim());
     }
-    // The label text a combobox currently displays (e.g. "Individual Id") — from its inner button
+    // The label text a combobox currently displays — from its inner button
     // text. Used only for the cache fallback when .value is somehow empty.
     function dgComboShownText(el) {
       try { var b = (el.shadowRoot || el).querySelector('[role="combobox"],button,input'); if (b) return (b.value || b.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
@@ -23593,7 +23593,7 @@ processJSON();
     // don't read the response. Respects opt-out + per-feature/day throttle.
     // Fire one usage ping. Returns a Promise<bool> that resolves TRUE only on a confirmed HTTP success.
     // CRITICAL: the day/feature throttle (markSent) is set ONLY after the write actually succeeds — so a
-    // request that fails (e.g. CSP-blocked on a strict page) does NOT burn the throttle, and the user can
+    // request that fails does NOT burn the throttle, and the user can
     // still be captured later the same day on a page where the write is allowed. (Previously markSent ran
     // unconditionally right after firing the fetch, so one CSP-blocked attempt silently locked the user
     // out for the rest of the day — the "new user never captured" bug.)
