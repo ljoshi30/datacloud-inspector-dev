@@ -21034,16 +21034,31 @@ processJSON();
 
           // What's captured vs not (honest status banner).
           var caps = data.captured;
-          function pill(ok, label) {
-            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : "#8a6d00") + ";background:" + (ok ? "#e3f6ec" : "#fef6dd") + ";border:1px solid " + (ok ? "#b6e6cd" : "#f1dca0") + ";border-radius:12px;padding:3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + "</span>";
+          // Every pill explains itself: green = found on the page; otherwise WHY it is not green.
+          // `optional` items (an activation may simply not use them) show neutral grey, not a warning.
+          function pill(ok, label, tipOk, tipNo, optional) {
+            var bad = optional ? { c: "#475569", bg: "#f1f5f9", bd: "#dbe3ec" } : { c: "#8a6d00", bg: "#fef6dd", bd: "#f1dca0" };
+            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : bad.c) + ";background:" + (ok ? "#e3f6ec" : bad.bg) + ";border:1px solid " + (ok ? "#b6e6cd" : bad.bd) + ";border-radius:12px;padding:3px 6px 3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + docActInfoIcon(ok ? tipOk : tipNo) + "</span>";
           }
           var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>"
-            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")")
-            + pill(caps.outputNames, "Output names")
-            + pill(caps.contactPoints, "Contact points")
-            + pill(caps.staticValues, "Campaign Data")
-            + pill(caps.limits, "Related-object limits")
-            + pill(caps.paths, "Show Paths")
+            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")",
+                "Green: the attributes included in this activation were read from the page.",
+                "Not green: no included attributes were found on the page yet. Open the activation (wizard or review step) so its attribute list is visible, then reopen this panel.")
+            + pill(caps.outputNames, "Output names",
+                "Green: the output (column) names were read. They appear on the Attributes step.",
+                "Not green: output names are shown only on the Attributes step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.contactPoints, "Contact points",
+                "Green: the contact point (channel, e.g. email or phone) configuration was read. It appears on the Contact Point step.",
+                "Not green: contact points are shown only on the Contact Point step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.staticValues, "Campaign Data",
+                "Green: the fixed Campaign Data values configured on this activation were read.",
+                "Not green does not mean an error. Either no Campaign Data is configured on this activation (so there is nothing to show), or the Attributes step where it is listed has not been on screen yet. If you expect values, open the Attributes step once and reopen this panel.", true)
+            + pill(caps.limits, "Related-object limits",
+                "Green: Max # of Attribute Values and Sort By were read for the related objects.",
+                "Not green does not mean an error. Activations that use only attributes of the main object have no related-object limits. If this one uses related attributes, scroll to them on the Attributes step once so they are on screen, then reopen this panel.", true)
+            + pill(caps.paths, "Show Paths",
+                "Green: the join path for each related object was read.",
+                "Not green does not mean an error. Paths exist only for related objects. If this activation uses them, click Add Attributes on the Attributes step and turn on Show Paths once, then reopen this panel.", true)
             + "</div>";
           // How to capture the two Attributes-step extras (read only while visible, then remembered).
           if (!caps.limits || !caps.paths) {
