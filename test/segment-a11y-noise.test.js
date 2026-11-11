@@ -12,4 +12,9 @@ ok(clean("A "+N+" B "+N+" C")==="A B C","multiple");
 // the cleaner is applied in the readers
 ok(/shadowEls\(el\)\.map\(e => dcCleanUiText/.test(src),"shadowTexts uses cleaner");
 ok(/const t = dcCleanUiText\(/.test(src),"leafShadowTexts uses cleaner");
+ok(clean("Press Space to start dragging this row, then use the Up and Down arrow keys to move it. Email")==="Email","variant wording");
+ok(clean("Drag and drop Email Address then use the Up and Down arrow keys to move it. Has Value")==="Drag and drop Email Address Has Value","drag variant");
+ok(clean("Press Spacebar to begin reordering this attribute; use arrow keys to move it. Phone")==="Phone","begin variant");
+// every reader of drag-row text routes through the cleaner
+for (const [name,re] of [["segLabel hover",/t = dcCleanUiText\(\(le\.textContent/],["activation section header",/docActStripCount\(dcCleanUiText\(/],["activation path combobox",/txt = c \? dcCleanUiText\(/],["activation wizard text",/wizText = dcCleanUiText\(/],["data space AND/OR",/t = dcCleanUiText\(el\.textContent/],["deepText",/return dcCleanUiText\(out\)/]]) ok(re.test(src),name+" uses cleaner");
 console.log(`${pass} passed, ${fail} failed`);process.exit(fail?1:0);

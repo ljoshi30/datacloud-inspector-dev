@@ -3278,7 +3278,7 @@
   // Salesforce's drag handles carry a screen-reader instruction ("Press Spacebar to start reordering this
   // filter, then use the Up and Down arrow keys to move it.") inside the rule's DOM. It is UI help text,
   // never data, so every text reader drops it — otherwise it leaks into labels (container titles, rule rows).
-  var DC_A11Y_NOISE = /Press\s+Spacebar\s+to\s+start\s+reordering\s+this\s+(?:filter|item|row|attribute)[^.]*?(?:to\s+move\s+it|move\s+it)\.?/gi;
+  var DC_A11Y_NOISE = /Press\s+(?:the\s+)?(?:Space(?:bar)?|Enter)\s+to\s+(?:start|begin)\s+(?:reordering|moving|dragging)[^.]*?\bmove\s+it\.?|(?:then\s+)?use\s+the\s+Up\s+and\s+Down\s+arrow\s+keys?[^.]*?\./gi;
   function dcCleanUiText(t) { return t ? String(t).replace(DC_A11Y_NOISE, " ").replace(/\s+/g, " ").trim() : ""; }
   function shadowEls(el) {
     try { const sr = el.shadowRoot; if (!sr) return []; return Array.from(sr.querySelectorAll("*")); } catch (e) { return []; }
@@ -19912,7 +19912,7 @@ processJSON();
         for (var j = 0; j < path.length && j < 6; j++) {
           var le = path[j];
           if (!le || !le.getAttribute) continue;
-          var t = ""; try { t = (le.textContent || "").trim(); } catch (e2) {}
+          var t = ""; try { t = dcCleanUiText((le.textContent || "").trim()); } catch (e2) {}
           if (!t || t.length > 60) continue;
           var hit = segLabelLookup(t);
           if (hit && (hit.fieldApi || hit.objectApi)) return hit;
@@ -20253,7 +20253,7 @@ processJSON();
       function docActOwnerHeader(limitEl) {
         var p = limitEl && limitEl.parentNode, kids = (p && p.children) || [];
         for (var i = 0; i < kids.length; i++) {
-          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(kids[i].textContent);
+          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(dcCleanUiText(kids[i].textContent));
         }
         return "";
       }
@@ -20294,7 +20294,7 @@ processJSON();
           } else if (tag === "lightning-combobox" && /^Path\b/i.test(String(segSafeGet(el, "label") || ""))) {
             var txt = docActOptionLabel(segSafeGet(el, "options"), segSafeGet(el, "value"));
             if (!txt) {
-              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? String(c.textContent || "").replace(/\s+/g, " ").trim() : ""; } catch (e) {}
+              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? dcCleanUiText(String(c.textContent || "")) : ""; } catch (e) {}
             }
             var po = docActPathOwner(txt);
             if (txt && po) paths.push({ owner: po, text: txt });
@@ -20449,7 +20449,7 @@ processJSON();
         // Filter-exists badges (Edit Filters vs Add Filters, read closed) — accumulate like
         // output names/paths since this step tears down on navigation.
         if (attrWizardEl) {
-          var wizText = ""; try { wizText = attrWizardEl.innerText || attrWizardEl.textContent || ""; } catch (e) {}
+          var wizText = ""; try { wizText = dcCleanUiText(attrWizardEl.innerText || attrWizardEl.textContent || ""); } catch (e) {}
           var badges = docActParseFilterBadges(wizText);
           Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
           var mem = docActParseMembership(wizText);
@@ -22771,7 +22771,7 @@ processJSON();
       try {
         var outer = [];
         eachElement(document, function (el) {
-          var t = ""; try { t = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+          var t = ""; try { t = dcCleanUiText(el.textContent || ""); } catch (e) {}
           if (!/^(AND|OR)$/i.test(t)) return;
           var kids = 0; try { kids = el.children ? el.children.length : 0; } catch (e) {}
           if (kids > 1) return;                               // leaf-ish only

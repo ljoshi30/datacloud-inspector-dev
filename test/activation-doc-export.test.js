@@ -966,7 +966,8 @@ console.log("\n13. BEHAVIOR (real source fns): Provisional Audience Limiting + S
     for (let k = j; k < src.length; k++) { if (src[k] === "{") d++; else if (src[k] === "}") { d--; if (d === 0) return src.slice(i, k + 1); } }
   }
   const names = ["docActOptionLabel", "docActDeepFind", "docActStripCount", "docActOwnerHeader", "docActPathOwner", "docActReadLimits"];
-  const code = "var segSafeGet=function(o,k){try{return o[k];}catch(e){return undefined;}};\n" + names.map(grab).join("\n") + "\nreturn docActReadLimits;";
+  const cleaner = src.slice(src.indexOf("var DC_A11Y_NOISE"), src.indexOf("function shadowEls"));
+  const code = "var segSafeGet=function(o,k){try{return o[k];}catch(e){return undefined;}};\n" + cleaner + "\n" + names.map(grab).join("\n") + "\nreturn docActReadLimits;";
   const readLimits = new Function(code)();
 
   // minimal fake DOM
