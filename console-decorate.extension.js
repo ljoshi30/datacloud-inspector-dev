@@ -17343,12 +17343,12 @@ processJSON();
     if (typeof window.__dcToggleSegApi === "function" && isActivationWizardPage()) {
       var apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
       var onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
       var apiSub = apiRow.querySelector("span:last-child");
       apiRow.onclick = function (e) {
         e.stopPropagation();
         var on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
-        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓";
       };
       menu.appendChild(apiRow);
     }
@@ -23257,12 +23257,12 @@ processJSON();
       if (isSegment && typeof window.__dcToggleSegApi === "function") {
         const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
         const onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
         const segSub = segApiRow.querySelector("span:last-child");
         segApiRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
-          if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+          if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓";
           // leave the menu open so the user sees the state flip; closes on outside click
         };
       }
@@ -23276,12 +23276,12 @@ processJSON();
           typeof window.__dcDsFormulaCount === "function" && window.__dcDsFormulaCount() > 0) {
         const fxIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><text x='3' y='12' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='13'>ƒ</text></svg>";
         const fxOnNow = (typeof window.__dcDsFormulaIsOn === "function") && window.__dcDsFormulaIsOn();
-        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Toggle formula hints: hover a formula field to see its formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover a formula field" : "Off — click to enable hover");
+        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Turn on, then hover the ✓ checkmark in the Formula column to see that field's formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓");
         const fxSub = fmRow.querySelector("span:last-child");
         fmRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleDsFormula(); } catch (err) {}
-          if (fxSub) fxSub.textContent = on ? "On — hover a formula field" : "Off — click to enable hover";
+          if (fxSub) fxSub.textContent = on ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓";
         };
       }
 
