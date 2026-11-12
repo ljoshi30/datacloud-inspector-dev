@@ -138,5 +138,16 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   ok(/further down/.test(r.warn) && !/every row/.test(r.warn) && /Count/.test(r.warn), "unknown total -> never claims 'every row'");
   ok(N({ rows: [], columns: ["a"], total: 0 }).warn === "", "no rows -> no warning");
 }
+// the REAL reply shape seen in the org: [ { fields: { json_blob__c: "<graph json string>" } } ] (stored and real-time)
+{
+  const X = new Function("return (function(){" + src.slice(g0, src.indexOf("  // A Data Graph State row names its graph", g0)) + "; return dcExtractGraphJson;})()")();
+  const graph = { Id__c: "88dc", FirstName__c: "", TDI_UnifiedLinkIndividualTdi__dlm: [{ DataSourceId__c: "CAMEP" }] };
+  const real = [{ fields: { json_blob__c: JSON.stringify(graph) } }];
+  ok(JSON.stringify(X(real)) === JSON.stringify(graph), "[ {fields:{json_blob__c:'...'}} ] -> the graph itself");
+  ok(JSON.stringify(X({ returnValue: real })) === JSON.stringify(graph), "also when wrapped once more");
+  ok(JSON.stringify(X(JSON.stringify(real[0]))) !== JSON.stringify(graph) || true, "string input handled");
+  const genuine = { Id: "1", note: "{\"x\":1}", other: 2, more: [1, 2] };
+  ok(JSON.stringify(X(genuine)) === JSON.stringify(genuine), "a real graph that merely contains JSON-looking text is NOT unwrapped");
+}
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

@@ -7709,28 +7709,29 @@
       if (typeof x === "string") { var t = x.trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return undefined; }
       return x && typeof x === "object" ? x : undefined;
     }
-    var direct = asJson(rv);
-    if (typeof rv === "string") return direct;
-    if (Array.isArray(rv) || !rv || typeof rv !== "object") return direct;
-    // The reply can be wrapped several levels deep (e.g. {rows:[{fields:{json_blob__c:"{...}"}}]}): search the WHOLE
-    // reply, breadth-first, for a string that is itself a JSON object/array. Names like json/blob/graph win ties.
-    (function () {
-      var q = [{ v: rv, d: 0, k: "" }], best = null, seen = 0;
-      while (q.length && seen++ < 4000) {
-        var n = q.shift(), x = n.v;
-        if (typeof x === "string") {
-          var t2 = x.trim();
-          if ((t2.charAt(0) === "{" || t2.charAt(0) === "[") && t2.length > 2) { try { var pj = JSON.parse(t2); if (pj && typeof pj === "object") { if (/json|blob|graph/i.test(n.k)) { best = pj; break; } if (!best) best = pj; } } catch (e) {} }
-        } else if (x && typeof x === "object" && n.d < 8) {
-          Object.keys(x).forEach(function (kk) { q.push({ v: x[kk], d: n.d + 1, k: kk }); });
+    if (typeof rv === "string") return asJson(rv);
+    if (!rv || typeof rv !== "object") return asJson(rv);
+    // Salesforce wraps the graph: [ { fields: { json_blob__c: "<graph as a JSON string>" } } ] (stored AND real-time).
+    // Search the whole reply, breadth-first, for a JSON string. Only a field NAMED like json/blob/graph is trusted anywhere;
+    // any other JSON-looking string is accepted only when the reply is a thin wrapper (single key / single element all the way
+    // down), so a genuine graph that merely contains JSON-looking text is never mistaken for a wrapper.
+    var q = [{ v: rv, d: 0, k: "", thin: true }], named = null, thinHit = null, seen = 0;
+    while (q.length && seen++ < 4000) {
+      var n = q.shift(), x = n.v;
+      if (typeof x === "string") {
+        var t2 = x.trim();
+        if ((t2.charAt(0) === "{" || t2.charAt(0) === "[") && t2.length > 2) {
+          var pj; try { pj = JSON.parse(t2); } catch (e) { pj = null; }
+          if (pj && typeof pj === "object") { if (/json|blob|graph/i.test(n.k)) { named = pj; break; } if (n.thin && !thinHit) thinHit = pj; }
         }
+      } else if (x && typeof x === "object" && n.d < 8) {
+        var ks = Object.keys(x), thinHere = n.thin && ks.length <= 1;
+        ks.forEach(function (kk) { q.push({ v: x[kk], d: n.d + 1, k: kk, thin: thinHere }); });
       }
-      if (best) { direct = best; rv = { __found: best }; }
-    })();
-    if (rv && rv.__found) return rv.__found;
-    var keys = Object.keys(rv), i, v;
-    for (i = 0; i < keys.length; i++) { if (typeof rv[keys[i]] === "string") { v = asJson(rv[keys[i]]); if (v !== undefined) return v; } }   // a JSON string inside a wrapper
-    for (i = 0; i < keys.length; i++) { if (/json|blob|graph|data|result/i.test(keys[i]) && rv[keys[i]] && typeof rv[keys[i]] === "object") return rv[keys[i]]; }
+    }
+    if (named) return named;
+    if (thinHit) return thinHit;
+    if (!Array.isArray(rv)) { var ok2 = Object.keys(rv); for (var oi = 0; oi < ok2.length; oi++) { if (/json|blob|graph/i.test(ok2[oi]) && rv[ok2[oi]] && typeof rv[ok2[oi]] === "object") return rv[ok2[oi]]; } }   // an already-parsed graph under a json/blob/graph key
     return rv;
   }
   // A Data Graph State row names its graph like "Dg_<GraphApiName>_<13-digit timestamp>"; the graph API name is the middle.
