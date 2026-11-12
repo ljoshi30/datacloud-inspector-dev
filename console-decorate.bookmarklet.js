@@ -9877,178 +9877,286 @@
     }
     return false;
   }
-  // Popup showing one cell's FULL value (for long text / JSON / blob fields), with a
-  // Copy button and pretty-print for JSON. Salesforce-like "view field value" behavior.
-  var _cellViewEl = null;
+  // ── Cell value / JSON viewer (Data Explorer) ────────────────────────────────────────────────────
+  // Three views of the same value: Table (record view: summary cards + one tab per nested table), Tree (collapsible,
+  // colour-coded, built lazily so a huge blob never floods the DOM) and Raw (pretty text with line numbers).
+  // Pure helpers below are unit-tested; none of them mutates the caller's object.
+  function dcJsonPathStr(path) {
+    var s = "$";
+    (path || []).forEach(function (p) { s += typeof p === "number" ? "[" + p + "]" : (/^[A-Za-z_$][\w$]*$/.test(p) ? "." + p : "[" + JSON.stringify(p) + "]"); });
+    return s;
+  }
+  function dcJsonStats(v) {
+    var st = { nodes: 0, depth: 0, arrays: 0, objects: 0 };
+    (function walk(x, d) {
+      st.nodes++; if (d > st.depth) st.depth = d;
+      if (x && typeof x === "object") {
+        if (Array.isArray(x)) { st.arrays++; x.forEach(function (c) { walk(c, d + 1); }); }
+        else { st.objects++; Object.keys(x).forEach(function (k) { walk(x[k], d + 1); }); }
+      }
+    })(v, 0);
+    return st;
+  }
+  // Which branches must be open to reveal every key/value containing q (case-insensitive)? Capped so a 1-letter query is safe.
+  function dcJsonSearch(root, q, cap) {
+    var out = { open: {}, hits: 0, capped: false };
+    q = String(q || "").toLowerCase(); cap = cap || 300;
+    if (!q) return out;
+    (function walk(x, path) {
+      if (out.hits >= cap) { out.capped = true; return; }
+      var isC = x && typeof x === "object";
+      var key = path.length ? path[path.length - 1] : null;
+      var hit = (typeof key === "string" && key.toLowerCase().indexOf(q) >= 0) || (!isC && String(x).toLowerCase().indexOf(q) >= 0);
+      if (hit) { out.hits++; for (var i = 0; i < path.length; i++) out.open[JSON.stringify(path.slice(0, i))] = true; }
+      if (isC) { if (Array.isArray(x)) x.forEach(function (c, i) { walk(c, path.concat(i)); }); else Object.keys(x).forEach(function (k) { walk(x[k], path.concat(k)); }); }
+    })(root, []);
+    return out;
+  }
+  // Table plan: scalar fields of the root + one tab per nested key (found at ANY depth, merged by key name).
+  function dcJsonTablePlan(data) {
+    var d = JSON.parse(JSON.stringify(data));
+    var asArr = function (v) { return Array.isArray(v) ? v : [v]; };
+    var isObj = function (x) { return x && typeof x === "object" && !Array.isArray(x); };
+    var plan = { scalars: [], tabs: [] }, idx = {};
+    function addTab(name, rows, parent) {
+      if (idx[name] == null) { idx[name] = plan.tabs.length; plan.tabs.push({ name: name, parent: parent || "", rows: [], cols: [], done: 0 }); }
+      var t = plan.tabs[idx[name]]; rows.forEach(function (r) { t.rows.push(r); });
+    }
+    if (Array.isArray(d)) addTab("Rows", d, "");
+    else if (isObj(d)) {
+      Object.keys(d).forEach(function (k) { if (d[k] && typeof d[k] === "object") addTab(k, asArr(d[k]), ""); else plan.scalars.push({ k: k, v: d[k] }); });
+    } else plan.scalars.push({ k: "value", v: d });
+    var changed;
+    do {
+      changed = false;
+      plan.tabs.forEach(function (t) {
+        while (t.done < t.rows.length) {
+          var r = t.rows[t.done++]; changed = true;
+          if (isObj(r)) Object.keys(r).forEach(function (k) { if (r[k] && typeof r[k] === "object") addTab(k, asArr(r[k]), t.name); });
+        }
+      });
+    } while (changed);
+    plan.tabs.forEach(function (t) {
+      t.rows.forEach(function (r) {
+        if (isObj(r)) Object.keys(r).forEach(function (k) { if ((!r[k] || typeof r[k] !== "object") && t.cols.indexOf(k) < 0) t.cols.push(k); });
+        else if (t.cols.indexOf("value") < 0 && !(r && typeof r === "object")) t.cols.push("value");
+      });
+      delete t.done;
+    });
+    return plan;
+  }
+  // One pretty-printed line -> coloured HTML (keys / strings / numbers / booleans / null).
+  function dcJsonColorLine(line, esc) {
+    var m = /^(\s*)("(?:[^"\\]|\\.)*")(\s*:\s*)(.*)$/.exec(line), indent, key = "", rest;
+    if (m) { indent = m[1]; key = "<span class='k'>" + esc(m[2]) + "</span>" + esc(m[3]); rest = m[4]; }
+    else { var mi = /^(\s*)(.*)$/.exec(line); indent = mi[1]; rest = mi[2]; }
+    var vm = /^("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(,?)$/.exec(rest), val;
+    if (vm) {
+      var t = vm[1], cls = t.charAt(0) === '"' ? "s" : t === "null" ? "z" : (t === "true" || t === "false") ? "b" : "n";
+      val = "<span class='" + cls + "'>" + esc(t) + "</span>" + esc(vm[2]);
+    } else val = "<span class='p'>" + esc(rest) + "</span>";
+    return esc(indent) + key + val;
+  }
+  function dcJsonBytes(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+
+  var _cellViewEl = null, _cellViewEsc = null;
+  function dcJsonViewerCss() {
+    if (document.getElementById("dc-jv-style")) return;
+    var st = document.createElement("style"); st.id = "dc-jv-style";
+    st.textContent =
+      ".dc-jv{--ink:#1e293b;--mut:#64748b;--line:#e2e8f0;--acc:#6366f1;}" +
+      ".dc-jv *{box-sizing:border-box}" +
+      ".dc-jv .hd{display:flex;align-items:center;gap:10px;padding:11px 14px;background:linear-gradient(120deg,#1e1b4b,#3730a3 60%,#4f46e5);color:#fff;cursor:move}" +
+      ".dc-jv .ttl{font-weight:700;font-size:14px;letter-spacing:.01em}.dc-jv .sub{font:600 10px SF Mono,Consolas,monospace;color:#c7d2fe;margin-top:2px}" +
+      ".dc-jv .seg{display:inline-flex;background:rgba(255,255,255,.14);border-radius:8px;padding:2px}" +
+      ".dc-jv .seg button{border:none;background:none;color:#e0e7ff;font:600 11px -apple-system,sans-serif;padding:5px 11px;border-radius:6px;cursor:pointer}" +
+      ".dc-jv .seg button.on{background:#fff;color:#3730a3;box-shadow:0 1px 3px rgba(0,0,0,.25)}" +
+      ".dc-jv .btn{border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:7px;padding:5px 11px;font:600 11px -apple-system,sans-serif;cursor:pointer}" +
+      ".dc-jv .btn:hover{background:rgba(255,255,255,.22)}.dc-jv .btn.pri{background:#fff;color:#3730a3;border-color:#fff}" +
+      ".dc-jv .x{border:none;background:none;color:#e0e7ff;font-size:20px;line-height:1;cursor:pointer;padding:0 4px}" +
+      ".dc-jv .bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut)}" +
+      ".dc-jv .chip{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:2px 9px;font-weight:600}" +
+      ".dc-jv .q{flex:1;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
+      ".dc-jv .body{overflow:auto;flex:1;min-height:0;background:#fff;color:var(--ink)}" +
+      ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;padding:12px 14px}" +
+      ".dc-jv .card{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:7px 10px;background:#fff;cursor:copy;min-width:0}" +
+      ".dc-jv .card:hover{background:#f5f7ff}.dc-jv .card .l{font:700 9.5px -apple-system,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}" +
+      ".dc-jv .card .v{font:12.5px SF Mono,Consolas,monospace;word-break:break-all;margin-top:2px}" +
+      ".dc-jv .tabs{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}" +
+      ".dc-jv .tab{border:1px solid var(--line);background:#f8fafc;color:#475569;border-radius:999px;padding:5px 12px;font:600 11.5px -apple-system,sans-serif;cursor:pointer;display:inline-flex;gap:6px;align-items:center}" +
+      ".dc-jv .tab:hover{border-color:#a5b4fc}.dc-jv .tab.on{background:var(--acc);border-color:var(--acc);color:#fff}" +
+      ".dc-jv .tab .n{background:rgba(99,102,241,.14);color:#4338ca;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .tab.on .n{background:rgba(255,255,255,.25);color:#fff}" +
+      ".dc-jv .tab.empty{opacity:.55;border-style:dashed}" +
+      ".dc-jv .from{font-size:10.5px;color:var(--mut);padding:8px 14px 0}.dc-jv .from b{color:#4338ca}" +
+      ".dc-jv table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}" +
+      ".dc-jv th{position:sticky;top:0;background:#eef2ff;color:#3730a3;text-align:left;padding:7px 10px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid #c7d2fe;white-space:nowrap}" +
+      ".dc-jv td{padding:6px 10px;border-bottom:1px solid #f1f5f9;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px SF Mono,Consolas,monospace;cursor:copy}" +
+      ".dc-jv tbody tr:nth-child(even) td{background:#fafbff}.dc-jv tbody tr:hover td{background:#eef2ff}" +
+      ".dc-jv .nul{color:#94a3b8;font-style:italic}.dc-jv .bt{background:#ede9fe;color:#6d28d9;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .bf{background:#f1f5f9;color:#64748b;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .num{color:#b45309}" +
+      ".dc-jv .tree{padding:10px 12px 14px;font:12.5px/1.6 SF Mono,Consolas,monospace}" +
+      ".dc-jv .row{white-space:nowrap}.dc-jv .tg{display:inline-block;width:14px;color:#6366f1;cursor:pointer;user-select:none}" +
+      ".dc-jv .kids{margin-left:7px;padding-left:12px;border-left:1px solid var(--g,#c7d2fe)}" +
+      ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#94a3b8;font-style:italic}.dc-jv .p{color:#64748b}" +
+      ".dc-jv .meta{color:#94a3b8;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
+      ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
+      ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#94a3b8;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
+      ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
+    document.head.appendChild(st);
+  }
   function showCellValue(fieldApi, fieldLabel, value) {
     if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
-    var esc2 = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
-    // Try to parse as JSON and render as table/record view
-    var bodyHtml = "";
-    var parsed = null;
-    try { parsed = JSON.parse(value); } catch (e) {}
-    if (parsed && typeof parsed === "object") {
-      // JSON detected — render as formatted record view
-      bodyHtml = renderJsonAsTable(parsed, esc2);
-    } else {
-      // Plain text — show as-is
-      bodyHtml = "<pre style='margin:0;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(value) + "</pre>";
-    }
-    var m = document.createElement("div");
-    _cellViewEl = m;
-    m.style.cssText = "position:fixed;top:3vh;left:50%;transform:translateX(-50%);width:min(1100px,94vw);height:min(90vh,900px);z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;";
+    if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
+    dcJsonViewerCss();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
+    var text = value == null ? "" : String(value), parsed = null;
+    try { var p0 = JSON.parse(text); if (p0 && typeof p0 === "object") parsed = p0; } catch (e) {}
+    var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv";
+    m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
+    var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
+    var plan = parsed ? dcJsonTablePlan(parsed) : null;
     m.innerHTML =
-      "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb'>" +
-        "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc2(fieldLabel) + "</div>" +
-        "<div style='font:600 10px SF Mono,Consolas,monospace;color:#5c6b8a'>" + esc2(fieldApi) + (parsed ? " &bull; Record View" : " &bull; " + value.length + " chars") + "</div></div>" +
-        "<button class='dc-cv-json' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 10px;cursor:pointer;font:600 10px system-ui;color:#475569" + (parsed ? "" : ";display:none") + "'>JSON</button>" +
-        "<button class='dc-cv-copy' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy</button>" +
-        "<button class='dc-cv-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button>" +
-      "</div>" +
-      "<div class='dc-cv-body' style='overflow:auto;flex:1'>" + bodyHtml + "</div>";
+      "<div class='hd'><div style='flex:1;min-width:0'><div class='ttl'>" + esc(fieldLabel) + "</div><div class='sub'>" + esc(fieldApi) + "</div></div>" +
+      (parsed ? "<div class='seg'><button data-v='table'>Table</button><button data-v='tree'>Tree</button><button data-v='raw'>Raw</button></div>" : "") +
+      "<button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
+      "<div class='bar'>" + (parsed
+        ? "<span class='chip'>JSON</span><span>" + dcJsonBytes(text.length) + "</span><span>&middot; " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + "</span><span>&middot; " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep</span>" +
+          "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
+          "<input class='q' placeholder='Search keys and values…' />"
+        : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
+      "<div class='body'></div><div class='toast'></div>";
     document.body.appendChild(m);
-    // Function to wire up all tabs inside the modal (reusable after re-render)
-    function wireUpTabs() {
-      m.querySelectorAll("[data-tabnav]").forEach(function (nav) {
-        nav.onclick = function (e) {
-          var t = e.target; while (t && !t.getAttribute("data-idx") && t !== nav) t = t.parentElement;
-          if (!t || !t.getAttribute("data-idx")) return;
-          var idx = t.getAttribute("data-idx");
-          var group = nav.getAttribute("data-tabnav");
-          m.querySelectorAll("[data-tabgrp='" + group + "']").forEach(function (tb) { tb.style.background = "#f3f2f2"; tb.style.color = "#54698d"; });
-          t.style.background = "#0070d2"; t.style.color = "white";
-          m.querySelectorAll("[data-panegrp='" + group + "']").forEach(function (p) { p.style.display = "none"; });
-          var pane = m.querySelector("[data-panegrp='" + group + "'][data-idx='" + idx + "']");
-          if (pane) pane.style.display = "block";
-        };
-      });
+    var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
+    var view = parsed ? "table" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
+    function toast(t) { toastEl.textContent = t; toastEl.style.opacity = "1"; clearTimeout(tmr); tmr = setTimeout(function () { toastEl.style.opacity = "0"; }, 1100); }
+    function copy(t, msg) { try { navigator.clipboard.writeText(t); toast(msg || "Copied"); } catch (e) { toast("Copy blocked by the browser"); } }
+    function hl(s) {   // escape + highlight the search query
+      s = String(s == null ? "" : s); if (!query) return esc(s);
+      var i = s.toLowerCase().indexOf(query.toLowerCase()); if (i < 0) return esc(s);
+      return esc(s.slice(0, i)) + "<mark>" + esc(s.slice(i, i + query.length)) + "</mark>" + hl2(s.slice(i + query.length));
     }
-    wireUpTabs();
-    window.__dcJsonTabIds = [];
-    m.querySelector(".dc-cv-copy").onclick = function () {
-      try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
-    };
-    // Toggle between table view and raw JSON
-    var showingTable = true;
-    if (parsed) {
-      m.querySelector(".dc-cv-json").onclick = function () {
-        var bodyEl = m.querySelector(".dc-cv-body");
-        var btn = m.querySelector(".dc-cv-json");
-        if (showingTable) {
-          bodyEl.innerHTML = "<pre style='margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(JSON.stringify(parsed, null, 2)) + "</pre>";
-          btn.textContent = "Table";
-        } else {
-          bodyEl.innerHTML = renderJsonAsTable(parsed, esc2);
-          wireUpTabs(); // Re-attach tab handlers after re-render
-          btn.textContent = "JSON";
-        }
-        showingTable = !showingTable;
-      };
+    function hl2(s) { return hl(s); }
+    function cellHtml(v) {
+      if (v === null || v === undefined) return "<span class='nul'>null</span>";
+      if (v === true) return "<span class='bt'>true</span>";
+      if (v === false) return "<span class='bf'>false</span>";
+      if (typeof v === "number") return "<span class='num'>" + hl(v) + "</span>";
+      return hl(v);
     }
-    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } };
-    m.querySelector(".dc-cv-x").onclick = close;
-    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
-  }
-  // Render a JSON object/array as a clean flat table (no inline nesting)
-  function renderJsonAsTable(data, esc2) {
-    if (Array.isArray(data)) {
-      if (data.length === 0) return "<div style='padding:12px;color:#64748b'>Empty array</div>";
-      if (typeof data[0] === "object" && data[0] !== null) {
-        // Get ONLY scalar columns — nested objects become their own tabs at the parent level
-        var cols = [];
-        data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0 && (!item[k] || typeof item[k] !== "object")) cols.push(k); }); });
-        if (cols.length === 0) cols = Object.keys(data[0] || {}).slice(0, 10);
-        var html = "<table style='border-collapse:collapse;width:100%;font-size:11px;min-width:400px'>";
-        html += "<thead><tr style='background:#fafaf9'>" + cols.map(function (c) { return "<th style='text-align:left;padding:8px;border-bottom:2px solid #d8dde6;text-transform:uppercase;color:#514f4d;white-space:nowrap;font-size:10px'>" + esc2(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead>";
-        html += "<tbody>";
-        data.forEach(function (item, idx) {
-          html += "<tr style='" + (idx % 2 ? "" : "background:#f8fafc") + "'>";
-          cols.forEach(function (c) {
-            var v = item && item[c] != null ? item[c] : "";
-            html += "<td style='padding:8px;border-bottom:1px solid #edeff0;vertical-align:top;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc2(String(v)) + "'>" + esc2(String(v)) + "</td>";
+    function fit(chars, cols) {   // size the window to the data instead of a fixed box
+      var w = view === "table" ? Math.max(620, Math.min(cols * 150 + 60, 1500)) : Math.max(620, Math.min(chars * 7.4 + 90, 1100));
+      m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
+    }
+    // ---------------- Table view
+    function renderTable() {
+      var h = "";
+      if (plan.scalars.length) {
+        h += "<div class='cards'>" + plan.scalars.map(function (s) {
+          return "<div class='card' data-copy='" + esc(s.v == null ? "" : String(s.v)) + "' title='Click to copy'><div class='l'>" + esc(s.k.replace(/__c$/, "")) + "</div><div class='v'>" + cellHtml(s.v) + "</div></div>";
+        }).join("") + "</div>";
+      }
+      if (plan.tabs.length) {
+        h += "<div class='tabs'>" + plan.tabs.map(function (t, i) {
+          return "<button class='tab" + (i === activeTab ? " on" : "") + (t.rows.length ? "" : " empty") + "' data-t='" + i + "'>" + esc(t.name.replace(/__dlm$|__cio$|__c$/, "")) + "<span class='n'>" + t.rows.length + "</span></button>";
+        }).join("") + "</div>";
+        var t = plan.tabs[activeTab];
+        h += t.parent ? "<div class='from'>inside <b>" + esc(t.parent.replace(/__dlm$|__cio$|__c$/, "")) + "</b></div>" : "";
+        if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#94a3b8'>Empty: no rows in this table</div>";
+        else {
+          var cols = t.cols.length ? t.cols : ["value"];
+          h += "<div style='padding:6px 14px 14px;overflow:auto'><table><thead><tr>" + cols.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          var shown = 0;
+          t.rows.forEach(function (r) {
+            var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r };
+            if (query && cols.every(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(query.toLowerCase()) < 0; })) return;
+            shown++;
+            h += "<tr>" + cols.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
           });
-          html += "</tr>";
-        });
-        html += "</tbody></table>";
-        return html;
+          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#94a3b8'>No rows match &ldquo;" + esc(query) + "&rdquo; in this tab</div>" : "") + "</div>";
+        }
       }
-      return "<div style='padding:12px'>" + data.map(function (item, i) { return "<div style='padding:3px 10px;border-bottom:1px solid #f1f5f9;font-size:11px'><span style='color:#64748b;margin-right:8px'>" + (i + 1) + ".</span>" + esc2(String(item)) + "</div>"; }).join("") + "</div>";
+      bodyEl.innerHTML = h;
+      var maxCols = 0; plan.tabs.forEach(function (t) { if (t.cols.length > maxCols) maxCols = t.cols.length; });
+      fit(0, maxCols || 4);
     }
-    // Single object with nested arrays → tabbed view (like Data Graph Visualizer)
-    // Also handles arrays that contain nested objects — flatten them into tabs
-    if (typeof data === "object" && data !== null) {
-      var allKeys = Object.keys(data);
-      var scalarKeys = allKeys.filter(function (k) { return !data[k] || typeof data[k] !== "object"; });
-      var nestedKeys = allKeys.filter(function (k) { return data[k] && typeof data[k] === "object"; });
-      // If this object has arrays inside arrays (Data Graph), collect ALL nested objects
-      // from within array items and promote them to top-level tabs
-      if (nestedKeys.length > 0) {
-        nestedKeys.forEach(function (nk) {
-          var nv = data[nk];
-          if (Array.isArray(nv) && nv.length > 0 && typeof nv[0] === "object") {
-            // Check if items in this array have their own nested objects
-            var subNested = [];
-            nv.forEach(function (item) {
-              if (!item) return;
-              Object.keys(item).forEach(function (sk) {
-                if (item[sk] && typeof item[sk] === "object" && subNested.indexOf(sk) < 0) subNested.push(sk);
-              });
-            });
-            // Promote sub-nested to top-level tabs
-            subNested.forEach(function (snk) {
-              if (nestedKeys.indexOf(snk) < 0) {
-                nestedKeys.push(snk);
-                // Collect all sub-nested items into one array
-                var collected = [];
-                nv.forEach(function (item) {
-                  if (item && item[snk]) {
-                    var subItems = Array.isArray(item[snk]) ? item[snk] : [item[snk]];
-                    subItems.forEach(function (si) { collected.push(si); });
-                  }
-                });
-                data[snk] = collected;
-              }
-            });
-          }
-        });
+    // ---------------- Tree view (children are created only when a branch is opened)
+    var GUIDES = ["#c7d2fe", "#fbcfe8", "#bbf7d0", "#fde68a", "#bae6fd", "#ddd6fe"];
+    function renderTree() {
+      var srch = dcJsonSearch(parsed, query), budget = 4000;
+      var root = document.createElement("div"); root.className = "tree";
+      function leaf(v) {
+        if (v === null) return "<span class='z'>null</span>";
+        if (typeof v === "boolean") return "<span class='b'>" + v + "</span>";
+        if (typeof v === "number") return "<span class='n'>" + v + "</span>";
+        return "<span class='s'>&quot;" + hl(v) + "&quot;</span>";
       }
-      var html2 = "";
-      // Scalar fields as a key-value table (top section)
-      if (scalarKeys.length > 0) {
-        html2 += "<table style='border-collapse:collapse;width:100%;font-size:12px;margin-bottom:12px'>";
-        scalarKeys.forEach(function (k, idx) {
-          var v = data[k];
-          html2 += "<tr style='" + (idx % 2 ? "background:#f8fafc" : "") + "'><td style='padding:6px 12px;border-bottom:1px solid #edeff0;font-weight:600;color:#514f4d;white-space:nowrap;vertical-align:top;width:200px;text-transform:uppercase;font-size:10px'>" + esc2(k.replace(/__c$/, "")) + "</td><td style='padding:6px 12px;border-bottom:1px solid #edeff0;color:#16325c;word-break:break-word;user-select:text'>" + (v == null ? "<span style='color:#94a3b8'>null</span>" : esc2(String(v))) + "</td></tr>";
-        });
-        html2 += "</table>";
+      function node(v, key, path, depth, last) {
+        var wrap = document.createElement("div"), row = document.createElement("div"); row.className = "row"; wrap.appendChild(row);
+        var kHtml = key === null ? "" : "<span class='k' data-path='" + esc(dcJsonPathStr(path)) + "' title='Click to copy path'>&quot;" + hl(key) + "&quot;</span><span class='p'>: </span>";
+        var comma = last ? "" : "<span class='p'>,</span>";
+        if (!v || typeof v !== "object") { row.innerHTML = "<span class='tg'></span>" + (typeof key === "number" ? "" : kHtml) + leaf(v) + comma; return wrap; }
+        var isA = Array.isArray(v), keys = isA ? null : Object.keys(v), n = isA ? v.length : keys.length;
+        var ob = isA ? "[" : "{", cb = isA ? "]" : "}";
+        var pk = JSON.stringify(path), open = depth < 2 || srch.open[pk] || (expandAll && budget-- > 0), built = false;
+        var kids = document.createElement("div"); kids.className = "kids"; kids.style.setProperty("--g", GUIDES[depth % GUIDES.length]);
+        var closeRow = document.createElement("div"); closeRow.className = "row";
+        closeRow.innerHTML = "<span class='tg'></span><span class='p'>" + cb + "</span>" + comma;
+        function head() {
+          row.innerHTML = "<span class='tg col'>" + (open ? "&#9662;" : "&#9656;") + "</span>" + (typeof key === "number" ? "<span class='meta' style='margin:0 6px 0 0'>" + key + "</span>" : kHtml) + "<span class='p'>" + ob + "</span>" +
+            (open ? "" : "<span class='meta col'>" + (n ? n + (isA ? " item" : " key") + (n === 1 ? "" : "s") : "empty") + "</span><span class='p'>" + cb + "</span>" + comma);
+        }
+        function build() {
+          if (built) return; built = true;
+          if (isA) v.forEach(function (c, i) { kids.appendChild(node(c, i, path.concat(i), depth + 1, i === n - 1)); });
+          else keys.forEach(function (k, i) { kids.appendChild(node(v[k], k, path.concat(k), depth + 1, i === n - 1)); });
+        }
+        function sync() { head(); kids.style.display = open && n ? "" : "none"; closeRow.style.display = open && n ? "" : "none"; if (open) build(); }
+        row.onclick = function (e) { if (e.target.closest && e.target.closest(".k")) return; open = !open; sync(); };
+        wrap.appendChild(kids); wrap.appendChild(closeRow); sync();
+        if (open && !n) { head(); row.innerHTML = row.innerHTML.replace(/<span class="meta col">empty<\/span><span class="p">[\]}]<\/span>/, ""); }
+        return wrap;
       }
-      // Nested arrays as tabs (like Data Graph Visualizer)
-      if (nestedKeys.length > 0) {
-        var tabId = "dcjt" + Math.random().toString(36).slice(2, 8);
-        html2 += "<div data-tabnav='" + tabId + "' style='display:flex;flex-wrap:wrap;gap:5px;border-bottom:2px solid #d8dde6;margin-top:12px;padding-bottom:5px'>";
-        nestedKeys.forEach(function (nk, ni) {
-          var count = Array.isArray(data[nk]) ? data[nk].length : 1;
-          var isEmpty = Array.isArray(data[nk]) && data[nk].length === 0;
-          var baseStyle = "padding:8px 12px;cursor:pointer;border-radius:4px;font-weight:600;font-size:12px;";
-          var activeStyle = ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;");
-          html2 += "<span data-tabgrp='" + tabId + "' data-idx='" + ni + "' style='" + baseStyle + activeStyle + "'>" + esc2(nk.replace(/__dlm$|__cio$|__c$/, "")) + " (" + count + ")</span>";
-        });
-        html2 += "</div>";
-        nestedKeys.forEach(function (nk, ni) {
-          var nv = data[nk];
-          var arrData = Array.isArray(nv) ? nv : [nv];
-          html2 += "<div data-panegrp='" + tabId + "' data-idx='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:10px;overflow:auto'>";
-          if (arrData.length === 0) {
-            html2 += "<div style='padding:16px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
-          } else {
-            html2 += renderJsonAsTable(arrData, esc2);
-          }
-          html2 += "</div>";
-        });
-      }
-      return html2;
+      root.appendChild(node(parsed, null, [], 0, true));
+      bodyEl.innerHTML = ""; bodyEl.appendChild(root);
+      if (query) { var note = document.createElement("div"); note.style.cssText = "padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0"; note.textContent = srch.hits ? srch.hits + (srch.capped ? "+" : "") + " match" + (srch.hits === 1 ? "" : "es") + " highlighted (matching branches are opened)" : "No keys or values match “" + query + "”"; bodyEl.appendChild(note); }
+      var ml = 0; pretty.split("\n").forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
     }
-    return "<pre style='margin:0;padding:12px;font:12px monospace'>" + esc2(String(data)) + "</pre>";
+    // ---------------- Raw view
+    function renderRaw() {
+      var lines = pretty.split("\n"), color = lines.length <= 4000;
+      var g = lines.map(function (_, i) { return i + 1; }).join("\n");
+      var c = color ? lines.map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") : esc(pretty);
+      bodyEl.innerHTML = "<div class='raw'><div class='g'>" + g + "</div><div class='c'>" + c + "</div></div>" +
+        (color ? "" : "<div style='padding:6px 14px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0'>Large value (" + lines.length + " lines): shown without colours to stay fast.</div>");
+      var ml = 0; lines.forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
+    }
+    function renderText() {
+      bodyEl.innerHTML = "<pre style='margin:0;padding:14px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 SF Mono,Consolas,monospace;color:#1e293b'>" + esc(text) + "</pre>";
+    }
+    function render() {
+      if (parsed) {
+        m.querySelectorAll(".seg button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === view); });
+        toolsEl.style.display = view === "tree" ? "" : "none";
+        qEl.style.display = view === "raw" ? "none" : "";
+      }
+      if (view === "table") renderTable(); else if (view === "tree") renderTree(); else if (view === "raw") renderRaw(); else renderText();
+    }
+    render();
+    // ---- events
+    m.addEventListener("click", function (e) {
+      var t = e.target; if (!t || !t.closest) return;
+      var b = t.closest(".seg button"); if (b) { view = b.getAttribute("data-v"); render(); return; }
+      var tb = t.closest(".tab"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
+      var a = t.closest("[data-a]"); if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
+      var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
+      var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }
+    });
+    if (qEl) qEl.addEventListener("input", function () { query = qEl.value.trim(); if (view === "table") renderTable(); else if (view === "tree") renderTree(); });
+    m.querySelector(".dc-cv-copy").onclick = function () { copy(view === "raw" || !parsed ? (parsed ? pretty : text) : text, parsed ? "Copied full JSON" : "Copied"); };
+    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; } };
+    m.querySelector(".dc-cv-x").onclick = close;
+    _cellViewEsc = function (e) { if (e.key === "Escape" && _cellViewEl === m) { close(); e.stopPropagation(); } };
+    document.addEventListener("keydown", _cellViewEsc, true);
+    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
   }
 
   // Persisted filter state per object so conditions SURVIVE re-renders (Apply re-renders
