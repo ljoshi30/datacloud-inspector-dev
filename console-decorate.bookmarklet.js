@@ -7059,7 +7059,7 @@
   // The 10-column limit is UI-ONLY — the backend returns ALL requested columns in one
   // call. So we passively capture a live request's aura.context/token/pageURI, then
   // replay the SAME read-only query with EVERY selected column. No dialog, no batching.
-  var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false };
+  var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false, querySeq: 0 };
   // REAL data space per object, captured from the page's own queries. The data space is
   // NOT derivable from the object name (e.g. DLO "RH_Profile__dll" is NOT in space "RH").
   // The ONLY reliable source is the {objectName, selectedDataSpaceName} pair the page
@@ -7092,6 +7092,7 @@
           var q = act.params.query;
           if (q) {
             _auraSniff.template = act;
+            _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;   // lets the sort guide notice "the page just ran a query"
             if (q.objectName) _auraSniff.objectName = q.objectName;
             if (q.selectedDataSpaceName != null) _auraSniff.dataSpace = q.selectedDataSpaceName;
             if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
@@ -7344,6 +7345,99 @@
 
   // "Connect to Data Cloud" — renders a button that triggers credential capture, then
   // calls `onConnected()`. Use wherever ensureQueryContext fails in bookmarklet mode.
+  // ── "Sort a column once" guide (Data Explorer) ───────────────────────────────────────────────
+  // Data 360 only lets this tool read a table after Salesforce itself has run one query on it, and the
+  // easiest way to make Salesforce run one is to sort a column. The old message was two plain lines that
+  // people skipped. This card: (1) uses a REAL header name from the table behind the panel, (2) says WHY,
+  // (3) watches for the sort and, the moment it lands, turns green and offers the button.
+  // Pure helper (unit-tested): choose a header label that a person can actually find and click.
+  function dcPickHeaderLabel(texts) {
+    var skip = /^(select( all)?( rows?)?|row( number)?|actions?|#|show actions?|checkbox)$/i;
+    for (var i = 0; i < (texts || []).length; i++) {
+      var t = String(texts[i] == null ? "" : texts[i]).replace(/\s+/g, " ").trim();
+      t = t.replace(/\s*(sort(ed)?( by)?:?\s*(ascending|descending|none)?|ascending|descending)\s*$/i, "").trim();
+      if (t && t.length <= 40 && !skip.test(t)) return t;
+    }
+    return "";
+  }
+  // Header names as the user sees them in the Salesforce table behind the panel (best effort).
+  function dcReadSortableHeaderLabels() {
+    var out = [];
+    try {
+      eachElement(document, function (el) {
+        if (out.length >= 8) return;
+        var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
+        if (tagOf(el) === "a" && /slds-th__action/i.test(cls || "")) {
+          var nm = (el.getAttribute("title") || el.textContent || "");
+          if (nm) out.push(nm);
+        }
+      });
+    } catch (e) {}
+    if (!out.length) {
+      try {
+        var rl = findRecordListEl();
+        ((rl && rl.columns) || []).forEach(function (c) { if (c && c.label && c.fieldName !== "recordPageUrl") out.push(c.label); });
+      } catch (e) {}
+    }
+    return out;
+  }
+  // Builds the card. opts: { actionLabel, isReady(): bool (optional, extra readiness test),
+  // onAction(): runs when the user presses the revealed button }. Returns the element; el.dcStop() stops watching.
+  function dcBuildSortGuide(opts) {
+    opts = opts || {};
+    if (!document.getElementById("dc-guide-style")) {
+      var st = document.createElement("style"); st.id = "dc-guide-style";
+      st.textContent = "@keyframes dc-guide-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}50%{box-shadow:0 0 0 6px rgba(245,158,11,0)}}" +
+                       "@keyframes dc-guide-dot{0%,100%{opacity:.25}50%{opacity:1}}";
+      document.head.appendChild(st);
+    }
+    var label = dcPickHeaderLabel(dcReadSortableHeaderLabels());
+    var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:6px;padding:1px 8px;font-weight:700;animation:dc-guide-pulse 1.6s ease-in-out infinite;'>" + label.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</span>"
+                      : "<b>any column</b>";
+    var num = "flex:none;width:20px;height:20px;border-radius:50%;background:#f59e0b;color:#fff;font:700 11px/20px -apple-system,sans-serif;text-align:center;";
+    var box = document.createElement("div");
+    box.setAttribute("data-dc-sort-guide", "1");
+    var baseSeq = _auraSniff.querySeq || 0;
+    var waiting =
+      "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 13px;color:#78350f;font-size:12px;line-height:1.5;'>" +
+      "<div style='display:flex;align-items:center;gap:7px;font-weight:700;color:#92400e;font-size:13px;margin-bottom:6px;'><span style='font-size:15px;'>&#9888;</span>One quick action needed: sort the table once</div>" +
+      "<div style='margin-bottom:9px;'><b>Why?</b> Data 360 only lets this tool read a table after Salesforce has run one query on it. Sorting a column makes Salesforce run that query, and we reuse its connection. Sorting is read-only and changes no data.</div>" +
+      "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;'><span style='" + num + "'>1</span><span>In the Salesforce table <b>behind this panel</b>, click the " + chip + " column header" + (label ? " (any header works)." : ".") + "</span></div>" +
+      "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='" + num + "'>2</span><span>This panel notices it automatically and shows the button here.</span></div>" +
+      "<div class='dc-guide-wait' style='margin-top:9px;font-size:11px;color:#b45309;display:flex;align-items:center;gap:6px;'><span style='width:7px;height:7px;border-radius:50%;background:#f59e0b;animation:dc-guide-dot 1.1s ease-in-out infinite;'></span>Waiting for you to click a column header&hellip;</div>" +
+      "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div>" +
+      "</div>";
+    box.innerHTML = waiting;
+    var finished = false, timer = null, started = Date.now();
+    function ready() {
+      if (finished) return; finished = true; if (timer) clearInterval(timer);
+      box.innerHTML =
+        "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 13px;color:#166534;font-size:12px;line-height:1.5;'>" +
+        "<div style='font-weight:700;font-size:13px;margin-bottom:4px;'>&#10003; Sort detected. You&rsquo;re all set</div>" +
+        "<div style='margin-bottom:9px;'>Salesforce just ran its query, so this tool can now read the table.</div>" +
+        (opts.onAction ? "<button type='button' class='dc-guide-go' style='width:100%;border:none;border-radius:8px;padding:9px 10px;cursor:pointer;background:#16a34a;color:#fff;font:700 12px -apple-system,sans-serif;'>" + (opts.actionLabel || "Continue") + "</button>" : "") +
+        "</div>";
+      var go = box.querySelector(".dc-guide-go");
+      if (go) go.onclick = function () { try { opts.onAction(); } finally { if (box.parentNode) box.parentNode.removeChild(box); } };
+      if (typeof opts.onReady === "function") { try { opts.onReady(); } catch (e) {} }
+    }
+    function check() {
+      if (finished) return;
+      if (box.__dcSeen && !box.isConnected) { finished = true; clearInterval(timer); return; }   // panel closed
+      if (box.isConnected) box.__dcSeen = true;
+      var sorted = (_auraSniff.querySeq || 0) > baseSeq;                      // the page ran a query after the card appeared
+      var extra = typeof opts.isReady === "function" ? !!opts.isReady() : false;
+      if (sorted || extra) { ready(); return; }
+      var note = box.querySelector(".dc-guide-note");
+      if (note && Date.now() - started > 20000 && !note.textContent) note.textContent = "Still waiting? Clicking a row checkbox in that table also works. Click it once, then click it again to untick it.";
+      if (Date.now() - started > 600000) { finished = true; clearInterval(timer); }
+    }
+    timer = setInterval(check, 300);
+    box.dcStop = function () { finished = true; if (timer) clearInterval(timer); };
+    box.dcForceReady = ready;       // test hook
+    return box;
+  }
+
   var _connectingInProgress = false;
   function renderConnectButton(container, onConnected) {
     if (extBridgePresent()) { onConnected(); return; }
@@ -12494,14 +12588,11 @@
     // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
     // steps, the exact next click highlighted. `again` = the button name to press afterwards.
     function showSortHelp(again) {
-      var num = "flex:none;width:18px;height:18px;border-radius:50%;background:#e2e8f0;color:#334155;font:600 11px/18px -apple-system,sans-serif;text-align:center;";
-      savedNote.innerHTML =
-        "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;color:#334155;font-size:12px;line-height:1.5;'>" +
-        "<div style='font-weight:600;color:#0f172a;margin-bottom:2px;'>One quick step to load your data</div>" +
-        "<div style='color:#64748b;margin-bottom:8px;'>Salesforce needs to load this table once before we can read it.</div>" +
-        "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;'><span style='" + num + "'>1</span><span>Click any <b>column header</b> in the Salesforce table behind this panel.</span></div>" +
-        "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='" + num + "'>2</span><span>Then press <b style='color:#0f172a;border-bottom:1.5px solid #94a3b8;'>" + again + "</b> again.</span></div>" +
-        "</div>";
+      savedNote.innerHTML = "";
+      savedNote.appendChild(dcBuildSortGuide({
+        actionLabel: again,
+        onAction: function () { (again === "Restore saved" ? restoreBtn : viewAllBtn).click(); }
+      }));
     }
 
     footer.appendChild(savedNote);
@@ -12544,9 +12635,11 @@
       viewAllBtn.textContent = "Waiting for session…";
       _connectingInProgress = true;
       // Show instruction above the button
-      _connHint = document.createElement("div");
-      _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
-      _connHint.innerHTML = "<b>One-time setup:</b> <b>Sort any column</b> on the SF table behind this modal (click a column header). This establishes the session and the button will enable automatically.";
+      _connHint = dcBuildSortGuide({
+        actionLabel: "Show selected columns' data",
+        isReady: function () { return !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent()); },
+        onAction: function () { viewAllBtn.click(); }
+      });
       footer.insertBefore(_connHint, footer.firstChild);
       // Poll until connection is ready
       var _connPoll = setInterval(function () {
@@ -12558,7 +12651,7 @@
           viewAllBtn.style.opacity = "1";
           viewAllBtn.style.cursor = "pointer";
           viewAllBtn.textContent = "Show selected columns' data";
-          if (_connHint) { _connHint.style.background = "#f0fdf4"; _connHint.style.borderColor = "#86efac"; _connHint.style.color = "#166534"; _connHint.innerHTML = "<b>✓ Connected!</b> Select columns above and click the button."; setTimeout(function () { if (_connHint) _connHint.remove(); _connHint = null; }, 3000); }
+          if (_connHint && _connHint.dcForceReady) _connHint.dcForceReady();
         }
       }, 300);
       // Give up after 30s
@@ -12570,7 +12663,7 @@
           viewAllBtn.style.opacity = "1";
           viewAllBtn.style.cursor = "pointer";
           viewAllBtn.textContent = "Show selected columns' data";
-          if (_connHint) _connHint.innerHTML = "<b>Tip:</b> If data doesn't load, click a row checkbox on the SF table first, then try again.";
+          // keep the guide on screen: it keeps watching, and its own note explains the checkbox fallback
         }
       }, 30000);
     }
@@ -12769,7 +12862,7 @@
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
       try { var _preDs2 = readPageDataSpace(); if (_preDs2) { if (_auraSniff) _auraSniff.dataSpace = _preDs2; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs2; } } catch (e) {}
       ensureQueryContext(function (ready) {
-        if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
+        if (!ready) { hideSpinner(); showSortHelp("Restore saved"); return; }
         // Same auto-dataspace step as "Show selected columns' data" so Restore works on
         // non-default-dataspace orgs too (consistency — was missing, causing a dataspace error).
         establishDataSpace(objectName, function () {
