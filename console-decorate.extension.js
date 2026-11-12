@@ -7101,7 +7101,7 @@
             if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
           }
           // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
-          if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || ""))) {
+          if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || "")) && String(act.id || "").indexOf("dc-") !== 0) {   // never learn from OUR OWN guesses (ids start "dc-")
             _graphCalls[act.params.objectName] = act.params.dataSpaceName;
           }
           // Capture dataspace from QueryWorkspace.queryDCSql params (Query Editor page)
@@ -11802,8 +11802,7 @@
     scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
     panel.appendChild(scrollHint);
     document.body.appendChild(panel);
-    // The result table opens FULL SCREEN by default (the ⛶ button / Esc restores the smaller window).
-    try { setFullScreen(true); } catch (e) {}
+    // Opens at the normal window size (the ⛶ button goes full screen; Esc restores).
     try { attachInstantTooltips(panel); } catch (e) {}   // fast tooltips for header/filter buttons
 
     // ── Delegated cell affordances (Copy / View) ────────────────────────────────

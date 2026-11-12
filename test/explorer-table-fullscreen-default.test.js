@@ -16,7 +16,7 @@ ok(fsBtn.textContent==="🗗","button flips to the restore icon");
 api.off();
 ok(panel.style.m.width==="min(1400px,96vw)"&&panel.style.m.height==="min(86vh,900px)"&&panel.style.m.left==="50%","restore returns the exact previous size/position");
 ok(fsBtn.textContent==="⛶","button flips back");
-// wiring: it is switched on right after the panel is attached, inside showAllColumnsTable
+// wiring: NOT auto-fullscreen (it covered Salesforce's own page + column headers)
 const f0=src.indexOf("  function showAllColumnsTable("),f1=src.indexOf("document.body.appendChild(panel);",f0);
-ok(f1>f0&&/document\.body\.appendChild\(panel\);\s*(\/\/[^\n]*\n\s*)*try \{ setFullScreen\(true\); \} catch/.test(src.slice(f1,f1+400)),"opens full screen by default right after attaching the panel");
+ok(f1>f0&&!/document\.body\.appendChild\(panel\);\s*(\/\/[^\n]*\n\s*)*try \{ setFullScreen\(true\); \} catch/.test(src.slice(f1,f1+400)),"table opens at its NORMAL size (not forced full screen); the \u26F6 button still toggles");
 console.log("explorer-table-fullscreen-default: "+n+" checks passed");

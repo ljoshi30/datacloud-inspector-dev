@@ -89,5 +89,17 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
     { context: "C", token: "T" }, (url, o) => { seen.push(decodeURIComponent(o.body.split("&")[0].slice(8))); return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: "{}" }] })) }); });
   G4.dcQueryDataGraph({ objectName: "G", dataSpace: "wrong", keyField: "Id__c", keyValue: "q" }, false).then(() => { ok(/"dataSpaceName":"LEARNED"/.test(seen[0]), "learned graph/space tried first"); console.log("LEARNED-OK"); });
 }
+// sniffer learns only from Salesforce's own graph call, never from our own guesses; and never touches the query template/data space
+{
+  const a0 = src.indexOf("  function absorbAuraForm(body) {"), a1 = src.indexOf("  // Ready only when we have credentials", a0);
+  const sn = { };
+  const A = new Function("_auraSniff", "_dsByObject", "decodeFormField", "var _graphCalls={};" + src.slice(a0, a1) + "; return {absorbAuraForm,_graphCalls};")(sn, {}, decodeURIComponent);
+  const form = (id, name, sp) => "message=" + encodeURIComponent(JSON.stringify({ actions: [{ id, descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", params: { objectName: name, dataSpaceName: sp, lookupKeys: "[Id__c=1]", noCache: false } }] })) + "&aura.context=C&aura.token=T";
+  A.absorbAuraForm(form("dc-5;a", "OURGUESS", "badspace"));
+  ok(!A._graphCalls.OURGUESS, "our own guess is NOT learned");
+  A.absorbAuraForm(form("123;a", "REAL", "TD_Insurance"));
+  ok(A._graphCalls.REAL === "TD_Insurance", "Salesforce's own call is learned");
+  ok(!sn.template && !sn.dataSpace, "graph call does not overwrite the Explorer query template / data space");
+}
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });
