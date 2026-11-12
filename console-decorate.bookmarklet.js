@@ -10455,6 +10455,7 @@
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
   // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
   // The table is never sorted by us: rows are in the order Data Cloud returned them (no ORDER BY) unless the user's SQL has one.
+  var _orderWarnOff = {};   // per object: user dismissed the "empty columns" note
   function dcOrderNote(o) {
     var rows = o.rows || [], cols = o.columns || [], total = o.total || 0;
     var order = o.fromSql ? "per your SQL" : (o.filtered ? "as returned for your filter (not sorted)" : "as returned by Data Cloud (not sorted)");
@@ -10464,14 +10465,14 @@
     });
     var known = total > 0;                       // total unknown (e.g. before Count) -> never claim "every row"
     var more = !known || total > rows.length;
-    var warn = "";
-    if (empty.length && more) {
+    var warn = "", short = "";
+    if (empty.length && more) {     // only when the data COULD be further down; "empty everywhere" is what Hide empty is for
+      short = empty.length + " column" + (empty.length === 1 ? "" : "s") + " empty here \u00B7 may have data further down";
       warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in these " + rows.length.toLocaleString() +
-        " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") + ". Use Add condition \u2192 column IS NOT NULL to find them.";
-    } else if (empty.length && !more) {
-      warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in every row of this table.";
+        " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") +
+        ". Use Add condition \u2192 column IS NOT NULL to find them, or tick Hide empty to hide these columns.";
     }
-    return { order: order, warn: warn, emptyCols: empty };
+    return { order: order, warn: warn, short: short, emptyCols: empty };
   }
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     // Never open the modal for an empty object — show a FAB-level toast instead.
@@ -10528,7 +10529,17 @@
       var fs0 = _filterState[objectName] || {};
       var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where) });
       var el = titleWrap.querySelector(".dc-ac-order");
-      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>" + (on.warn ? "<div style='margin-top:2px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:5px;padding:2px 7px;display:inline-block;max-width:60ch'>\u26A0 " + on.warn + "</div>" : "");
+      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>";
+      if (on.warn && !_orderWarnOff[objectName]) {
+        var chip = document.createElement("span");
+        chip.style.cssText = "margin-left:8px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:1px 4px 1px 8px;white-space:nowrap;cursor:help";
+        chip.title = on.warn;
+        chip.appendChild(document.createTextNode("\u26A0 " + on.short + " "));
+        var x = document.createElement("span"); x.textContent = "\u2715"; x.title = "Hide this note"; x.setAttribute("role", "button");
+        x.style.cssText = "cursor:pointer;padding:0 5px;color:#b45309;font-weight:700";
+        x.onclick = function (ev) { ev.stopPropagation(); _orderWarnOff[objectName] = true; chip.remove(); };
+        chip.appendChild(x); el.appendChild(chip);
+      }
     })();
     hdr.appendChild(titleWrap);
 

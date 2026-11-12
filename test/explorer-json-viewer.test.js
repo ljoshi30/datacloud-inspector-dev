@@ -130,12 +130,14 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   let r = N({ rows: rowsA, columns: ["a", "b"], total: 109632 });
   ok(/not sorted/.test(r.order) && r.emptyCols.join() === "a" && /1 of 2/.test(r.warn) && /further down/.test(r.warn) && /109,632/.test(r.warn), "empty col + more rows on server -> warns data may be further down");
   r = N({ rows: rowsA, columns: ["a", "b"], total: 2 });
-  ok(/empty in every row/.test(r.warn) && !/further down/.test(r.warn), "empty col but ALL rows loaded -> no 'further down' claim");
+  ok(r.warn === "" && r.short === "", "all rows loaded -> NO banner at all (Hide empty covers it)");
+  ok(/1 column empty here/.test(N({ rows: rowsA, columns: ["a", "b"], total: 50 }).short), "short chip text");
   r = N({ rows: [{ a: false, b: 0 }], columns: ["a", "b"], total: 5 });
   ok(r.warn === "" && r.emptyCols.length === 0, "false / 0 are real values, not empty");
   ok(/your filter/.test(N({ rows: rowsA, columns: ["b"], total: 2, filtered: true }).order) && /your SQL/.test(N({ rows: rowsA, columns: ["b"], total: 2, fromSql: true }).order), "order text for filter / SQL");
   r = N({ rows: rowsA, columns: ["a", "b"], total: 0 });
   ok(/further down/.test(r.warn) && !/every row/.test(r.warn) && /Count/.test(r.warn), "unknown total -> never claims 'every row'");
+  ok(/IS NOT NULL/.test(r.warn) && /Hide empty/.test(r.warn), "tooltip tells what to do");
   ok(N({ rows: [], columns: ["a"], total: 0 }).warn === "", "no rows -> no warning");
 }
 // the REAL reply shape seen in the org: [ { fields: { json_blob__c: "<graph json string>" } } ] (stored and real-time)
