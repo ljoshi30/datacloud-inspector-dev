@@ -10046,11 +10046,11 @@
       ".dc-jv .cards{max-height:30%;overflow:auto;flex:none;border-bottom:1px solid var(--line)}" +
       ".dc-jv .main{display:flex;flex:1 1 auto;min-height:230px;min-width:0}" +
       ".dc-jv .rail{flex:none;width:250px;overflow:auto;border-right:1px solid var(--line);background:#f8fafc;padding:6px 0}" +
-      ".dc-jv .rl{font:700 9.5px -apple-system,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;padding:4px 12px}" +
+      ".dc-jv .rl{font:700 9.5px -apple-system,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#64748b;padding:4px 12px}" +
       ".dc-jv .ri{display:flex;align-items:center;gap:6px;width:100%;border:none;border-left:3px solid transparent;background:none;text-align:left;padding:6px 10px;font:600 12px -apple-system,sans-serif;color:#334155;cursor:pointer}" +
       ".dc-jv .ri:hover{background:#eef2ff}.dc-jv .ri.on{background:#e0e7ff;border-left-color:var(--acc);color:#312e81}" +
       ".dc-jv .ri .nm{flex:1;min-width:0;white-space:normal;word-break:break-word;line-height:1.25}.dc-jv .ri .br{color:#a5b4fc}" +
-      ".dc-jv .ri .n{background:#e2e8f0;color:#475569;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .ri.on .n{background:var(--acc);color:#fff}.dc-jv .ri.empty{opacity:.5}" +
+      ".dc-jv .ri .n{background:#e2e8f0;color:#475569;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .ri.on .n{background:var(--acc);color:#fff}.dc-jv .ri.empty{opacity:.65}" +
       ".dc-jv .pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}" +
       ".dc-jv .ph{display:flex;gap:8px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mut)}.dc-jv .ph b{font-size:13px;color:#312e81}.dc-jv .ph .sp{flex:1}" +
       ".dc-jv .tw{overflow:auto;flex:1;padding:0 0 10px}" +
@@ -10058,18 +10058,18 @@
       ".dc-jv th{position:sticky;top:0;background:#eef2ff;color:#3730a3;text-align:left;padding:7px 10px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid #c7d2fe;white-space:nowrap}" +
       ".dc-jv td{padding:6px 10px;border-bottom:1px solid #f1f5f9;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px SF Mono,Consolas,monospace;cursor:copy}" +
       ".dc-jv tbody tr:nth-child(even) td{background:#fafbff}.dc-jv tbody tr:hover td{background:#eef2ff}" +
-      ".dc-jv .nul{color:#94a3b8;font-style:italic}.dc-jv .bt{background:#ede9fe;color:#6d28d9;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .bf{background:#f1f5f9;color:#64748b;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .num{color:#b45309}" +
+      ".dc-jv .nul{color:#64748b;font-style:italic}.dc-jv .bt{background:#ede9fe;color:#6d28d9;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .bf{background:#f1f5f9;color:#64748b;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .num{color:#b45309}" +
       ".dc-jv .tree{padding:10px 12px 14px;font:12.5px/1.6 SF Mono,Consolas,monospace}" +
       ".dc-jv .row{white-space:nowrap}.dc-jv .tg{display:inline-block;width:14px;color:#6366f1;cursor:pointer;user-select:none}" +
       ".dc-jv .kids{margin-left:7px;padding-left:12px;border-left:1px solid var(--g,#c7d2fe)}" +
-      ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#94a3b8;font-style:italic}.dc-jv .p{color:#64748b}" +
+      ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#64748b;font-style:italic}.dc-jv .p{color:#64748b}" +
       ".dc-jv .live{display:inline-flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid #cbd5e1}" +
       ".dc-jv .sw{display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;padding:2px}.dc-jv .sw i{width:28px;height:16px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}.dc-jv .sw i:after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}" +
       ".dc-jv .sw[aria-checked=true] i{background:#16a34a}.dc-jv .sw[aria-checked=true] i:after{left:14px}.dc-jv .sw[aria-checked=true]{color:#15803d}" +
       ".dc-jv .rf{color:#4338ca;border-color:#c7d2fe;background:#fff}.dc-jv .rf[disabled],.dc-jv .sw[disabled]{opacity:.5;cursor:wait}.dc-jv .st{font-size:11px;color:#64748b;white-space:nowrap}.dc-jv .st.bad{color:#b91c1c}" +
-      ".dc-jv .meta{color:#94a3b8;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
+      ".dc-jv .meta{color:#64748b;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
       ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
-      ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#94a3b8;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
+      ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#64748b;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
       ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
     document.head.appendChild(st);
   }
@@ -10096,6 +10096,7 @@
           "<input class='q' placeholder='Search keys and values…' />"
         : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
       "<div class='body'></div><div class='toast'></div>";
+    if (parsed) m.style.minHeight = "64vh";
     document.body.appendChild(m);
     var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
     var fsOn = false, view = parsed ? "table" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
@@ -10116,8 +10117,8 @@
     }
     function fit(chars, cols) {   // size the window to the data instead of a fixed box
       if (fsOn) return;
-      var mn = live ? 880 : 0;
-      var w = view === "table" ? Math.max(700, mn, Math.min(cols * 150 + 290, 1500)) : Math.max(620, mn, Math.min(chars * 7.4 + 90, 1100));
+      var mn = live ? 900 : 0;
+      var w = view === "table" ? Math.max(700, mn, Math.min(cols * 150 + 290, 1500)) : Math.max(980, mn, Math.min(chars * 7.4 + 90, 1300));
       m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
     }
     // ---------------- Table view: left rail (tables, indented under their parent) + the selected table
@@ -10147,7 +10148,7 @@
         }).join("") + "</div><div class='pane'>";
         var t = plan.tabs[activeTab];
         h += "<div class='ph'><b>" + esc(cleanName(t.name)) + "</b> " + (t.parent ? "<span>inside " + esc(cleanName(t.parent)) + "</span>" : "<span>top level</span>") + "<span class='sp'></span><span>" + t.rows.length + " row" + (t.rows.length === 1 ? "" : "s") + "</span></div>";
-        if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#94a3b8'>Empty: no rows in this table</div>";
+        if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#64748b'>Empty: no rows in this table</div>";
         else {
           var cols2 = t.cols.length ? t.cols : ["value"];
           h += "<div class='tw'><table><thead><tr>" + cols2.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
@@ -10158,7 +10159,7 @@
             shown++;
             h += "<tr>" + cols2.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
           });
-          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#94a3b8'>No rows match &ldquo;" + esc(query) + "&rdquo; in this table. Tables on the left show how many rows match.</div>" : "") + "</div>";
+          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#64748b'>No rows match &ldquo;" + esc(query) + "&rdquo; in this table. Tables on the left show how many rows match.</div>" : "") + "</div>";
         }
         h += "</div></div>";
       }
@@ -10184,7 +10185,7 @@
         if (!v || typeof v !== "object") { row.innerHTML = "<span class='tg'></span>" + (typeof key === "number" ? "" : kHtml) + leaf(v) + comma; return wrap; }
         var isA = Array.isArray(v), keys = isA ? null : Object.keys(v), n = isA ? v.length : keys.length;
         var ob = isA ? "[" : "{", cb = isA ? "]" : "}";
-        var pk = JSON.stringify(path), open = depth < 2 || srch.open[pk] || (expandAll && budget-- > 0), built = false;
+        var pk = JSON.stringify(path), open = depth < 3 || srch.open[pk] || (expandAll && budget-- > 0), built = false;
         var kids = document.createElement("div"); kids.className = "kids"; kids.style.setProperty("--g", GUIDES[depth % GUIDES.length]);
         var closeRow = document.createElement("div"); closeRow.className = "row";
         closeRow.innerHTML = "<span class='tg'></span><span class='p'>" + cb + "</span>" + comma;
@@ -10214,7 +10215,7 @@
       var g = lines.map(function (_, i) { return i + 1; }).join("\n");
       var c = color ? lines.map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") : esc(pretty);
       bodyEl.innerHTML = "<div class='raw'><div class='g'>" + g + "</div><div class='c'>" + c + "</div></div>" +
-        (color ? "" : "<div style='padding:6px 14px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0'>Large value (" + lines.length + " lines): shown without colours to stay fast.</div>");
+        (color ? "" : "<div style='padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0'>Large value (" + lines.length + " lines): shown without colours to stay fast.</div>");
       var ml = 0; lines.forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
     }
     function renderText() {
