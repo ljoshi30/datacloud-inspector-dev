@@ -7734,6 +7734,19 @@
     if (!Array.isArray(rv)) { var ok2 = Object.keys(rv); for (var oi = 0; oi < ok2.length; oi++) { if (/json|blob|graph/i.test(ok2[oi]) && rv[ok2[oi]] && typeof rv[ok2[oi]] === "object") return rv[ok2[oi]]; } }   // an already-parsed graph under a json/blob/graph key
     return rv;
   }
+  // Which field identifies this Data Graph row? Not a fixed name (orgs differ: Id__c, ssot__Id__c, ...): take a top-level
+  // scalar of the graph JSON that ALSO appears, with the same value, as a column of the row; prefer names that look like an id.
+  // Fallback: an id-looking top-level scalar of the blob itself. Returns {key,value} or null. Pure.
+  function dcPickLookupKey(blobText, rowMap) {
+    var top; try { top = JSON.parse(blobText); } catch (e) { return null; }
+    if (Array.isArray(top)) top = top[0];
+    if (!top || typeof top !== "object") return null;
+    var idLike = /(^|_)id(__c)?$/i, scal = function (v) { return typeof v === "string" || typeof v === "number"; };
+    var ks = Object.keys(top).filter(function (k) { return scal(top[k]) && String(top[k]).trim() !== ""; });
+    var hit = ks.filter(function (k) { return rowMap && rowMap[k] !== undefined && String(rowMap[k]).trim() === String(top[k]).trim(); });
+    var pick = hit.filter(function (k) { return idLike.test(k); })[0] || hit[0] || ks.filter(function (k) { return idLike.test(k); })[0];
+    return pick ? { key: pick, value: String(top[pick]).trim() } : null;
+  }
   // A Data Graph State row names its graph like "Dg_<GraphApiName>_<13-digit timestamp>"; the graph API name is the middle.
   function dcGraphNameFromCell(t) { var m = /^Dg_(.+?)_\d{9,}$/.exec(String(t || "").trim()); return m ? m[1] : ""; }
   function dcQueryDataGraph(live, realtime) {
@@ -9981,6 +9994,22 @@
     (path || []).forEach(function (p) { s += typeof p === "number" ? "[" + p + "]" : (/^[A-Za-z_$][\w$]*$/.test(p) ? "." + p : "[" + JSON.stringify(p) + "]"); });
     return s;
   }
+  // How many leaf values differ between two JSON documents (added / removed / changed)? Pure; capped so it stays fast.
+  // Used to show whether Real-time really returned something different from the stored copy.
+  function dcJsonDiffCount(a, b, cap) {
+    cap = cap || 500; var n = 0;
+    (function walk(x, y, d) {
+      if (n >= cap) return;
+      var ox = x && typeof x === "object", oy = y && typeof y === "object";
+      if (ox && oy && Array.isArray(x) === Array.isArray(y)) {
+        var ks = {}; Object.keys(x).forEach(function (k) { ks[k] = 1; }); Object.keys(y).forEach(function (k) { ks[k] = 1; });
+        if (d > 40) return;
+        Object.keys(ks).forEach(function (k) { walk(x[k], y[k], d + 1); });
+      } else if (ox !== oy || (!ox && x !== y)) { n++; }
+      else if (ox && oy) { n++; }   // array vs object
+    })(a, b, 0);
+    return n;
+  }
   function dcJsonStats(v) {
     var st = { nodes: 0, depth: 0, arrays: 0, objects: 0 };
     (function walk(x, d) {
@@ -10292,11 +10321,19 @@
     }
     var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, dtEl = m.querySelector(".dt"), dboxEl = m.querySelector(".dbox"), lastDetail = "", stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
     function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
-    function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago(); }
+    var snap = { Stored: value }, cmpTxt = "";   // Stored starts as the copy already in the table; each load is remembered per mode
+    function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago() + cmpTxt; }
+    function compareWithOther(newStr) {
+      var other = snap[modeLbl === "Live" ? "Stored" : "Live"];
+      if (other == null) return "";
+      var A, B; try { A = JSON.parse(newStr); B = JSON.parse(other); } catch (e) { return ""; }
+      var d = dcJsonDiffCount(A, B, 500), nm = modeLbl === "Live" ? "stored copy" : "last live";
+      return d === 0 ? " \u00b7 identical to the " + nm : " \u00b7 " + (d >= 500 ? "500+" : d) + " value" + (d === 1 ? "" : "s") + " differ from the " + nm;
+    }
     function reload() {
       if (!live || busy) return; busy = true; if (dtEl) dtEl.style.display = "none"; dboxEl.style.display = "none"; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
       dcQueryDataGraph(live, rt).then(function (v) {
-        setData(JSON.stringify(v)); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; paintSt(); render();
+        var newStr = JSON.stringify(v); setData(newStr); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; cmpTxt = compareWithOther(newStr); snap[modeLbl] = newStr; paintSt(); render();
       }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); lastDetail = e.message; if (stEl) stEl.title = e.message; if (dtEl) dtEl.style.display = ""; if (dboxEl.style.display !== "none") dboxEl.textContent = lastDetail; })
         .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
     }
@@ -10456,9 +10493,53 @@
   // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
   // The table is never sorted by us: rows are in the order Data Cloud returned them (no ORDER BY) unless the user's SQL has one.
   var _orderWarnOff = {};   // per object: user dismissed the "empty columns" note
+  // ORDER BY of the user's own SQL -> [{col,dir}] (dir defaults to ASC like SQL). Pure; top-level clause only.
+  function dcParseOrderBy(sql) {
+    var m = /\bORDER\s+BY\s+([\s\S]+?)(?:\s+(?:LIMIT|OFFSET|FETCH)\b|;|$)/i.exec(String(sql || ""));
+    if (!m) return [];
+    var parts = [], depth = 0, cur = "", i, ch, q = false;
+    for (i = 0; i < m[1].length; i++) {
+      ch = m[1].charAt(i);
+      if (ch === '"') q = !q;
+      if (!q && ch === "(") depth++; else if (!q && ch === ")") depth--;
+      if (!q && depth === 0 && ch === ",") { parts.push(cur); cur = ""; } else cur += ch;
+    }
+    if (cur.trim()) parts.push(cur);
+    return parts.map(function (p) {
+      var t = p.trim(), dm = /\s+(ASC|DESC)(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$/i.exec(t), dir = dm ? dm[1].toUpperCase() : "ASC";
+      var col = (dm ? t.slice(0, dm.index) : t).trim();
+      if (/[()]/.test(col)) col = "(expression)"; else col = col.replace(/^"|"$/g, "").replace(/""/g, '"');
+      return { col: col, dir: dir };
+    }).filter(function (o) { return o.col; });
+  }
+  // The query Salesforce's own grid last ran (the template we clone for <=100-row loads) may carry sort settings. We do not
+  // know their key names in every org/release, so report ANY query key that looks like sorting, verbatim. Pure.
+  function dcTemplateSort(tpl) {
+    var q = tpl && tpl.params && tpl.params.query, out = [];
+    if (!q || typeof q !== "object") return out;
+    Object.keys(q).forEach(function (k) {
+      if (/^(columns|objectName|selectedDataSpaceName)$/.test(k) || !/sort|order/i.test(k)) return;
+      var v = q[k]; if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return;
+      var sv; try { sv = typeof v === "string" ? v : JSON.stringify(v); } catch (e) { sv = String(v); }
+      out.push({ key: k, value: sv.slice(0, 120) });
+    });
+    return out;
+  }
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // Rows are NEVER sorted by us. Order comes from: the user's own SQL ORDER BY; or (<=100-row loads) the Salesforce grid's sort
+  // that rides along in the cloned query; otherwise Data Cloud gives NO ordering guarantee (a reload can return other rows).
   function dcOrderNote(o) {
     var rows = o.rows || [], cols = o.columns || [], total = o.total || 0;
-    var order = o.fromSql ? "per your SQL" : (o.filtered ? "as returned for your filter (not sorted)" : "as returned by Data Cloud (not sorted)");
+    var ob = o.orderBy || [], ts = o.tplSort || [], order, orderTip = "";
+    if (ob.length) {
+      order = "sorted by " + ob.map(function (x) { return x.col + (x.dir === "DESC" ? " \u2193 descending" : " \u2191 ascending"); }).join(", ") + " (from your SQL)";
+    } else if (o.viaTemplate && ts.length) {
+      var raw = ts.map(function (x) { return x.key + " = " + x.value; }).join("; ");
+      var dirWord = /desc/i.test(raw) ? " (descending)" : (/asc/i.test(raw) ? " (ascending)" : "");
+      order = "follows the sort of Salesforce\u2019s own grid" + dirWord; orderTip = raw;
+    } else {
+      order = (o.fromSql ? "as returned for your SQL" : (o.filtered ? "as returned for your filter" : "as returned by Data Cloud")) + " (no sort \u2014 order is not guaranteed, a reload can show other rows)";
+    }
     var empty = cols.filter(function (fn) {
       for (var i = 0; i < rows.length; i++) { var v = rows[i] && rows[i][fn]; if (v !== null && v !== undefined && v !== "") return false; }
       return rows.length > 0;
@@ -10472,7 +10553,7 @@
         " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") +
         ". Use Add condition \u2192 column IS NOT NULL to find them, or tick Hide empty to hide these columns.";
     }
-    return { order: order, warn: warn, short: short, emptyCols: empty };
+    return { order: order, orderTip: orderTip, warn: warn, short: short, emptyCols: empty };
   }
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     // Never open the modal for an empty object — show a FAB-level toast instead.
@@ -10527,9 +10608,11 @@
       "<div class='dc-ac-order' style='font-size:11px;color:#5c6b8a;margin-top:1px'></div>";
     (function () {
       var fs0 = _filterState[objectName] || {};
-      var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where) });
+      var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where),
+        orderBy: fs0.orderBy || [], tplSort: dcTemplateSort(_auraSniff.template),
+        viaTemplate: !isFiltered && !extBridgePresent() && (wantRows || rows.length) <= 100 });
       var el = titleWrap.querySelector(".dc-ac-order");
-      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>";
+      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>"; if (on.orderTip) el.title = "Sort settings in the Salesforce grid query: " + on.orderTip;
       if (on.warn && !_orderWarnOff[objectName]) {
         var chip = document.createElement("span");
         chip.style.cssText = "margin-left:8px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:1px 4px 1px 8px;white-space:nowrap;cursor:help";
@@ -11938,13 +12021,14 @@
       var live = null;
       try {   // Data Graph row? then offer Real-time + Refresh using the row's lookup key (Id__c)
         if (/json_blob/i.test(info.fn)) {
-          var kv = "", trEl = _toolsTd.closest("tr");
-          var gh = [];
+          var trEl = _toolsTd.closest("tr"), gh = [], rowMap = {};
           if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) {
-            if (colByIndex[parseInt(c.getAttribute("data-c"), 10)] === "Id__c") kv = (c.textContent || "").trim();
-            var gm = dcGraphNameFromCell(c.textContent || ""); if (gm && gh.indexOf(gm) < 0) gh.push(gm);
+            var cn = colByIndex[parseInt(c.getAttribute("data-c"), 10)], tx = (c.textContent || "").trim();
+            if (cn) rowMap[cn] = tx;
+            var gm = dcGraphNameFromCell(tx); if (gm && gh.indexOf(gm) < 0) gh.push(gm);
           });
-          if (kv) live = { objectName: objectName, graphHints: gh, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: "Id__c", keyValue: kv };
+          var pk = dcPickLookupKey(info.val, rowMap);   // the key field + value come from THIS row's own data, not a fixed name
+          if (pk) live = { objectName: objectName, graphHints: gh, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: pk.key, keyValue: pk.value };
         }
       } catch (ex) { live = null; }
       showCellValue(info.fn, meta[info.fn] || info.fn, info.val, live);
@@ -12763,7 +12847,7 @@
             var keepWant = _originalWantRows[objName] || res.rows.length;
             if (whereMatch && whereMatch[1]) {
               var whereClause2 = whereMatch[1].trim();
-              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
+              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
               var countSql2 = "SELECT COUNT(*) FROM " + fromTable + " WHERE " + whereClause2;
               runRawSql(countSql2, ds, 1).then(function (cntRes) {
                 var cnt = 0;
@@ -12781,7 +12865,7 @@
             } else {
               // No WHERE (e.g. a plain LIMIT): still a QUERY RESULT, not the table's original rows —
               // flag it so it is never cached as "original" and "Back to original" is offered.
-              _filterState[objName] = { active: true, where: "", conds: null, fromSql: true };
+              _filterState[objName] = { active: true, where: "", conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
               _filterCount[objName] = 0;
               _savedSoqlRanOk = true;
               try { closeSoqlEditor(); } catch (e) {}

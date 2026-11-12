@@ -128,13 +128,14 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   const N = new Function(src.slice(o0, o1) + "; return dcOrderNote;")();
   const rowsA = [{ a: null, b: "x" }, { a: "", b: "y" }];
   let r = N({ rows: rowsA, columns: ["a", "b"], total: 109632 });
-  ok(/not sorted/.test(r.order) && r.emptyCols.join() === "a" && /1 of 2/.test(r.warn) && /further down/.test(r.warn) && /109,632/.test(r.warn), "empty col + more rows on server -> warns data may be further down");
+  ok(/no sort/.test(r.order) && r.emptyCols.join() === "a" && /1 of 2/.test(r.warn) && /further down/.test(r.warn) && /109,632/.test(r.warn), "empty col + more rows on server -> warns data may be further down");
   r = N({ rows: rowsA, columns: ["a", "b"], total: 2 });
   ok(r.warn === "" && r.short === "", "all rows loaded -> NO banner at all (Hide empty covers it)");
   ok(/1 column empty here/.test(N({ rows: rowsA, columns: ["a", "b"], total: 50 }).short), "short chip text");
   r = N({ rows: [{ a: false, b: 0 }], columns: ["a", "b"], total: 5 });
   ok(r.warn === "" && r.emptyCols.length === 0, "false / 0 are real values, not empty");
   ok(/your filter/.test(N({ rows: rowsA, columns: ["b"], total: 2, filtered: true }).order) && /your SQL/.test(N({ rows: rowsA, columns: ["b"], total: 2, fromSql: true }).order), "order text for filter / SQL");
+  ok(/not guaranteed/.test(r.order), "unsorted text says order is not guaranteed");
   r = N({ rows: rowsA, columns: ["a", "b"], total: 0 });
   ok(/further down/.test(r.warn) && !/every row/.test(r.warn) && /Count/.test(r.warn), "unknown total -> never claims 'every row'");
   ok(/IS NOT NULL/.test(r.warn) && /Hide empty/.test(r.warn), "tooltip tells what to do");
@@ -150,6 +151,77 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   ok(JSON.stringify(X(JSON.stringify(real[0]))) !== JSON.stringify(graph) || true, "string input handled");
   const genuine = { Id: "1", note: "{\"x\":1}", other: 2, more: [1, 2] };
   ok(JSON.stringify(X(genuine)) === JSON.stringify(genuine), "a real graph that merely contains JSON-looking text is NOT unwrapped");
+}
+// stored-vs-live comparison
+{
+  const d0 = src.indexOf("  function dcJsonDiffCount("), d1 = src.indexOf("  function dcJsonStats(", d0);
+  const D = new Function(src.slice(d0, d1) + "; return dcJsonDiffCount;")();
+  ok(D({ a: 1, b: [1, { c: 2 }] }, { a: 1, b: [1, { c: 2 }] }) === 0, "identical -> 0");
+  ok(D({ a: 1 }, { a: 2 }) === 1, "one changed value -> 1");
+  ok(D({ a: 1 }, { a: 1, b: 5 }) === 1 && D({ a: 1, b: 5 }, { a: 1 }) === 1, "added / removed key -> 1");
+  ok(D({ r: [1, 2, 3] }, { r: [1, 2] }) === 1, "array length differs -> 1");
+  ok(D({ r: [{ x: 1 }] }, { r: [{ x: 9 }] }) === 1, "nested change -> 1");
+  ok(D([1, 2, 3, 4, 5], [9, 9, 9, 9, 9], 3) === 3, "cap respected");
+  ok(/cmpTxt = compareWithOther\(newStr\); snap\[modeLbl\] = newStr/.test(src), "reload compares against the other mode then remembers this one");
+}
+// lookup key is derived from the row, not hard-coded to Id__c (orgs differ)
+{
+  const k0 = src.indexOf("  function dcPickLookupKey("), k1 = src.indexOf("  // A Data Graph State row names its graph", k0);
+  const K = new Function(src.slice(k0, k1) + "; return dcPickLookupKey;")();
+  const blob = (o) => JSON.stringify(o);
+  let r = K(blob({ Id__c: "abc", FirstName__c: "A", Kids: [{ Id__c: "zzz" }] }), { Id__c: "abc", Name: "x" });
+  ok(r && r.key === "Id__c" && r.value === "abc", "Id__c org");
+  r = K(blob({ ssot__Id__c: "u-1", Label: "L" }), { ssot__Id__c: "u-1" });
+  ok(r && r.key === "ssot__Id__c" && r.value === "u-1", "different key name (ssot__Id__c) found from the data");
+  r = K(blob({ CustomerKey: "k9", Other: "o" }), { CustomerKey: "k9", Other: "o" });
+  ok(r && r.key === "CustomerKey" || (r && r.key === "Other"), "non id-looking key still resolved by matching the row");
+  r = K(blob({ Id__c: "q1", Name: "n" }), {});
+  ok(r && r.key === "Id__c" && r.value === "q1", "row has no matching column -> id-looking field of the blob");
+  ok(K("not json", {}) === null && K(blob({ a: { b: 1 } }), {}) === null, "no usable key -> null (no live controls)");
+  ok(!/colByIndex\[parseInt\(c\.getAttribute\("data-c"\), 10\)\] === "Id__c"/.test(src), "no hard-coded Id__c column in the call site");
+}
+// ---- ORDER scenarios -------------------------------------------------------------------------------
+{
+  const e0 = src.indexOf("  function dcParseOrderBy("), e1 = src.indexOf("  function showAllColumnsTable(", e0);
+  const E = new Function(src.slice(e0, e1) + "; return {dcParseOrderBy,dcTemplateSort,dcOrderNote};")();
+  const P = E.dcParseOrderBy;
+  ok(JSON.stringify(P('SELECT a FROM t ORDER BY "Birth Date" DESC LIMIT 5')) === '[{"col":"Birth Date","dir":"DESC"}]', "ORDER BY DESC + LIMIT");
+  ok(JSON.stringify(P("select a from t order by a, b desc")) === '[{"col":"a","dir":"ASC"},{"col":"b","dir":"DESC"}]', "default ASC, multi column, lower case");
+  ok(P("SELECT a FROM t WHERE x=1").length === 0 && P("").length === 0 && P(null).length === 0, "no ORDER BY / empty / null");
+  ok(P("SELECT a FROM t ORDER BY COALESCE(a, b) DESC")[0].col === "(expression)", "expression not mis-split");
+  ok(P("SELECT a FROM t ORDER BY a DESC NULLS LAST")[0].dir === "DESC", "NULLS LAST tolerated");
+  // template sort
+  const T = E.dcTemplateSort;
+  ok(T({ params: { query: { objectName: "o", columns: ["a"], selectedDataSpaceName: "d", sortBy: "Birth__c", sortDirection: "DESC" } } }).length === 2, "sort-looking keys reported verbatim");
+  ok(T({ params: { query: { objectName: "o", columns: ["a"], selectedDataSpaceName: "d", maxRows: 100 } } }).length === 0 && T(null).length === 0, "no sort keys -> none");
+  ok(T({ params: { query: { orderBy: [] , sortBy: null } } }).length === 0, "empty sort values ignored");
+  // note text, every scenario
+  const rowsA = [{ a: "x" }];
+  let n = E.dcOrderNote({ rows: rowsA, columns: ["a"], total: 9, orderBy: P("SELECT a FROM t ORDER BY a DESC") });
+  ok(/descending/.test(n.order) && /from your SQL/.test(n.order), "S1: user SQL ORDER BY DESC -> says descending");
+  n = E.dcOrderNote({ rows: rowsA, columns: ["a"], total: 9, orderBy: P("SELECT a FROM t ORDER BY a") });
+  ok(/ascending/.test(n.order), "S2: user SQL ORDER BY (default) -> ascending");
+  n = E.dcOrderNote({ rows: rowsA, columns: ["a"], total: 9, viaTemplate: true, tplSort: [{ key: "sortDirection", value: "DESC" }] });
+  ok(/Salesforce.s own grid/.test(n.order) && /descending/.test(n.order) && /sortDirection = DESC/.test(n.orderTip), "S3: <=100 rows, grid sort rides along -> says so + raw in tooltip");
+  n = E.dcOrderNote({ rows: rowsA, columns: ["a"], total: 9, viaTemplate: false, tplSort: [{ key: "sortDirection", value: "DESC" }] });
+  ok(/no sort/.test(n.order), "S4: >100 rows (SQL path) ignores the grid sort -> reported as unsorted (it IS unsorted)");
+  n = E.dcOrderNote({ rows: rowsA, columns: ["a"], total: 9, viaTemplate: true, tplSort: [] });
+  ok(/no sort/.test(n.order), "S5: <=100 rows, grid not sorted -> unsorted");
+}
+// ---- REAL behavior: does the <=100-row query inherit the grid's sort? the >100 SQL path must NOT add ORDER BY
+{
+  const q0 = src.indexOf("  function queryAllColumns("), q1 = src.indexOf("  var _auraQid = 0;", q0);
+  let sent = null;
+  const Q = new Function("_auraSniff", "fetch", "var _auraQid=0;" + src.slice(q0, q1) + "; return queryAllColumns;")(
+    { context: "C", token: "T", dataSpace: "D", template: { id: "x", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$query", params: { query: { objectName: "o", columns: ["old"], selectedDataSpaceName: "D", maxRows: 100, sortBy: "Birth__c", sortDirection: "DESC" } } } },
+    (url, o) => { sent = JSON.parse(decodeURIComponent(o.body.split("&")[0].slice(8))).actions[0].params.query; return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: [{ fields: { a: 1 } }] }] })) }); });
+  Q("o", ["a", "b"], "D", 50).then(() => {
+    ok(sent.sortBy === "Birth__c" && sent.sortDirection === "DESC" && sent.maxRows === 50 && sent.columns.join() === "a,b", "FACT: <=100-row load keeps the grid's sort keys (only columns/limit swapped)");
+    console.log("INHERIT-OK");
+  });
+  const s0 = src.indexOf("  function runDcSql("), s1 = src.indexOf("// ── DOCUMENTED path", s0);
+  const sqlBody = src.slice(s0, src.indexOf("  function ", s0 + 30));
+  ok(!/ORDER BY/i.test(sqlBody.replace(/\/\/[^\n]*/g, "")), "FACT: the >100-row SQL path builds NO ORDER BY (engine order, not guaranteed)");
 }
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });
