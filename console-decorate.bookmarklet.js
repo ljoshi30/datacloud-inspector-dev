@@ -1864,6 +1864,8 @@
     // Close in-dev Data Explorer surfaces too (guarded — stripped from public build).
     try { if (typeof closeExploreModal === "function") closeExploreModal(); } catch (e) {}
     try { if (typeof closeAllColumnsTable === "function") closeAllColumnsTable(); } catch (e) {}
+    try { if (typeof closeCellView === "function") closeCellView(); } catch (e) {}
+    try { if (typeof dcSweepOverlays === "function") dcSweepOverlays(); } catch (e) {}
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
@@ -10021,6 +10023,27 @@
   function dcJsonBytes(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
 
   var _cellViewEl = null, _cellViewEsc = null;
+  function closeCellView() {
+    if (_cellViewEl) { try { _cellViewEl.remove(); } catch (e) {} _cellViewEl = null; }
+    if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
+  }
+  // Turn-off backstop: remove any floating overlay of ours that sits directly on <body> but has no dc- id
+  // (JSON viewer, sort-guide spotlight + tag, popups...). Only top-level, position:fixed/absolute elements, so
+  // Salesforce's own app root can never be hit.
+  function dcSweepOverlays() {
+    try {
+      Array.prototype.slice.call(document.body.children).forEach(function (el) {
+        var ours = false;
+        if (el.id && el.id.indexOf("dc-") === 0) ours = true;
+        else {
+          if (typeof el.className === "string" && /(^|\s)dc-/.test(el.className)) ours = true;
+          if (!ours && el.attributes) for (var i = 0; i < el.attributes.length; i++) { if (el.attributes[i].name.indexOf("data-dc") === 0) { ours = true; break; } }
+          if (ours) { var pos = ""; try { pos = getComputedStyle(el).position; } catch (e) {} if (pos !== "fixed" && pos !== "absolute") ours = false; }
+        }
+        if (ours) el.remove();
+      });
+    } catch (e) {}
+  }
   function dcJsonViewerCss() {
     if (document.getElementById("dc-jv-style")) return;
     var st = document.createElement("style"); st.id = "dc-jv-style";
@@ -10074,14 +10097,13 @@
     document.head.appendChild(st);
   }
   function showCellValue(fieldApi, fieldLabel, value, live) {
-    if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
-    if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
+    closeCellView();
     dcJsonViewerCss();
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
     var text = value == null ? "" : String(value), parsed = null;
     try { var p0 = JSON.parse(text); if (p0 && typeof p0 === "object") parsed = p0; } catch (e) {}
     if (!parsed) live = null;
-    var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv";
+    var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv"; m.id = "dc-jv-modal";
     m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
     var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
     var plan = parsed ? dcJsonTablePlan(parsed) : null;

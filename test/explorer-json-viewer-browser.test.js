@@ -79,6 +79,22 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   ok(await ev("document.querySelector('.rf').disabled") === false, "controls re-enabled after failure");
   // reopening replaces, never stacks
   await ev("open_();open_()"); ok(await ev("document.querySelectorAll('.dc-jv').length") === 1, "no stacking");
+  // ---- tool turned OFF: no dc- id needed. Stray floating overlays + the viewer must all go; page content must stay.
+  await ev(`document.body.insertAdjacentHTML('beforeend',
+    "<div id='keep-app' style='position:absolute'>SF app root</div>" +
+    "<div class='dc-popup' style='position:fixed;top:0'>x</div>" +
+    "<div data-dc-guide-spot='1' style='position:fixed'>ring</div>" +
+    "<div data-dc-sort-guide style='position:absolute'>tag</div>" +
+    "<div class='dc-static-but-not-floating' style='position:static'>safe</div>" +
+    "<div class='other' style='position:fixed'>not ours</div>");
+    openLive();`);
+  ok(await ev("document.getElementById('dc-jv-modal') != null"), "viewer has a dc- id now");
+  await ev("closeCellView();dcSweepOverlays()");
+  ok(await ev("document.querySelector('.dc-jv')") === null, "viewer closed on off");
+  ok(await ev("document.querySelectorAll('.dc-popup,[data-dc-guide-spot],[data-dc-sort-guide]').length") === 0, "floating dc overlays removed");
+  ok(await ev("!!document.getElementById('keep-app') && !!document.querySelector('.other') && !!document.querySelector('.dc-static-but-not-floating')"), "page content and non-floating elements untouched");
+  await ev("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");   // listener removed -> no error
+  ok(await ev("typeof _cellViewEsc") !== "undefined" && await ev("_cellViewEsc === null"), "Esc listener released");
   console.log("explorer-json-viewer-browser: " + n + " checks passed");
   ch.kill(); srv.close(); process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });

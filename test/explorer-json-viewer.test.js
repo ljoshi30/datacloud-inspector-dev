@@ -34,6 +34,10 @@ ok(c('  "k": "v<",') === "  <span class='k'>&quot;k&quot;</span>: <span class='s
 ok(/class='n'>-1.5e3/.test(c('"a": -1.5e3')) && /class='b'>true/.test(c('"a": true,')) && /class='z'>null/.test(c('"a": null')), "num/bool/null");
 ok(/class='p'>\{/.test(c("{")) && /class='s'>&quot;x&quot;/.test(c('  "x"')), "brackets and array strings");
 ok(H.dcJsonBytes(2048) === "2.0 KB", "bytes");
+// --- turn-off wiring: teardown must close the viewer and sweep overlays (behaviour is proven in the browser test)
+const td0 = src.indexOf("  function teardown() {"), td1 = src.indexOf("  // DRIFT METER", td0);
+const tdSrc = src.slice(td0, td1);
+ok(/closeCellView\(\)/.test(tdSrc) && /dcSweepOverlays\(\)/.test(tdSrc), "teardown calls closeCellView + dcSweepOverlays");
 // --- Data Graph live reload: response unwrapping + the exact request we send (stubbed fetch/session)
 const g0 = src.indexOf("  function dcExtractGraphJson"), g1 = src.indexOf("  // >100 rows: the Data Explorer's own query");
 ok(g0 > 0 && g1 > g0, "graph helpers found");
