@@ -7452,23 +7452,25 @@
       }
       function bar(n) { return "<span style='flex:1;height:2px;min-width:10px;margin:0 6px;background:" + (stage > n ? "#16a34a" : "#fde68a") + ";'></span>"; }
       function step(n, txt) { return "<span style='display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;color:" + (stage > n || (n === 3 && stage >= 3) ? "#166534" : "#a16207") + ";'>" + dot(n) + txt + "</span>"; }
-      return "<div style='display:flex;align-items:center;margin-top:2px;'>" + step(1, "Click header") + bar(1) + step(2, "Salesforce loads") + bar(2) + step(3, "Button unlocks") + "</div>";
+      return "<div style='display:flex;align-items:center;margin-top:2px;'>" + step(1, "Click header") + bar(1) + step(2, "Salesforce connects") + bar(2) + step(3, "Button unlocks") + "</div>";
     }
     var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:5px;padding:0 7px;font-weight:700;'>" + dcEsc(label) + "</span>" : "<b>any column header</b>";
     function renderWait(stage) {
-      var title = stage === 1 ? "Click " + chip + " to unlock your data" : "Salesforce is loading&hellip; one moment";
+      var title = stage === 1 ? "Click " + chip + " to connect" : "Connecting&hellip; Salesforce is loading the table";
+      var body = stage === 1
+        ? "This tool reads your data through Salesforce&rsquo;s own connection, and Salesforce opens it when a table is sorted. Click the header" + (hdr ? " (highlighted in the table)" : " of any column") + ". It&rsquo;s just a sort: read-only, nothing is changed."
+        : "Hang on a second. The button below unlocks by itself as soon as Salesforce finishes.";
       box.innerHTML =
-        "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 12px;color:#78350f;font-size:12px;line-height:1.45;'>" +
-        "<div style='font-weight:700;font-size:13px;color:#92400e;margin-bottom:3px;'>" + title + "</div>" +
-        "<div style='margin:2px 0 9px;'>Salesforce only shares its connection after it runs a query itself, and sorting a column makes it run one. Read-only: nothing changes." +
-        (stage === 1 ? " Find it in the table behind this panel" + (hdr ? " (highlighted)" : "") + "." : "") + "</div>" +
+        "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 12px;color:#78350f;font-size:12px;line-height:1.5;'>" +
+        "<div style='font-weight:700;font-size:13px;color:#92400e;margin-bottom:4px;'>" + title + "</div>" +
+        "<div style='margin:0 0 9px;'>" + body + "</div>" +
         stepper(stage) +
         "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div></div>";
     }
     function renderDone() {
       box.innerHTML =
         "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 12px;color:#166534;font-size:12px;line-height:1.45;'>" +
-        "<div style='font-weight:700;font-size:13px;margin-bottom:3px;'>&#10003; Connected. Press the button below</div>" + stepper(3) + "</div>";
+        "<div style='font-weight:700;font-size:13px;margin-bottom:4px;'>&#10003; Connected. Now press the button below</div>" + stepper(3) + "</div>";
     }
     var finished = false, timer = null, started = Date.now(), stage = 1, onClick = null;
     function cleanup() {
@@ -12715,7 +12717,7 @@
       const b = document.createElement("button");
       b.textContent = icon ? icon + " " + label : label;
       if (tip) b.title = tip;
-      b.style.cssText = "flex:1;border-radius:6px;padding:7px 8px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid " +
+      b.style.cssText = "flex:1 1 auto;border-radius:6px;padding:7px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;border:1px solid " +
         (primary ? "#0d6efd;background:#0d6efd;color:#fff;" : "#c9d0da;background:#fff;color:#1e3a5f;");
       if (!primary) { b.onmouseenter = () => (b.style.background = "#f3f6fb"); b.onmouseleave = () => (b.style.background = "#fff"); }
       return b;
@@ -12767,7 +12769,7 @@
     btnRow.style.cssText = "display:flex;";
     // Row 2: secondary buttons
     const btnRow2 = document.createElement("div");
-    btnRow2.style.cssText = "display:flex;gap:4px;";
+    btnRow2.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
 
     // Spinner overlay — shown during apply so user knows work is happening
     const spinnerEl = document.createElement("div");

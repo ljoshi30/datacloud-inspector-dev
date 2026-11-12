@@ -50,9 +50,9 @@ await ev("pn.remove();exploreModalEl=null");
 // --- waiting state
 await ev("window.btn=mkBtn();window.g1=mk({lockBtn:btn})");await sleep(150);
 const t=await T();
-ok("card names the real visible column", /Click\s+Account Id\s+to unlock/.test(t), t);
-ok("explains why, read-only", /runs a query itself/.test(t)&&/sorting a column makes it run one/.test(t)&&/Read-only/.test(t), t);
-ok("stepper present", /Click header/.test(t)&&/Salesforce loads/.test(t)&&/Button unlocks/.test(t));
+ok("card names the real visible column", /Click\s+Account Id\s+to connect/i.test(t), t);
+ok("explains why, read-only", /through Salesforce.s own connection/.test(t)&&/when a table is sorted/.test(t)&&/read-only, nothing is changed/.test(t), t);
+ok("stepper present", /Click header/.test(t)&&/Salesforce connects/.test(t)&&/Button unlocks/.test(t));
 ok("attention colour (amber)", await ev("getComputedStyle(document.querySelector('[data-dc-sort-guide] > div')).borderLeftColor")==="rgb(245, 158, 11)");
 ok("the card has NO button of its own (no duplicate)", await ev("document.querySelectorAll('[data-dc-sort-guide] button').length")===0);
 ok("original button is locked with a lock and a tooltip", await ev("btn.disabled")===true && /^🔒/.test(await ev("btn.textContent")) && /unlocks by itself/.test(await ev("btn.title")));
@@ -77,7 +77,7 @@ ok("button still locked until Salesforce's query is seen", await ev("btn.disable
 // --- Salesforce's own query lands
 await ev("_auraSniff.querySeq++");await sleep(420);
 const t2=await T();
-ok("turns green: Connected, press the button below", /Connected/.test(t2)&&/Press the button below/i.test(t2), t2);
+ok("turns green: Connected, press the button below", /Connected/.test(t2)&&/Now press the button below/i.test(t2), t2);
 ok("green colour", await ev("getComputedStyle(document.querySelector('[data-dc-sort-guide] > div')).borderLeftColor")==="rgb(22, 163, 74)");
 ok("still no second button in the card", await ev("document.querySelectorAll('[data-dc-sort-guide] button').length")===0);
 ok("original button UNLOCKED with its original text, tooltip and a pulse", await ev("btn.disabled")===false && (await ev("btn.textContent"))==="Show selected columns' data" && (await ev("btn.title"))==="orig tip" && /dc-guide-bpulse/.test(await ev("btn.style.animation")));
