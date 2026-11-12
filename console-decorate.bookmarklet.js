@@ -7604,6 +7604,25 @@
                        : " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV"
     };
   }
+  // Download CSV when a filter matches MORE rows than are loaded: it re-queries the matching rows, but through the same
+  // engine as Export All, so it is capped at DC_MAX_TOTAL_EXPORT too. Same rule: never say "all" when it is not all.
+  function dcFilteredCsvInfo(matching) {
+    var cap = DC_MAX_TOTAL_EXPORT, m = Number(matching) || 0, over = m > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Download first " + cap.toLocaleString() + " of " + m.toLocaleString() + " filtered"
+                  : "\u2B07 Download CSV (all " + m.toLocaleString() + " filtered)",
+      confirmMsg: over
+        ? m.toLocaleString() + " rows match your filter, but Download CSV fetches at most the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " matching rows now?\n\nFetches in batches \u2014 you can click Cancel while it runs."
+        : m.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches \u2014 you can click Cancel while it runs.",
+      tip: over
+        ? "Downloads the currently loaded rows as CSV. Because your filter matches more rows than are loaded, it fetches the matching rows in batches (cancellable) \u2014 limit: the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT
+        : "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.",
+      doneLabel: function (n) { return "\u2713 Saved " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + m.toLocaleString() + " filtered" : ""); },
+      headerNote: over ? " \u2014 Download CSV saves the first " + cap.toLocaleString() + " matching rows only" : " \u2014 Download CSV will fetch all"
+    };
+  }
+
   // Paginated CSV export: runs a query, then pages through all results building CSV
   // incrementally. Extension-only (pagination needs the sid-cookie background).
   // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
@@ -10015,7 +10034,7 @@
     var filteredTotal = _filterCount[objectName] || 0;
     var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? ((_filterState[objectName].fromSql && !_filterState[objectName].where) ? " (query result)" : " (filtered)") : "") + " &times; " + columns.length + " cols";
     if (isFiltered && filteredTotal > rows.length) {
-      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span> — Download CSV will fetch all";
+      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span>" + dcFilteredCsvInfo(filteredTotal).headerNote;
     } else if (serverTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
@@ -10195,7 +10214,7 @@
             if (!(_filterState[objectName] && _filterState[objectName].active)) _originalTotal[objectName] = cnt;
             var _hintEl = panel.querySelector(".dc-scroll-hint");
             if (_hintEl) {
-              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total (Download CSV for all)" : "";
+              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total" : "";
               _hintEl.textContent = rows.length.toLocaleString() + " rows loaded" + _more + " · scroll freely — all rows & columns available, no extra queries.";
             }
           } catch (e) {}
@@ -10445,10 +10464,10 @@
     // FIX 5: Download CSV label shows loaded row count
     var filterTotal = _filterCount[objectName] || 0;
     var csvLabel = filterTotal > rows.length
-      ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
+      ? dcFilteredCsvInfo(filterTotal).label
       : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.textContent = csvLabel;
-    csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
+    csvBtn.title = dcFilteredCsvInfo(filterTotal > rows.length ? filterTotal : 0).tip;
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
       // If a batched download is already running, this click cancels it (Explorer-local flag).
@@ -10461,7 +10480,8 @@
       var fs2 = _filterState[objectName];
       // If filter active and more rows exist than loaded → paginate to get all (cancellable)
       if (fs2 && fs2.active && fc > rows.length) {
-        if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches — you can click Cancel while it runs.")) return;
+        var csvCap = dcFilteredCsvInfo(fc);
+        if (!confirm(csvCap.confirmMsg)) return;
         _explorerExportCancel = false;
         csvBtn.dataset.exporting = "true"; csvBtn.disabled = false;
         csvBtn.textContent = "✕ Cancel export";
@@ -10480,6 +10500,7 @@
           csvBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + " rows…)";
         }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreCsvUi();
+          if (csvCap.capped) csvBtn.textContent = csvCap.doneLabel(res.totalRows);
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
@@ -11258,7 +11279,7 @@
     function updateScrollHint(total) {
       const hintEl = panel.querySelector(".dc-scroll-hint");
       if (!hintEl) return;
-      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total (Download CSV for all)" : "";
+      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total" : "";
       hintEl.textContent = total.toLocaleString() + " rows loaded" + more + " · scroll freely — all rows & columns available, no extra queries.";
     }
     function renderWindow(force) {
