@@ -7582,6 +7582,28 @@
   // Extension-only (pagination requires the sid-cookie background).
   var DC_PAGE_SIZE = 49999;
   var DC_MAX_TOTAL_EXPORT = 500000;   // hard cap (memory + credit safety)
+  // Explorer "Export All" is capped at DC_MAX_TOTAL_EXPORT rows. Every label/message about it comes from here
+  // so the button can never promise "everything" when the table is bigger than the cap.
+  var DC_BIGGER_EXPORT_HINT = " To get the rest, export in slices using a filter.";
+  /* @strip:start dev */
+  DC_BIGGER_EXPORT_HINT = " For the whole table, use Query Editor \u2192 Export ALL, or export in slices using a filter.";
+  /* @strip:end */
+  function dcExportCapInfo(total) {
+    var cap = DC_MAX_TOTAL_EXPORT, t = Number(total) || 0, over = t > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Export first " + cap.toLocaleString() + " of " + t.toLocaleString() + " rows"
+                  : "\u2B07 Export All" + (t ? " (" + t.toLocaleString() + " rows)" : ""),
+      confirmMsg: over
+        ? "This table has " + t.toLocaleString() + " rows, but Export All downloads at most the first " + cap.toLocaleString() + " rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " rows now? You can click Cancel while it runs."
+        : (t ? "Download all " + t.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
+             : "Download up to " + cap.toLocaleString() + " rows from this object? This may take a while. You can click Cancel while it runs."),
+      tip: "Download this object as CSV (ignores any filter), fetched in batches. Limit: the first " + cap.toLocaleString() + " rows per export." + (over ? DC_BIGGER_EXPORT_HINT : "") + " Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.",
+      doneLabel: function (n) { return "\u2713 Exported " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + t.toLocaleString() : ""); },
+      infoSuffix: over ? " &mdash; <b>Export All</b> saves the first " + cap.toLocaleString() + " rows only." + DC_BIGGER_EXPORT_HINT
+                       : " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV"
+    };
+  }
   // Paginated CSV export: runs a query, then pages through all results building CSV
   // incrementally. Extension-only (pagination needs the sid-cookie background).
   // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
@@ -10011,7 +10033,7 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(wantRows || rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads the whole table.";
+    rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
     rowsInput.addEventListener("input", function () {
       var v = parseInt(rowsInput.value, 10);
       if (!v || v < 1) {
@@ -10020,7 +10042,7 @@
         rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
         rowsInput.value = String(DC_MAX_FETCH_ROWS);
       } else {
-        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads the whole table.";
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
       }
     });
     const reloadBtn = document.createElement("button");
@@ -10033,7 +10055,7 @@
       if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
       // Large loads: ask first. Each query is billed by rows PROCESSED, and loading in several
       // batches re-reads earlier rows, so the cost can exceed the row count. Also slow in VDI.
-      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nLarge loads take longer and use more Data Cloud credits. Credits are billed by rows processed, and rows fetched in several batches may be read more than once.\n\nYou can also use Download CSV to save the rows already loaded, or Export All to save the whole table.")) return;
+      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nLarge loads take longer and use more Data Cloud credits. Credits are billed by rows processed, and rows fetched in several batches may be read more than once.\n\nYou can also use Download CSV to save the rows already loaded, or Export All to save up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.")) return;
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       showTableSpinner(panel, "Loading " + want + " rows…");
       const sub = panel.querySelector(".dc-ac-sub");
@@ -10188,7 +10210,7 @@
             var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
             info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
             if (_cntTime) info += " <span style='font-size:10px;color:#94a3b8;'>(live count as of " + _cntTime + ")</span>";
-            if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
+            if (cnt > rows.length) info += dcExportCapInfo(cnt).infoSuffix;
             if (rowsProcessed != null && rowsProcessed > 0) {
               // Actual billing basis reported by the engine.
               info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + _dxCreditStr(rowsProcessed) + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
@@ -10204,7 +10226,8 @@
           var eab = panel.querySelector("#dc-export-all-btn");
           if (eab && cnt > rows.length) {
             eab.style.display = "";
-            eab.textContent = "⬇ Export All (" + cnt.toLocaleString() + " rows)";
+            eab.textContent = dcExportCapInfo(cnt).label;
+            eab.title = dcExportCapInfo(cnt).tip;
             eab.setAttribute("data-total", cnt);
           }
         }).catch(function (err) {
@@ -10479,8 +10502,8 @@
     // Export All always shows full object count (not filtered). Use Count button result if available.
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
-    exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
-    exportAllBtn.title = "Download EVERY row of this object as CSV (ignores any filter), fetched in batches from Salesforce. Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.";
+    exportAllBtn.textContent = dcExportCapInfo(exportAllTotal).label;
+    exportAllBtn.title = dcExportCapInfo(exportAllTotal).tip;
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     // No records loaded and none reported on the server → nothing to export.
     if (!rows.length && !serverTotal) {
@@ -10512,16 +10535,15 @@
         // fall through to a fresh export
       }
       var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0;
-      var confirmMsg = btnTotal
-        ? "Download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
-        : "Download ALL records from this object? This may take a while. You can click Cancel while it runs.";
+      var capInfo = dcExportCapInfo(btnTotal);
+      var confirmMsg = capInfo.confirmMsg;
       if (!confirm(confirmMsg)) return;
       _explorerExportCancel = false;
       exportAllBtn.dataset.exporting = "true";
       exportAllBtn.textContent = "✕ Cancel Export";
       exportAllBtn.style.background = "#dc2626"; exportAllBtn.style.borderColor = "#dc2626";
       exportAllBtn.disabled = false; // stays clickable so the user can cancel
-      var originalText = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+      var originalText = capInfo.label;
       var restoreBtnUi = function () {
         exportAllBtn.dataset.exporting = "false";
         exportAllBtn.disabled = false;
@@ -10542,7 +10564,7 @@
           exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
         }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreBtnUi();
-          exportAllBtn.textContent = "✓ Exported (" + res.totalRows.toLocaleString() + " rows)";
+          exportAllBtn.textContent = capInfo.doneLabel(res.totalRows);
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
@@ -11413,7 +11435,7 @@
       var _moreOnServer = _srvTot > rows.length;
       if (sub) sub.innerHTML = rows.length.toLocaleString() + " rows &times; " + columns.length + " columns &bull; " +
         (_moreOnServer
-          ? "<span style='color:#b8860b'>loaded " + rows.length.toLocaleString() + " of " + _srvTot.toLocaleString() + " in the table — the server returned fewer rows than requested (" + wantRows.toLocaleString() + "). Click Reload to try again, or use Export All for every row.</span>"
+          ? "<span style='color:#b8860b'>loaded " + rows.length.toLocaleString() + " of " + _srvTot.toLocaleString() + " in the table — the server returned fewer rows than requested (" + wantRows.toLocaleString() + "). Click Reload to try again, or use Export All (first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows).</span>"
           : "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but the table only has " + rows.length.toLocaleString() + " records.</span>");
     }
     if (typeof makeDraggable === "function") try { makeDraggable(panel, hdr); } catch (e) {}
