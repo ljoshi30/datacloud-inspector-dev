@@ -101,5 +101,14 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   ok(A._graphCalls.REAL === "TD_Insurance", "Salesforce's own call is learned");
   ok(!sn.template && !sn.dataSpace, "graph call does not overwrite the Explorer query template / data space");
 }
+// graph name is read from the row's own "Dg_<name>_<timestamp>" cell and tried FIRST
+{
+  const seen = [];
+  const G5 = new Function("_auraSniff", "fetch", "function dataSpaceCandidates(){return []}var _auraQid=0;var _graphCalls={};" + src.slice(g0, g1) + "; return {dcQueryDataGraph,dcGraphNameFromCell};")(
+    { context: "C", token: "T" }, (url, o) => { seen.push(decodeURIComponent(o.body.split("&")[0].slice(8))); return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: "{}" }] })) }); });
+  ok(G5.dcGraphNameFromCell("Dg_TDI_Unified_Profile_SFP_RT_1780157109046") === "TDI_Unified_Profile_SFP_RT", "graph name parsed from Dg_ cell");
+  ok(G5.dcGraphNameFromCell("DataCloudTransforms") === "" && G5.dcGraphNameFromCell("") === "", "non-graph cells ignored");
+  G5.dcQueryDataGraph({ objectName: "TDI_Unified_Profile_1780157058614_VALUE", graphHints: ["TDI_Unified_Profile_SFP_RT"], dataSpace: "TD_Insurance", keyField: "Id__c", keyValue: "q" }, true).then(() => { ok(/"objectName":"TDI_Unified_Profile_SFP_RT","dataSpaceName":"TD_Insurance"/.test(seen[0]) && /"noCache":true/.test(seen[0]), "first request = row's graph name @ data space, noCache true: " + seen[0]); console.log("HINT-OK"); });
+}
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

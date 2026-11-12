@@ -7717,13 +7717,16 @@
     for (i = 0; i < keys.length; i++) { if (/json|blob|graph|data|result/i.test(keys[i]) && rv[keys[i]] && typeof rv[keys[i]] === "object") return rv[keys[i]]; }
     return rv;
   }
+  // A Data Graph State row names its graph like "Dg_<GraphApiName>_<13-digit timestamp>"; the graph API name is the middle.
+  function dcGraphNameFromCell(t) { var m = /^Dg_(.+?)_\d{9,}$/.exec(String(t || "").trim()); return m ? m[1] : ""; }
   function dcQueryDataGraph(live, realtime) {
     return new Promise(function (resolve, reject) {
       if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected. Sort a column or click Connect first.")); return; }
       // Candidate (graph name x data space) pairs, the one that worked last time first. A wrong guess gives Salesforce's
       // generic "Something's not right with the query", so we try the plausible ones and remember the winner.
       var trimmed = String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "");
-      var names = [trimmed]; if (trimmed !== live.objectName) names.push(live.objectName);
+      var names = []; (live.graphHints || []).forEach(function (h) { if (h && names.indexOf(h) < 0) names.push(h); });   // graph name read from the row itself first
+      [trimmed, live.objectName].forEach(function (n) { if (n && names.indexOf(n) < 0) names.push(n); });
       var spaces = [], seenS = {};
       var addS = function (x) { if (x && !seenS[x]) { seenS[x] = 1; spaces.push(x); } };
       addS(live.dataSpace);
@@ -11881,8 +11884,12 @@
       try {   // Data Graph row? then offer Real-time + Refresh using the row's lookup key (Id__c)
         if (/json_blob/i.test(info.fn)) {
           var kv = "", trEl = _toolsTd.closest("tr");
-          if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) { if (colByIndex[parseInt(c.getAttribute("data-c"), 10)] === "Id__c") kv = (c.textContent || "").trim(); });
-          if (kv) live = { objectName: objectName, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: "Id__c", keyValue: kv };
+          var gh = [];
+          if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) {
+            if (colByIndex[parseInt(c.getAttribute("data-c"), 10)] === "Id__c") kv = (c.textContent || "").trim();
+            var gm = dcGraphNameFromCell(c.textContent || ""); if (gm && gh.indexOf(gm) < 0) gh.push(gm);
+          });
+          if (kv) live = { objectName: objectName, graphHints: gh, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: "Id__c", keyValue: kv };
         }
       } catch (ex) { live = null; }
       showCellValue(info.fn, meta[info.fn] || info.fn, info.val, live);
