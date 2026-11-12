@@ -1334,7 +1334,7 @@
     ["targetLabel", "Target Field (label)"], ["targetApi", "Target Field API"], ["targetType", "Target Type"],
   ];
   function rowsToTable(rows, sep) {
-    const esc = sep === "," ? (s) => (/[",\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
+    const esc = sep === "," ? (s) => (/[",\r\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
     const head = EXPORT_COLS.map((c) => c[1]).join(sep);
     const body = rows.map((r) => EXPORT_COLS.map((c) => esc(r[c[0]] == null ? "" : r[c[0]])).join(sep)).join("\n");
     return head + "\n" + body;
@@ -7929,7 +7929,7 @@
       if (!extBridgePresent()) {
         var BM_PAGE = 49999;
         var BM_MAX = DC_MAX_TOTAL_EXPORT;
-        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
         var rowData = [];
 
@@ -7981,7 +7981,7 @@
         return;
       }
       var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
-      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
       function appendRows(data, metadata) {
         if (!cols.length && metadata && metadata.length) {
           cols = metadata.map(function (m) { return m.name; });
@@ -9165,7 +9165,7 @@
       if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows.");
       return;
     }
-    const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const esc = v => { const s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     // Header = exactly the columns shown. An "Id" column is added ONLY if the rows really carry
     // one (Data Cloud objects usually have none → it was always an empty column), and never twice.
     const header = (columns.indexOf("Id") < 0 && rows.some(r => r && Object.prototype.hasOwnProperty.call(r, "Id")))
@@ -10913,7 +10913,7 @@
         if (_colVizHidden[fn]) {
           hiddenCount++;
           var n = i + 1;
-          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:nth-child(" + n + "){display:none!important}");
+          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:not(.dc-sp):nth-child(" + n + "){display:none!important}");   // .dc-sp = scroll spacer cell, must never be hidden
         }
       });
       if (rules.length) {
@@ -11662,7 +11662,7 @@
         var origCols = _originalColumns[objectName] || columns;
         var origWant = _originalWantRows[objectName] || wantRows;
         if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
-        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, allColumns);
+        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, origCols);   // 5th arg = the ORIGINAL full set, never the SQL result's columns
       } else {
         // No cache — fall back to re-query
         runFilter(null);
@@ -11685,7 +11685,7 @@
         _filterCount[objectName] = 0;
         if (_originalRows[objectName] && _originalRows[objectName].length) {
           if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
-          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, allColumns);
+          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, _originalColumns[objectName] || allColumns);
         } else {
           // No cache — re-query without filter
           var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
@@ -11874,7 +11874,7 @@
     function mkSpacer() {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = columns.length; td.style.cssText = "padding:0;border:none;";
+      td.colSpan = columns.length; td.className = "dc-sp"; td.style.cssText = "padding:0;border:none;";
       tr.appendChild(td);
       return { tr: tr, td: td };
     }
@@ -12862,6 +12862,9 @@
           // The previous filter/original state is only replaced HERE, after a query really succeeded,
           // so a failed/cancelled run can never leave the table and its filter state out of sync.
           function finishOk(res) {
+            // 0 rows: the table renderer refuses to open an empty result, so do NOT touch the filter state or close the
+            // editor (that left the old table showing with a stale "SQL filter" record). Tell the user instead.
+            if (!res.rows || !res.rows.length) { runBtn.disabled = false; runBtn.style.opacity = "1"; setStatus("Query ran but returned 0 rows - the table is unchanged.", "warn"); return; }
             // Keep the user's Rows setting — never replace it with how many rows this query returned.
             var keepWant = _originalWantRows[objName] || res.rows.length;
             if (whereMatch && whereMatch[1]) {
@@ -14867,7 +14870,7 @@
           var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
           var cap = ul > 0 ? Math.min(ul, QE_HARD) : QE_HARD;
           var parts = [], cols = [], colTypes = {}, preview = [], got = 0;
-          var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
           function append(data, metadata) {
             if (!cols.length && metadata && metadata.length) {
               cols = metadata.map(function (m) { return m && m.name; });
@@ -14922,7 +14925,7 @@
                                          // so we stop at a sane cap + warn, rather than grinding
                                          // through 1.7M rows and a surprise credit bill.
         var QE_HARD_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
-        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = [], cols2 = [], colTypes2 = {}, totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
         var cappedAtDefault = false;     // did we stop at QE_DEFAULT_CAP with more available?
 
@@ -15116,7 +15119,7 @@
         var partRows = split ? Math.max(1, split.partRows | 0) : 0;
         var lastEmpty = null;   // what Data Cloud reported on the last empty page (shown if the export ends early)
         function prog() { if (onProgress) onProgress(got, split ? { part: partIdx, files: partFiles.length } : null); }
-        var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var HARD = 100000000;   // 100M absolute backstop (still bounded — never truly infinite)
         var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
         var cap = ul > 0 ? ul : HARD;

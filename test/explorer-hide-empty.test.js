@@ -34,3 +34,11 @@ const kA=keyFn(["x","y"],100,"Obj");curDs="B";const kB=keyFn(["x","y"],100,"Obj"
 ok(kA!==kB,"same object + columns in a DIFFERENT data space gets a different cache key (no stale rows)");
 curDs="B";ok(keyFn(["x","y"],100,"Obj")===kB,"same space -> same key (cache still hits)");
 console.log("explorer cache key: "+n+" checks passed");
+ok(!/showAllColumnsTable\(objectName, origCols, _originalRows\[objectName\], origWant, allColumns\)/.test(src),"Back to original no longer passes the SQL result's columns as the full set");
+ok(/_originalColumns\[objectName\] \|\| columns, _originalRows\[objectName\], _originalWantRows\[objectName\] \|\| wantRows, _originalColumns\[objectName\] \|\| allColumns/.test(src),"Clear passes the original full set");
+const f=src.indexOf("function finishOk(res) {");ok(/if \(!res\.rows \|\| !res\.rows\.length\)[^\n]*return;/.test(src.slice(f,f+700)) && src.slice(f,f+700).indexOf("return;")<src.slice(f,f+900).indexOf("_filterState"),"0-row SQL result returns BEFORE touching _filterState / closing the editor");
+console.log("explorer sql-restore: "+n+" checks passed");
+ok(/td\.className = "dc-sp"/.test(src)&&/td:not\(\.dc-sp\):nth-child\(/.test(src),"scroll spacer cell is excluded from hidden-column CSS (hiding column 1 no longer collapses the scrollbar)");
+console.log("explorer colviz spacer: "+n+" checks passed");
+ok(!/\/\[",\\n\]\/\.test\(s\)/.test(src),"every CSV escaper quotes a bare carriage return too");
+console.log("explorer csv cr: "+n+" checks passed");
