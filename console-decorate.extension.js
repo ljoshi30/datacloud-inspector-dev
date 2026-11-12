@@ -11542,6 +11542,8 @@
     scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
     panel.appendChild(scrollHint);
     document.body.appendChild(panel);
+    // The result table opens FULL SCREEN by default (the ⛶ button / Esc restores the smaller window).
+    try { setFullScreen(true); } catch (e) {}
     try { attachInstantTooltips(panel); } catch (e) {}   // fast tooltips for header/filter buttons
 
     // ── Delegated cell affordances (Copy / View) ────────────────────────────────
