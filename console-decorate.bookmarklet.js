@@ -7350,6 +7350,17 @@
   // easiest way to make Salesforce run one is to sort a column. The old message was two plain lines that
   // people skipped. This card: (1) uses a REAL header name from the table behind the panel, (2) says WHY,
   // (3) watches for the sort and, the moment it lands, turns green and offers the button.
+  // A→Z / Z→A by visible label (case-insensitive, numeric-aware, stable; ties fall back to the API name).
+  // Returns a NEW array. `labelOf(item)` gives the text to sort on.
+  function dcSortByLabel(items, asc, labelOf) {
+    var key = function (x) { return String(labelOf(x) == null ? "" : labelOf(x)).toLowerCase(); };
+    var out = (items || []).map(function (x, i) { return { x: x, k: key(x), i: i }; });
+    out.sort(function (a, b) {
+      var c = a.k.localeCompare(b.k, undefined, { numeric: true, sensitivity: "base" });
+      return c !== 0 ? (asc ? c : -c) : a.i - b.i;
+    });
+    return out.map(function (o) { return o.x; });
+  }
   // Pure helper (unit-tested): choose a header label that a person can actually find and click.
   function dcPickHeaderLabel(texts) {
     var skip = /^(select( all)?( rows?)?|row( number)?|actions?|#|show actions?|checkbox)$/i;
@@ -11774,11 +11785,19 @@
     // Sort A→Z / Z→A toggle
     let sortAsc = true;
     const sortBtn = document.createElement("button");
-    sortBtn.title = "Toggle sort order";
+    sortBtn.title = "Sort ALL columns alphabetically (A → Z / Z → A): the list and your selected columns' order";
     sortBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:#1e3a5f;white-space:nowrap;flex-shrink:0;";
     const updateSortLabel = () => { sortBtn.textContent = sortAsc ? "A → Z" : "Z → A"; };
     updateSortLabel();
-    sortBtn.onclick = () => { sortAsc = !sortAsc; updateSortLabel(); if (activeTab === "available") renderAvailable(searchInput.value); };
+    sortBtn.onclick = () => {
+      sortAsc = !sortAsc; updateSortLabel();
+      // Also put the SELECTED columns in that order (this is the order the data table uses). Explicit click only,
+      // so a hand-dragged order is never touched unless the user presses this button.
+      const lblOf = (fn) => { const c = all.find(x => x.fieldName === fn); return (c && (c.label || c.fieldName)) || fn; };
+      orderedSelected = dcSortByLabel(orderedSelected.filter(fn => checked.has(fn)), sortAsc, lblOf);
+      persistSelection();
+      renderActiveTab();
+    };
 
     searchRow.appendChild(searchInput);
     searchRow.appendChild(sortBtn);
@@ -11890,10 +11909,10 @@
       if (!q) {
         const selectedInOrder = orderedSelected.filter(fn => checked.has(fn));
         const unchecked = visible.filter(col => !checked.has(col.fieldName));
-        if (!sortAsc) unchecked.reverse();
+        const uncheckedSorted = dcSortByLabel(unchecked, sortAsc, c => c.label || c.fieldName);
         const selectedCols = selectedInOrder.map(fn => visible.find(c => c.fieldName === fn)).filter(Boolean);
         selectedCount = selectedCols.length;
-        visible = [...selectedCols, ...unchecked];
+        visible = [...selectedCols, ...uncheckedSorted];
         // "SELECTED (n)" header pinned above the selected group
         if (selectedCount > 0) {
           const selHdr = document.createElement("div");
@@ -11902,7 +11921,7 @@
           listWrap.appendChild(selHdr);
         }
       } else {
-        if (!sortAsc) visible = visible.slice().reverse();
+        visible = dcSortByLabel(visible, sortAsc, c => c.label || c.fieldName);
       }
 
       // Divider between selected and unselected (only when no search query)
