@@ -121,5 +121,22 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   ok(JSON.stringify(X(plain)) === JSON.stringify(plain), "plain graph object returned as-is");
   ok(X({ rows: [{ fields: [null] }] }).rows !== undefined, "nothing JSON-like inside -> returns the reply itself (never undefined)");
 }
+// order note + "empty here but data may be further down" warning
+{
+  const o0 = src.indexOf("  function dcOrderNote(o) {"), o1 = src.indexOf("  function showAllColumnsTable(", o0);
+  ok(o0 > 0 && o1 > o0, "dcOrderNote found");
+  const N = new Function(src.slice(o0, o1) + "; return dcOrderNote;")();
+  const rowsA = [{ a: null, b: "x" }, { a: "", b: "y" }];
+  let r = N({ rows: rowsA, columns: ["a", "b"], total: 109632 });
+  ok(/not sorted/.test(r.order) && r.emptyCols.join() === "a" && /1 of 2/.test(r.warn) && /further down/.test(r.warn) && /109,632/.test(r.warn), "empty col + more rows on server -> warns data may be further down");
+  r = N({ rows: rowsA, columns: ["a", "b"], total: 2 });
+  ok(/empty in every row/.test(r.warn) && !/further down/.test(r.warn), "empty col but ALL rows loaded -> no 'further down' claim");
+  r = N({ rows: [{ a: false, b: 0 }], columns: ["a", "b"], total: 5 });
+  ok(r.warn === "" && r.emptyCols.length === 0, "false / 0 are real values, not empty");
+  ok(/your filter/.test(N({ rows: rowsA, columns: ["b"], total: 2, filtered: true }).order) && /your SQL/.test(N({ rows: rowsA, columns: ["b"], total: 2, fromSql: true }).order), "order text for filter / SQL");
+  r = N({ rows: rowsA, columns: ["a", "b"], total: 0 });
+  ok(/further down/.test(r.warn) && !/every row/.test(r.warn) && /Count/.test(r.warn), "unknown total -> never claims 'every row'");
+  ok(N({ rows: [], columns: ["a"], total: 0 }).warn === "", "no rows -> no warning");
+}
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

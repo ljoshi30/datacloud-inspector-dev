@@ -10452,6 +10452,26 @@
   }
   // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // The table is never sorted by us: rows are in the order Data Cloud returned them (no ORDER BY) unless the user's SQL has one.
+  function dcOrderNote(o) {
+    var rows = o.rows || [], cols = o.columns || [], total = o.total || 0;
+    var order = o.fromSql ? "per your SQL" : (o.filtered ? "as returned for your filter (not sorted)" : "as returned by Data Cloud (not sorted)");
+    var empty = cols.filter(function (fn) {
+      for (var i = 0; i < rows.length; i++) { var v = rows[i] && rows[i][fn]; if (v !== null && v !== undefined && v !== "") return false; }
+      return rows.length > 0;
+    });
+    var known = total > 0;                       // total unknown (e.g. before Count) -> never claim "every row"
+    var more = !known || total > rows.length;
+    var warn = "";
+    if (empty.length && more) {
+      warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in these " + rows.length.toLocaleString() +
+        " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") + ". Use Add condition \u2192 column IS NOT NULL to find them.";
+    } else if (empty.length && !more) {
+      warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in every row of this table.";
+    }
+    return { order: order, warn: warn, emptyCols: empty };
+  }
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
     // Never open the modal for an empty object — show a FAB-level toast instead.
     if (!rows || !rows.length) {
@@ -10501,7 +10521,14 @@
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
     titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
-      "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>";
+      "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>" +
+      "<div class='dc-ac-order' style='font-size:11px;color:#5c6b8a;margin-top:1px'></div>";
+    (function () {
+      var fs0 = _filterState[objectName] || {};
+      var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where) });
+      var el = titleWrap.querySelector(".dc-ac-order");
+      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>" + (on.warn ? "<div style='margin-top:2px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:5px;padding:2px 7px;display:inline-block;max-width:60ch'>\u26A0 " + on.warn + "</div>" : "");
+    })();
     hdr.appendChild(titleWrap);
 
     // Rows control — request more than the default page (e.g. 2000). We can only honor
