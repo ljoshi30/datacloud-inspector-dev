@@ -7360,81 +7360,146 @@
     }
     return "";
   }
-  // Header names as the user sees them in the Salesforce table behind the panel (best effort).
-  function dcReadSortableHeaderLabels() {
-    var out = [];
+  // A column header the user can really see and click: visible, inside the viewport, and not under our panel.
+  // Returns { label, el } or null. The label is read from that same element so name and highlight always match.
+  function dcFindVisibleHeader() {
+    var found = null, panelRect = null;
+    try { if (typeof exploreModalEl !== "undefined" && exploreModalEl && exploreModalEl.isConnected) panelRect = exploreModalEl.getBoundingClientRect(); } catch (e) {}
+    var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
     try {
       eachElement(document, function (el) {
-        if (out.length >= 8) return;
+        if (found || tagOf(el) !== "a") return;
         var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
-        if (tagOf(el) === "a" && /slds-th__action/i.test(cls || "")) {
-          var nm = (el.getAttribute("title") || el.textContent || "");
-          if (nm) out.push(nm);
-        }
+        if (!/slds-th__action/i.test(cls || "")) return;
+        var r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return;
+        if (panelRect && r.right > panelRect.left && r.left < panelRect.right && r.bottom > panelRect.top && r.top < panelRect.bottom) return;
+        var lab = dcPickHeaderLabel([el.getAttribute("title") || el.textContent || ""]);
+        if (!lab) return;
+        found = { label: lab, el: el };
       });
     } catch (e) {}
-    if (!out.length) {
-      try {
-        var rl = findRecordListEl();
-        ((rl && rl.columns) || []).forEach(function (c) { if (c && c.label && c.fieldName !== "recordPageUrl") out.push(c.label); });
-      } catch (e) {}
-    }
-    return out;
+    return found;
   }
-  // Builds the card. opts: { actionLabel, isReady(): bool (optional, extra readiness test),
-  // onAction(): runs when the user presses the revealed button }. Returns the element; el.dcStop() stops watching.
+  function dcEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // Builds the guide card. opts: { lockBtn: the page's ORIGINAL action button (locked while waiting, unlocked on ready;
+  // the card never has a button of its own), isReady(): extra readiness test, onReady() }.
+  // Returns the element; el.dcStop() stops watching and restores everything (button, spotlight).
   function dcBuildSortGuide(opts) {
     opts = opts || {};
     if (!document.getElementById("dc-guide-style")) {
       var st = document.createElement("style"); st.id = "dc-guide-style";
-      st.textContent = "@keyframes dc-guide-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}50%{box-shadow:0 0 0 6px rgba(245,158,11,0)}}" +
-                       "@keyframes dc-guide-dot{0%,100%{opacity:.25}50%{opacity:1}}";
+      st.textContent = "@keyframes dc-guide-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}50%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}" +
+                       "@keyframes dc-guide-bpulse{0%,100%{box-shadow:0 0 0 0 rgba(13,110,253,.45)}50%{box-shadow:0 0 0 8px rgba(13,110,253,0)}}";
       document.head.appendChild(st);
     }
-    var label = dcPickHeaderLabel(dcReadSortableHeaderLabels());
-    var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:6px;padding:1px 8px;font-weight:700;animation:dc-guide-pulse 1.6s ease-in-out infinite;'>" + label.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</span>"
-                      : "<b>any column</b>";
-    var num = "flex:none;width:20px;height:20px;border-radius:50%;background:#f59e0b;color:#fff;font:700 11px/20px -apple-system,sans-serif;text-align:center;";
+    var hdr = dcFindVisibleHeader();
+    var label = hdr ? hdr.label : "";
     var box = document.createElement("div");
     box.setAttribute("data-dc-sort-guide", "1");
     var baseSeq = _auraSniff.querySeq || 0;
-    var waiting =
-      "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 13px;color:#78350f;font-size:12px;line-height:1.5;'>" +
-      "<div style='display:flex;align-items:center;gap:7px;font-weight:700;color:#92400e;font-size:13px;margin-bottom:6px;'><span style='font-size:15px;'>&#9888;</span>One quick action needed: sort the table once</div>" +
-      "<div style='margin-bottom:9px;'><b>Why?</b> Data 360 only lets this tool read a table after Salesforce has run one query on it. Sorting a column makes Salesforce run that query, and we reuse its connection. Sorting is read-only and changes no data.</div>" +
-      "<div style='display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;'><span style='" + num + "'>1</span><span>In the Salesforce table <b>behind this panel</b>, click the " + chip + " column header" + (label ? " (any header works)." : ".") + "</span></div>" +
-      "<div style='display:flex;gap:8px;align-items:flex-start;'><span style='" + num + "'>2</span><span>This panel notices it automatically and shows the button here.</span></div>" +
-      "<div class='dc-guide-wait' style='margin-top:9px;font-size:11px;color:#b45309;display:flex;align-items:center;gap:6px;'><span style='width:7px;height:7px;border-radius:50%;background:#f59e0b;animation:dc-guide-dot 1.1s ease-in-out infinite;'></span>Waiting for you to click a column header&hellip;</div>" +
-      "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div>" +
-      "</div>";
-    box.innerHTML = waiting;
-    var finished = false, timer = null, started = Date.now();
-    function ready() {
-      if (finished) return; finished = true; if (timer) clearInterval(timer);
+    var btn = opts.lockBtn || null, saved = null, locked = false;
+    function lock() {
+      if (!btn || locked) return; locked = true;
+      saved = { text: btn.textContent, disabled: btn.disabled, opacity: btn.style.opacity, cursor: btn.style.cursor, title: btn.title, anim: btn.style.animation };
+      btn.disabled = true; btn.style.opacity = "0.55"; btn.style.cursor = "not-allowed";
+      btn.textContent = "🔒 " + saved.text.replace(/^🔒\s*/, "");
+      btn.title = "Locked until you click a column header in the Salesforce table (see the orange box above). It unlocks by itself.";
+    }
+    function unlock(pulse) {
+      if (!btn || !locked) return; locked = false;
+      btn.disabled = saved.disabled; btn.style.opacity = saved.opacity || "1"; btn.style.cursor = saved.cursor || "pointer";
+      btn.textContent = saved.text; btn.title = saved.title;
+      btn.style.animation = pulse ? "dc-guide-bpulse 1.2s ease-in-out 3" : saved.anim;
+    }
+    // spotlight on the REAL header (fixed overlay on <body>; never inserted into Salesforce's own DOM; clicks pass through)
+    var ring = null, tag = null;
+    function placeSpot() {
+      if (!hdr) return;
+      var r = hdr.el.isConnected ? hdr.el.getBoundingClientRect() : null;
+      var vis = r && r.width >= 8 && r.height >= 8 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+      if (!vis) { if (ring) ring.style.display = "none"; if (tag) tag.style.display = "none"; return; }
+      if (!ring) {
+        ring = document.createElement("div"); ring.setAttribute("data-dc-guide-spot", "1");
+        ring.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;border:3px solid #f59e0b;border-radius:6px;animation:dc-guide-pulse 1.5s ease-in-out infinite;box-sizing:border-box;";
+        tag = document.createElement("div"); tag.setAttribute("data-dc-guide-spot", "1");
+        tag.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;background:#92400e;color:#fff;font:700 11px -apple-system,sans-serif;padding:4px 9px;border-radius:6px;white-space:nowrap;";
+        tag.textContent = "👆 Click here";
+        document.body.appendChild(ring); document.body.appendChild(tag);
+      }
+      ring.style.display = tag.style.display = "";
+      ring.style.left = (r.left - 3) + "px"; ring.style.top = (r.top - 3) + "px"; ring.style.width = (r.width + 6) + "px"; ring.style.height = (r.height + 6) + "px";
+      tag.style.left = Math.max(4, r.left + 4) + "px"; tag.style.top = (r.bottom + 8) + "px";
+    }
+    function clearSpot() { [ring, tag].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); }); ring = tag = null; }
+    // stepper: 1 click header, 2 Salesforce loads, 3 unlocked
+    function stepper(stage) {
+      function dot(n) {
+        var done = stage > n || (n === 3 && stage >= 3), on = stage === n;
+        var bg = done ? "#16a34a;color:#fff" : on ? "#f59e0b;color:#fff;animation:dc-guide-pulse 1.5s ease-in-out infinite" : "#fde68a;color:#92400e";
+        return "<span style='display:inline-block;width:18px;height:18px;border-radius:50%;background:" + bg + ";font:700 10px/18px sans-serif;text-align:center;'>" + (done ? "&#10003;" : n) + "</span>";
+      }
+      function bar(n) { return "<span style='flex:1;height:2px;min-width:10px;margin:0 6px;background:" + (stage > n ? "#16a34a" : "#fde68a") + ";'></span>"; }
+      function step(n, txt) { return "<span style='display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;color:" + (stage > n || (n === 3 && stage >= 3) ? "#166534" : "#a16207") + ";'>" + dot(n) + txt + "</span>"; }
+      return "<div style='display:flex;align-items:center;margin-top:2px;'>" + step(1, "Click header") + bar(1) + step(2, "Salesforce loads") + bar(2) + step(3, "Button unlocks") + "</div>";
+    }
+    var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:5px;padding:0 7px;font-weight:700;'>" + dcEsc(label) + "</span>" : "<b>any column header</b>";
+    function renderWait(stage) {
+      var title = stage === 1 ? "Click " + chip + " to unlock your data" : "Salesforce is loading&hellip; one moment";
       box.innerHTML =
-        "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 13px;color:#166534;font-size:12px;line-height:1.5;'>" +
-        "<div style='font-weight:700;font-size:13px;margin-bottom:4px;'>&#10003; Sort detected. You&rsquo;re all set</div>" +
-        "<div style='margin-bottom:9px;'>Salesforce just ran its query, so this tool can now read the table.</div>" +
-        (opts.onAction ? "<button type='button' class='dc-guide-go' style='width:100%;border:none;border-radius:8px;padding:9px 10px;cursor:pointer;background:#16a34a;color:#fff;font:700 12px -apple-system,sans-serif;'>" + (opts.actionLabel || "Continue") + "</button>" : "") +
-        "</div>";
-      var go = box.querySelector(".dc-guide-go");
-      if (go) go.onclick = function () { try { opts.onAction(); } finally { if (box.parentNode) box.parentNode.removeChild(box); } };
+        "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 12px;color:#78350f;font-size:12px;line-height:1.45;'>" +
+        "<div style='font-weight:700;font-size:13px;color:#92400e;margin-bottom:3px;'>" + title + "</div>" +
+        "<div style='margin:2px 0 9px;'>Salesforce only shares its connection after it runs a query itself, and sorting a column makes it run one. Read-only: nothing changes." +
+        (stage === 1 ? " Find it in the table behind this panel" + (hdr ? " (highlighted)" : "") + "." : "") + "</div>" +
+        stepper(stage) +
+        "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div></div>";
+    }
+    function renderDone() {
+      box.innerHTML =
+        "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 12px;color:#166534;font-size:12px;line-height:1.45;'>" +
+        "<div style='font-weight:700;font-size:13px;margin-bottom:3px;'>&#10003; Connected. Press the button below</div>" + stepper(3) + "</div>";
+    }
+    var finished = false, timer = null, started = Date.now(), stage = 1, onClick = null;
+    function cleanup() {
+      finished = true; if (timer) clearInterval(timer);
+      clearSpot();
+      if (onClick) { try { document.removeEventListener("click", onClick, true); } catch (e) {} onClick = null; }
+    }
+    function ready() {
+      if (finished) return; cleanup();
+      renderDone(); unlock(true);
       if (typeof opts.onReady === "function") { try { opts.onReady(); } catch (e) {} }
     }
+    // the user clicked a sortable header -> advance to step 2 right away
+    onClick = function (e) {
+      if (finished || stage !== 1) return;
+      try {
+        var path = e.composedPath ? e.composedPath() : [];
+        for (var i = 0; i < path.length; i++) {
+          var n = path[i];
+          if (n && n.nodeType === 1 && tagOf(n) === "a" && /slds-th__action/i.test(typeof n.className === "string" ? n.className : "")) { stage = 2; clearSpot(); renderWait(2); return; }
+        }
+      } catch (err) {}
+    };
+    document.addEventListener("click", onClick, true);
     function check() {
       if (finished) return;
-      if (box.__dcSeen && !box.isConnected) { finished = true; clearInterval(timer); return; }   // panel closed
+      if (box.__dcSeen && !box.isConnected) { cleanup(); unlock(false); return; }   // panel closed
       if (box.isConnected) box.__dcSeen = true;
       var sorted = (_auraSniff.querySeq || 0) > baseSeq;                      // the page ran a query after the card appeared
       var extra = typeof opts.isReady === "function" ? !!opts.isReady() : false;
       if (sorted || extra) { ready(); return; }
+      placeSpot();
       var note = box.querySelector(".dc-guide-note");
       if (note && Date.now() - started > 20000 && !note.textContent) note.textContent = "Still waiting? Clicking a row checkbox in that table also works. Click it once, then click it again to untick it.";
-      if (Date.now() - started > 600000) { finished = true; clearInterval(timer); }
+      if (Date.now() - started > 600000) { cleanup(); unlock(false); }
     }
+    renderWait(1); lock();
     timer = setInterval(check, 300);
-    box.dcStop = function () { finished = true; if (timer) clearInterval(timer); };
-    box.dcForceReady = ready;       // test hook
+    setTimeout(function () { if (!finished) placeSpot(); }, 0);
+    box.dcStop = function () { cleanup(); unlock(false); };
+    box.dcUnlock = function () { unlock(false); };      // release the button but keep watching (fallback)
+    box.dcForceReady = ready;                             // test hook / session poll
     return box;
   }
 
@@ -12587,12 +12652,12 @@
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
     // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
     // steps, the exact next click highlighted. `again` = the button name to press afterwards.
+    var _sortGuide = null;
     function showSortHelp(again) {
+      if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
       savedNote.innerHTML = "";
-      savedNote.appendChild(dcBuildSortGuide({
-        actionLabel: again,
-        onAction: function () { (again === "Restore saved" ? restoreBtn : viewAllBtn).click(); }
-      }));
+      _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn });
+      savedNote.appendChild(_sortGuide);
     }
 
     footer.appendChild(savedNote);
@@ -12629,41 +12694,27 @@
     var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
     var _connHint = null;
     if (!_connectionReady) {
-      viewAllBtn.disabled = true;
-      viewAllBtn.style.opacity = "0.6";
-      viewAllBtn.style.cursor = "not-allowed";
-      viewAllBtn.textContent = "Waiting for session…";
       _connectingInProgress = true;
-      // Show instruction above the button
+      // The guide locks the ORIGINAL button (no second button) and unlocks it when the page has run a query
       _connHint = dcBuildSortGuide({
-        actionLabel: "Show selected columns' data",
-        isReady: function () { return !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent()); },
-        onAction: function () { viewAllBtn.click(); }
+        lockBtn: viewAllBtn,
+        isReady: function () { return !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent()); }
       });
       footer.insertBefore(_connHint, footer.firstChild);
-      // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
           _connectionReady = true;
           _connectingInProgress = false;
           clearInterval(_connPoll);
-          viewAllBtn.disabled = false;
-          viewAllBtn.style.opacity = "1";
-          viewAllBtn.style.cursor = "pointer";
-          viewAllBtn.textContent = "Show selected columns' data";
           if (_connHint && _connHint.dcForceReady) _connHint.dcForceReady();
         }
       }, 300);
-      // Give up after 30s
+      // After 30s release the button anyway (it will explain itself if it fails); the guide keeps watching.
       setTimeout(function () {
         clearInterval(_connPoll);
         if (!_connectionReady) {
           _connectingInProgress = false;
-          viewAllBtn.disabled = false;
-          viewAllBtn.style.opacity = "1";
-          viewAllBtn.style.cursor = "pointer";
-          viewAllBtn.textContent = "Show selected columns' data";
-          // keep the guide on screen: it keeps watching, and its own note explains the checkbox fallback
+          if (_connHint && _connHint.dcUnlock) _connHint.dcUnlock();
         }
       }, 30000);
     }

@@ -21,9 +21,11 @@ ok(m.sn.querySeq===3,"each query is counted");
 // ---- wiring: both old plain messages are gone and both surfaces use the guide
 ok(!/One quick step to load your data/.test(src),"old grey 'One quick step' callout removed");
 ok(!/<b>One-time setup:<\/b>/.test(src),"old blue 'One-time setup' hint removed");
-ok(/function showSortHelp\(again\)\s*\{[\s\S]{0,400}dcBuildSortGuide\(/.test(src),"data-space error path uses the guide");
+ok(/function showSortHelp\(again\)\s*\{[\s\S]{0,500}dcBuildSortGuide\(/.test(src),"data-space error path uses the guide");
+ok(/lockBtn: again === "Restore saved" \? restoreBtn : viewAllBtn/.test(src),"guide locks the ORIGINAL button (no duplicate)");
+ok(!/dc-guide-go/.test(src),"no guide-owned action button anywhere");
+ok(/_sortGuide\.dcStop\(\)/.test(src),"a new guide stops the old one (no stacked locks)");
 ok(/_connHint = dcBuildSortGuide\(/.test(src),"no-session path uses the guide");
 ok(/if \(!ready\) \{ hideSpinner\(\); showSortHelp\("Restore saved"\); return; \}/.test(src),"Restore without a session uses the guide");
-ok(/again === "Restore saved" \? restoreBtn : viewAllBtn\)\.click\(\)/.test(src),"guide button re-runs the right action");
 ok(/querySeq: 0/.test(src),"counter declared");
 console.log("explorer-sort-guide-wiring: "+n+" checks passed");
