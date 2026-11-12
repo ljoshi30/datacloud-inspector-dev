@@ -7074,6 +7074,7 @@
   // aura.context / aura.token / aura.pageURI are SESSION-GLOBAL — identical across EVERY
   // aura action — so we grab them from ANY /aura POST (telemetry, navigation, etc.), which
   // the page fires constantly. objectName + dataSpace come only from a CdpDataView.query.
+  var _graphCalls = {};   // graph name -> data space, learned from Salesforce's own View calls
   function absorbAuraForm(body) {
     var s = String(body || "");
     var parts = s.split("&"), map = {};
@@ -7098,6 +7099,10 @@
             if (q.objectName) _auraSniff.objectName = q.objectName;
             if (q.selectedDataSpaceName != null) _auraSniff.dataSpace = q.selectedDataSpaceName;
             if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
+          }
+          // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
+          if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || ""))) {
+            _graphCalls[act.params.objectName] = act.params.dataSpaceName;
           }
           // Capture dataspace from QueryWorkspace.queryDCSql params (Query Editor page)
           // Handle both "dataspace" and "dataSpace" casing
@@ -7725,12 +7730,19 @@
       try { if (typeof dataSpaceCandidates === "function") dataSpaceCandidates(live.objectName).forEach(addS); } catch (e) {}
       if (!spaces.length) spaces.push("default");
       var combos = [];
+      var seenGraph = [];
+      names.forEach(function (n) { if (_graphCalls[n]) { seenGraph.push(n + " @ " + _graphCalls[n]); combos.push({ name: n, space: _graphCalls[n] }); } });   // Salesforce's own known-good pair
       if (live._ok) combos.push(live._ok);
       names.forEach(function (n) { spaces.forEach(function (sp) { if (!live._ok || live._ok.name !== n || live._ok.space !== sp) combos.push({ name: n, space: sp }); }); });
-      combos = combos.slice(0, 10);
-      var lastErr = "";
+      var seenC = {}; combos = combos.filter(function (c) { var k = c.name + "\u0001" + c.space; if (seenC[k]) return false; seenC[k] = 1; return true; }).slice(0, 10);
+      var lastErr = "", lastRaw = "";
       (function attempt(i) {
-        if (i >= combos.length) { reject(new Error((lastErr || "Request failed") + " [tried " + combos.map(function (c) { return c.name + " @ " + c.space; }).join("; ") + "]")); return; }
+        if (i >= combos.length) {
+          reject(new Error((lastErr || "Request failed") + " [tried " + combos.map(function (c) { return c.name + " @ " + c.space; }).join("; ") + "]" +
+            "\nSalesforce said: " + (lastRaw || "(nothing)") + "\nLookup: [" + live.keyField + "=" + live.keyValue + "], noCache=" + (!!realtime) +
+            "\nGraph/space Salesforce's own View used this session: " + (Object.keys(_graphCalls).map(function (k) { return k + " @ " + _graphCalls[k]; }).join("; ") || "none seen (open Salesforce's View on this row once, then retry)")));
+          return;
+        }
         var c = combos[i];
         _auraQid = (_auraQid || 0) + 1;
         var act = { id: "dc-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", callingDescriptor: "UNKNOWN",
@@ -7744,7 +7756,7 @@
           var a2 = json && json.actions && json.actions[0];
           if (!a2) { reject(new Error("Response had no actions.")); return; }
           if (a2.state !== "SUCCESS") {
-            try { lastErr = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; } catch (e) { lastErr = a2.state; }
+            try { lastErr = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; lastRaw = JSON.stringify(a2.error).slice(0, 600); } catch (e) { lastErr = a2.state; }
             attempt(i + 1); return;
           }
           var v = dcExtractGraphJson(a2.returnValue);
@@ -10090,6 +10102,7 @@
       ".dc-jv .sw{display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;padding:2px}.dc-jv .sw i{width:28px;height:16px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}.dc-jv .sw i:after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}" +
       ".dc-jv .sw[aria-checked=true] i{background:#16a34a}.dc-jv .sw[aria-checked=true] i:after{left:14px}.dc-jv .sw[aria-checked=true]{color:#15803d}" +
       ".dc-jv .rf{color:#4338ca;border-color:#c7d2fe;background:#fff}.dc-jv .rf[disabled],.dc-jv .sw[disabled]{opacity:.5;cursor:wait}.dc-jv .st{font-size:11px;color:#64748b;white-space:nowrap}.dc-jv .st.bad{color:#b91c1c}" +
+      ".dc-jv .dbox{background:#fef2f2;border-bottom:1px solid #fecaca;color:#7f1d1d;padding:8px 14px;font:11.5px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto;user-select:text}" +
       ".dc-jv .meta{color:#64748b;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
       ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
       ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#64748b;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
@@ -10113,11 +10126,11 @@
       "<button class='btn dc-cv-fs' title='Full screen / back'>&#x26F6;</button><button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
       "<div class='bar'>" + (parsed
         ? "<span class='chip'>JSON</span><span class='info'></span>" +
-          (live ? "<span class='live'><button class='sw' data-a='rt' role='switch' aria-checked='false' title='Off: show the stored graph. On: build the graph live from the latest data (same as Salesforce&#39;s Real-time View).'><i></i>Real-time</button><button class='btn rf' data-a='rf' title='Reload the graph now'>&#8635; Refresh</button><span class='st'></span></span>" : "") +
+          (live ? "<span class='live'><button class='sw' data-a='rt' role='switch' aria-checked='false' title='Off: show the stored graph. On: build the graph live from the latest data (same as Salesforce&#39;s Real-time View).'><i></i>Real-time</button><button class='btn rf' data-a='rf' title='Reload the graph now'>&#8635; Refresh</button><span class='st'></span><a class='dt' href='#' style='display:none;font-size:11px;color:#4338ca'>Details</a></span>" : "") +
           "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
           "<input class='q' placeholder='Search keys and values…' />"
         : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
-      "<div class='body'></div><div class='toast'></div>";
+      "<div class='dbox' style='display:none'></div><div class='body'></div><div class='toast'></div>";
     if (parsed) m.style.minHeight = "64vh";
     document.body.appendChild(m);
     var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
@@ -10257,14 +10270,14 @@
       if (activeTab >= plan.tabs.length) activeTab = 0;
       m.querySelector(".info").textContent = infoText();
     }
-    var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
+    var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, dtEl = m.querySelector(".dt"), dboxEl = m.querySelector(".dbox"), lastDetail = "", stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
     function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
     function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago(); }
     function reload() {
-      if (!live || busy) return; busy = true; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
+      if (!live || busy) return; busy = true; if (dtEl) dtEl.style.display = "none"; dboxEl.style.display = "none"; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
       dcQueryDataGraph(live, rt).then(function (v) {
         setData(JSON.stringify(v)); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; paintSt(); render();
-      }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); if (stEl) stEl.title = e.message; })
+      }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); lastDetail = e.message; if (stEl) stEl.title = e.message; if (dtEl) dtEl.style.display = ""; if (dboxEl.style.display !== "none") dboxEl.textContent = lastDetail; })
         .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
     }
     if (parsed) m.querySelector(".info").textContent = infoText();
@@ -10278,6 +10291,7 @@
       var a = t.closest("[data-a]");
       if (a && a.getAttribute("data-a") === "rt") { rt = !rt; swEl.setAttribute("aria-checked", rt ? "true" : "false"); reload(); return; }
       if (a && a.getAttribute("data-a") === "rf") { reload(); return; }
+      var dt = t.closest(".dt"); if (dt) { e.preventDefault(); var openD = dboxEl.style.display === "none"; dboxEl.style.display = openD ? "" : "none"; dboxEl.textContent = lastDetail; if (openD) { var cb = document.createElement("button"); cb.className = "btn"; cb.style.cssText = "color:#7f1d1d;border-color:#fca5a5;background:#fff;margin-left:8px"; cb.textContent = "Copy details"; cb.onclick = function () { copy(lastDetail, "Details copied"); }; dboxEl.insertBefore(cb, dboxEl.firstChild); dboxEl.insertBefore(document.createTextNode("\n"), cb.nextSibling); } return; }
       if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
       var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
       var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }

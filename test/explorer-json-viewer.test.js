@@ -42,7 +42,7 @@ ok(/closeCellView\(\)/.test(tdSrc) && /dcSweepOverlays\(\)/.test(tdSrc), "teardo
 const g0 = src.indexOf("  function dcExtractGraphJson"), g1 = src.indexOf("  // >100 rows: the Data Explorer's own query");
 ok(g0 > 0 && g1 > g0, "graph helpers found");
 const calls = [];
-const G = new Function("_auraSniff", "fetch", "var _auraQid=0;" + src.slice(g0, g1) + "; return {dcExtractGraphJson,dcQueryDataGraph};")(
+const G = new Function("_auraSniff", "fetch", "var _auraQid=0; var _graphCalls={};" + src.slice(g0, g1) + "; return {dcExtractGraphJson,dcQueryDataGraph};")(
   { context: "CTX", token: "TOK", pageURI: "PG" },
   (url, o) => { calls.push({ url, body: decodeURIComponent(o.body.split("&")[0].slice(8)) }); const n = calls.length;
     const bad = n === 1 && globalThis.__failFirst;
@@ -70,7 +70,7 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   // wrong data space first -> falls through to the next candidate and REMEMBERS the winner
   calls.length = 0; globalThis.__failFirst = true;
   const live2 = { objectName: "G", dataSpace: "wrong", keyField: "Id__c", keyValue: "z" };
-  const G2 = new Function("_auraSniff", "fetch", "function dataSpaceCandidates(){return ['TD_Insurance','default']}var _auraQid=0;" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")(
+  const G2 = new Function("_auraSniff", "fetch", "function dataSpaceCandidates(){return ['TD_Insurance','default']}var _auraQid=0;var _graphCalls={};" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")(
     { context: "C", token: "T" }, (url, o) => { calls.push(decodeURIComponent(o.body.split("&")[0].slice(8))); const ok = calls.length > 1;
       return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [ok ? { state: "SUCCESS", returnValue: { a: 1 } } : { state: "ERROR", error: [{ message: "bad" }] }] })) }); });
   await G2.dcQueryDataGraph(live2, true);
@@ -79,8 +79,15 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   calls.length = 0; await G2.dcQueryDataGraph(live2, false);
   assert.strictEqual(JSON.parse(calls[0]).actions[0].params.dataSpaceName, "TD_Insurance"); n++;   // winner tried first next time
   // all fail -> error lists what was tried
-  const G3 = new Function("_auraSniff", "fetch", "var _auraQid=0;" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")({ context: "C", token: "T" },
+  const G3 = new Function("_auraSniff", "fetch", "var _auraQid=0;var _graphCalls={};" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")({ context: "C", token: "T" },
     () => Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "ERROR", error: [{ message: "bad" }] }] })) }));
   await G3.dcQueryDataGraph({ objectName: "G__dlm", dataSpace: "S", keyField: "Id__c", keyValue: "z" }, true).then(() => assert.fail("should reject"), e => { assert(/bad \[tried G @ S; G__dlm @ S\]/.test(e.message), e.message); n++; });
-  console.log("explorer-json-viewer: " + n + " checks passed");
+  // learned pair from Salesforce's own View call is tried FIRST
+{
+  const seen = [];
+  const G4 = new Function("_auraSniff", "fetch", "function dataSpaceCandidates(){return ['other']}var _auraQid=0;var _graphCalls={G:'LEARNED'};" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")(
+    { context: "C", token: "T" }, (url, o) => { seen.push(decodeURIComponent(o.body.split("&")[0].slice(8))); return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "SUCCESS", returnValue: "{}" }] })) }); });
+  G4.dcQueryDataGraph({ objectName: "G", dataSpace: "wrong", keyField: "Id__c", keyValue: "q" }, false).then(() => { ok(/"dataSpaceName":"LEARNED"/.test(seen[0]), "learned graph/space tried first"); console.log("LEARNED-OK"); });
+}
+console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });
