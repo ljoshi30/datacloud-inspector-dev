@@ -75,7 +75,7 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   await ev("document.querySelector('.sw').click()"); await new Promise(r => setTimeout(r, 250));
   ok(await ev("stubCalls.join()") === "true,true,false", "toggle OFF -> stored");
   await ev("stubFail=true;document.querySelector('.rf').click()"); await new Promise(r => setTimeout(r, 250));
-  ok(/boom/.test(await ev("document.querySelector('.st').textContent")) && /LIVE/.test(await ev("document.querySelector('.cards').textContent")), "failure keeps previous data and says why");
+  ok(/Could not load/.test(await ev("document.querySelector('.st').textContent")) && /boom/.test(await ev("document.querySelector('.st').title")) && /LIVE/.test(await ev("document.querySelector('.cards').textContent")), "failure keeps previous data; detail in tooltip");
   ok(await ev("document.querySelector('.rf').disabled") === false, "controls re-enabled after failure");
   // reopening replaces, never stacks
   await ev("open_();open_()"); ok(await ev("document.querySelectorAll('.dc-jv').length") === 1, "no stacking");

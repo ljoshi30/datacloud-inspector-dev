@@ -63,5 +63,20 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   calls.length = 0; globalThis.__failFirst = true;
   r = await G.dcQueryDataGraph(live, false);
   assert.strictEqual(calls.length, 2); assert.strictEqual(JSON.parse(calls[1].body).actions[0].params.objectName, "TDI_Unified_Profile_SFP_RT__dlm"); n++;
+  // wrong data space first -> falls through to the next candidate and REMEMBERS the winner
+  calls.length = 0; globalThis.__failFirst = true;
+  const live2 = { objectName: "G", dataSpace: "wrong", keyField: "Id__c", keyValue: "z" };
+  const G2 = new Function("_auraSniff", "fetch", "function dataSpaceCandidates(){return ['TD_Insurance','default']}var _auraQid=0;" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")(
+    { context: "C", token: "T" }, (url, o) => { calls.push(decodeURIComponent(o.body.split("&")[0].slice(8))); const ok = calls.length > 1;
+      return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [ok ? { state: "SUCCESS", returnValue: { a: 1 } } : { state: "ERROR", error: [{ message: "bad" }] }] })) }); });
+  await G2.dcQueryDataGraph(live2, true);
+  assert.strictEqual(JSON.parse(calls[1]).actions[0].params.dataSpaceName, "TD_Insurance"); n++;
+  assert.deepStrictEqual(live2._ok, { name: "G", space: "TD_Insurance" }); n++;
+  calls.length = 0; await G2.dcQueryDataGraph(live2, false);
+  assert.strictEqual(JSON.parse(calls[0]).actions[0].params.dataSpaceName, "TD_Insurance"); n++;   // winner tried first next time
+  // all fail -> error lists what was tried
+  const G3 = new Function("_auraSniff", "fetch", "var _auraQid=0;" + src.slice(g0, g1) + "; return {dcQueryDataGraph};")({ context: "C", token: "T" },
+    () => Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [{ state: "ERROR", error: [{ message: "bad" }] }] })) }));
+  await G3.dcQueryDataGraph({ objectName: "G__dlm", dataSpace: "S", keyField: "Id__c", keyValue: "z" }, true).then(() => assert.fail("should reject"), e => { assert(/bad \[tried G @ S; G__dlm @ S\]/.test(e.message), e.message); n++; });
   console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

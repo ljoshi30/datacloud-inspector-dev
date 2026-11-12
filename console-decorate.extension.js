@@ -7713,14 +7713,26 @@
   function dcQueryDataGraph(live, realtime) {
     return new Promise(function (resolve, reject) {
       if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected. Sort a column or click Connect first.")); return; }
-      var names = [String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "")];
-      if (names[0] !== live.objectName) names.push(live.objectName);   // retry with the exact name if the trimmed one is rejected
+      // Candidate (graph name x data space) pairs, the one that worked last time first. A wrong guess gives Salesforce's
+      // generic "Something's not right with the query", so we try the plausible ones and remember the winner.
+      var trimmed = String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "");
+      var names = [trimmed]; if (trimmed !== live.objectName) names.push(live.objectName);
+      var spaces = [], seenS = {};
+      var addS = function (x) { if (x && !seenS[x]) { seenS[x] = 1; spaces.push(x); } };
+      addS(live.dataSpace);
+      try { if (typeof dataSpaceCandidates === "function") dataSpaceCandidates(live.objectName).forEach(addS); } catch (e) {}
+      if (!spaces.length) spaces.push("default");
+      var combos = [];
+      if (live._ok) combos.push(live._ok);
+      names.forEach(function (n) { spaces.forEach(function (sp) { if (!live._ok || live._ok.name !== n || live._ok.space !== sp) combos.push({ name: n, space: sp }); }); });
+      combos = combos.slice(0, 10);
       var lastErr = "";
       (function attempt(i) {
-        if (i >= names.length) { reject(new Error(lastErr || "Request failed")); return; }
+        if (i >= combos.length) { reject(new Error((lastErr || "Request failed") + " [tried " + combos.map(function (c) { return c.name + " @ " + c.space; }).join("; ") + "]")); return; }
+        var c = combos[i];
         _auraQid = (_auraQid || 0) + 1;
         var act = { id: "dc-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", callingDescriptor: "UNKNOWN",
-          params: { objectName: names[i], dataSpaceName: live.dataSpace || "default", lookupKeys: "[" + live.keyField + "=" + live.keyValue + "]", noCache: !!realtime } };
+          params: { objectName: c.name, dataSpaceName: c.space, lookupKeys: "[" + live.keyField + "=" + live.keyValue + "]", noCache: !!realtime } };
         var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
         fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.CdpDataView.queryDataGraphWithLookupKeys=1", {
           method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include"
@@ -7735,7 +7747,7 @@
           }
           var v = dcExtractGraphJson(a2.returnValue);
           if (v === undefined || v === null) { reject(new Error("Empty graph returned.")); return; }
-          resolve(v);
+          live._ok = c; resolve(v);
         }).catch(function (err) { reject(new Error("Request failed: " + err)); });
       })(0);
     });
@@ -10229,7 +10241,7 @@
       if (!live || busy) return; busy = true; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
       dcQueryDataGraph(live, rt).then(function (v) {
         setData(JSON.stringify(v)); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; paintSt(); render();
-      }).catch(function (e) { paintSt("Could not load: " + e.message + " (showing previous data)"); })
+      }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); if (stEl) stEl.title = e.message; })
         .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
     }
     if (parsed) m.querySelector(".info").textContent = infoText();
