@@ -62,6 +62,12 @@ ok("ring sits exactly on that header", geo===true);
 ok("ring does not block clicks (pointer-events:none)", await ev("getComputedStyle(document.querySelector('[data-dc-guide-spot]')).pointerEvents")==="none");
 await sleep(450);
 ok("no false 'ready' with no sort", await ev("ready.length===0 && btn.disabled===true"));
+// --- clicking the "Click this header" tag does the same as clicking the header (forwarded)
+await ev("window.__sorted=0;document.getElementById('sfhost').shadowRoot.getElementById('a1').addEventListener('click',()=>window.__sorted++)");
+ok("tag says 'Click this header' and is clickable", /Click this header/.test(await ev("document.querySelector('[data-dc-guide-spot]:last-of-type, [data-dc-guide-spot] + [data-dc-guide-spot]').textContent")));
+await ev("document.querySelectorAll('[data-dc-guide-spot]')[1].click()");await sleep(60);
+ok("clicking the tag clicks the real header once and advances the stepper", await ev("__sorted")===1 && /loading/i.test(await T()));
+await ev("document.getElementById('out').innerHTML='';window.ready=[];window.btn=mkBtn();window.g1=mk({lockBtn:btn})");await sleep(150);
 // --- user clicks the header -> stepper advances immediately, ring removed
 await ev("document.getElementById('sfhost').shadowRoot.getElementById('a1').dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true}))");await sleep(60);
 const tc=await T();

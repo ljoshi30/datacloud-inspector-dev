@@ -28,4 +28,22 @@ ok(/_sortGuide\.dcStop\(\)/.test(src),"a new guide stops the old one (no stacked
 ok(/_connHint = dcBuildSortGuide\(/.test(src),"no-session path uses the guide");
 ok(/if \(!ready\) \{ hideSpinner\(\); showSortHelp\("Restore saved"\); return; \}/.test(src),"Restore without a session uses the guide");
 ok(/querySeq: 0/.test(src),"counter declared");
+// ---- the panel must NOT close when the user clicks a Salesforce column header (or our spotlight tag)
+(function(){
+  const i=src.indexOf("  function dcIsSfGridOrGuideTarget(e) {"),j=src.indexOf("  function closeExploreModal() {",i);
+  ok(i>0&&j>i,"helper exists");
+  const f=new Function(src.slice(i,j)+"; return dcIsSfGridOrGuideTarget;")();
+  const el=(tag,o)=>Object.assign({nodeType:1,tagName:tag,className:"",getAttribute(k){return (this.attrs||{})[k]||""},hasAttribute(k){return !!(this.attrs||{})[k]!==false&&(this.attrs||{}).hasOwnProperty(k)}},o);
+  const ev=(...p)=>({composedPath:()=>p});
+  ok(f(ev(el("a",{className:"slds-th__action"}),el("th"),el("body")))===true,"header anchor click keeps panel open");
+  ok(f(ev(el("div",{attrs:{"data-dc-guide-spot":"1"}}),el("body")))===true,"spotlight tag click keeps panel open");
+  ok(f(ev(el("div",{attrs:{"data-dc-sort-guide":"1"}})))===true,"guide card click keeps panel open");
+  ok(f(ev(el("th",{attrs:{role:"columnheader"}})))===true,"role=columnheader keeps panel open");
+  ok(f(ev(el("div"),el("body")))===false,"a plain page click still closes the panel");
+  ok(f({})===false,"no composedPath -> false, no throw");
+  // both close-on-outside-click handlers (first open AND re-open) must use the helper
+  ok(/!inModal && !inBar && !dcIsSfGridOrGuideTarget\(e\)/.test(src),"re-open path uses the helper (was the bug: header click closed it)");
+  ok(/var inSfGrid = dcIsSfGridOrGuideTarget\(e\)/.test(src),"first-open path uses the helper");
+  ok(/tag\.onclick = function \(ev\)[\s\S]{0,120}dcClickLikeUser\(hdr\.el\)/.test(src),"tag forwards its click to the real header");
+})();
 console.log("explorer-sort-guide-wiring: "+n+" checks passed");

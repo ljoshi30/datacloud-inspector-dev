@@ -7381,6 +7381,15 @@
     } catch (e) {}
     return found;
   }
+  // Full pointer-event sequence (what a real click sends) so Lightning's header handler reacts.
+  function dcClickLikeUser(el) {
+    try {
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
+        var Ctor = (type.indexOf("pointer") === 0 && typeof PointerEvent === "function") ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true, view: window, button: 0 }));
+      });
+    } catch (e) { try { el.click(); } catch (e2) {} }
+  }
   function dcEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
   // Builds the guide card. opts: { lockBtn: the page's ORIGINAL action button (locked while waiting, unlocked on ready;
   // the card never has a button of its own), isReady(): extra readiness test, onReady() }.
@@ -7423,8 +7432,10 @@
         ring = document.createElement("div"); ring.setAttribute("data-dc-guide-spot", "1");
         ring.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;border:3px solid #f59e0b;border-radius:6px;animation:dc-guide-pulse 1.5s ease-in-out infinite;box-sizing:border-box;";
         tag = document.createElement("div"); tag.setAttribute("data-dc-guide-spot", "1");
-        tag.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;background:#92400e;color:#fff;font:700 11px -apple-system,sans-serif;padding:4px 9px;border-radius:6px;white-space:nowrap;";
-        tag.textContent = "👆 Click here";
+        tag.style.cssText = "position:fixed;z-index:2147483640;cursor:pointer;background:#92400e;color:#fff;font:700 11px -apple-system,sans-serif;padding:4px 9px;border-radius:6px;white-space:nowrap;";
+        tag.textContent = "👆 Click this header";
+        tag.title = "Same as clicking the highlighted column header";
+        tag.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); dcClickLikeUser(hdr.el); };
         document.body.appendChild(ring); document.body.appendChild(tag);
       }
       ring.style.display = tag.style.display = "";
@@ -11627,6 +11638,26 @@
   // ── Column picker modal ───────────────────────────────────────────────────
   let exploreModalEl = null;
 
+  // True when a pointer event landed on Salesforce's own grid / column header or on our guide's spotlight tag.
+  // Clicking those must NEVER close the Explorer panel (sorting is how the user connects; the panel has to stay open).
+  function dcIsSfGridOrGuideTarget(e) {
+    try {
+      var path = (e.composedPath && e.composedPath()) || [];
+      for (var pi = 0; pi < path.length; pi++) {
+        var n = path[pi];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.hasAttribute && (n.hasAttribute("data-dc-guide-spot") || n.hasAttribute("data-dc-sort-guide"))) return true;
+        var t = (n.tagName || "").toLowerCase();
+        var role = (n.getAttribute && n.getAttribute("role")) || "";
+        var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
+        if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
+            role === "columnheader" || role === "grid" || role === "gridcell" ||
+            /slds-th__action|slds-table|slds-is-sortable/.test(cls)) return true;
+      }
+    } catch (ex) {}
+    return false;
+  }
+
   function closeExploreModal() {
     if (exploreModalEl) { exploreModalEl.style.display = "none"; }
     const bar = document.getElementById("dc-bar");
@@ -11649,7 +11680,7 @@
         if (!exploreModalEl || exploreModalEl.style.display === "none") return;
         var inModal = exploreModalEl.contains(e.target);
         var inBar = barEl2 && barEl2.contains(e.target);
-        if (!inModal && !inBar) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
+        if (!inModal && !inBar && !dcIsSfGridOrGuideTarget(e)) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
       };
       setTimeout(function () { document.addEventListener("pointerdown", onOut2, true); }, 100);
       return;
@@ -13025,20 +13056,7 @@
       // shadow host — use composedPath() to see the real element chain and detect any CDP /
       // data-view / datatable / column-header node. This lets users sort WITHOUT losing the
       // open picker (previously any outside click closed it, forcing a reopen).
-      var inSfGrid = false;
-      try {
-        var path = (e.composedPath && e.composedPath()) || [];
-        for (var pi = 0; pi < path.length; pi++) {
-          var n = path[pi];
-          if (!n || n.nodeType !== 1) continue;
-          var t = (n.tagName || "").toLowerCase();
-          var role = (n.getAttribute && n.getAttribute("role")) || "";
-          var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
-          if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
-              role === "columnheader" || role === "grid" || role === "gridcell" ||
-              /slds-th__action|slds-table|slds-is-sortable/.test(cls)) { inSfGrid = true; break; }
-        }
-      } catch (ex) {}
+      var inSfGrid = dcIsSfGridOrGuideTarget(e);
       if (!inModal && !inSoql && !inAcDrop && !inBar && !inSfGrid) { closeExploreModal(); closeSoqlEditor(); document.removeEventListener("pointerdown", onOut, true); }
     };
     setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
