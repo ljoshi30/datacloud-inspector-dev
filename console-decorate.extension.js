@@ -8663,19 +8663,21 @@
   // returns the cached rows WITHOUT
   // another Data Cloud query. `force:true` (the Refresh button) bypasses the cache.
   // Returns a Promise<rows>; rows carry a non-enumerable __fromCache flag when reused.
-  function _dataCacheKey(columns, want) {
-    return String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
+  function _dataCacheKey(columns, want, objectName) {
+    // Include the data space: the same object name can exist in two spaces with different rows.
+    var ds = ""; try { ds = objectName ? String(resolveDataSpace(objectName) || "") : ""; } catch (e) {}
+    return ds + "@@" + String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
   }
   function loadColumnsDataCached(objectName, columns, want, force) {
     var cache = exploreCache(objectName);
-    var key = _dataCacheKey(columns, want);
+    var key = _dataCacheKey(columns, want, objectName);
     if (!force && cache.lastData && cache.lastData.key === key && cache.lastData.rows) {
       var cached = cache.lastData.rows;
       try { Object.defineProperty(cached, "__fromCache", { value: true, configurable: true }); } catch (e) {}
       return Promise.resolve(cached);
     }
     return loadColumnsData(objectName, columns, want).then(function (rows) {
-      cache.lastData = { key: key, rows: rows, cols: columns.slice(), want: want };
+      cache.lastData = { key: _dataCacheKey(columns, want, objectName), rows: rows, cols: columns.slice(), want: want };
       return rows;
     });
   }
