@@ -24,3 +24,7 @@ ok(plan(cols,[],undefined,true).autoColumns===null,"S6 no rows: no-op");
 ok(/hideCb\.checked = columns\.length < fullCols\.length/.test(src),"checkbox reflects what is actually shown");
 ok(/_hep\.autoColumns\) \{ return showAllColumnsTable/.test(src),"auto-apply wired at render start");
 console.log("explorer-hide-empty: "+n+" checks passed");
+const rl=src.indexOf("var _reloadCols = allColumns || columns;");
+ok(rl>0&&/loadColumnsDataCached\(objectName, _reloadCols, want, true\)/.test(src.slice(rl,rl+300)),"Reload fetches the FULL column set, not the Hide-empty subset");
+ok(/_originalColumns\[objectName\] = allColumns \|\| columns;/.test(src),"first-open original keeps the full column set");
+console.log("explorer-hide-empty (reload wiring): "+n+" checks passed");

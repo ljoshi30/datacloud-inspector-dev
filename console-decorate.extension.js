@@ -10588,7 +10588,7 @@
     // no filter is active. Used for zero-credit "Back to original" restore.
     if (!_filterState[objectName] || !_filterState[objectName].active) {
       _originalRows[objectName] = rows;
-      _originalColumns[objectName] = columns;
+      _originalColumns[objectName] = allColumns || columns;   // the FULL set (Hide empty only trims the view)
       _originalWantRows[objectName] = wantRows;
       if (rows.__serverRowCount) _originalTotal[objectName] = rows.__serverRowCount;
     }
@@ -10700,12 +10700,15 @@
         var prevFilterCount = _filterCount[objectName];
         _filterState[objectName] = null;
         _filterCount[objectName] = 0;
-        loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
+        // Reload the FULL column set — never just the Hide-empty subset, or empty columns would be lost
+        // (and a column that now has data could never come back, and CSV would silently drop them).
+        var _reloadCols = allColumns || columns;
+        loadColumnsDataCached(objectName, _reloadCols, want, true).then((newRows) => {
           // Update original cache with fresh data so Clear/Back-to-original stays current
           _originalRows[objectName] = newRows;
-          _originalColumns[objectName] = columns;
+          _originalColumns[objectName] = _reloadCols;
           _originalWantRows[objectName] = want;
-          showAllColumnsTable(objectName, columns, newRows, want);
+          showAllColumnsTable(objectName, _reloadCols, newRows, want);
         }).catch(function(err) {
           // Restore filter state so the stale-but-visible data still matches the shown filter label
           _filterState[objectName] = prevFilterState;
