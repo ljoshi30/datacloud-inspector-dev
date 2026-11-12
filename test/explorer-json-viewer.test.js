@@ -34,4 +34,34 @@ ok(c('  "k": "v<",') === "  <span class='k'>&quot;k&quot;</span>: <span class='s
 ok(/class='n'>-1.5e3/.test(c('"a": -1.5e3')) && /class='b'>true/.test(c('"a": true,')) && /class='z'>null/.test(c('"a": null')), "num/bool/null");
 ok(/class='p'>\{/.test(c("{")) && /class='s'>&quot;x&quot;/.test(c('  "x"')), "brackets and array strings");
 ok(H.dcJsonBytes(2048) === "2.0 KB", "bytes");
-console.log("explorer-json-viewer: " + n + " checks passed");
+// --- Data Graph live reload: response unwrapping + the exact request we send (stubbed fetch/session)
+const g0 = src.indexOf("  function dcExtractGraphJson"), g1 = src.indexOf("  // >100 rows: the Data Explorer's own query");
+ok(g0 > 0 && g1 > g0, "graph helpers found");
+const calls = [];
+const G = new Function("_auraSniff", "fetch", "var _auraQid=0;" + src.slice(g0, g1) + "; return {dcExtractGraphJson,dcQueryDataGraph};")(
+  { context: "CTX", token: "TOK", pageURI: "PG" },
+  (url, o) => { calls.push({ url, body: decodeURIComponent(o.body.split("&")[0].slice(8)) }); const n = calls.length;
+    const bad = n === 1 && globalThis.__failFirst;
+    return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ actions: [bad ? { state: "ERROR", error: [{ message: "no such graph" }] } : { state: "SUCCESS", returnValue: { dataGraphJson: JSON.stringify({ Id__c: "n" + n }) } }] })) }); });
+ok(G.dcExtractGraphJson('{"a":1}').a === 1, "string json");
+ok(G.dcExtractGraphJson({ x: '{"a":2}' }).a === 2, "json string inside wrapper");
+ok(G.dcExtractGraphJson({ jsonBlob: { a: 3 }, other: 1 }).a === 3, "named object property");
+ok(G.dcExtractGraphJson({ a: 4 }).a === 4, "object itself");
+ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
+(async () => {
+  const live = { objectName: "TDI_Unified_Profile_SFP_RT__dlm", dataSpace: "TD_Insurance", keyField: "Id__c", keyValue: "abc" };
+  let r = await G.dcQueryDataGraph(live, true);
+  const act = JSON.parse(calls[0].body).actions[0];
+  assert.strictEqual(act.params.noCache, true); n++;
+  assert.strictEqual(act.params.lookupKeys, "[Id__c=abc]"); n++;
+  assert.strictEqual(act.params.objectName, "TDI_Unified_Profile_SFP_RT"); n++;
+  assert.strictEqual(act.params.dataSpaceName, "TD_Insurance"); n++;
+  assert(/queryDataGraphWithLookupKeys=1/.test(calls[0].url) && /ACTION\$queryDataGraphWithLookupKeys/.test(act.descriptor)); n++;
+  assert.strictEqual(r.Id__c, "n1"); n++;
+  await G.dcQueryDataGraph(live, false); assert.strictEqual(JSON.parse(calls[1].body).actions[0].params.noCache, false); n++;
+  // trimmed name rejected -> retries with the exact name
+  calls.length = 0; globalThis.__failFirst = true;
+  r = await G.dcQueryDataGraph(live, false);
+  assert.strictEqual(calls.length, 2); assert.strictEqual(JSON.parse(calls[1].body).actions[0].params.objectName, "TDI_Unified_Profile_SFP_RT__dlm"); n++;
+  console.log("explorer-json-viewer: " + n + " checks passed");
+})().catch(e => { console.error(e); process.exit(1); });

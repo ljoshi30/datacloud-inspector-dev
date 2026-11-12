@@ -7692,6 +7692,55 @@
   }
   var _auraQid = 0;
 
+  // ── Data Graph "View" parity: the SAME aura action Salesforce's own View dialog fires (captured from a real org):
+  //   POST /aura?...CdpDataView.queryDataGraphWithLookupKeys=1
+  //   params { objectName, dataSpaceName, lookupKeys:"[Id__c=<value>]", noCache }
+  // noCache:false = the stored/cached graph, noCache:true = built live ("Real-time View").
+  // Pull the graph JSON out of whatever shape returnValue has (string / wrapper object / the object itself).
+  function dcExtractGraphJson(rv) {
+    function asJson(x) {
+      if (typeof x === "string") { var t = x.trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return undefined; }
+      return x && typeof x === "object" ? x : undefined;
+    }
+    var direct = asJson(rv);
+    if (typeof rv === "string") return direct;
+    if (Array.isArray(rv) || !rv || typeof rv !== "object") return direct;
+    var keys = Object.keys(rv), i, v;
+    for (i = 0; i < keys.length; i++) { if (typeof rv[keys[i]] === "string") { v = asJson(rv[keys[i]]); if (v !== undefined) return v; } }   // a JSON string inside a wrapper
+    for (i = 0; i < keys.length; i++) { if (/json|blob|graph|data|result/i.test(keys[i]) && rv[keys[i]] && typeof rv[keys[i]] === "object") return rv[keys[i]]; }
+    return rv;
+  }
+  function dcQueryDataGraph(live, realtime) {
+    return new Promise(function (resolve, reject) {
+      if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected. Sort a column or click Connect first.")); return; }
+      var names = [String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "")];
+      if (names[0] !== live.objectName) names.push(live.objectName);   // retry with the exact name if the trimmed one is rejected
+      var lastErr = "";
+      (function attempt(i) {
+        if (i >= names.length) { reject(new Error(lastErr || "Request failed")); return; }
+        _auraQid = (_auraQid || 0) + 1;
+        var act = { id: "dc-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", callingDescriptor: "UNKNOWN",
+          params: { objectName: names[i], dataSpaceName: live.dataSpace || "default", lookupKeys: "[" + live.keyField + "=" + live.keyValue + "]", noCache: !!realtime } };
+        var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+        fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.CdpDataView.queryDataGraphWithLookupKeys=1", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include"
+        }).then(function (r) { return r.text(); }).then(function (txt) {
+          if (/aura:invalidSession|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Session expired. Run any query in Salesforce first.")); return; }
+          var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Response was not JSON.")); return; }
+          var a2 = json && json.actions && json.actions[0];
+          if (!a2) { reject(new Error("Response had no actions.")); return; }
+          if (a2.state !== "SUCCESS") {
+            try { lastErr = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; } catch (e) { lastErr = a2.state; }
+            attempt(i + 1); return;
+          }
+          var v = dcExtractGraphJson(a2.returnValue);
+          if (v === undefined || v === null) { reject(new Error("Empty graph returned.")); return; }
+          resolve(v);
+        }).catch(function (err) { reject(new Error("Request failed: " + err)); });
+      })(0);
+    });
+  }
+
   // >100 rows: the Data Explorer's own query is hard-capped at 100 (probe 6) and the
   // REST Query API is CORS-walled (probe 7). But the Data Cloud QUERY EDITOR runs SQL
   // via a same-origin aura action that honors rowLimit (probe 8):
@@ -9974,9 +10023,9 @@
       ".dc-jv .btn{border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:7px;padding:5px 11px;font:600 11px -apple-system,sans-serif;cursor:pointer}" +
       ".dc-jv .btn:hover{background:rgba(255,255,255,.22)}.dc-jv .btn.pri{background:#fff;color:#3730a3;border-color:#fff}" +
       ".dc-jv .x{border:none;background:none;color:#e0e7ff;font-size:20px;line-height:1;cursor:pointer;padding:0 4px}" +
-      ".dc-jv .bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut)}" +
+      ".dc-jv .bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);flex-wrap:wrap}.dc-jv .bar span,.dc-jv .bar button{white-space:nowrap}" +
       ".dc-jv .chip{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:2px 9px;font-weight:600}" +
-      ".dc-jv .q{flex:1;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
+      ".dc-jv .q{flex:1 1 150px;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
       ".dc-jv .body{overflow:auto;flex:1;min-height:0;background:#fff;color:var(--ink)}" +
       ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;padding:10px 14px}" +
       ".dc-jv .card{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:7px 10px;background:#fff;cursor:copy;min-width:0}" +
@@ -10002,19 +10051,24 @@
       ".dc-jv .row{white-space:nowrap}.dc-jv .tg{display:inline-block;width:14px;color:#6366f1;cursor:pointer;user-select:none}" +
       ".dc-jv .kids{margin-left:7px;padding-left:12px;border-left:1px solid var(--g,#c7d2fe)}" +
       ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#94a3b8;font-style:italic}.dc-jv .p{color:#64748b}" +
+      ".dc-jv .live{display:inline-flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid #cbd5e1}" +
+      ".dc-jv .sw{display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;padding:2px}.dc-jv .sw i{width:28px;height:16px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}.dc-jv .sw i:after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}" +
+      ".dc-jv .sw[aria-checked=true] i{background:#16a34a}.dc-jv .sw[aria-checked=true] i:after{left:14px}.dc-jv .sw[aria-checked=true]{color:#15803d}" +
+      ".dc-jv .rf{color:#4338ca;border-color:#c7d2fe;background:#fff}.dc-jv .rf[disabled],.dc-jv .sw[disabled]{opacity:.5;cursor:wait}.dc-jv .st{font-size:11px;color:#64748b;white-space:nowrap}.dc-jv .st.bad{color:#b91c1c}" +
       ".dc-jv .meta{color:#94a3b8;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
       ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
       ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#94a3b8;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
       ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
     document.head.appendChild(st);
   }
-  function showCellValue(fieldApi, fieldLabel, value) {
+  function showCellValue(fieldApi, fieldLabel, value, live) {
     if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
     if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
     dcJsonViewerCss();
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
     var text = value == null ? "" : String(value), parsed = null;
     try { var p0 = JSON.parse(text); if (p0 && typeof p0 === "object") parsed = p0; } catch (e) {}
+    if (!parsed) live = null;
     var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv";
     m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
     var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
@@ -10024,7 +10078,8 @@
       (parsed ? "<div class='seg'><button data-v='table' title='Easy to read: each nested list as its own table'>Table</button><button data-v='tree' title='Explore the structure: open and close branches, click a key to copy its path'>Tree</button><button data-v='raw' title='The exact JSON text with line numbers'>Raw</button></div>" : "") +
       "<button class='btn dc-cv-fs' title='Full screen / back'>&#x26F6;</button><button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
       "<div class='bar'>" + (parsed
-        ? "<span class='chip'>JSON</span><span>" + dcJsonBytes(text.length) + "</span><span>&middot; " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + "</span><span>&middot; " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep</span>" +
+        ? "<span class='chip'>JSON</span><span class='info'></span>" +
+          (live ? "<span class='live'><button class='sw' data-a='rt' role='switch' aria-checked='false' title='Off: show the stored graph. On: build the graph live from the latest data (same as Salesforce&#39;s Real-time View).'><i></i>Real-time</button><button class='btn rf' data-a='rf' title='Reload the graph now'>&#8635; Refresh</button><span class='st'></span></span>" : "") +
           "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
           "<input class='q' placeholder='Search keys and values…' />"
         : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
@@ -10049,19 +10104,21 @@
     }
     function fit(chars, cols) {   // size the window to the data instead of a fixed box
       if (fsOn) return;
-      var w = view === "table" ? Math.max(700, Math.min(cols * 150 + 290, 1500)) : Math.max(620, Math.min(chars * 7.4 + 90, 1100));
+      var mn = live ? 880 : 0;
+      var w = view === "table" ? Math.max(700, mn, Math.min(cols * 150 + 290, 1500)) : Math.max(620, mn, Math.min(chars * 7.4 + 90, 1100));
       m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
     }
     // ---------------- Table view: left rail (tables, indented under their parent) + the selected table
     function cleanName(n) { return n.replace(/__(dlm|cio|c)(?=_|$)/, ""); }
     var depthOf = {};
-    if (plan) plan.tabs.forEach(function (t) { depthOf[t.name] = t.parent && depthOf[t.parent] != null ? depthOf[t.parent] + 1 : 0; });
+    function calcDepth() { depthOf = {}; if (plan) plan.tabs.forEach(function (t) { depthOf[t.name] = t.parent && depthOf[t.parent] != null ? depthOf[t.parent] + 1 : 0; }); }
     function rowMatches(t, r, cols) {
       var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r }, q = query.toLowerCase();
       if (t.name.toLowerCase().indexOf(q) >= 0) return true;   // searching a table's NAME selects all of its rows
       return cols.some(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(q) >= 0; });
     }
     function renderTable() {
+      calcDepth();
       var h = "";
       if (plan.scalars.length) {
         h += "<div class='cards'>" + plan.scalars.map(function (s) {
@@ -10159,13 +10216,34 @@
       }
       if (view === "table") renderTable(); else if (view === "tree") renderTree(); else if (view === "raw") renderRaw(); else renderText();
     }
+    function infoText() { return dcJsonBytes(text.length) + " \u00b7 " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + " \u00b7 " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep"; }
+    function setData(newText) {
+      text = newText; parsed = JSON.parse(newText); stats = dcJsonStats(parsed); pretty = JSON.stringify(parsed, null, 2); plan = dcJsonTablePlan(parsed);
+      if (activeTab >= plan.tabs.length) activeTab = 0;
+      m.querySelector(".info").textContent = infoText();
+    }
+    var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
+    function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
+    function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago(); }
+    function reload() {
+      if (!live || busy) return; busy = true; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
+      dcQueryDataGraph(live, rt).then(function (v) {
+        setData(JSON.stringify(v)); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; paintSt(); render();
+      }).catch(function (e) { paintSt("Could not load: " + e.message + " (showing previous data)"); })
+        .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
+    }
+    if (parsed) m.querySelector(".info").textContent = infoText();
+    if (live) { paintSt(); var agoTimer = setInterval(function () { if (!m.isConnected) { clearInterval(agoTimer); return; } if (!busy && !stEl.classList.contains("bad")) paintSt(); }, 15000); }
     render();
     // ---- events
     m.addEventListener("click", function (e) {
       var t = e.target; if (!t || !t.closest) return;
       var b = t.closest(".seg button"); if (b) { view = b.getAttribute("data-v"); render(); return; }
       var tb = t.closest(".ri"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
-      var a = t.closest("[data-a]"); if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
+      var a = t.closest("[data-a]");
+      if (a && a.getAttribute("data-a") === "rt") { rt = !rt; swEl.setAttribute("aria-checked", rt ? "true" : "false"); reload(); return; }
+      if (a && a.getAttribute("data-a") === "rf") { reload(); return; }
+      if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
       var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
       var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }
     });
@@ -11751,7 +11829,15 @@
       e.stopPropagation();
       if (!_toolsTd) return;
       const info = cellInfo(_toolsTd);
-      showCellValue(info.fn, meta[info.fn] || info.fn, info.val);
+      var live = null;
+      try {   // Data Graph row? then offer Real-time + Refresh using the row's lookup key (Id__c)
+        if (/json_blob/i.test(info.fn)) {
+          var kv = "", trEl = _toolsTd.closest("tr");
+          if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) { if (colByIndex[parseInt(c.getAttribute("data-c"), 10)] === "Id__c") kv = (c.textContent || "").trim(); });
+          if (kv) live = { objectName: objectName, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: "Id__c", keyValue: kv };
+        }
+      } catch (ex) { live = null; }
+      showCellValue(info.fn, meta[info.fn] || info.fn, info.val, live);
     };
 
     renderRowsChunked(renderRows);

@@ -4,7 +4,7 @@ const src = fs.readFileSync(__dirname + "/../console-decorate.extension.js", "ut
 const code = src.slice(src.indexOf("  function dcJsonPathStr(path)"), src.indexOf("  // Persisted filter state per object"));
 const data = { Id__c: "x1", T: [{ A: "one", Kids: [{ Phone: "+1" }, { Phone: "+2" }] }], Z: [] };
 const html = "<!doctype html><meta charset=utf-8><body><script>var makeDraggable=null;window.__copied=[];navigator.clipboard&&0;" + code +
-  "\nwindow.open_=function(){showCellValue('f','Label',JSON.stringify(" + JSON.stringify(data) + "))};</script>";
+  "\nwindow.stubCalls=[];window.stubFail=false;window.dcQueryDataGraph=function(l,rt){stubCalls.push(rt);return new Promise(function(res,rej){setTimeout(function(){stubFail?rej(new Error('boom')):res({Id__c:'LIVE',Items:[{a:1},{a:2},{a:3}]})},60)})};window.openLive=function(){showCellValue('f','Label',JSON.stringify({Id__c:'old',Items:[{a:1}]}),{objectName:'X',dataSpace:'d',keyField:'Id__c',keyValue:'k'})};window.open_=function(){showCellValue('f','Label',JSON.stringify(" + JSON.stringify(data) + "))};</script>";
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 (async () => {
   const srv = http.createServer((q, s) => { s.setHeader("content-type", "text/html; charset=utf-8"); s.end(html); }); await new Promise(r => srv.listen(0, r));
@@ -59,6 +59,24 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   await ev("showCellValue('f','L','just some text <b>')");
   ok(await ev("document.querySelector('.dc-jv pre').textContent") === "just some text <b>" && await ev("document.querySelectorAll('.dc-jv b').length") === 0, "plain text escaped");
   ok(await ev("document.querySelectorAll('.seg').length") === 0, "no view switch for text");
+  // ---- Data Graph live controls
+  ok(await ev("document.querySelectorAll('.sw').length") === 0, "no live controls for ordinary JSON");
+  await ev("openLive()");
+  ok(await ev("document.querySelector('.sw').getAttribute('aria-checked')") === "false" && /Stored/.test(await ev("document.querySelector('.st').textContent")), "starts Stored / off");
+  await ev("document.querySelector('.sw').click()");
+  ok(await ev("document.querySelector('.sw').disabled") === true, "controls disabled while loading");
+  await new Promise(r => setTimeout(r, 250));
+  ok(await ev("stubCalls.join()") === "true", "toggle ON asks for real-time (noCache true)");
+  ok(/Live/.test(await ev("document.querySelector('.st').textContent")) && await ev("document.querySelector('.sw').getAttribute('aria-checked')") === "true", "status Live, switch on");
+  ok(/LIVE/.test(await ev("document.querySelector('.cards').textContent")) && await ev("document.querySelectorAll('tbody tr').length") === 3, "view re-rendered with fresh data");
+  ok(/3 rows|2 tables|1 table/.test(await ev("document.querySelector('.info').textContent")), "info line refreshed");
+  await ev("document.querySelector('.rf').click()"); await new Promise(r => setTimeout(r, 250));
+  ok(await ev("stubCalls.join()") === "true,true", "Refresh keeps the current mode");
+  await ev("document.querySelector('.sw').click()"); await new Promise(r => setTimeout(r, 250));
+  ok(await ev("stubCalls.join()") === "true,true,false", "toggle OFF -> stored");
+  await ev("stubFail=true;document.querySelector('.rf').click()"); await new Promise(r => setTimeout(r, 250));
+  ok(/boom/.test(await ev("document.querySelector('.st').textContent")) && /LIVE/.test(await ev("document.querySelector('.cards').textContent")), "failure keeps previous data and says why");
+  ok(await ev("document.querySelector('.rf').disabled") === false, "controls re-enabled after failure");
   // reopening replaces, never stacks
   await ev("open_();open_()"); ok(await ev("document.querySelectorAll('.dc-jv').length") === 1, "no stacking");
   console.log("explorer-json-viewer-browser: " + n + " checks passed");
