@@ -10555,7 +10555,23 @@
     }
     return { order: order, orderTip: orderTip, warn: warn, short: short, emptyCols: empty };
   }
+  // Hide-empty plan (pure, unit-tested). `full` = the whole selected set; `nonEmpty` = those with a value in
+  // at least one loaded row. `autoColumns` = the reduced list to render when the user's Hide-empty choice is ON
+  // but this render was handed the full set (reload / filter / reopen / new object) — null when nothing to do.
+  // Never hides EVERYTHING (an all-empty result keeps its columns so the table is not blank).
+  function dcHideEmptyPlan(columns, rows, allColumns, on) {
+    var full = allColumns || columns, empty = {};
+    full.forEach(function (fn) { empty[fn] = true; });
+    (rows || []).forEach(function (r) { full.forEach(function (fn) { var v = r[fn]; if (v !== null && v !== undefined && v !== "") empty[fn] = false; }); });
+    var nonEmpty = full.filter(function (fn) { return !empty[fn]; });
+    var emptyCount = full.length - nonEmpty.length;
+    var auto = (on && emptyCount > 0 && nonEmpty.length > 0 && columns.length === full.length) ? nonEmpty : null;
+    return { full: full, nonEmpty: nonEmpty, emptyCount: emptyCount, autoColumns: auto, canHide: nonEmpty.length > 0 };
+  }
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
+    // Hide-empty is a remembered choice: honour it on EVERY render, not only right after a click.
+    var _hep = dcHideEmptyPlan(columns, rows, allColumns, !!window.__dcHideEmpty);
+    if (rows && rows.length && _hep.autoColumns) { return showAllColumnsTable(objectName, _hep.autoColumns, rows, wantRows, _hep.full); }
     // Never open the modal for an empty object — show a FAB-level toast instead.
     if (!rows || !rows.length) {
       dcExploreToast((objectName || "This object") + " has no records — nothing to show.");
@@ -10848,15 +10864,13 @@
     // trims the table to only columns that have data in the loaded rows. Pure VIEW
     // filter: CSV still exports the FULL set. Empties are computed from the FULL column
     // set (fullCols) against the fetched rows, so the toggle is stable across re-renders.
-    const fullCols = allColumns || columns;
-    const emptyCols = {}; fullCols.forEach(fn => { emptyCols[fn] = true; });
-    rows.forEach(r => { fullCols.forEach(fn => { var v = r[fn]; if (v !== null && v !== undefined && v !== "") emptyCols[fn] = false; }); });
-    const nonEmptyColumns = fullCols.filter(fn => !emptyCols[fn]);
-    const emptyCount = fullCols.length - nonEmptyColumns.length;
+    const fullCols = _hep.full;
+    const nonEmptyColumns = _hep.nonEmpty;
+    const emptyCount = _hep.emptyCount;
     const hideWrap = document.createElement("label");
     hideWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;cursor:pointer;white-space:nowrap;";
     const hideCb = document.createElement("input"); hideCb.type = "checkbox";
-    hideCb.checked = !!(window.__dcHideEmpty);           // remember choice across re-renders
+    hideCb.checked = columns.length < fullCols.length;   // reflects what is ACTUALLY shown (never a stale flag)
     hideWrap.appendChild(hideCb);
     hideWrap.appendChild(document.createTextNode("Hide empty (" + emptyCount + ")"));
     hideWrap.title = "Show only columns that have data in the loaded rows. CSV still exports all columns.";
@@ -10866,7 +10880,7 @@
       const shown = hideCb.checked ? nonEmptyColumns : fullCols;
       showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
     };
-    if (emptyCount > 0) hdr.appendChild(hideWrap);
+    if (emptyCount > 0 && _hep.canHide) hdr.appendChild(hideWrap);
 
     // ── Column visibility toggle ─────────────────────────────────────────────────
     // Client-side only — hides/shows loaded columns with zero query credits.

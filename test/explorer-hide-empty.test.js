@@ -1,0 +1,26 @@
+// BEHAVIOR test: Hide-empty plan runs the REAL dcHideEmptyPlan from source across scenarios.
+const fs=require("fs"),path=require("path");
+const src=fs.readFileSync(path.join(__dirname,"..","console-decorate.extension.js"),"utf8");
+let n=0;const ok=(c,m)=>{n++;if(!c){console.error("FAIL: "+m);process.exit(1)}};
+const a=src.indexOf("  function dcHideEmptyPlan("),b=src.indexOf("  function showAllColumnsTable(",a);
+ok(a>0&&b>a,"helper found");
+const plan=new Function(src.slice(a,b)+";return dcHideEmptyPlan;")();
+const cols=["Id","A","B","C"];
+const rows=[{Id:1,A:null,B:"",C:"x"},{Id:2,A:undefined,B:null,C:null}];
+let p=plan(cols,rows,undefined,false);
+ok(p.emptyCount===2&&p.nonEmpty.join()==="Id,C","counts empties (null/undefined/'')");
+ok(p.autoColumns===null,"flag OFF: nothing auto-hidden");
+p=plan(cols,rows,undefined,true);
+ok(p.autoColumns&&p.autoColumns.join()==="Id,C","S1 flag ON + fresh full render (reload/new object): auto-hides, so the checkbox is never ticked while all columns show");
+const shown=plan(["Id","C"],rows,cols,true);
+ok(shown.autoColumns===null&&shown.full.join()===cols.join(),"S2 already reduced: no re-render loop, full set kept for CSV");
+ok(plan(cols,[{Id:1,A:2,B:3,C:4}],undefined,true).autoColumns===null,"S3 nothing empty: no change");
+const allE=plan(cols,[{Id:null,A:null,B:null,C:null}],undefined,true);
+ok(allE.autoColumns===null&&!allE.canHide,"S4 ALL empty: never hide everything, no checkbox");
+const later=plan(["Id","C"],[{Id:1,A:"now",B:null,C:1}],cols,true);
+ok(later.nonEmpty.join()==="Id,A,C","S5 new rows (filter/reload) with data in a formerly-empty col: recomputed from FULL set");
+ok(plan(cols,[],undefined,true).autoColumns===null,"S6 no rows: no-op");
+// wiring
+ok(/hideCb\.checked = columns\.length < fullCols\.length/.test(src),"checkbox reflects what is actually shown");
+ok(/_hep\.autoColumns\) \{ return showAllColumnsTable/.test(src),"auto-apply wired at render start");
+console.log("explorer-hide-empty: "+n+" checks passed");
