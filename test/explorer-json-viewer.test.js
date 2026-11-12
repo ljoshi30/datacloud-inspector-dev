@@ -110,5 +110,16 @@ ok(G.dcExtractGraphJson("nope") === undefined, "non-json string -> undefined");
   ok(G5.dcGraphNameFromCell("DataCloudTransforms") === "" && G5.dcGraphNameFromCell("") === "", "non-graph cells ignored");
   G5.dcQueryDataGraph({ objectName: "TDI_Unified_Profile_1780157058614_VALUE", graphHints: ["TDI_Unified_Profile_SFP_RT"], dataSpace: "TD_Insurance", keyField: "Id__c", keyValue: "q" }, true).then(() => { ok(/"objectName":"TDI_Unified_Profile_SFP_RT","dataSpaceName":"TD_Insurance"/.test(seen[0]) && /"noCache":true/.test(seen[0]), "first request = row's graph name @ data space, noCache true: " + seen[0]); console.log("HINT-OK"); });
 }
+// wrapped replies: JSON string buried several levels deep is found; a plain graph object is still returned as-is
+{
+  const X = new Function("return (function(){" + src.slice(g0, src.indexOf("  // A Data Graph State row names its graph", g0)) + "; return dcExtractGraphJson;})()")();
+  const inner = { Unified: [{ Id: "1", Kids: [{ n: 2 }] }] };
+  const deep = { rows: [{ fields: { other: "x", json_blob__c: JSON.stringify(inner) } }] };
+  ok(JSON.stringify(X(deep)) === JSON.stringify(inner), "JSON string buried in rows[].fields.* is extracted");
+  ok(JSON.stringify(X({ a: { b: [JSON.stringify([1, 2])] } })) === "[1,2]", "array string found at depth");
+  const plain = { Unified: [{ Id: "1" }] };
+  ok(JSON.stringify(X(plain)) === JSON.stringify(plain), "plain graph object returned as-is");
+  ok(X({ rows: [{ fields: [null] }] }).rows !== undefined, "nothing JSON-like inside -> returns the reply itself (never undefined)");
+}
 console.log("explorer-json-viewer: " + n + " checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

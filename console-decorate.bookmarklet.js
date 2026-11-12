@@ -7712,6 +7712,22 @@
     var direct = asJson(rv);
     if (typeof rv === "string") return direct;
     if (Array.isArray(rv) || !rv || typeof rv !== "object") return direct;
+    // The reply can be wrapped several levels deep (e.g. {rows:[{fields:{json_blob__c:"{...}"}}]}): search the WHOLE
+    // reply, breadth-first, for a string that is itself a JSON object/array. Names like json/blob/graph win ties.
+    (function () {
+      var q = [{ v: rv, d: 0, k: "" }], best = null, seen = 0;
+      while (q.length && seen++ < 4000) {
+        var n = q.shift(), x = n.v;
+        if (typeof x === "string") {
+          var t2 = x.trim();
+          if ((t2.charAt(0) === "{" || t2.charAt(0) === "[") && t2.length > 2) { try { var pj = JSON.parse(t2); if (pj && typeof pj === "object") { if (/json|blob|graph/i.test(n.k)) { best = pj; break; } if (!best) best = pj; } } catch (e) {} }
+        } else if (x && typeof x === "object" && n.d < 8) {
+          Object.keys(x).forEach(function (kk) { q.push({ v: x[kk], d: n.d + 1, k: kk }); });
+        }
+      }
+      if (best) { direct = best; rv = { __found: best }; }
+    })();
+    if (rv && rv.__found) return rv.__found;
     var keys = Object.keys(rv), i, v;
     for (i = 0; i < keys.length; i++) { if (typeof rv[keys[i]] === "string") { v = asJson(rv[keys[i]]); if (v !== undefined) return v; } }   // a JSON string inside a wrapper
     for (i = 0; i < keys.length; i++) { if (/json|blob|graph|data|result/i.test(keys[i]) && rv[keys[i]] && typeof rv[keys[i]] === "object") return rv[keys[i]]; }
