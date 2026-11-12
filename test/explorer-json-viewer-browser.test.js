@@ -19,13 +19,26 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   let n = 0; const ok = (c, m) => { assert(c, m); n++; };
   await ev("open_()");
   ok(await ev("document.querySelectorAll('.dc-jv').length") === 1, "opens");
-  ok(await ev("document.querySelectorAll('.tab').length") === 3, "3 tabs (Z empty)");
-  ok(await ev("document.querySelector('.tab.empty .n').textContent") === "0", "empty tab shows 0");
+  ok(await ev("document.querySelectorAll('.ri').length") === 3, "3 tabs (Z empty)");
+  ok(await ev("document.querySelector('.ri.empty .n').textContent") === "0", "empty tab shows 0");
   // search filters rows in Kids tab
-  await ev("Array.from(document.querySelectorAll('.tab')).find(function(t){return /^Kids/.test(t.textContent)}).click()");
+  await ev("Array.from(document.querySelectorAll('.ri')).find(function(t){return /Kids/.test(t.textContent)}).click()");
   ok(await ev("document.querySelectorAll('tbody tr').length") === 2, "2 rows");
   await ev("var q=document.querySelector('.q');q.value='+2';q.dispatchEvent(new Event('input'))");
   ok(await ev("document.querySelectorAll('tbody tr').length") === 1, "search filters rows");
+  // searching a table NAME selects all its rows; rail shows match counts
+  await ev("var q2=document.querySelector('.q');q2.value='kids';q2.dispatchEvent(new Event('input'))");
+  ok(await ev("document.querySelectorAll('tbody tr').length") === 2, "name search keeps all rows of the matching table");
+  ok(/^2\/2$/.test(await ev("Array.from(document.querySelectorAll('.ri')).find(function(t){return /Kids/.test(t.textContent)}).querySelector('.n').textContent")), "rail shows 2/2");
+  ok(await ev("document.querySelector('.ri.on').style.paddingLeft") !== await ev("document.querySelectorAll('.ri')[0].style.paddingLeft"), "nested table indented");
+  // fullscreen toggle, and view switches don't shrink it
+  await ev("document.querySelector('.dc-cv-fs').click()");
+  ok(await ev("document.querySelector('.dc-jv').style.width") === "100vw", "fullscreen on");
+  await ev("document.querySelector(\".seg button[data-v='raw']\").click()");
+  ok(await ev("document.querySelector('.dc-jv').style.width") === "100vw", "view switch keeps fullscreen");
+  await ev("document.querySelector('.dc-cv-fs').click();document.querySelector(\".seg button[data-v='table']\").click()");
+  ok(await ev("document.querySelector('.dc-jv').style.width") !== "100vw", "fullscreen off");
+  await ev("var q3=document.querySelector('.q');q3.value='';q3.dispatchEvent(new Event('input'))");
   // Tree: collapsed branches are not built until opened (lazy)
   await ev("document.querySelector(\".seg button[data-v='tree']\").click()");
   const rows0 = await ev("document.querySelectorAll('.tree .row').length");

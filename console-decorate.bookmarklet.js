@@ -9978,17 +9978,22 @@
       ".dc-jv .chip{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:2px 9px;font-weight:600}" +
       ".dc-jv .q{flex:1;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
       ".dc-jv .body{overflow:auto;flex:1;min-height:0;background:#fff;color:var(--ink)}" +
-      ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;padding:12px 14px}" +
+      ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;padding:10px 14px}" +
       ".dc-jv .card{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:7px 10px;background:#fff;cursor:copy;min-width:0}" +
       ".dc-jv .card:hover{background:#f5f7ff}.dc-jv .card .l{font:700 9.5px -apple-system,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}" +
       ".dc-jv .card .v{font:12.5px SF Mono,Consolas,monospace;word-break:break-all;margin-top:2px}" +
-      ".dc-jv .tabs{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}" +
-      ".dc-jv .tab{border:1px solid var(--line);background:#f8fafc;color:#475569;border-radius:999px;padding:5px 12px;font:600 11.5px -apple-system,sans-serif;cursor:pointer;display:inline-flex;gap:6px;align-items:center}" +
-      ".dc-jv .tab:hover{border-color:#a5b4fc}.dc-jv .tab.on{background:var(--acc);border-color:var(--acc);color:#fff}" +
-      ".dc-jv .tab .n{background:rgba(99,102,241,.14);color:#4338ca;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .tab.on .n{background:rgba(255,255,255,.25);color:#fff}" +
-      ".dc-jv .tab.empty{opacity:.55;border-style:dashed}" +
-      ".dc-jv .from{font-size:10.5px;color:var(--mut);padding:8px 14px 0}.dc-jv .from b{color:#4338ca}" +
-      ".dc-jv table{border-collapse:separate;border-spacing:0;width:100%;font-size:12px}" +
+      ".dc-jv .cards{max-height:30%;overflow:auto;flex:none;border-bottom:1px solid var(--line)}" +
+      ".dc-jv .main{display:flex;flex:1 1 auto;min-height:230px;min-width:0}" +
+      ".dc-jv .rail{flex:none;width:250px;overflow:auto;border-right:1px solid var(--line);background:#f8fafc;padding:6px 0}" +
+      ".dc-jv .rl{font:700 9.5px -apple-system,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;padding:4px 12px}" +
+      ".dc-jv .ri{display:flex;align-items:center;gap:6px;width:100%;border:none;border-left:3px solid transparent;background:none;text-align:left;padding:6px 10px;font:600 12px -apple-system,sans-serif;color:#334155;cursor:pointer}" +
+      ".dc-jv .ri:hover{background:#eef2ff}.dc-jv .ri.on{background:#e0e7ff;border-left-color:var(--acc);color:#312e81}" +
+      ".dc-jv .ri .nm{flex:1;min-width:0;white-space:normal;word-break:break-word;line-height:1.25}.dc-jv .ri .br{color:#a5b4fc}" +
+      ".dc-jv .ri .n{background:#e2e8f0;color:#475569;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .ri.on .n{background:var(--acc);color:#fff}.dc-jv .ri.empty{opacity:.5}" +
+      ".dc-jv .pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}" +
+      ".dc-jv .ph{display:flex;gap:8px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mut)}.dc-jv .ph b{font-size:13px;color:#312e81}.dc-jv .ph .sp{flex:1}" +
+      ".dc-jv .tw{overflow:auto;flex:1;padding:0 0 10px}" +
+      ".dc-jv table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px}" +
       ".dc-jv th{position:sticky;top:0;background:#eef2ff;color:#3730a3;text-align:left;padding:7px 10px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid #c7d2fe;white-space:nowrap}" +
       ".dc-jv td{padding:6px 10px;border-bottom:1px solid #f1f5f9;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px SF Mono,Consolas,monospace;cursor:copy}" +
       ".dc-jv tbody tr:nth-child(even) td{background:#fafbff}.dc-jv tbody tr:hover td{background:#eef2ff}" +
@@ -10015,9 +10020,9 @@
     var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
     var plan = parsed ? dcJsonTablePlan(parsed) : null;
     m.innerHTML =
-      "<div class='hd'><div style='flex:1;min-width:0'><div class='ttl'>" + esc(fieldLabel) + "</div><div class='sub'>" + esc(fieldApi) + "</div></div>" +
-      (parsed ? "<div class='seg'><button data-v='table'>Table</button><button data-v='tree'>Tree</button><button data-v='raw'>Raw</button></div>" : "") +
-      "<button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
+      "<div class='hd'><div style='flex:1;min-width:0'><div class='ttl'>" + esc(fieldLabel) + "</div>" + (fieldApi && fieldApi !== fieldLabel ? "<div class='sub'>" + esc(fieldApi) + "</div>" : "") + "</div>" +
+      (parsed ? "<div class='seg'><button data-v='table' title='Easy to read: each nested list as its own table'>Table</button><button data-v='tree' title='Explore the structure: open and close branches, click a key to copy its path'>Tree</button><button data-v='raw' title='The exact JSON text with line numbers'>Raw</button></div>" : "") +
+      "<button class='btn dc-cv-fs' title='Full screen / back'>&#x26F6;</button><button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
       "<div class='bar'>" + (parsed
         ? "<span class='chip'>JSON</span><span>" + dcJsonBytes(text.length) + "</span><span>&middot; " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + "</span><span>&middot; " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep</span>" +
           "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
@@ -10026,7 +10031,7 @@
       "<div class='body'></div><div class='toast'></div>";
     document.body.appendChild(m);
     var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
-    var view = parsed ? "table" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
+    var fsOn = false, view = parsed ? "table" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
     function toast(t) { toastEl.textContent = t; toastEl.style.opacity = "1"; clearTimeout(tmr); tmr = setTimeout(function () { toastEl.style.opacity = "0"; }, 1100); }
     function copy(t, msg) { try { navigator.clipboard.writeText(t); toast(msg || "Copied"); } catch (e) { toast("Copy blocked by the browser"); } }
     function hl(s) {   // escape + highlight the search query
@@ -10043,10 +10048,19 @@
       return hl(v);
     }
     function fit(chars, cols) {   // size the window to the data instead of a fixed box
-      var w = view === "table" ? Math.max(620, Math.min(cols * 150 + 60, 1500)) : Math.max(620, Math.min(chars * 7.4 + 90, 1100));
+      if (fsOn) return;
+      var w = view === "table" ? Math.max(700, Math.min(cols * 150 + 290, 1500)) : Math.max(620, Math.min(chars * 7.4 + 90, 1100));
       m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
     }
-    // ---------------- Table view
+    // ---------------- Table view: left rail (tables, indented under their parent) + the selected table
+    function cleanName(n) { return n.replace(/__(dlm|cio|c)(?=_|$)/, ""); }
+    var depthOf = {};
+    if (plan) plan.tabs.forEach(function (t) { depthOf[t.name] = t.parent && depthOf[t.parent] != null ? depthOf[t.parent] + 1 : 0; });
+    function rowMatches(t, r, cols) {
+      var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r }, q = query.toLowerCase();
+      if (t.name.toLowerCase().indexOf(q) >= 0) return true;   // searching a table's NAME selects all of its rows
+      return cols.some(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(q) >= 0; });
+    }
     function renderTable() {
       var h = "";
       if (plan.scalars.length) {
@@ -10055,28 +10069,33 @@
         }).join("") + "</div>";
       }
       if (plan.tabs.length) {
-        h += "<div class='tabs'>" + plan.tabs.map(function (t, i) {
-          return "<button class='tab" + (i === activeTab ? " on" : "") + (t.rows.length ? "" : " empty") + "' data-t='" + i + "'>" + esc(t.name.replace(/__dlm$|__cio$|__c$/, "")) + "<span class='n'>" + t.rows.length + "</span></button>";
-        }).join("") + "</div>";
+        h += "<div class='main'><div class='rail'><div class='rl'>Tables</div>" + plan.tabs.map(function (t, i) {
+          var cols = t.cols.length ? t.cols : ["value"], cnt = t.rows.length, dim = !cnt;
+          var badge = String(cnt);
+          if (query) { var mm = t.rows.filter(function (r) { return rowMatches(t, r, cols); }).length; badge = mm + "/" + cnt; dim = !mm; }
+          return "<button class='ri" + (i === activeTab ? " on" : "") + (dim ? " empty" : "") + "' data-t='" + i + "' title='" + esc(t.name) + "' style='padding-left:" + (10 + depthOf[t.name] * 14) + "px'>" +
+            (depthOf[t.name] ? "<span class='br'>&#8627;</span>" : "") + "<span class='nm'>" + esc(cleanName(t.name)) + "</span><span class='n'>" + badge + "</span></button>";
+        }).join("") + "</div><div class='pane'>";
         var t = plan.tabs[activeTab];
-        h += t.parent ? "<div class='from'>inside <b>" + esc(t.parent.replace(/__dlm$|__cio$|__c$/, "")) + "</b></div>" : "";
+        h += "<div class='ph'><b>" + esc(cleanName(t.name)) + "</b> " + (t.parent ? "<span>inside " + esc(cleanName(t.parent)) + "</span>" : "<span>top level</span>") + "<span class='sp'></span><span>" + t.rows.length + " row" + (t.rows.length === 1 ? "" : "s") + "</span></div>";
         if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#94a3b8'>Empty: no rows in this table</div>";
         else {
-          var cols = t.cols.length ? t.cols : ["value"];
-          h += "<div style='padding:6px 14px 14px;overflow:auto'><table><thead><tr>" + cols.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          var cols2 = t.cols.length ? t.cols : ["value"];
+          h += "<div class='tw'><table><thead><tr>" + cols2.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
           var shown = 0;
           t.rows.forEach(function (r) {
             var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r };
-            if (query && cols.every(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(query.toLowerCase()) < 0; })) return;
+            if (query && !rowMatches(t, r, cols2)) return;
             shown++;
-            h += "<tr>" + cols.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
+            h += "<tr>" + cols2.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
           });
-          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#94a3b8'>No rows match &ldquo;" + esc(query) + "&rdquo; in this tab</div>" : "") + "</div>";
+          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#94a3b8'>No rows match &ldquo;" + esc(query) + "&rdquo; in this table. Tables on the left show how many rows match.</div>" : "") + "</div>";
         }
+        h += "</div></div>";
       }
       bodyEl.innerHTML = h;
       var maxCols = 0; plan.tabs.forEach(function (t) { if (t.cols.length > maxCols) maxCols = t.cols.length; });
-      fit(0, maxCols || 4);
+      fit(0, maxCols + 1.4 || 4);
     }
     // ---------------- Tree view (children are created only when a branch is opened)
     var GUIDES = ["#c7d2fe", "#fbcfe8", "#bbf7d0", "#fde68a", "#bae6fd", "#ddd6fe"];
@@ -10145,13 +10164,19 @@
     m.addEventListener("click", function (e) {
       var t = e.target; if (!t || !t.closest) return;
       var b = t.closest(".seg button"); if (b) { view = b.getAttribute("data-v"); render(); return; }
-      var tb = t.closest(".tab"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
+      var tb = t.closest(".ri"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
       var a = t.closest("[data-a]"); if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
       var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
       var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }
     });
     if (qEl) qEl.addEventListener("input", function () { query = qEl.value.trim(); if (view === "table") renderTable(); else if (view === "tree") renderTree(); });
     m.querySelector(".dc-cv-copy").onclick = function () { copy(view === "raw" || !parsed ? (parsed ? pretty : text) : text, parsed ? "Copied full JSON" : "Copied"); };
+    var savedBox = "";
+    m.querySelector(".dc-cv-fs").onclick = function () {
+      fsOn = !fsOn;
+      if (fsOn) { savedBox = m.style.cssText; m.style.top = "0"; m.style.left = "0"; m.style.transform = "none"; m.style.width = "100vw"; m.style.height = "100vh"; m.style.maxHeight = "100vh"; m.style.borderRadius = "0"; }
+      else { m.style.cssText = savedBox; fit(0, 0); render(); }
+    };
     var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; } };
     m.querySelector(".dc-cv-x").onclick = close;
     _cellViewEsc = function (e) { if (e.key === "Escape" && _cellViewEl === m) { close(); e.stopPropagation(); } };
