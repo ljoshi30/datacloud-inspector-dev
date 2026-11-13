@@ -93,4 +93,7 @@ ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sn
 ok(!/var px = fm\[1\]\.match/.test(src)&&!/Generic fallback: strip the FIRST underscore/.test(src)&&!/\.replace\(\/\^\[A-Z0-9\]\{2,6\}_\/, ""\)/.test(src),"no prefix-derived data space, no blind first-token table strip, no prefix-trimmed table label");
 ok(/if \(objectName && _dsByObject\[objectName\] != null && !_dsGuess\[objectName\]\) return \[_dsByObject\[objectName\]\];/.test(src)&&!/Object\.keys\(_dsByObject\)\.forEach/.test(src),"a confirmed per-object space is the ONLY candidate; spaces seen for other objects are never tried");
 ok(/dsLastObj === objectName/.test(src)&&/_auraSniff\.dsLastObj = q\.objectName/.test(src),"a sniffed space learned for another object is not reused");
+ok(/gotNum/.test(src)&&/Count returned no number/.test(src),"Count never shows a fake 0 when no number came back");
+ok(/__totalUnknown = true/.test(src)&&/&& !rows\.__totalUnknown/.test(src),"an unknown server total is never reported as complete");
+ok(!/if \(cands\.indexOf\("default"\) < 0\) cands\.push\("default"\)/.test(src)&&!/dsCandidates\.push\("default"\)/.test(src),"no forced 'default' retry after a confirmed space");
 console.log("explorer data-space source: "+n+" checks passed");

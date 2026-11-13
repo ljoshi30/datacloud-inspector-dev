@@ -89,7 +89,7 @@ const lines = (f) => text(f).split("\n").filter(Boolean);
     const mkW = (n) => { files[n] = { chunks: [], closed: false }; return { write: async (x) => { files[n].chunks.push(x); }, close: async () => { files[n].closed = true; } }; };
     const dir = { getFileHandle: async (n) => ({ createWritable: async () => mkW(n) }) };
     const offsets = [];
-    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], DC_PAGE_SIZE: PAGE,
+    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], dcLearnSpace: () => {}, DC_PAGE_SIZE: PAGE,
       fetch: async (url, o) => { const msg = JSON.parse(decodeURIComponent(/message=([^&]*)/.exec(o.body)[1])); const sql = msg.actions[0].params.sql;
         const lim = +/LIMIT (\d+)/.exec(sql)[1], off = (/OFFSET (\d+)/.exec(sql) || [0, 0])[1] | 0; offsets.push(off);
         const n = Math.max(0, Math.min(lim, TOTAL - off, PAGE)); const rows = []; for (let i = 0; i < n; i++) rows.push([off + i, "v"]);
@@ -107,7 +107,7 @@ const lines = (f) => text(f).split("\n").filter(Boolean);
     const files = {}; let emptyServed = 0;
     const mkW = (n) => { files[n] = { chunks: [], closed: false }; return { write: async (x) => { files[n].chunks.push(x); }, close: async () => { files[n].closed = true; } }; };
     const dir = { getFileHandle: async (n) => ({ createWritable: async () => mkW(n) }) };
-    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], DC_PAGE_SIZE: 49999,
+    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], dcLearnSpace: () => {}, DC_PAGE_SIZE: 49999,
       fetch: async (url, o) => { const msg = JSON.parse(decodeURIComponent(/message=([^&]*)/.exec(o.body)[1])); const sql = msg.actions[0].params.sql;
         const off = (/OFFSET (\d+)/.exec(sql) || [0, 0])[1] | 0; let n = Math.max(0, Math.min(15000, TOTAL - off));
         if (off >= emptyFrom && emptyServed < emptyTimes) { emptyServed++; n = 0; }
@@ -134,7 +134,7 @@ const lines = (f) => text(f).split("\n").filter(Boolean);
     const files = {}; let served = 0;
     const mkW = (n) => { files[n] = { chunks: [], closed: false }; return { write: async (x) => { files[n].chunks.push(x); }, close: async () => { files[n].closed = true; } }; };
     const dir = { getFileHandle: async (n) => ({ createWritable: async () => mkW(n) }) };
-    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], DC_PAGE_SIZE: 49999,
+    const env = { extBridgePresent: () => false, _auraSniff: { context: "c", token: "t", pageURI: "/p" }, _auraQid: 0, dataSpaceCandidates: () => ["default"], dcLearnSpace: () => {}, DC_PAGE_SIZE: 49999,
       fetch: async (url, o) => { const msg = JSON.parse(decodeURIComponent(/message=([^&]*)/.exec(o.body)[1])); const sql = msg.actions[0].params.sql;
         const off = (/OFFSET (\d+)/.exec(sql) || [0, 0])[1] | 0; let n = Math.max(0, Math.min(20000, TOTAL - off)); let st = { completionStatus: "Finished", rowsProcessed: 0 };
         if (off >= 40000 && served < stallPages) { served++; n = 0; st = { completionStatus: "Running", progress: 40 }; }

@@ -6960,6 +6960,12 @@
   }
   // The last sniffed space is usable for an object only if it was learned for THAT object (or from the Query Editor,
   // which is not tied to an object). A space learned for a different object is stale and must not be reused.
+  // Remember a space that just WORKED for a query - together with the table it worked for.
+  function dcLearnSpace(space, sql) {
+    if (!space) return;
+    var m = String(sql || "").match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+    _auraSniff.dataSpace = space; _auraSniff.dsLastObj = m ? m[1] : null;
+  }
   function dcSniffedSpaceApplies(objectName) {
     if (_auraSniff.dataSpace == null || _badDsNames.test(_auraSniff.dataSpace)) return false;
     return !_auraSniff.dsLastObj || _auraSniff.dsLastObj === objectName;
@@ -8403,7 +8409,6 @@
         var tblName = fm2 ? fm2[1] : "";
         dataSpaceCandidates(tblName).forEach(function (c) { if (dsCandidates.indexOf(c) < 0) dsCandidates.push(c); });
       }
-      if (dsCandidates.indexOf("default") < 0) dsCandidates.push("default");
       function tryDs(dsi) {
         var trySpace = dsCandidates[dsi] || "";
         _auraQid = (_auraQid || 0) + 1;
@@ -8443,7 +8448,7 @@
               return;
             }
             // Success — remember this dataspace for future queries
-            if (trySpace) _auraSniff.dataSpace = trySpace;
+            dcLearnSpace(trySpace, sql);
             var rv = a.returnValue || {}; var dr = rv.dataRows || rv.rows || []; var meta = rv.metadata || [];
             var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
             resolve(mapByMeta(arrData, meta));
@@ -8470,6 +8475,7 @@
         runDcSqlViaBridge(sqlNoLimit, want, ds).then(function (res) {
           var allData = res.data || [];
           var totalRows = res.rowCount || allData.length;
+          var _totalKnown = !!res.rowCount;   // server omitted the count -> we only know how many we fetched
           var queryId = res.queryId || "";
 
           function mapRows(data) {
@@ -8480,6 +8486,7 @@
               return obj;
             }).filter(Boolean);
             mapped.__serverRowCount = totalRows;
+            if (!_totalKnown && data.length >= want) mapped.__totalUnknown = true;   // may be truncated: do not claim "complete"
             mapped.__queryId = queryId;
             return mapped;
           }
@@ -8561,6 +8568,7 @@
           // by OFFSET until we have `bmWant` rows, an empty page, or the true total (when known).
           if (batchRows.length === 0 || allRows.length >= bmWant || (bmServerTotal && allRows.length >= bmServerTotal)) {
             allRows.__serverRowCount = bmServerTotal || allRows.length;
+            if (!bmServerTotal && allRows.length >= bmWant) allRows.__totalUnknown = true;   // count unavailable and we stopped at our limit
             resolve(allRows);
           } else {
             fetchBmBatch(allRows.length);
@@ -10767,8 +10775,9 @@
       return new Promise(function (resolve, reject) {
         if (typeof extBridgePresent === "function" && extBridgePresent()) {
           runRawSql(cSql, ds, 1).then(function (res) {
-            var cnt = 0, cRows = (res && res.rows) || [];
-            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } } }
+            var cnt = 0, cRows = (res && res.rows) || [], gotNum = false;
+            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; gotNum = true; break; } } } }
+            if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
             resolve({ count: cnt, rowsProcessed: null });
           }).catch(reject);
           return;
@@ -10776,7 +10785,6 @@
         if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — sort a column on the table first to connect.")); return; }
         var cands = [ds];
         if (typeof dataSpaceCandidates === "function") { var fm = cSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
-        if (cands.indexOf("default") < 0) cands.push("default");
         function tryDs(i) {
           var space = cands[i] || "";
           _auraQid = (_auraQid || 0) + 1;
@@ -10791,15 +10799,16 @@
                 if (/denied authorization|not authorized/i.test(String(em)) && i + 1 < cands.length) { tryDs(i + 1); return; }
                 reject(new Error(String(em) || "Count failed")); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, cSql);
               var rv = a.returnValue || {};
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var firstRow = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
-              var cnt = 0;
+              var cnt = 0, gotNum = false;
               if (firstRow != null) {
                 var vals = Array.isArray(firstRow) ? firstRow : (typeof firstRow === "object" ? Object.keys(firstRow).map(function (kk) { return firstRow[kk]; }) : [firstRow]);
-                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
+                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; gotNum = true; break; } }
               }
+              if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
               var _rp = (rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount));
               var rowsProcessed = parseInt(_rp, 10); if (isNaN(rowsProcessed)) rowsProcessed = null;
               resolve({ count: cnt, rowsProcessed: rowsProcessed });
@@ -11791,7 +11800,7 @@
       thDistinct.style.cssText = "position:absolute;top:3px;right:30px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
       thDistinct.onclick = function (e) {
         e.stopPropagation();
-        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length);
+        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length) && !rows.__totalUnknown;
         var rect; try { rect = thDistinct.getBoundingClientRect(); } catch (ex) { rect = { left: 100, top: 60, bottom: 80 }; }
         dcShowDistinct(fn, meta[fn] || fn, rows, rect, complete);
       };
@@ -11908,7 +11917,7 @@
       const hintEl = panel.querySelector(".dc-scroll-hint");
       if (!hintEl) return;
       const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total" : "";
-      hintEl.textContent = total.toLocaleString() + " rows loaded" + more + " · scroll freely — all rows & columns available, no extra queries.";
+      hintEl.textContent = total.toLocaleString() + " rows loaded" + (rows.__totalUnknown && !more ? " (more may exist - press Count for the total)" : more) + " · scroll freely — all rows & columns available, no extra queries.";
     }
     function renderWindow(force) {
       if (!panel.isConnected) return;
@@ -14819,7 +14828,6 @@
           var fm = countSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
-        if (cands.indexOf("default") < 0) cands.push("default");
         var MAX_POLL = 4;   // a few retries (~6s total) — a big table's COUNT can take several seconds; if the COUNT(*) wrapper still isn't ready,
                             // the caller falls back to Fetch-style row counting (which works).
         function tryDs(i, attempt) {
@@ -14843,7 +14851,7 @@
                 if (/denied authorization|not authorized/i.test(cleanErr) && i + 1 < cands.length) { tryDs(i + 1, 0); return; }
                 reject(new Error(cleanErr || "Count query failed")); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, countSql);
               var rv = a.returnValue || {};
               var cnt = null;
               // The count value lives INSIDE the single result row. Do NOT read a
@@ -14990,7 +14998,6 @@
           var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
-        if (cands.indexOf("default") < 0) cands.push("default");
         var dsi = 0;
         // Async-materialization poll. Data Cloud returns state:"SUCCESS" with an EMPTY
         // dataRows while the query is still running (completionStatus Running/Unspecified/
@@ -15045,7 +15052,7 @@
                 else if (/syntax error|42601/i.test(cleanErr)) hint = " — check your SQL syntax.";
                 reject(new Error(cleanErr + hint)); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, batchSql);
               var rv = a.returnValue || {};
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var meta = rv.metadata || [];
@@ -15282,7 +15289,7 @@
           if (!_auraSniff.context || !_auraSniff.token) { fail(new Error("No active session — run any query using SF's Run Query button first.")); return; }
           var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
           var ASK = 49999;
-          var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
+          var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
           var SHORT_RETRIES = (split && split.shortRetries != null) ? split.shortRetries : 5, SHORT_WAIT_MS = (split && split.shortWaitMs != null) ? split.shortWaitMs : 2000, LONG_RETRIES = (split && split.longRetries != null) ? split.longRetries : 30;
           var dsi = 0, POLL_MS = 1500, MAX_POLL = 6;   // ~9s cold-start ceiling (was 30s) — fail fast on empty
           function batch(offset, pollAttempt) {
@@ -15304,7 +15311,7 @@
                   if (/denied authorization|not authorized/i.test(String(em)) && offset === 0 && dsi + 1 < cands.length) { dsi++; batch(0); return; }
                   fail(new Error(String(em))); return;
                 }
-                if (space) _auraSniff.dataSpace = space;
+                dcLearnSpace(space, bsql);
                 var rv = a.returnValue || {};
                 var dr = rv.dataRows || rv.rows || rv.data || []; var meta = rv.metadata || [];
                 var arr = dr.map(function (d) { return d && d.row ? d.row : d; });
