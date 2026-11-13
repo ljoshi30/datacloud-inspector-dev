@@ -61,3 +61,5 @@ ok(/handle\.addEventListener\("pointercancel", onCancel\)/.test(src)&&/const onC
 ok(/URL\.revokeObjectURL\(_bu\)/.test(src),"Export-All blob is released when its table closes");
 ok(/_mdl\.style\.display === "none"\) \{ clearSpot\(\); return; \}/.test(src),"sort-guide spotlight is removed while the column picker is hidden");
 console.log("explorer misc: "+n+" checks passed");
+ok(/function showSortHelp\(again, detail\)/.test(src)&&/showSortHelp\("Show selected columns' data", msg\)/.test(src)&&/showSortHelp\("Restore saved", rmsg\)/.test(src),"a failed load shows Salesforce's real error above the connect card (not the card alone)");
+console.log("explorer failed-load detail: "+n+" checks passed");

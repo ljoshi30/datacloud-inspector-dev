@@ -13177,9 +13177,19 @@
     // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
     // steps, the exact next click highlighted. `again` = the button name to press afterwards.
     var _sortGuide = null;
-    function showSortHelp(again) {
+    // `detail` = the REAL error from the failed load. Without it the user just saw the same card again with no clue
+    // why (the guide only explains how to connect, but the failure may be something else entirely).
+    function showSortHelp(again, detail) {
       if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
       savedNote.innerHTML = "";
+      if (detail) {
+        try { console.warn("[Data360 Inspector] load failed:", detail); } catch (e) {}
+        var det = document.createElement("div");
+        det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
+        var dt = document.createElement("b"); dt.textContent = "The data load failed. Salesforce said: ";
+        det.appendChild(dt); det.appendChild(document.createTextNode(String(detail).slice(0, 700)));
+        savedNote.appendChild(det);
+      }
       _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn });
       savedNote.appendChild(_sortGuide);
     }
@@ -13397,7 +13407,7 @@
             // object likely isn't queryable from any detectable dataspace — give a clear,
             // action-oriented message instead of the raw SQL error.
             if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
-              showSortHelp("Show selected columns' data"); return;
+              showSortHelp("Show selected columns' data", msg); return;
             }
             savedNote.textContent = msg;
           });
@@ -13449,7 +13459,7 @@
             hideSpinner();
             var rmsg = String(err && err.message || err);
             if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
-              showSortHelp("Restore saved"); return;
+              showSortHelp("Restore saved", rmsg); return;
             }
             savedNote.textContent = rmsg;
           });
