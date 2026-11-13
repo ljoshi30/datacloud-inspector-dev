@@ -9159,6 +9159,182 @@
     setTimeout(poll, 100);
   }
 
+  // Make a result readable in a spreadsheet: (1) JSON-object columns are EXPANDED into one column per key
+  // (Record.Id, Record.LastName, ...) instead of one giant text cell; (2) columns whose every value
+  // is a plain short number become real numbers (IDs with leading zeros / long digit strings stay text);
+  // (3) a sensible width per column. Pure: returns { cols, rows (objects keyed by the new column names), widths }.
+  function qePrepResults(cols, rows, expandJson) {
+    var MAXKEYS = 80, outCols = [], plan = {};
+    cols.forEach(function (c) {
+      var keys = [], seen = {}, objs = 0, nonEmpty = 0, bad = false, parsed = new Array(rows.length);
+      if (expandJson) for (var i = 0; i < rows.length && !bad; i++) {
+        var v = rows[i][c]; if (v == null || v === "") continue; nonEmpty++;
+        var o = null;
+        if (v && typeof v === "object" && !Array.isArray(v)) o = v;
+        else if (typeof v === "string" && v.charAt(0) === "{") { try { var j = JSON.parse(v); if (j && typeof j === "object" && !Array.isArray(j)) o = j; } catch (e) {} }
+        if (!o) { bad = true; break; }
+        parsed[i] = o; objs++;
+        Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+      }
+      if (expandJson && !bad && objs > 0 && objs === nonEmpty && keys.length > 0 && keys.length <= MAXKEYS) {
+        plan[c] = { keys: keys, parsed: parsed, names: keys.map(function (k) { var nm = c + "." + k; return nm; }) };
+        plan[c].names.forEach(function (n) { outCols.push(n); });
+      } else outCols.push(c);
+    });
+    var NUM = /^-?(0|[1-9]\d{0,9})(\.\d{1,6})?$/;
+    var outRows = rows.map(function (r, ri) {
+      var o = {};
+      cols.forEach(function (c) {
+        var pl = plan[c];
+        if (!pl) { o[c] = r[c]; return; }
+        var po = pl.parsed[ri];
+        pl.keys.forEach(function (k, ki) { var v = po ? po[k] : null; o[pl.names[ki]] = (v && typeof v === "object") ? JSON.stringify(v) : v; });
+      });
+      return o;
+    });
+    var widths = outCols.map(function (c) {
+      var w = String(c).length, allNum = true, any = false;
+      for (var i = 0; i < outRows.length; i++) {
+        var v = outRows[i][c]; if (v == null || v === "") continue; any = true;
+        var t = typeof v === "string" ? v : String(v);
+        if (i < 300 && t.length > w) w = t.length;
+        if (allNum && !(typeof v === "number" || NUM.test(t))) allNum = false;
+      }
+      if (allNum && any) for (var q = 0; q < outRows.length; q++) { var vv = outRows[q][c]; if (vv != null && vv !== "" && typeof vv !== "number") outRows[q][c] = Number(vv); }
+      return Math.max(10, Math.min(60, Math.round(w * 1.15) + 2));
+    });
+    return { cols: outCols, rows: outRows, widths: widths };
+  }
+    // ── STREAMING .xlsx writer (memory-flat, multi-sheet) ──────────────────────────────
+    // Builds a real Excel workbook straight onto a FileSystemWritableFileStream, one sheet per
+    // `sheetRows` data rows (header repeated on each sheet, frozen + bold + filter). Nothing is
+    // held in memory beyond the current batch: every sheet is its own deflate-compressed zip entry
+    // written as the rows arrive; the small workbook/rels parts are appended at the END (zip entry
+    // order is free), when the real sheet count is known. Strings are inline (no shared-string table,
+    // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
+    // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
+    function dcXlsxStream(out, sheetRows) {
+      var widths = null, enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
+      var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+      function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
+      function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
+      function emit(bytes) { pos += bytes.length; return out.write(bytes); }
+      function colLetter(i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+      function xe(s) { return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+      function cell(v, style) {
+        var s = style ? " s='1'" : "";
+        if (v == null || v === "") return "<c" + s + "/>";
+        if (typeof v === "number" && isFinite(v)) return "<c" + s + "><v>" + v + "</v></c>";
+        if (typeof v === "boolean") return "<c" + s + " t='b'><v>" + (v ? 1 : 0) + "</v></c>";
+        var t = typeof v === "object" ? JSON.stringify(v) : String(v);
+        if (t.length > 32767) t = t.slice(0, 32767);   // Excel's per-cell limit; longer text would corrupt the file
+        return "<c" + s + " t='inlineStr'><is><t xml:space='preserve'>" + xe(t) + "</t></is></c>";
+      }
+      function startEntry(name) {
+        var cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), r = cs.readable.getReader();
+        var e = { name: name, nameB: enc.encode(name), crc: 0xFFFFFFFF, usize: 0, csize: 0, offset: pos, w: w };
+        var h = []; u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0808); u16(h, 8); u16(h, 0); u16(h, 0x21); u32(h, 0); u32(h, 0); u32(h, 0); u16(h, e.nameB.length); u16(h, 0);
+        e.pump = emit(new Uint8Array(h)).then(function () { return emit(e.nameB); }).then(function () {
+          return (function loop() { return r.read().then(function (x) { if (x.done) return; e.csize += x.value.length; return emit(x.value).then(loop); }); })();
+        });
+        return e;
+      }
+      function entryWrite(e, str) {
+        var b = enc.encode(str), c = e.crc;
+        for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8);
+        e.crc = c; e.usize += b.length;
+        if (e.usize > 4000000000) throw new Error("A sheet is too large for one workbook part - use a smaller rows-per-sheet or split CSV files.");
+        return e.w.write(b);
+      }
+      function endEntry(e) {
+        return e.w.close().then(function () { return e.pump; }).then(function () {
+          e.crc = (e.crc ^ 0xFFFFFFFF) >>> 0;
+          var d = []; u32(d, 0x08074b50); u32(d, e.crc); u32(d, e.csize); u32(d, e.usize);
+          entries.push(e); return emit(new Uint8Array(d));
+        });
+      }
+      function wholeEntry(name, text) { var e = startEntry(name); return entryWrite(e, text).then(function () { return endEntry(e); }); }
+      function sheetHead() {
+        var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
+          "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
+          "<cols>" + (widths && widths.length === cols.length ? widths.map(function (w, i) { return "<col min='" + (i + 1) + "' max='" + (i + 1) + "' width='" + w + "' customWidth='1'/>"; }).join("") : "<col min='1' max='" + nC + "' width='18' customWidth='1'/>") + "</cols><sheetData><row>";
+        for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
+        return x + "</row>";
+      }
+      function openSheet() { sheetNo++; rowsInSheet = 0; cur = startEntry("xl/worksheets/sheet" + sheetNo + ".xml"); return entryWrite(cur, sheetHead()); }
+      function closeSheet() {
+        if (!cur) return Promise.resolve();
+        var e = cur; cur = null;
+        var last = colLetter(Math.max(0, cols.length - 1)) + (rowsInSheet + 1);
+        sheetNames.push("Rows " + (((sheetNo - 1) * sheetRows) + 1) + "-" + (((sheetNo - 1) * sheetRows) + rowsInSheet));
+        return entryWrite(e, "</sheetData><autoFilter ref='A1:" + last + "'/></worksheet>").then(function () { return endEntry(e); });
+      }
+      var chain = Promise.resolve();
+      function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
+      return {
+        setCols: function (c, w) { cols = c.slice(); widths = w || null; },
+        sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
+        // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
+        addRows: function (rows) {
+          return serial(function () {
+            var i = 0;
+            function step() {
+              var buf = "";
+              while (i < rows.length) {
+                if (!cur || rowsInSheet >= sheetRows) {
+                  var pend = buf; buf = "";
+                  return Promise.resolve(pend && cur ? entryWrite(cur, pend) : null).then(closeSheet).then(openSheet).then(step);
+                }
+                var r = rows[i++], x = "<row>";
+                for (var k = 0; k < cols.length; k++) x += cell(r[k], false);
+                buf += x + "</row>"; rowsInSheet++;
+              }
+              return buf ? entryWrite(cur, buf) : null;
+            }
+            return step();
+          });
+        },
+        // Finalise: close the open sheet, append workbook parts + central directory, close the file.
+        close: function () {
+          return serial(function () {
+            if (ended) return null; ended = true;
+            var p = cur ? Promise.resolve() : openSheet();   // never produce a workbook with zero sheets
+            return p.then(closeSheet).then(function () {
+              var n = sheetNames.length, ct = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/xl/workbook.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'/><Override PartName='/xl/styles.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'/>";
+              var wb = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets>", rel = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>";
+              for (var s = 1; s <= n; s++) {
+                ct += "<Override PartName='/xl/worksheets/sheet" + s + ".xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'/>";
+                wb += "<sheet name='" + xe(sheetNames[s - 1]) + "' sheetId='" + s + "' r:id='rId" + s + "'/>";
+                rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
+              }
+              rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
+              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><color rgb='FFFFFFFF'/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='3'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill><fill><patternFill patternType='solid'><fgColor rgb='FF1E293B'/><bgColor indexed='64'/></patternFill></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='2'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='2' borderId='0' xfId='0' applyFont='1' applyFill='1'/></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
+              return wholeEntry("[Content_Types].xml", ct + "</Types>")
+                .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
+                .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
+                .then(function () { return wholeEntry("xl/_rels/workbook.xml.rels", rel); })
+                .then(function () { return wholeEntry("xl/styles.xml", styles); });
+            }).then(function () {
+              var cdStart = pos, cdSize = 0, chain2 = Promise.resolve();
+              entries.forEach(function (e) {
+                chain2 = chain2.then(function () {
+                  var c = []; u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0808); u16(c, 8); u16(c, 0); u16(c, 0x21); u32(c, e.crc); u32(c, e.csize); u32(c, e.usize); u16(c, e.nameB.length); u16(c, 0); u16(c, 0); u16(c, 0); u16(c, 0); u32(c, 0); u32(c, e.offset);
+                  cdSize += c.length + e.nameB.length;
+                  return emit(new Uint8Array(c)).then(function () { return emit(e.nameB); });
+                });
+              });
+              return chain2.then(function () {
+                var z = []; u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, entries.length); u16(z, entries.length); u32(z, cdSize); u32(z, cdStart); u16(z, 0);
+                return emit(new Uint8Array(z));
+              });
+            }).then(function () { return out.close(); });
+          });
+        }
+      };
+    }
+    function qeCanXlsx() { try { return typeof window.showSaveFilePicker === "function" && typeof CompressionStream === "function" && typeof TextEncoder === "function"; } catch (e) { return false; } }
+
+
   // ── Export visible rows to CSV ────────────────────────────────────────────
   function exportExploreCsv(recList) {
     const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
@@ -9179,6 +9355,21 @@
 
   // Download an arbitrary rows[]×columns[] set as CSV (used by the full-table view,
   // so ALL columns export with data — not just SF's 10).
+  // Formatted Excel (.xlsx) of the loaded rows: JSON-blob columns expanded into one column per key,
+  // numbers stored as numbers, bold frozen filtered header, sized columns. Built in memory.
+  function downloadRowsXlsx(objectName, columns, rows, btn) {
+    if (!rows || !rows.length) { if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows."); return; }
+    var old = btn ? btn.textContent : ""; if (btn) { btn.disabled = true; btn.textContent = "Building…"; }
+    var chunks = [], pp = qePrepResults(columns, rows, true);
+    var x = dcXlsxStream({ write: function (b) { chunks.push(b); return Promise.resolve(); }, close: function () { return Promise.resolve(); } }, 1000000);
+    x.setCols(pp.cols, pp.widths);
+    x.addRows(pp.rows.map(function (r) { return pp.cols.map(function (c) { return r[c]; }); })).then(function () { return x.close(); }).then(function () {
+      var nm = (objectName || "data-explore") + ".xlsx";
+      var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); a.download = nm; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (btn) btn.textContent = "\u2713 Saved";
+    }).catch(function (e) { if (btn) { btn.textContent = "Excel build failed"; btn.title = String(e && e.message || e); } }).then(function () { if (btn) { btn.disabled = false; setTimeout(function () { btn.textContent = old; }, 2000); } });
+  }
   function downloadRowsCsv(objectName, columns, rows) {
     // Don't produce a header-only CSV when the object has no records — tell the user
     // instead of silently downloading an empty file.
@@ -11338,7 +11529,12 @@
       if (ev.key === "Escape" && _fsOn) { setFullScreen(false); ev.stopPropagation(); }
     };
     document.addEventListener("keydown", _fsEsc, true);
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
+    const xlsxBtn = document.createElement("button");
+    xlsxBtn.textContent = "⬇ Excel";
+    xlsxBtn.title = "Download the loaded rows as a formatted Excel file: JSON-blob columns are expanded into separate columns, numbers stay numbers, header is bold/frozen/filterable.";
+    xlsxBtn.style.cssText = csvBtn.style.cssText.replace(/background:[^;]+;/, "background:#16a34a;").replace(/border:[^;]+;/, "border:1px solid #16a34a;");
+    xlsxBtn.onclick = () => downloadRowsXlsx(objectName, fullCols, rows, xlsxBtn);
+    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(xlsxBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
@@ -13836,52 +14032,6 @@
   function qeJsonPretty(value) { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } }
 
   // Open the QE JSON modal for a raw cell value (already known to be JSON).
-  // Make a result readable in a spreadsheet: (1) JSON-object columns are EXPANDED into one column per key
-  // (Record.Id, Record.LastName, ...) instead of one giant text cell; (2) columns whose every value
-  // is a plain short number become real numbers (IDs with leading zeros / long digit strings stay text);
-  // (3) a sensible width per column. Pure: returns { cols, rows (objects keyed by the new column names), widths }.
-  function qePrepResults(cols, rows, expandJson) {
-    var MAXKEYS = 80, outCols = [], plan = {};
-    cols.forEach(function (c) {
-      var keys = [], seen = {}, objs = 0, nonEmpty = 0, bad = false, parsed = new Array(rows.length);
-      if (expandJson) for (var i = 0; i < rows.length && !bad; i++) {
-        var v = rows[i][c]; if (v == null || v === "") continue; nonEmpty++;
-        var o = null;
-        if (v && typeof v === "object" && !Array.isArray(v)) o = v;
-        else if (typeof v === "string" && v.charAt(0) === "{") { try { var j = JSON.parse(v); if (j && typeof j === "object" && !Array.isArray(j)) o = j; } catch (e) {} }
-        if (!o) { bad = true; break; }
-        parsed[i] = o; objs++;
-        Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
-      }
-      if (expandJson && !bad && objs > 0 && objs === nonEmpty && keys.length > 0 && keys.length <= MAXKEYS) {
-        plan[c] = { keys: keys, parsed: parsed, names: keys.map(function (k) { var nm = c + "." + k; return nm; }) };
-        plan[c].names.forEach(function (n) { outCols.push(n); });
-      } else outCols.push(c);
-    });
-    var NUM = /^-?(0|[1-9]\d{0,9})(\.\d{1,6})?$/;
-    var outRows = rows.map(function (r, ri) {
-      var o = {};
-      cols.forEach(function (c) {
-        var pl = plan[c];
-        if (!pl) { o[c] = r[c]; return; }
-        var po = pl.parsed[ri];
-        pl.keys.forEach(function (k, ki) { var v = po ? po[k] : null; o[pl.names[ki]] = (v && typeof v === "object") ? JSON.stringify(v) : v; });
-      });
-      return o;
-    });
-    var widths = outCols.map(function (c) {
-      var w = String(c).length, allNum = true, any = false;
-      for (var i = 0; i < outRows.length; i++) {
-        var v = outRows[i][c]; if (v == null || v === "") continue; any = true;
-        var t = typeof v === "string" ? v : String(v);
-        if (i < 300 && t.length > w) w = t.length;
-        if (allNum && !(typeof v === "number" || NUM.test(t))) allNum = false;
-      }
-      if (allNum && any) for (var q = 0; q < outRows.length; q++) { var vv = outRows[q][c]; if (vv != null && vv !== "" && typeof vv !== "number") outRows[q][c] = Number(vv); }
-      return Math.max(10, Math.min(60, Math.round(w * 1.15) + 2));
-    });
-    return { cols: outCols, rows: outRows, widths: widths };
-  }
   // Tab-separated text for pasting straight into Google Sheets / Excel. Fields holding a tab,
   // newline or quote are double-quoted (quotes doubled) so each value stays in ONE cell.
   function qeToTsv(cols, rows) {
@@ -15266,135 +15416,6 @@
     // batch (slow + billed rows processed) and the cursor's 1-hour life (extension path).
     // onProgress(fetched). isCancelled() lets the user stop. Resolves { totalRows, cancelled }.
     // Requires showSaveFilePicker (Chromium). Caller checks qeCanStream() first.
-    // ── STREAMING .xlsx writer (memory-flat, multi-sheet) ──────────────────────────────
-    // Builds a real Excel workbook straight onto a FileSystemWritableFileStream, one sheet per
-    // `sheetRows` data rows (header repeated on each sheet, frozen + bold + filter). Nothing is
-    // held in memory beyond the current batch: every sheet is its own deflate-compressed zip entry
-    // written as the rows arrive; the small workbook/rels parts are appended at the END (zip entry
-    // order is free), when the real sheet count is known. Strings are inline (no shared-string table,
-    // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
-    // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
-    function dcXlsxStream(out, sheetRows) {
-      var widths = null, enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
-      var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
-      function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
-      function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
-      function emit(bytes) { pos += bytes.length; return out.write(bytes); }
-      function colLetter(i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
-      function xe(s) { return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-      function cell(v, style) {
-        var s = style ? " s='1'" : "";
-        if (v == null || v === "") return "<c" + s + "/>";
-        if (typeof v === "number" && isFinite(v)) return "<c" + s + "><v>" + v + "</v></c>";
-        if (typeof v === "boolean") return "<c" + s + " t='b'><v>" + (v ? 1 : 0) + "</v></c>";
-        var t = typeof v === "object" ? JSON.stringify(v) : String(v);
-        if (t.length > 32767) t = t.slice(0, 32767);   // Excel's per-cell limit; longer text would corrupt the file
-        return "<c" + s + " t='inlineStr'><is><t xml:space='preserve'>" + xe(t) + "</t></is></c>";
-      }
-      function startEntry(name) {
-        var cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), r = cs.readable.getReader();
-        var e = { name: name, nameB: enc.encode(name), crc: 0xFFFFFFFF, usize: 0, csize: 0, offset: pos, w: w };
-        var h = []; u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0808); u16(h, 8); u16(h, 0); u16(h, 0x21); u32(h, 0); u32(h, 0); u32(h, 0); u16(h, e.nameB.length); u16(h, 0);
-        e.pump = emit(new Uint8Array(h)).then(function () { return emit(e.nameB); }).then(function () {
-          return (function loop() { return r.read().then(function (x) { if (x.done) return; e.csize += x.value.length; return emit(x.value).then(loop); }); })();
-        });
-        return e;
-      }
-      function entryWrite(e, str) {
-        var b = enc.encode(str), c = e.crc;
-        for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8);
-        e.crc = c; e.usize += b.length;
-        if (e.usize > 4000000000) throw new Error("A sheet is too large for one workbook part - use a smaller rows-per-sheet or split CSV files.");
-        return e.w.write(b);
-      }
-      function endEntry(e) {
-        return e.w.close().then(function () { return e.pump; }).then(function () {
-          e.crc = (e.crc ^ 0xFFFFFFFF) >>> 0;
-          var d = []; u32(d, 0x08074b50); u32(d, e.crc); u32(d, e.csize); u32(d, e.usize);
-          entries.push(e); return emit(new Uint8Array(d));
-        });
-      }
-      function wholeEntry(name, text) { var e = startEntry(name); return entryWrite(e, text).then(function () { return endEntry(e); }); }
-      function sheetHead() {
-        var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
-          "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
-          "<cols>" + (widths && widths.length === cols.length ? widths.map(function (w, i) { return "<col min='" + (i + 1) + "' max='" + (i + 1) + "' width='" + w + "' customWidth='1'/>"; }).join("") : "<col min='1' max='" + nC + "' width='18' customWidth='1'/>") + "</cols><sheetData><row>";
-        for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
-        return x + "</row>";
-      }
-      function openSheet() { sheetNo++; rowsInSheet = 0; cur = startEntry("xl/worksheets/sheet" + sheetNo + ".xml"); return entryWrite(cur, sheetHead()); }
-      function closeSheet() {
-        if (!cur) return Promise.resolve();
-        var e = cur; cur = null;
-        var last = colLetter(Math.max(0, cols.length - 1)) + (rowsInSheet + 1);
-        sheetNames.push("Rows " + (((sheetNo - 1) * sheetRows) + 1) + "-" + (((sheetNo - 1) * sheetRows) + rowsInSheet));
-        return entryWrite(e, "</sheetData><autoFilter ref='A1:" + last + "'/></worksheet>").then(function () { return endEntry(e); });
-      }
-      var chain = Promise.resolve();
-      function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
-      return {
-        setCols: function (c, w) { cols = c.slice(); widths = w || null; },
-        sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
-        // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
-        addRows: function (rows) {
-          return serial(function () {
-            var i = 0;
-            function step() {
-              var buf = "";
-              while (i < rows.length) {
-                if (!cur || rowsInSheet >= sheetRows) {
-                  var pend = buf; buf = "";
-                  return Promise.resolve(pend && cur ? entryWrite(cur, pend) : null).then(closeSheet).then(openSheet).then(step);
-                }
-                var r = rows[i++], x = "<row>";
-                for (var k = 0; k < cols.length; k++) x += cell(r[k], false);
-                buf += x + "</row>"; rowsInSheet++;
-              }
-              return buf ? entryWrite(cur, buf) : null;
-            }
-            return step();
-          });
-        },
-        // Finalise: close the open sheet, append workbook parts + central directory, close the file.
-        close: function () {
-          return serial(function () {
-            if (ended) return null; ended = true;
-            var p = cur ? Promise.resolve() : openSheet();   // never produce a workbook with zero sheets
-            return p.then(closeSheet).then(function () {
-              var n = sheetNames.length, ct = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/xl/workbook.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'/><Override PartName='/xl/styles.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'/>";
-              var wb = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets>", rel = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>";
-              for (var s = 1; s <= n; s++) {
-                ct += "<Override PartName='/xl/worksheets/sheet" + s + ".xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'/>";
-                wb += "<sheet name='" + xe(sheetNames[s - 1]) + "' sheetId='" + s + "' r:id='rId" + s + "'/>";
-                rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
-              }
-              rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
-              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><color rgb='FFFFFFFF'/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='3'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill><fill><patternFill patternType='solid'><fgColor rgb='FF1E293B'/><bgColor indexed='64'/></patternFill></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='2'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='2' borderId='0' xfId='0' applyFont='1' applyFill='1'/></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
-              return wholeEntry("[Content_Types].xml", ct + "</Types>")
-                .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
-                .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
-                .then(function () { return wholeEntry("xl/_rels/workbook.xml.rels", rel); })
-                .then(function () { return wholeEntry("xl/styles.xml", styles); });
-            }).then(function () {
-              var cdStart = pos, cdSize = 0, chain2 = Promise.resolve();
-              entries.forEach(function (e) {
-                chain2 = chain2.then(function () {
-                  var c = []; u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0808); u16(c, 8); u16(c, 0); u16(c, 0x21); u32(c, e.crc); u32(c, e.csize); u32(c, e.usize); u16(c, e.nameB.length); u16(c, 0); u16(c, 0); u16(c, 0); u16(c, 0); u32(c, 0); u32(c, e.offset);
-                  cdSize += c.length + e.nameB.length;
-                  return emit(new Uint8Array(c)).then(function () { return emit(e.nameB); });
-                });
-              });
-              return chain2.then(function () {
-                var z = []; u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, entries.length); u16(z, entries.length); u32(z, cdSize); u32(z, cdStart); u16(z, 0);
-                return emit(new Uint8Array(z));
-              });
-            }).then(function () { return out.close(); });
-          });
-        }
-      };
-    }
-    function qeCanXlsx() { try { return typeof window.showSaveFilePicker === "function" && typeof CompressionStream === "function" && typeof TextEncoder === "function"; } catch (e) { return false; } }
-
     function qeCanStream() { try { return typeof window.showSaveFilePicker === "function"; } catch (e) { return false; } }
     // `split` (optional, bookmarklet-safe): { dirHandle, partRows, baseName } → ONE continuous scan that is
     // written as several CSV files (part001, part002 …) of at most `partRows` data rows each, every part with

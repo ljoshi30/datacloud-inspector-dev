@@ -53,8 +53,8 @@ function readZip(buf) {
 
   // END-TO-END through the real export engine (extension-cursor path stubbed): 2,500 rows, 1,000 per sheet
   {
-    const a = src.indexOf("    function dcXlsxStream("), b = src.indexOf("    // DEBUG (dev-only");
-    const eng = src.slice(a, b);
+    const a = src.indexOf("    function dcXlsxStream("), a2 = src.indexOf("    function qeCanXlsx"), b = src.indexOf("    // DEBUG (dev-only"), e0 = src.indexOf("    function qeCanStream");
+    const eng = src.slice(a, a2) + src.slice(e0, b);
     const bytes = []; const handle = { createWritable: () => Promise.resolve({ write: v => { bytes.push(Buffer.from(v)); return Promise.resolve(); }, close: () => Promise.resolve() }) };
     const rowsAll = []; for (let r = 0; r < 2500; r++) rowsAll.push(["id" + r, r]);
     const env = { extBridgePresent: () => true, DC_PAGE_SIZE: 1000, window: {}, _auraSniff: {}, dataSpaceCandidates: () => [], dcLearnSpace: () => {},
