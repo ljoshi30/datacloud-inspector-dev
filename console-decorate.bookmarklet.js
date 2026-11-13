@@ -7517,6 +7517,9 @@
       if (finished) return;
       if (box.__dcSeen && !box.isConnected) { cleanup(); unlock(false); return; }   // panel closed
       if (box.isConnected) box.__dcSeen = true;
+      // Column picker hidden (closeExploreModal only display:none's it): take the spotlight ring off Salesforce's
+      // header and stand by; it comes back by itself when the picker is reopened.
+      try { var _mdl = box.closest && box.closest("#dc-explore-modal"); if (_mdl && _mdl.style.display === "none") { clearSpot(); return; } } catch (e) {}
       var sorted = (_auraSniff.querySeq || 0) > baseSeq;                      // the page ran a query after the card appeared
       var extra = typeof opts.isReady === "function" ? !!opts.isReady() : false;
       if (sorted || extra) { ready(); return; }
@@ -9978,7 +9981,12 @@
       .sort(function (a, b) { return b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0); });
   }
 
-  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
+  // Cancels any Explorer export still running for the table being closed/re-rendered (Hide empty, filter, Reload,
+  // Back to original ...) — otherwise it keeps spending credits with no Cancel button and still downloads.
+  // Table name out of a FROM clause token: strips double quotes and a leading schema ("a"."b" -> b).
+  function dcFromTableName(tok) { var t = String(tok || "").trim().replace(/;$/, ""); var parts = t.match(/"(?:[^"]|"")*"|[^.\s]+/g) || [t]; return String(parts[parts.length - 1]).replace(/^"|"$/g, "").replace(/""/g, '"'); }
+  var _explorerCancelFn = null;
+  function closeAllColumnsTable() { try { if (_explorerCancelFn) { _explorerCancelFn(); _explorerCancelFn = null; } } catch (e) {} if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
   function reopenLastTable() {
     if (_lastTableState && typeof showAllColumnsTable === "function") {
       var s = _lastTableState;
@@ -10584,6 +10592,11 @@
     // time in this table). Kept LOCAL so it can never collide with the Query Editor's
     // own export cancel — the two features are fully independent.
     var _explorerExportCancel = false;
+    _explorerCancelFn = function () {
+      _explorerExportCancel = true;
+      // Release the saved Export-All file (up to 500k rows) once this table is gone; a delay lets a just-started download finish.
+      try { var _bu = _exportAllDone && _exportAllDone.blobUrl; if (_bu) { _exportAllDone = null; setTimeout(function () { try { URL.revokeObjectURL(_bu); } catch (e) {} }, 60000); } } catch (e) {}
+    };
     // Remember everything needed to reopen this exact table later, with no re-query.
     _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
     // Cache the original (unfiltered) rows the FIRST time this object is opened, or when
@@ -10848,7 +10861,7 @@
           }
           // Show Export All button if it was hidden (now we know the total)
           var eab = panel.querySelector("#dc-export-all-btn");
-          if (eab && cnt > rows.length) {
+          if (eab && cnt > rows.length && !(_filterState[objectName] && _filterState[objectName].active)) {   // a filtered COUNT is not the object total
             eab.style.display = "";
             eab.textContent = dcExportCapInfo(cnt).label;
             eab.title = dcExportCapInfo(cnt).tip;
@@ -10947,9 +10960,9 @@
           };
           msg.appendChild(showAllLink);
           // Insert into the scroll area so it sits over the table
-          var scrollEl = panel.querySelector("div[style*='flex:1']");
+          var scrollEl = panel.querySelector("#dc-allcols-scroll");   // the table's own scroll area (NOT the header)
           if (scrollEl) { scrollEl.style.position = "relative"; scrollEl.appendChild(msg); }
-          else { panel.appendChild(msg); }
+          else { return; }   // initial call runs before the scroll area exists; it is re-run right after it is added
         }
       } else {
         if (allHiddenEl) allHiddenEl.remove();
@@ -11158,7 +11171,8 @@
         }
         // fall through to a fresh export
       }
-      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0;
+      // Export All is ALWAYS the unfiltered object, so a filter's row count must never be used here.
+      var btnTotal = isFiltered ? (_originalTotal[objectName] || 0) : (parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0);
       var capInfo = dcExportCapInfo(btnTotal);
       var confirmMsg = capInfo.confirmMsg;
       if (!confirm(confirmMsg)) return;
@@ -11720,6 +11734,7 @@
 
     // scroll area + table
     const scroll = document.createElement("div");
+    scroll.id = "dc-allcols-scroll";
     // overscroll-behavior:contain stops a left/right overscroll from triggering the
     // browser's swipe-to-go-back (which was navigating away / "closing" the page when
     // scrolling back toward the left on wide tables). Also isolates vertical bounce.
@@ -11956,6 +11971,7 @@
       scroll.appendChild(emptyBanner);
     }
     panel.appendChild(scroll);
+    try { applyColVizCss(); } catch (e) {}   // now the scroll area exists: shows the 'all columns hidden' overlay in the right place
     // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.
     const scrollHint = document.createElement("div");
     scrollHint.className = "dc-scroll-hint";
@@ -12493,6 +12509,7 @@
             handle.releasePointerCapture(e.pointerId);
             handle.removeEventListener("pointermove", onMove);
             handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
             // Commit the reorder
             if (toIdx !== fromIdx) {
               orderedSelected.splice(fromIdx, 1);
@@ -12505,8 +12522,19 @@
             persistSelection();   // remember the new order across tab close
           };
 
+          // The browser can cancel a drag (touch scroll, alt-tab, capture lost): undo the lift WITHOUT reordering.
+          const onCancel = () => {
+            try { handle.releasePointerCapture(e.pointerId); } catch (er) {}
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
+            [...listWrap.querySelectorAll("[data-fn]")].forEach(r => { r.style.transform = ""; r.style.transition = ""; });
+            listWrap.style.userSelect = "";
+            renderOrder();
+          };
           handle.addEventListener("pointermove", onMove);
           handle.addEventListener("pointerup",   onUp);
+          handle.addEventListener("pointercancel", onCancel);
         });
       });
     }
@@ -12858,6 +12886,13 @@
           // Extract FROM table from the actual (auto-quoted) SQL so COUNT uses same name as data query
           var fromMatch = soql.match(/\bFROM\s+("(?:[^"]|"")*"|\S+)/i);
           var fromTable = fromMatch ? fromMatch[1] : sqlQuoteIdent(objName);
+          // The result is shown, counted and exported AS objName — a different FROM table would be mislabelled and
+          // every follow-up (Count / Export All / filtered CSV) would query the wrong table. Refuse it plainly.
+          if (fromMatch && dcFromTableName(fromMatch[1]).toLowerCase() !== String(objName).toLowerCase()) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            setStatus("This editor works on " + objName + ". FROM " + dcFromTableName(fromMatch[1]) + " is a different table - open that object in Data Explorer and use its editor.", "warn");
+            return;
+          }
           // Shared success handler (normal run AND the auto-retry after dropping an unknown column).
           // The previous filter/original state is only replaced HERE, after a query really succeeded,
           // so a failed/cancelled run can never leave the table and its filter state out of sync.

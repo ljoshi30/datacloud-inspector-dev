@@ -42,3 +42,22 @@ ok(/td\.className = "dc-sp"/.test(src)&&/td:not\(\.dc-sp\):nth-child\(/.test(src
 console.log("explorer colviz spacer: "+n+" checks passed");
 ok(!/\/\[",\\n\]\/\.test\(s\)/.test(src),"every CSV escaper quotes a bare carriage return too");
 console.log("explorer csv cr: "+n+" checks passed");
+ok(/_explorerCancelFn = function \(\) \{\s*_explorerExportCancel = true;/.test(src)&&/function closeAllColumnsTable\(\) \{ try \{ if \(_explorerCancelFn\)/.test(src),"closing/re-rendering the table cancels a running export");
+ok(/var btnTotal = isFiltered \? \(_originalTotal\[objectName\] \|\| 0\)/.test(src),"Export All never uses a filter's count");
+ok(/cnt > rows\.length && !\(_filterState\[objectName\] && _filterState\[objectName\]\.active\)/.test(src),"filtered COUNT does not rewrite Export All's total");
+// behaviour: cancel fn ordering — close runs the PREVIOUS render's canceller, then new render installs its own
+const c0=src.indexOf("  var _explorerCancelFn = null;"),c1=src.indexOf("\n",src.indexOf("function closeAllColumnsTable()",c0));
+const cl=new Function("allColsTableEl","document",src.slice(c0,c1)+";return {set:f=>{_explorerCancelFn=f},close:closeAllColumnsTable};")(null,{getElementById:()=>null});
+let flag=false;cl.set(()=>{flag=true});cl.close();ok(flag,"BEHAVIOR: close() fires the registered export canceller");
+console.log("explorer export cancel/total: "+n+" checks passed");
+const d0=src.indexOf("  function dcFromTableName("),d1=src.indexOf("\n",d0);
+const fromName=new Function(src.slice(d0,d1)+";return dcFromTableName;")();
+ok(fromName('"TDI_Individual__dlm"')==="TDI_Individual__dlm"&&fromName("Foo__dlm")==="Foo__dlm"&&fromName('"x"."Foo__dlm";')==="Foo__dlm","FROM table name parse (quoted, bare, schema-qualified)");
+ok(/dcFromTableName\(fromMatch\[1\]\)\.toLowerCase\(\) !== String\(objName\)\.toLowerCase\(\)/.test(src),"a different FROM table is refused before running");
+console.log("explorer from-guard: "+n+" checks passed");
+ok(/scroll\.id = "dc-allcols-scroll"/.test(src)&&/panel\.querySelector\("#dc-allcols-scroll"\)/.test(src)&&!/panel\.querySelector\("div\[style\*='flex:1'\]"\)/.test(src),"all-hidden overlay attaches to the table's scroll area, never the header");
+console.log("explorer overlay: "+n+" checks passed");
+ok(/handle\.addEventListener\("pointercancel", onCancel\)/.test(src)&&/const onCancel = \(\) => \{[\s\S]{0,900}renderOrder\(\);\s*\};/.test(src),"column drag has a pointercancel path that reverts without reordering");
+ok(/URL\.revokeObjectURL\(_bu\)/.test(src),"Export-All blob is released when its table closes");
+ok(/_mdl\.style\.display === "none"\) \{ clearSpot\(\); return; \}/.test(src),"sort-guide spotlight is removed while the column picker is hidden");
+console.log("explorer misc: "+n+" checks passed");
