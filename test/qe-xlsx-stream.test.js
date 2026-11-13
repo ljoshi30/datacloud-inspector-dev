@@ -36,6 +36,7 @@ function readZip(buf) {
   ok((s1.match(/<row>/g) || []).length === 4, "header + 3 data rows on sheet 1");
   ok(/a&amp;b &lt;x&gt;/.test(s1), "XML-escaped text");
   ok(/<c s='2' t='inlineStr'><is><t xml:space='preserve'>001<\/t><\/is><\/c>/.test(s1), "leading-zero id stays text");
+  ok(/wrapText='1'/.test(z["xl/styles.xml"]) && /cellXfs count='3'/.test(z["xl/styles.xml"]), "data text cells use a wrap + top-aligned style");
   ok(/<c><v>5<\/v><\/c>/.test(s1) && /<c><v>1.5<\/v><\/c>/.test(s1), "real numbers are numeric cells");
   ok(/<row><c\/>/.test(s1) || /<c\/><c s='2' t='inlineStr'>/.test(s1), "null keeps its column position (empty cell)");
   ok(/<c t='b'><v>1<\/v><\/c>/.test(s1), "boolean cell");
