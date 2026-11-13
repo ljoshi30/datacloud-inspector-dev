@@ -13836,6 +13836,52 @@
   function qeJsonPretty(value) { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } }
 
   // Open the QE JSON modal for a raw cell value (already known to be JSON).
+  // Make a result readable in a spreadsheet: (1) JSON-object columns are EXPANDED into one column per key
+  // (Record.Id, Record.LastName, ...) instead of one giant text cell; (2) columns whose every value
+  // is a plain short number become real numbers (IDs with leading zeros / long digit strings stay text);
+  // (3) a sensible width per column. Pure: returns { cols, rows (objects keyed by the new column names), widths }.
+  function qePrepResults(cols, rows, expandJson) {
+    var MAXKEYS = 80, outCols = [], plan = {};
+    cols.forEach(function (c) {
+      var keys = [], seen = {}, objs = 0, nonEmpty = 0, bad = false, parsed = new Array(rows.length);
+      if (expandJson) for (var i = 0; i < rows.length && !bad; i++) {
+        var v = rows[i][c]; if (v == null || v === "") continue; nonEmpty++;
+        var o = null;
+        if (v && typeof v === "object" && !Array.isArray(v)) o = v;
+        else if (typeof v === "string" && v.charAt(0) === "{") { try { var j = JSON.parse(v); if (j && typeof j === "object" && !Array.isArray(j)) o = j; } catch (e) {} }
+        if (!o) { bad = true; break; }
+        parsed[i] = o; objs++;
+        Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+      }
+      if (expandJson && !bad && objs > 0 && objs === nonEmpty && keys.length > 0 && keys.length <= MAXKEYS) {
+        plan[c] = { keys: keys, parsed: parsed, names: keys.map(function (k) { var nm = c + "." + k; return nm; }) };
+        plan[c].names.forEach(function (n) { outCols.push(n); });
+      } else outCols.push(c);
+    });
+    var NUM = /^-?(0|[1-9]\d{0,9})(\.\d{1,6})?$/;
+    var outRows = rows.map(function (r, ri) {
+      var o = {};
+      cols.forEach(function (c) {
+        var pl = plan[c];
+        if (!pl) { o[c] = r[c]; return; }
+        var po = pl.parsed[ri];
+        pl.keys.forEach(function (k, ki) { var v = po ? po[k] : null; o[pl.names[ki]] = (v && typeof v === "object") ? JSON.stringify(v) : v; });
+      });
+      return o;
+    });
+    var widths = outCols.map(function (c) {
+      var w = String(c).length, allNum = true, any = false;
+      for (var i = 0; i < outRows.length; i++) {
+        var v = outRows[i][c]; if (v == null || v === "") continue; any = true;
+        var t = typeof v === "string" ? v : String(v);
+        if (i < 300 && t.length > w) w = t.length;
+        if (allNum && !(typeof v === "number" || NUM.test(t))) allNum = false;
+      }
+      if (allNum && any) for (var q = 0; q < outRows.length; q++) { var vv = outRows[q][c]; if (vv != null && vv !== "" && typeof vv !== "number") outRows[q][c] = Number(vv); }
+      return Math.max(10, Math.min(60, Math.round(w * 1.15) + 2));
+    });
+    return { cols: outCols, rows: outRows, widths: widths };
+  }
   // Tab-separated text for pasting straight into Google Sheets / Excel. Fields holding a tab,
   // newline or quote are double-quoted (quotes doubled) so each value stays in ONE cell.
   function qeToTsv(cols, rows) {
@@ -15229,7 +15275,7 @@
     // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
     // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
     function dcXlsxStream(out, sheetRows) {
-      var enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
+      var widths = null, enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
       var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
       function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
       function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
@@ -15272,7 +15318,7 @@
       function sheetHead() {
         var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
           "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
-          "<cols><col min='1' max='" + nC + "' width='18' customWidth='1'/></cols><sheetData><row>";
+          "<cols>" + (widths && widths.length === cols.length ? widths.map(function (w, i) { return "<col min='" + (i + 1) + "' max='" + (i + 1) + "' width='" + w + "' customWidth='1'/>"; }).join("") : "<col min='1' max='" + nC + "' width='18' customWidth='1'/>") + "</cols><sheetData><row>";
         for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
         return x + "</row>";
       }
@@ -15287,7 +15333,7 @@
       var chain = Promise.resolve();
       function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
       return {
-        setCols: function (c) { cols = c.slice(); },
+        setCols: function (c, w) { cols = c.slice(); widths = w || null; },
         sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
         // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
         addRows: function (rows) {
@@ -15323,7 +15369,7 @@
                 rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
               }
               rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
-              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='2'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='2'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='0' borderId='0' xfId='0' applyFont='1'/></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
+              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><color rgb='FFFFFFFF'/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='3'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill><fill><patternFill patternType='solid'><fgColor rgb='FF1E293B'/><bgColor indexed='64'/></patternFill></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='2'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='2' borderId='0' xfId='0' applyFont='1' applyFill='1'/></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
               return wholeEntry("[Content_Types].xml", ct + "</Types>")
                 .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
                 .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
@@ -16937,17 +16983,38 @@
       dlBtn2.title = "Download these results as CSV (uses the data already fetched — no extra query).";
       dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
       dlBtn2.onclick = function () { downloadBtn.click(); };
+      var expLbl = document.createElement("label"); expLbl.style.cssText = "font:600 11px system-ui;color:#334155;margin-right:12px;cursor:pointer;display:flex;align-items:center;gap:5px;";
+      var expChk = document.createElement("input"); expChk.type = "checkbox"; expChk.checked = true;
+      expLbl.title = "JSON columns (like an activation record) become one column per field, so you can filter and read them. Applies to Copy for Sheets and the Excel download.";
+      expLbl.appendChild(expChk); expLbl.appendChild(document.createTextNode("Expand JSON into columns"));
+      var xlBtn = document.createElement("button");
+      xlBtn.textContent = "\ud83d\udcd7 Download Excel (.xlsx)";
+      xlBtn.title = "A formatted Excel workbook: bold frozen header, filters, sized columns, real numbers" + (typeof CompressionStream === "function" ? "" : " (needs a newer browser)");
+      xlBtn.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#10b981,#047857);margin-right:8px;";
+      if (typeof CompressionStream !== "function") xlBtn.style.display = "none";
+      xlBtn.onclick = function () {
+        var old = xlBtn.textContent; xlBtn.disabled = true; xlBtn.textContent = "Building…";
+        var pp = qePrepResults(allCols, rows, expChk.checked), chunks = [];
+        var x = dcXlsxStream({ write: function (b) { chunks.push(b); return Promise.resolve(); }, close: function () { return Promise.resolve(); } }, 1000000);
+        x.setCols(pp.cols, pp.widths);
+        x.addRows(pp.rows.map(function (r) { return pp.cols.map(function (c) { return r[c]; }); })).then(function () { return x.close(); }).then(function () {
+          var fnI = document.getElementById("dc-qe-filename"), nm = ((fnI && fnI.value.trim()) || (_lastResult && _lastResult.filename) || "results").replace(/\.csv$/i, "") + ".xlsx";
+          var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); a.download = nm; document.body.appendChild(a); a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          xlBtn.textContent = "\u2713 Saved " + nm;
+        }).catch(function (e) { xlBtn.textContent = "Excel build failed"; xlBtn.title = String(e && e.message || e); }).then(function () { xlBtn.disabled = false; setTimeout(function () { xlBtn.textContent = old; }, 2500); });
+      };
       var shBtn = document.createElement("button");
       shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)";
       shBtn.title = "Copy the rows shown here as tab-separated text (all columns), ready to paste into Google Sheets or Excel.";
       shBtn.style.cssText = "border:1px solid #cbd5e1;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#334155;background:#fff;margin-right:8px;";
       shBtn.onclick = function () {
-        var tsv = qeToTsv(allCols, rows.slice(0, showing)), done = function () { shBtn.textContent = "\u2713 Copied - paste into Sheets"; setTimeout(function () { shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)"; }, 1800); };
+        var pp = qePrepResults(allCols, rows.slice(0, showing), expChk.checked), tsv = qeToTsv(pp.cols, pp.rows), done = function () { shBtn.textContent = "\u2713 Copied - paste into Sheets"; setTimeout(function () { shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)"; }, 1800); };
         try { navigator.clipboard.writeText(tsv).then(done, function () { throw 0; }); }
         catch (ex) { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e2) { shBtn.textContent = "Copy blocked by the browser"; } ta.remove(); }
       };
       var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
-      ftBtns.appendChild(shBtn); ftBtns.appendChild(dlBtn2); footer.appendChild(ftBtns);
+      ftBtns.appendChild(expLbl); ftBtns.appendChild(shBtn); ftBtns.appendChild(xlBtn); ftBtns.appendChild(dlBtn2); footer.appendChild(ftBtns);
 
       // ── Snapshot / compare toolbar (activation-history retain + day-over-day diff) ──
       var snapSql = (_lastResult && _lastResult.sql) || (_lastResult && _lastResult.tableName) || "qe";
