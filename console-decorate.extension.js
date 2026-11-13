@@ -13836,7 +13836,20 @@
   function qeJsonPretty(value) { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } }
 
   // Open the QE JSON modal for a raw cell value (already known to be JSON).
+  // Tab-separated text for pasting straight into Google Sheets / Excel. Fields holding a tab,
+  // newline or quote are double-quoted (quotes doubled) so each value stays in ONE cell.
+  function qeToTsv(cols, rows) {
+    var cell = function (v) {
+      var t = v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
+      return /[\t\r\n"]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    };
+    var out = [cols.map(cell).join("\t")];
+    for (var i = 0; i < rows.length; i++) out.push(cols.map(function (c) { return cell(rows[i][c]); }).join("\t"));
+    return out.join("\n");
+  }
   function openQeJsonModal(rawValue, colName) {
+    // Same readable viewer as the Data Explorer (Table / Tree / Raw, colour-coded, resizable, full screen).
+    try { if (typeof showCellValue === "function") { showCellValue(colName || "value", colName || "value", rawValue, null); return; } } catch (e0) {}
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
     var det = qeJsonDetect(rawValue);
     var value = det.isJson ? det.value : rawValue;
@@ -16654,7 +16667,16 @@
       closeX.title = "Close the results table";
       closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
       closeX.onclick = function () { modal.remove(); };
-      hdr.appendChild(closeX);
+      var fsBtn = document.createElement("button"), _fsOn = false, _boxCss = "";
+      fsBtn.innerHTML = "&#x26F6;"; fsBtn.title = "Full screen / back";
+      fsBtn.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:16px;width:32px;height:32px;border-radius:50%;cursor:pointer;margin-right:8px;";
+      fsBtn.onclick = function () {
+        _fsOn = !_fsOn;
+        if (_fsOn) { _boxCss = box.style.cssText; box.style.cssText = "position:fixed;top:0;left:0;transform:none;width:100vw;max-width:none;height:100vh;max-height:100vh;border-radius:0;background:#fff;display:flex;flex-direction:column;overflow:hidden;"; }
+        else box.style.cssText = _boxCss;
+      };
+      var hdrBtns = document.createElement("div"); hdrBtns.style.cssText = "display:flex;align-items:center;flex-shrink:0;";
+      hdrBtns.appendChild(fsBtn); hdrBtns.appendChild(closeX); hdr.appendChild(hdrBtns);
 
       var note = document.createElement("div");
       note.style.cssText = "padding:8px 20px;background:#fffbeb;border-bottom:1px solid #fcd34d;font-size:11px;color:#92400e;flex-shrink:0;";
@@ -16770,7 +16792,17 @@
       dlBtn2.title = "Download these results as CSV (uses the data already fetched — no extra query).";
       dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
       dlBtn2.onclick = function () { downloadBtn.click(); };
-      footer.appendChild(dlBtn2);
+      var shBtn = document.createElement("button");
+      shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)";
+      shBtn.title = "Copy the rows shown here as tab-separated text (all columns), ready to paste into Google Sheets or Excel.";
+      shBtn.style.cssText = "border:1px solid #cbd5e1;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#334155;background:#fff;margin-right:8px;";
+      shBtn.onclick = function () {
+        var tsv = qeToTsv(allCols, rows.slice(0, showing)), done = function () { shBtn.textContent = "\u2713 Copied - paste into Sheets"; setTimeout(function () { shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)"; }, 1800); };
+        try { navigator.clipboard.writeText(tsv).then(done, function () { throw 0; }); }
+        catch (ex) { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e2) { shBtn.textContent = "Copy blocked by the browser"; } ta.remove(); }
+      };
+      var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
+      ftBtns.appendChild(shBtn); ftBtns.appendChild(dlBtn2); footer.appendChild(ftBtns);
 
       // ── Snapshot / compare toolbar (activation-history retain + day-over-day diff) ──
       var snapSql = (_lastResult && _lastResult.sql) || (_lastResult && _lastResult.tableName) || "qe";
