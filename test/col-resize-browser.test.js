@@ -1,8 +1,9 @@
 // Real-Chrome test (run manually): drag-resize of table columns via dcMakeColsResizable.
 const fs=require("fs"),http=require("http"),cp=require("child_process"),assert=require("assert");
 const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
+const wcss=src.slice(src.indexOf('wst.textContent = "')+19,src.indexOf('"; document.head.appendChild(wst)'));
 const code=src.slice(src.indexOf("  function dcMakeColsResizable"),src.indexOf("  // Formatted Excel (.xlsx) of the loaded rows:"));
-const html="<!doctype html><meta charset=utf-8><body><div id=w><table style='width:100%;border-collapse:collapse'><thead><tr><th>Alpha</th><th>Beta</th><th>Gamma</th></tr></thead><tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table></div><script>"+code+";dcMakeColsResizable(document.getElementById('w'));</script>";
+const html="<!doctype html><meta charset=utf-8><body><style>"+wcss+"</style><div id=w><table style='width:100%;border-collapse:collapse'><thead><tr><th>Alpha</th><th>Beta</th><th>Gamma</th></tr></thead><tbody><tr><td style='white-space:nowrap;max-width:100px;overflow:hidden;text-overflow:ellipsis'>"+"long value ".repeat(30)+"</td><td>2</td><td>3</td></tr></tbody></table></div><script>"+code+";dcMakeColsResizable(document.getElementById('w'));</script>";
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 (async()=>{
  const srv=http.createServer((q,s)=>{s.setHeader("content-type","text/html");s.end(html);});await new Promise(r=>srv.listen(0,r));
@@ -33,6 +34,12 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(Math.abs(w2-(w1-60))<3,"column narrowed by drag");
  await ev("document.querySelectorAll('.dc-col-grip')[1].dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))");
  ok(await ev("document.querySelector('table').style.tableLayout")==="","double-click restores auto-fit");
+ const h0=await ev("document.querySelector('td').getBoundingClientRect().height");
+ await ev("document.getElementById('w').classList.add('dc-wrap')");
+ const h1=await ev("document.querySelector('td').getBoundingClientRect().height");
+ ok(h1>h0*2,"wrap class makes long value multi-line ("+h0+"→"+h1+")");
+ await ev("document.getElementById('w').classList.remove('dc-wrap')");
+ ok(await ev("document.querySelector('td').getBoundingClientRect().height")===h0,"unwrap restores");
  console.log("col-resize-browser: "+n+" checks passed");
  ch.kill();srv.close();process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1);});

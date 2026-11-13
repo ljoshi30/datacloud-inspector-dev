@@ -17096,6 +17096,15 @@
         catch (ex) { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e2) { shBtn.textContent = "Copy blocked by the browser"; } ta.remove(); }
       };
       var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
+      // Wrap text: long cell values break onto several lines instead of "…". Pure CSS on the table wrapper
+      // (rules are !important to beat the cells' inline nowrap/ellipsis), so sort/fill/resizing are untouched.
+      if (!document.getElementById("dc-wrap-css")) { var wst = document.createElement("style"); wst.id = "dc-wrap-css"; wst.textContent = ".dc-wrap td{white-space:normal!important;max-width:none!important;overflow:visible!important;text-overflow:clip!important;word-break:break-word;vertical-align:top;}"; document.head.appendChild(wst); }
+      var wrapLbl = document.createElement("label"); wrapLbl.style.cssText = "font:600 11px system-ui;color:#334155;margin-right:12px;cursor:pointer;display:flex;align-items:center;gap:5px;";
+      var wrapChk = document.createElement("input"); wrapChk.type = "checkbox";
+      wrapChk.onchange = function () { tableWrap.classList.toggle("dc-wrap", wrapChk.checked); };
+      wrapLbl.title = "Wrap long values onto several lines instead of cutting them off with “…”.";
+      wrapLbl.appendChild(wrapChk); wrapLbl.appendChild(document.createTextNode("Wrap text"));
+      ftBtns.appendChild(wrapLbl);
       ftBtns.appendChild(expLbl); ftBtns.appendChild(shBtn); ftBtns.appendChild(xlBtn); ftBtns.appendChild(dlBtn2); footer.appendChild(ftBtns);
 
       // ── Snapshot / compare toolbar (activation-history retain + day-over-day diff) ──
