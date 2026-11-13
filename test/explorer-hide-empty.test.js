@@ -65,3 +65,13 @@ ok(/function showSortHelp\(again, detail\)/.test(src)&&/showSortHelp\("Show sele
 console.log("explorer failed-load detail: "+n+" checks passed");
 ok(/_allErrs\.push\(/.test(src)&&/All attempts: /.test(src),"failed SQL load lists EVERY (table, data space) attempt with its error, not just the first");
 console.log("explorer all-attempts: "+n+" checks passed");
+{ // BEHAVIOR: the page-DOM data space never overrides the one Salesforce's own query used for the object
+  const a1=src.indexOf("  function dcAdoptPageDs("),a2=src.indexOf("  function resolveDataSpace(",a1);
+  ok(a1>0&&a2>a1,"dcAdoptPageDs found");
+  const mk=()=>{const st={_auraSniff:{dataSpace:null},_dsByObject:{}};return {st,f:new Function("_auraSniff","_dsByObject",src.slice(a1,a2)+";return dcAdoptPageDs;")(st._auraSniff,st._dsByObject)}};
+  let m=mk();m.st._dsByObject.Obj="SfRealSpace";m.st._auraSniff.dataSpace="SfRealSpace";m.f("Obj","SpaceTD");
+  ok(m.st._dsByObject.Obj==="SfRealSpace"&&m.st._auraSniff.dataSpace==="SfRealSpace","DOM guess does NOT overwrite the sniffed per-object data space");
+  m=mk();m.f("Obj","FromDom");ok(m.st._dsByObject.Obj==="FromDom"&&m.st._auraSniff.dataSpace==="FromDom","with nothing sniffed, the DOM value is used as a fallback");
+}
+ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sniffer ignores our OWN calls (dc*, dcsql-, dcraw-, dcqe*) so our failed data-space guesses are never learned");
+console.log("explorer data-space source: "+n+" checks passed");

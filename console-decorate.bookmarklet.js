@@ -6944,6 +6944,14 @@
   // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
   // UI placeholder text that must never be treated as a real dataspace name.
   var _badDsNames = /^(Selected|Select|Sort|Filter|Edit|View|Loading|None|All|Default selection)$/i;
+  // The data space read from the page's dropdown is only a FALLBACK. If Salesforce's own query for this object already
+  // told us its data space (sniffed), that wins — never overwrite it with a DOM guess.
+  function dcAdoptPageDs(objectName, ds) {
+    if (!ds) return;
+    if (objectName && _dsByObject[objectName] != null) return;
+    if (_auraSniff && _auraSniff.dataSpace == null) _auraSniff.dataSpace = ds;
+    if (objectName) _dsByObject[objectName] = ds;
+  }
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
     if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
@@ -7092,6 +7100,10 @@
         for (var ai = 0; ai < actions.length; ai++) {
           var act = actions[ai];
           if (!act || !act.params) continue;
+          // Our OWN calls (ids dc-, dcsql-, dcraw-, dcqe*...) are never evidence of what the page uses: learning from them
+          // let our failed data-space guesses become the 'page's' data space, and made our own query look like the
+          // page's sort. Only Salesforce's own traffic teaches the sniffer.
+          if (/^dc/i.test(String(act.id || ""))) continue;
           var q = act.params.query;
           if (q) {
             _auraSniff.template = act;
@@ -11544,7 +11556,7 @@
       // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
-      try { var _preDs3 = readPageDataSpace(); if (_preDs3) { if (_auraSniff) _auraSniff.dataSpace = _preDs3; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs3; } } catch (e) {}
+      try { var _preDs3 = readPageDataSpace(); if (_preDs3) { dcAdoptPageDs(objectName, _preDs3); } } catch (e) {}
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
@@ -13326,10 +13338,7 @@
       // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
       try {
         var _preDs = readPageDataSpace();
-        if (_preDs) {
-          if (_auraSniff) _auraSniff.dataSpace = _preDs;
-          if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs;
-        }
+        if (_preDs) { dcAdoptPageDs(objectName, _preDs); }
       } catch (e) {}
       viewAllBtn.disabled = true;
       var wantRows = (cachedRows && cachedRows.length > 0) ? cachedRows.length : 1000;
@@ -13446,7 +13455,7 @@
       // Restore = repopulate the picker AND open the full-columns table for the saved
       // set (via the one-shot query) — no blank writes to SF's native table.
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
-      try { var _preDs2 = readPageDataSpace(); if (_preDs2) { if (_auraSniff) _auraSniff.dataSpace = _preDs2; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs2; } } catch (e) {}
+      try { var _preDs2 = readPageDataSpace(); if (_preDs2) { dcAdoptPageDs(objectName, _preDs2); } } catch (e) {}
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); showSortHelp("Restore saved"); return; }
         // Same auto-dataspace step as "Show selected columns' data" so Restore works on
