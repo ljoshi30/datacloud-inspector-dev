@@ -6955,8 +6955,14 @@
   // A page-dropdown value is only a GUESS. Salesforce authorizes our queries only after ITS OWN query ran for the
   // object, so a guess must never count as "established" (that skipped the auto-sort and caused the denied errors).
   function dcDsConfirmed(objectName) {
-    if (objectName && _dsByObject[objectName] != null) return !_dsGuess[objectName];
-    return _auraSniff.dataSpace != null && !_auraSniff.dsGuess;
+    // Per-OBJECT only: in an org with several data spaces, the space last used for ANOTHER object proves nothing here.
+    return !!(objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]);
+  }
+  // The last sniffed space is usable for an object only if it was learned for THAT object (or from the Query Editor,
+  // which is not tied to an object). A space learned for a different object is stale and must not be reused.
+  function dcSniffedSpaceApplies(objectName) {
+    if (_auraSniff.dataSpace == null || _badDsNames.test(_auraSniff.dataSpace)) return false;
+    return !_auraSniff.dsLastObj || _auraSniff.dsLastObj === objectName;
   }
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
@@ -6968,8 +6974,10 @@
     var sel = null;
     eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
     if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string" && !_badDsNames.test(v2)) return v2; } catch (e) {} } }
-    // 3) last sniffed space this session (the object currently open usually matches)
-    if (_auraSniff.dataSpace != null && !_badDsNames.test(_auraSniff.dataSpace)) return _auraSniff.dataSpace;
+    // 3) the space currently selected in the page's own Data Space dropdown (read from the component, validated)
+    var _cur = dcReadDsFromComponent(); if (_cur && _cur.name) return _cur.name;
+    // 4) last sniffed space - only if it was learned for THIS object (never one learned for another object)
+    if (dcSniffedSpaceApplies(objectName)) return _auraSniff.dataSpace;
     return "";   // unknown → caller tries candidate spaces (incl. "default")
   }
   // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
@@ -6978,9 +6986,10 @@
   function dataSpaceCandidates(objectName) {
     var out = [], seen = {};
     var add = function (s) { if (s != null && !seen[s]) { seen[s] = 1; out.push(s); } };
-    add(resolveDataSpace(objectName));                 // best guess first (may be "")
-    Object.keys(_dsByObject).forEach(function (k) { add(_dsByObject[k]); });  // any seen space
-    if (_auraSniff.dataSpace != null) add(_auraSniff.dataSpace);
+    // This object's own space, as used by Salesforce's own query for it, is the ONLY candidate: never try other
+    // spaces (a same-named table in another space would silently return the wrong rows).
+    if (objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]) return [_dsByObject[objectName]];
+    add(resolveDataSpace(objectName));
     // Read from page UI as fallback (covers cold-start bookmarklet)
     if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs && _pageDsAuth) add(pageDs); }
     // No name is ever derived from the object name or from page text: only values Salesforce itself provided.
@@ -7110,7 +7119,7 @@
             _auraSniff.template = act;
             _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;   // lets the sort guide notice "the page just ran a query"
             if (q.objectName) _auraSniff.objectName = q.objectName;
-            if (q.selectedDataSpaceName != null) { _auraSniff.dataSpace = q.selectedDataSpaceName; _auraSniff.dsGuess = false; }
+            if (q.selectedDataSpaceName != null) { _auraSniff.dataSpace = q.selectedDataSpaceName; _auraSniff.dsGuess = false; _auraSniff.dsLastObj = q.objectName || null; }
             if (q.objectName && q.selectedDataSpaceName != null) { _dsByObject[q.objectName] = q.selectedDataSpaceName; delete _dsGuess[q.objectName]; }
           }
           // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
@@ -7120,7 +7129,7 @@
           // Capture dataspace from QueryWorkspace.queryDCSql params (Query Editor page)
           // Handle both "dataspace" and "dataSpace" casing
           var capturedDs = act.params.dataspace || act.params.dataSpace || act.params.selectedDataSpaceName || "";
-          if (capturedDs) _auraSniff.dataSpace = capturedDs;
+          if (capturedDs) { _auraSniff.dataSpace = capturedDs; _auraSniff.dsLastObj = null; }
         }
       } catch (e) {}
     }
@@ -8191,7 +8200,8 @@
   // `value` is the API name and must be one of the option values - so nothing is guessed from visible text.
   function dcPickDsFromCombobox(el) {
     var lbl = ""; try { lbl = String(el.label || (el.getAttribute && el.getAttribute("label")) || (el.getAttribute && el.getAttribute("aria-label")) || ""); } catch (e) {}
-    if (!/data\s*-?\s*space/i.test(lbl)) return null;
+    var idHint = ""; try { idHint = String(el.name || (el.getAttribute && (el.getAttribute("name") || el.getAttribute("data-id") || el.getAttribute("data-name"))) || ""); } catch (e) {}
+    if (!/data\s*-?\s*space/i.test(lbl) && !/data[-_ ]?space/i.test(idHint)) return null;   // label (any language) OR the component's own name/id
     var v = ""; try { v = el.value; } catch (e) {}
     if (v && typeof v === "object") { try { v = v.value || v.name || v.apiName || ""; } catch (e) { v = ""; } }
     var opts = null; try { opts = el.options; } catch (e) {}
@@ -8204,7 +8214,14 @@
     }
     return /^[A-Za-z0-9_-]{1,80}$/.test(v) ? { name: v, label: "" } : null;
   }
+  var _dsCompCache = { t: 0, v: null };
   function dcReadDsFromComponent() {
+    // Whole-document walk: cache briefly so hot callers (cache keys, per-query resolves) stay cheap on slow VDIs.
+    var _now = Date.now();
+    if (_now - _dsCompCache.t < 1500) return _dsCompCache.v;
+    var r = dcReadDsFromComponentUncached(); _dsCompCache.t = _now; _dsCompCache.v = r; return r;
+  }
+  function dcReadDsFromComponentUncached() {
     var found = null;
     try {
       eachElement(document, function (el) {

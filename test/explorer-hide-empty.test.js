@@ -80,7 +80,7 @@ ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sn
 { // BEHAVIOR: data space read from the dropdown component's own value/options, never from page text
   const a1=src.indexOf("  function dcPickDsFromCombobox("),a2=src.indexOf("  function readPageDataSpace(",a1);
   ok(a1>0&&a2>a1,"combobox reader found");
-  const run=(els)=>new Function("eachElement","tagOf","document",src.slice(a1,a2)+";return dcReadDsFromComponent();")((d,f)=>els.forEach(e=>f(e)),(e)=>e.tag,{});
+  const run=(els)=>new Function("eachElement","tagOf","document",src.slice(a1,a2)+";return dcReadDsFromComponentUncached();")((d,f)=>els.forEach(e=>f(e)),(e)=>e.tag,{});
   const opts=[{label:"default",value:"default"},{label:"TD Insurance",value:"TD_Insurance_ds"}];
   let r=run([{tag:"lightning-combobox",label:"Data Space",value:"TD_Insurance_ds",options:opts}]);
   ok(r&&r.name==="TD_Insurance_ds"&&r.label==="TD Insurance","returns the option VALUE (API name) and its label, not the visible text");
@@ -91,4 +91,6 @@ ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sn
   ok(!/_guessDs/.test(src)&&!/prefixMatch/.test(src)&&!/Strategy 1: find the "Data Space" label/.test(src)&&!/Strategy 3: look for any element/.test(src),"no data space is derived from page text or the object-name prefix");
 }
 ok(!/var px = fm\[1\]\.match/.test(src)&&!/Generic fallback: strip the FIRST underscore/.test(src)&&!/\.replace\(\/\^\[A-Z0-9\]\{2,6\}_\/, ""\)/.test(src),"no prefix-derived data space, no blind first-token table strip, no prefix-trimmed table label");
+ok(/if \(objectName && _dsByObject\[objectName\] != null && !_dsGuess\[objectName\]\) return \[_dsByObject\[objectName\]\];/.test(src)&&!/Object\.keys\(_dsByObject\)\.forEach/.test(src),"a confirmed per-object space is the ONLY candidate; spaces seen for other objects are never tried");
+ok(/dsLastObj === objectName/.test(src)&&/_auraSniff\.dsLastObj = q\.objectName/.test(src),"a sniffed space learned for another object is not reused");
 console.log("explorer data-space source: "+n+" checks passed");
