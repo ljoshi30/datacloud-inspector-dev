@@ -90,4 +90,5 @@ ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sn
   ok(/if \(_preDs && _pageDsAuth\)/.test(src)&&/_preDs2 && _pageDsAuth/.test(src)&&/_preDs3 && _pageDsAuth/.test(src),"pre-flight adopts the page value only when it is authoritative");
   ok(!/_guessDs/.test(src)&&!/prefixMatch/.test(src)&&!/Strategy 1: find the "Data Space" label/.test(src)&&!/Strategy 3: look for any element/.test(src),"no data space is derived from page text or the object-name prefix");
 }
+ok(!/var px = fm\[1\]\.match/.test(src)&&!/Generic fallback: strip the FIRST underscore/.test(src)&&!/\.replace\(\/\^\[A-Z0-9\]\{2,6\}_\/, ""\)/.test(src),"no prefix-derived data space, no blind first-token table strip, no prefix-trimmed table label");
 console.log("explorer data-space source: "+n+" checks passed");

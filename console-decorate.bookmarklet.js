@@ -8361,7 +8361,7 @@
       var ds = (dataSpace != null && dataSpace !== "") ? dataSpace : (_auraSniff.dataSpace != null && _auraSniff.dataSpace !== "") ? _auraSniff.dataSpace : "";
       // Fallback: derive from table name prefix or page header
       if (!ds) { ds = (typeof readPageDataSpace === "function") ? readPageDataSpace() : ""; }
-      if (!ds) { var fm = sql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); if (fm) { var px = fm[1].match(/^([A-Za-z0-9]{2,6})_/); if (px) ds = px[1]; } }
+      // (no data space is ever derived from the table-name prefix; dataSpaceCandidates supplies concrete values)
       var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
       function mapByMeta(data, metadata) {
         var cols = (metadata || []).map(function (m) { return m && m.name; });
@@ -8583,10 +8583,7 @@
     //    e.g. "TDI_TDI_GI_Individual_Additional__dlm" → "TDI_GI_Individual_Additional__dlm".
     var m = objectName.match(/^([A-Za-z0-9]+)_(\1_.*)$/);
     if (m) add(m[2]);
-    // 3) Generic fallback: strip the FIRST underscore-delimited token (the space
-    //    prefix) once, in case the real table simply carries a space prefix.
-    var us = objectName.indexOf("_");
-    if (us > 0) add(objectName.slice(us + 1));
+    // (the blind "strip the first token" fallback was removed: it could match a DIFFERENT table with that name)
     return out;
   }
   function querySqlAllColumns(objectName, columns, dataSpace, rowLimit) {
@@ -14657,16 +14654,8 @@
     function extractTableName(sql) {
       var m = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
       if (!m) return "query-results";
-      var raw = m[1].replace(/"/g, "");
-      // TDI_Quote__dlm → Quote, TDI_TDI_GI_Unified__dlm → GI_Unified, RH_Profile__dll → Profile
-      var cleaned = raw
-        .replace(/__dlm$|__dll$/i, "")
-        .replace(/^[A-Z0-9]{2,6}_/, "");
-      // If doubled prefix (TDI_TDI_...), strip the second one too
-      if (/^[A-Z0-9]{2,6}_/.test(cleaned) && raw.indexOf(cleaned) > 0) {
-        cleaned = cleaned.replace(/^[A-Z0-9]{2,6}_/, "");
-      }
-      return cleaned || raw;
+      // The real table name exactly as written in the query - never trimmed by assumed prefixes.
+      return m[1].replace(/"/g, "");
     }
 
     function todayStr() {
