@@ -24,5 +24,5 @@ const fn=new Function(...Object.keys(env),code+";return downloadRowsXlsx;")(...O
 (()=>{const f=require("fs").readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
  const c=f.slice(f.indexOf("  function qeToHtmlTable"),f.indexOf("  // Formatted Excel (.xlsx) of the loaded rows"));
  const h=new Function(c+";return qeToHtmlTable;")()(["A","B<"],[{A:"x&y",B:{k:1}}],[10,20]);
- const bad=!/font-weight:bold/.test(h)||!/background:#1e293b/.test(h)||!/x&amp;y/.test(h)||!/B&lt;/.test(h)||!/<col width="70">/.test(h);
+ const bad=!/font-weight:bold/.test(h)||!/background:#1e293b/.test(h)||!/x&amp;y/.test(h)||!/B&lt;/.test(h)||!/<col width="70">/.test(h)||!/white-space:normal/.test(h);
  if(bad){console.error("FAIL html table",h);process.exit(1);} console.log("explorer-xlsx: html table styled+escaped ok");})();

@@ -9366,7 +9366,7 @@
     h += "<tr>" + cols.map(function (c) { return '<th style="' + bd + 'background:#1e293b;color:#ffffff;font-weight:bold;text-align:left;padding:4px 8px;">' + e(c) + "</th>"; }).join("") + "</tr>";
     rows.forEach(function (r, ri) {
       var bg = ri % 2 ? "background:#f1f5f9;" : "";
-      h += "<tr>" + cols.map(function (c) { var v = r[c]; if (v && typeof v === "object") v = JSON.stringify(v); return '<td style="' + bd + bg + 'padding:3px 8px;vertical-align:top;">' + e(v) + "</td>"; }).join("") + "</tr>";
+      h += "<tr>" + cols.map(function (c) { var v = r[c]; if (v && typeof v === "object") v = JSON.stringify(v); return '<td style="' + bd + bg + 'padding:3px 8px;vertical-align:top;white-space:normal;word-wrap:break-word;">' + e(v) + "</td>"; }).join("") + "</tr>";
     });
     return h + "</table>";
   }
