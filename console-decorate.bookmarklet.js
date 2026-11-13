@@ -11577,7 +11577,12 @@
     xlsxBtn.title = "Download the loaded rows as a formatted Excel file: JSON-blob columns are expanded into separate columns, numbers stay numbers, header is bold/frozen/filterable.";
     xlsxBtn.style.cssText = csvBtn.style.cssText.replace(/background:[^;]+;/, "background:#16a34a;").replace(/border:[^;]+;/, "border:1px solid #16a34a;");
     xlsxBtn.onclick = () => downloadRowsXlsx(objectName, fullCols, rows, xlsxBtn);
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(xlsxBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
+    const wrapBtn = document.createElement("button");
+    wrapBtn.textContent = "↵ Wrap";
+    wrapBtn.title = "Wrap long values onto up to 3 lines per row (rows stay a fixed height so scrolling stays smooth). Hover a cell for the full value, or click it to open the viewer.";
+    wrapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    wrapBtn.onclick = () => { const on = wrapBtn.dataset.on !== "1"; wrapBtn.dataset.on = on ? "1" : "0"; wrapBtn.style.background = on ? "#e0f2fe" : "#fff"; wrapBtn.style.borderColor = on ? "#0284c7" : "#cbd5e1"; if (typeof setWrapMode === "function") setWrapMode(on); };
+    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(xlsxBtn); hdr.appendChild(wrapBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
@@ -12148,19 +12153,33 @@
     // it here (height + overflow hidden + nowrap) so a long value can never wrap to two
     // lines and desync the scroll position from the rendered rows.
     const TD_CSS = "box-sizing:border-box;height:31px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    // WRAP mode keeps the fixed-row-height contract (so virtual scrolling stays exact): every row is
+    // WRAP_H tall and each cell shows up to 3 wrapped lines inside a clipped box; the full value is in
+    // the tooltip and the cell viewer. (Variable-height rows would desync the scrollbar and freeze VDI.)
+    const WRAP_H = 66;
+    const TD_WRAP_CSS = "box-sizing:border-box;height:" + WRAP_H + "px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;overflow:hidden;white-space:normal;vertical-align:top;";
+    let _wrapOn = false;
     function buildRowEl(r, ri) {
       const tr = document.createElement("tr");
-      tr.style.cssText = "height:31px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
+      tr.style.cssText = "height:" + (_wrapOn ? WRAP_H : 31) + "px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
       for (let ci = 0; ci < columns.length; ci++) {
         const fn = columns[ci];
         const td = document.createElement("td");
         const val = fmt(r[fn]);
-        td.style.cssText = TD_CSS;
-        td.textContent = val;
+        td.style.cssText = _wrapOn ? TD_WRAP_CSS : TD_CSS;
+        if (_wrapOn && val !== "") {
+          const box = document.createElement("div");
+          box.style.cssText = "max-height:" + (WRAP_H - 14) + "px;overflow:hidden;line-height:17px;word-break:break-word;pointer-events:none;";
+          box.textContent = val; td.appendChild(box);
+        } else td.textContent = val;
         if (val !== "") { td.title = val; td.setAttribute("data-c", ci); }
         tr.appendChild(td);
       }
       return tr;
+    }
+    function setWrapMode(on) {
+      _wrapOn = !!on; ROW_H = on ? WRAP_H : 31; _measured = false;
+      _win.start = _win.end = -1; renderWindow(true);
     }
     // VIRTUAL (windowed) RENDER — the DOM holds ONLY the rows near the viewport, no matter
     // how many rows are loaded. Scrolling up OR down keeps the live DOM at ~one screenful,
@@ -16888,10 +16907,20 @@
       // (data-json index into rows via r/c) so the user can open the JSON modal; the
       // text still copies on click like every other cell. Shared by all 3 render paths.
       var _jsonCellStore = []; // holds raw JSON strings; button carries its index
+      var wrapOn = false;   // 'Wrap text' checkbox: JSON cells render as indented, colour-coded blocks
       function qeCellHtml(val) {
         var raw = val == null ? "" : String(val);
         var copyAttr = raw.replace(/'/g, "&#39;").replace(/</g, "&lt;");
         var base = "padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;";
+        if (wrapOn && qeJsonDetect(val).isJson) {
+          var pj = ""; try { pj = JSON.stringify(qeJsonDetect(val).value, null, 2); } catch (e) { pj = raw; }
+          var cut = pj.length > 30000; if (cut) pj = pj.slice(0, 30000);
+          var colored = pj.split("\n").map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") + (cut ? "\n… (truncated — use the { } button for the full JSON)" : "");
+          var ji2 = _jsonCellStore.push(raw) - 1;
+          return "<td style='" + base + "' title='Click to copy the compact JSON' data-copy='" + copyAttr + "'>" +
+            "<button class='dc-qe-json-btn' data-json='" + ji2 + "' title='View JSON (table / raw)' style='border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:4px;font:700 10px system-ui;padding:0 5px;margin-bottom:3px;cursor:pointer;'>{ } open viewer</button>" +
+            "<pre class='dc-pj'>" + colored + "</pre></td>";
+        }
         if (qeJsonDetect(val).isJson) {
           var ji = _jsonCellStore.push(raw) - 1;
           return "<td style='" + base + "' title='Click to copy · use the { } button to view JSON' data-copy='" + copyAttr + "'>" +
@@ -17098,10 +17127,10 @@
       var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
       // Wrap text: long cell values break onto several lines instead of "…". Pure CSS on the table wrapper
       // (rules are !important to beat the cells' inline nowrap/ellipsis), so sort/fill/resizing are untouched.
-      if (!document.getElementById("dc-wrap-css")) { var wst = document.createElement("style"); wst.id = "dc-wrap-css"; wst.textContent = ".dc-wrap td{white-space:normal!important;max-width:none!important;overflow:visible!important;text-overflow:clip!important;word-break:break-word;vertical-align:top;}"; document.head.appendChild(wst); }
+      if (!document.getElementById("dc-wrap-css")) { var wst = document.createElement("style"); wst.id = "dc-wrap-css"; wst.textContent = ".dc-wrap td{white-space:normal!important;max-width:none!important;overflow:visible!important;text-overflow:clip!important;word-break:break-word;vertical-align:top;}.dc-wrap .dc-pj{white-space:pre-wrap!important;word-break:break-word;margin:0;min-width:340px;max-height:320px;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#334155;}.dc-pj .k{color:#0b5cad;font-weight:600}.dc-pj .s{color:#15803d}.dc-pj .n{color:#c2410c}.dc-pj .b{color:#7c3aed;font-weight:600}.dc-pj .z{color:#94a3b8;font-style:italic}.dc-pj .p{color:#64748b}"; document.head.appendChild(wst); }
       var wrapLbl = document.createElement("label"); wrapLbl.style.cssText = "font:600 11px system-ui;color:#334155;margin-right:12px;cursor:pointer;display:flex;align-items:center;gap:5px;";
       var wrapChk = document.createElement("input"); wrapChk.type = "checkbox";
-      wrapChk.onchange = function () { tableWrap.classList.toggle("dc-wrap", wrapChk.checked); };
+      wrapChk.onchange = function () { wrapOn = wrapChk.checked; tableWrap.classList.toggle("dc-wrap", wrapOn); fillTbodyChunked(rows); };
       wrapLbl.title = "Wrap long values onto several lines instead of cutting them off with “…”.";
       wrapLbl.appendChild(wrapChk); wrapLbl.appendChild(document.createTextNode("Wrap text"));
       ftBtns.appendChild(wrapLbl);
