@@ -6982,17 +6982,9 @@
     Object.keys(_dsByObject).forEach(function (k) { add(_dsByObject[k]); });  // any seen space
     if (_auraSniff.dataSpace != null) add(_auraSniff.dataSpace);
     // Read from page UI as fallback (covers cold-start bookmarklet)
-    var _guessDs = "";
-    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs) { if (_pageDsAuth) add(pageDs); else _guessDs = pageDs; } }
-    // Derive from object name prefix: TDI_Quote__dlm → "TDI" (last resort, but proven
-    // correct for this org pattern where prefix = dataspace). Only use if the prefix is
-    // short (≤6 chars) and alphanumeric — avoids false positives on longer prefixes.
-    if (objectName) {
-      var prefixMatch = objectName.match(/^([A-Za-z0-9]{2,6})_/);
-      if (prefixMatch) add(prefixMatch[1]);
-    }
+    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs && _pageDsAuth) add(pageDs); }
+    // No name is ever derived from the object name or from page text: only values Salesforce itself provided.
     add(""); add("default");
-    if (_guessDs) add(_guessDs);        // text-scraped value: tried only after everything else
     return out;
   }
 

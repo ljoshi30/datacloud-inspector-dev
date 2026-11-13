@@ -88,6 +88,6 @@ ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sn
   ok(run([{tag:"lightning-combobox",label:"Object type",value:"x",options:[{label:"x",value:"x"}]}])===null,"other comboboxes are ignored");
   ok(run([{tag:"div",label:"Data Space",value:"TD"}])===null,"plain elements are ignored");
   ok(/if \(_preDs && _pageDsAuth\)/.test(src)&&/_preDs2 && _pageDsAuth/.test(src)&&/_preDs3 && _pageDsAuth/.test(src),"pre-flight adopts the page value only when it is authoritative");
-  ok(/if \(_guessDs\) add\(_guessDs\)/.test(src),"text-scraped data space is tried only after every other candidate");
+  ok(!/_guessDs/.test(src)&&!/prefixMatch/.test(src),"no data space is derived from page text or the object-name prefix");
 }
 console.log("explorer data-space source: "+n+" checks passed");
