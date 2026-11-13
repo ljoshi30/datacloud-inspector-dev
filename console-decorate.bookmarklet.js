@@ -10938,7 +10938,12 @@
         chip.appendChild(x); el.appendChild(chip);
       }
     })();
-    hdr.appendChild(titleWrap);
+    // Header layout: row 1 = title/info (left) + full-screen & close (always top-right);
+    // row 2 = all the controls in one wrapping group, so nothing is stranded on its own line.
+    titleWrap.style.minWidth = "0";
+    const topBtns = document.createElement("div"); topBtns.style.cssText = "display:flex;align-items:center;gap:6px;flex-shrink:0;align-self:flex-start;";
+    const ctl = document.createElement("div"); ctl.style.cssText = "flex:1 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
+    hdr.appendChild(titleWrap); hdr.appendChild(topBtns); hdr.appendChild(ctl);
 
     // Rows control — request more than the default page (e.g. 2000). We can only honor
     // ≤100 uses the fast CdpDataView query; >100 switches to the Query Editor's SQL
@@ -11160,7 +11165,7 @@
 
     // "Refresh" — force a fresh query, bypassing the in-memory cache. Use this when
     rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
-    hdr.appendChild(rowsWrap);
+    ctl.appendChild(rowsWrap);
 
     // "Hide empty columns" — data is often sparse (many all-null columns), so this
     // trims the table to only columns that have data in the loaded rows. Pure VIEW
@@ -11182,7 +11187,7 @@
       const shown = hideCb.checked ? nonEmptyColumns : fullCols;
       showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
     };
-    if (emptyCount > 0 && _hep.canHide) hdr.appendChild(hideWrap);
+    if (emptyCount > 0 && _hep.canHide) ctl.appendChild(hideWrap);
 
     // ── Column visibility toggle ─────────────────────────────────────────────────
     // Client-side only — hides/shows loaded columns with zero query credits.
@@ -11196,7 +11201,7 @@
     colVizBtn.textContent = "Columns ▾";
     colVizBtn.title = "Show or hide individual columns — no re-query needed.";
     colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
-    hdr.appendChild(colVizBtn);
+    ctl.appendChild(colVizBtn);
 
     // Inject/refresh a <style> block that hides columns via nth-child selectors.
     // Must live outside openColVizPanel so it can be called at initial render too.
@@ -11539,7 +11544,7 @@
       };
     }
 
-    if (changeColsBtn) hdr.appendChild(changeColsBtn);
+    if (changeColsBtn) ctl.appendChild(changeColsBtn);
     // Full screen / restore — same idea as the Activation panel's ⛶. Pure layout: it only changes the
     // panel's size/position (the table re-windows itself via its ResizeObserver); no data is touched.
     const fsBtn = document.createElement("button");
@@ -11582,7 +11587,7 @@
     wrapBtn.title = "Wrap long values onto up to 3 lines per row (rows stay a fixed height so scrolling stays smooth). Hover a cell for the full value, or click it to open the viewer.";
     wrapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
     wrapBtn.onclick = () => { const on = wrapBtn.dataset.on !== "1"; wrapBtn.dataset.on = on ? "1" : "0"; wrapBtn.style.background = on ? "#e0f2fe" : "#fff"; wrapBtn.style.borderColor = on ? "#0284c7" : "#cbd5e1"; if (typeof setWrapMode === "function") setWrapMode(on); };
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(xlsxBtn); hdr.appendChild(wrapBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(fsBtn); hdr.appendChild(closeBtn);
+    ctl.appendChild(sqlBtn); ctl.appendChild(csvBtn); ctl.appendChild(xlsxBtn); ctl.appendChild(wrapBtn); ctl.appendChild(exportAllBtn); topBtns.appendChild(fsBtn); topBtns.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
