@@ -9369,6 +9369,34 @@
     });
     return h + "</table>";
   }
+  // Drag the right edge of any header cell to resize that column; double-click the edge to auto-fit again.
+  function dcMakeColsResizable(root) {
+    root.querySelectorAll("th").forEach(function (th) {
+      if (th.querySelector(".dc-col-grip")) return;
+      if (!th.style.position) th.style.position = "relative";
+      th.style.boxSizing = "border-box";
+      var g = document.createElement("div"); g.className = "dc-col-grip"; g.title = "Drag to resize · double-click to auto-fit";
+      g.style.cssText = "position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
+      g.onclick = function (e) { e.stopPropagation(); };
+      g.ondblclick = function (e) { e.stopPropagation(); var tb = th.closest("table"); if (tb) { tb.style.tableLayout = ""; tb.style.width = "100%"; tb.querySelectorAll("th").forEach(function (t) { t.style.width = t.style.minWidth = t.style.maxWidth = ""; }); } };
+      g.onpointerdown = function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var tbl = th.closest("table");
+        // First drag: freeze every column at its current width and switch to fixed layout so the dragged
+        // column really grows/shrinks (cells clip with an ellipsis) instead of the browser re-balancing.
+        if (tbl && tbl.style.tableLayout !== "fixed") {
+          var ths = Array.prototype.slice.call(tbl.querySelectorAll("th")), ws = ths.map(function (t) { return t.getBoundingClientRect().width; }), tot = 0;
+          ths.forEach(function (t, i) { t.style.width = t.style.minWidth = t.style.maxWidth = ws[i] + "px"; tot += ws[i]; });
+          tbl.style.tableLayout = "fixed"; tbl.style.width = tot + "px";
+        }
+        var x0 = e.clientX, w0 = th.getBoundingClientRect().width, t0 = tbl ? parseFloat(tbl.style.width) || 0 : 0;
+        var mv = function (ev) { var w = Math.max(50, w0 + ev.clientX - x0); th.style.width = th.style.minWidth = th.style.maxWidth = w + "px"; if (tbl && t0) tbl.style.width = (t0 + w - w0) + "px"; };
+        var up = function () { window.removeEventListener("pointermove", mv, true); window.removeEventListener("pointerup", up, true); };
+        window.addEventListener("pointermove", mv, true); window.addEventListener("pointerup", up, true);
+      };
+      th.appendChild(g);
+    });
+  }
   // Formatted Excel (.xlsx) of the loaded rows: JSON-blob columns expanded into one column per key,
   // numbers stored as numbers, bold frozen filtered header, sized columns. Built in memory.
   function downloadRowsXlsx(objectName, columns, rows, btn) {
@@ -16935,6 +16963,7 @@
         cols.forEach(function (c) { thHtml += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'></span></th>"; });
         thHtml += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
         tableWrap.innerHTML = thHtml;
+        dcMakeColsResizable(tableWrap);
         fillTbodyChunked(rows);   // fill rows in non-blocking chunks (VDI-safe), not all at once
         tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
           th.onclick = function () { sortRows(th.getAttribute("data-col")); };
@@ -17016,6 +17045,7 @@
       cols.forEach(function (c) { table += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'> ▲</span></th>"; });
       table += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
       tableWrap.innerHTML = table;
+      dcMakeColsResizable(tableWrap);
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
