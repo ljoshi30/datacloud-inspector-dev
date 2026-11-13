@@ -8275,59 +8275,7 @@
     } catch (e) {}
     if (ds) return ds;
 
-    // Strategy 1: find the "Data Space" label element, read sibling/child for the value
-    eachElement(document, function (el) {
-      if (ds) return;
-      var txt = (el.textContent || "").trim();
-      if (/^Data\s*Space$/i.test(txt) && el.children.length === 0) {
-        // First try: next sibling's value attribute (covers Lightning button triggers)
-        var next = el.nextElementSibling;
-        if (next) {
-          var attrVal = next.getAttribute("data-value") || next.getAttribute("value") || "";
-          if (isValidDs(attrVal)) { ds = attrVal; return; }
-          var val = next.textContent.trim().split("\n")[0].trim();
-          if (val && val.length > 0 && val.length < 40) _pageDataSpaceLabel = val;
-          if (isValidDs(val)) { ds = val; return; }
-        }
-        // Look at parent's text minus the label
-        var parent = el.parentElement;
-        if (parent) {
-          var parts = parent.textContent.trim().split(/\s+/);
-          for (var i = 0; i < parts.length; i++) {
-            if (isValidDs(parts[i]) && !/^data$/i.test(parts[i]) && !/^space$/i.test(parts[i])) { ds = parts[i]; return; }
-          }
-        }
-      }
-    });
-    if (ds) return ds;
-    // Strategy 2: look for "Workspace" label followed by the space name
-    eachElement(document, function (el) {
-      if (ds) return;
-      var txt = (el.textContent || "").trim();
-      if (/^Workspace$/i.test(txt) && el.children.length === 0) {
-        var next = el.nextElementSibling;
-        if (next) {
-          var val = next.textContent.trim().split("\n")[0].trim();
-          if (isValidDs(val)) { ds = val; return; }
-        }
-      }
-    });
-    if (ds) return ds;
-    // Strategy 3: look for any element whose parent contains "Data Space" or "Workspace"
-    // and the element itself is a short valid identifier (common SF header layout)
-    eachElement(document, function (el) {
-      if (ds) return;
-      if (el.children.length > 0) return;
-      var txt = (el.textContent || "").trim();
-      if (!isValidDs(txt)) return;
-      var parent = el.parentElement;
-      if (!parent) return;
-      var pTxt = parent.textContent || "";
-      if (/Data\s*Space|Workspace/i.test(pTxt) && pTxt.indexOf(txt) >= 0) {
-        if (!/^(Data|Space|Workspace|Home|Notes|Files)$/i.test(txt)) { ds = txt; return; }
-      }
-    });
-    if (ds) return ds;
+    // (Former text-scraping strategies removed: a value is returned only when the page itself provides it.)
     // Strategy 4: URL may contain dataspace param
     try {
       var urlParams = new URLSearchParams(location.search);
