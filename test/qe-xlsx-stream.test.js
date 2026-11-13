@@ -35,9 +35,9 @@ function readZip(buf) {
   const s1 = z["xl/worksheets/sheet1.xml"];
   ok((s1.match(/<row>/g) || []).length === 4, "header + 3 data rows on sheet 1");
   ok(/a&amp;b &lt;x&gt;/.test(s1), "XML-escaped text");
-  ok(/<c t='inlineStr'><is><t xml:space='preserve'>001<\/t><\/is><\/c>/.test(s1), "leading-zero id stays text");
+  ok(/<c s='2' t='inlineStr'><is><t xml:space='preserve'>001<\/t><\/is><\/c>/.test(s1), "leading-zero id stays text");
   ok(/<c><v>5<\/v><\/c>/.test(s1) && /<c><v>1.5<\/v><\/c>/.test(s1), "real numbers are numeric cells");
-  ok(/<row><c\/>/.test(s1) || /<c\/><c t='inlineStr'>/.test(s1), "null keeps its column position (empty cell)");
+  ok(/<row><c\/>/.test(s1) || /<c\/><c s='2' t='inlineStr'>/.test(s1), "null keeps its column position (empty cell)");
   ok(/<c t='b'><v>1<\/v><\/c>/.test(s1), "boolean cell");
   ok(/<pane ySplit='1'/.test(z["xl/worksheets/sheet2.xml"]) && /Id/.test(z["xl/worksheets/sheet2.xml"]), "header repeated + frozen on every sheet");
   ok(/autoFilter ref='A1:C4'/.test(s1) && /autoFilter ref='A1:C2'/.test(z["xl/worksheets/sheet3.xml"]), "filter range matches each sheet's rows");
