@@ -10226,7 +10226,7 @@
     if (parsed) m.style.minHeight = "64vh";
     document.body.appendChild(m);
     var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
-    var fsOn = false, view = parsed ? "table" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
+    var fsOn = false, view = parsed ? "raw" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
     function toast(t) { toastEl.textContent = t; toastEl.style.opacity = "1"; clearTimeout(tmr); tmr = setTimeout(function () { toastEl.style.opacity = "0"; }, 1100); }
     function copy(t, msg) { try { navigator.clipboard.writeText(t); toast(msg || "Copied"); } catch (e) { toast("Copy blocked by the browser"); } }
     function hl(s) {   // escape + highlight the search query

@@ -19,7 +19,8 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   let n = 0; const ok = (c, m) => { assert(c, m); n++; };
   await ev("open_()");
   ok(await ev("document.querySelectorAll('.dc-jv').length") === 1, "opens");
-  ok(await ev("Array.from(document.querySelectorAll('.seg button.on')).map(function(b){return b.textContent}).join()") === "Table", "opens on the Table tab by default");
+  ok(await ev("Array.from(document.querySelectorAll('.seg button.on')).map(function(b){return b.textContent}).join()") === "Raw", "opens on the Raw tab by default");
+  await ev("document.querySelector('.seg button[data-v=table]').click()");
   ok(await ev("document.querySelectorAll('.ri').length") === 3, "3 tabs (Z empty)");
   ok(await ev("document.querySelector('.ri.empty .n').textContent") === "0", "empty tab shows 0");
   // search filters rows in Kids tab
@@ -62,7 +63,7 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   ok(await ev("document.querySelectorAll('.seg').length") === 0, "no view switch for text");
   // ---- Data Graph live controls
   ok(await ev("document.querySelectorAll('.sw').length") === 0, "no live controls for ordinary JSON");
-  await ev("openLive()");
+  await ev("openLive()"); await ev("document.querySelector('.seg button[data-v=table]').click()");
   ok(await ev("document.querySelector('.sw').getAttribute('aria-checked')") === "false" && /Stored/.test(await ev("document.querySelector('.st').textContent")), "starts Stored / off");
   await ev("document.querySelector('.sw').click()");
   ok(await ev("document.querySelector('.sw').disabled") === true, "controls disabled while loading");
