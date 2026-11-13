@@ -109,4 +109,17 @@ ok(!/if \(cands\.indexOf\("default"\) < 0\) cands\.push\("default"\)/.test(src)&
   ok(!f([],[E],5000,false).showPrompt&&!f(["a"],[],5000,false).showPrompt,"no prompt without columns or rows");
   ok(/dcSparsePlan\(allColumns \|\| columns, rows/.test(src)&&/runFilter\(_sp\.where\)/.test(src),"prompt is wired to the existing filter query");
 }
+{ // BEHAVIOR: JSON cells open in Table view even when stored double-encoded or as an object
+  const a1=src.indexOf("  function dcParseJsonLoose("),a2=src.indexOf("  function showCellValue(",a1);
+  ok(a1>0&&a2>a1,"dcParseJsonLoose found");
+  const f=new Function(src.slice(a1,a2)+";return dcParseJsonLoose;")();
+  const o={a:[{x:1}]};
+  ok(f(JSON.stringify(o)).value.a[0].x===1,"plain JSON text parses");
+  const d=f(JSON.stringify(JSON.stringify(o)));ok(d&&d.value.a[0].x===1&&d.text===JSON.stringify(o),"double-encoded JSON string is unwrapped (was shown as plain text)");
+  ok(f(JSON.stringify(JSON.stringify(JSON.stringify(o)))).value.a.length===1,"triple-encoded is unwrapped too");
+  ok(f(o).value===o,"an already-parsed object is accepted");
+  ok(f("\uFEFF "+JSON.stringify(o)).value.a.length===1,"BOM/whitespace tolerated");
+  ok(f("hello")===null&&f("12")===null&&f('"just text"')===null&&f("")===null&&f(null)===null&&f("{bad")===null,"non-JSON stays plain text (no false positives)");
+  ok(/var _jl = dcParseJsonLoose\(value\)/.test(src)&&/dcParseJsonLoose\(s\)/.test(src),"Explorer viewer and Query Editor detector both use it");
+}
 console.log("explorer data-space source: "+n+" checks passed");

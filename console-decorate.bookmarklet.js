@@ -10186,12 +10186,27 @@
       ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
     document.head.appendChild(st);
   }
+  // Parse a cell value as JSON. Data Cloud often stores JSON as a JSON-encoded STRING (double-encoded: "\"{...}\""),
+  // or as an already-parsed object; both must open in Table view, not as plain text. Pure.
+  // Returns { value, text } (text = the JSON text that was actually parsed) or null when it is not a JSON object/array.
+  function dcParseJsonLoose(raw) {
+    if (raw == null) return null;
+    if (typeof raw === "object") { try { return { value: raw, text: JSON.stringify(raw) }; } catch (e) { return null; } }
+    var t = String(raw).replace(/^\uFEFF/, "").trim();
+    for (var i = 0; i < 4; i++) {
+      var v; try { v = JSON.parse(t); } catch (e) { return null; }
+      if (v && typeof v === "object") return { value: v, text: t };
+      if (typeof v !== "string") return null;     // number / boolean / null: not a JSON document
+      t = v.replace(/^\uFEFF/, "").trim();         // a JSON string: unwrap one level and try again
+    }
+    return null;
+  }
   function showCellValue(fieldApi, fieldLabel, value, live) {
     closeCellView();
     dcJsonViewerCss();
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
-    var text = value == null ? "" : String(value), parsed = null;
-    try { var p0 = JSON.parse(text); if (p0 && typeof p0 === "object") parsed = p0; } catch (e) {}
+    var text = value == null ? "" : (typeof value === "object" ? (function () { try { return JSON.stringify(value); } catch (e) { return String(value); } })() : String(value)), parsed = null;
+    var _jl = dcParseJsonLoose(value); if (_jl) { parsed = _jl.value; text = _jl.text; }
     if (!parsed) live = null;
     var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv"; m.id = "dc-jv-modal";
     m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
@@ -10349,7 +10364,7 @@
     }
     var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, dtEl = m.querySelector(".dt"), dboxEl = m.querySelector(".dbox"), lastDetail = "", stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
     function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
-    var snap = { Stored: value }, cmpTxt = "";   // Stored starts as the copy already in the table; each load is remembered per mode
+    var snap = { Stored: text }, cmpTxt = "";   // Stored starts as the copy already in the table; each load is remembered per mode
     function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago() + cmpTxt; }
     function compareWithOther(newStr) {
       var other = snap[modeLbl === "Live" ? "Stored" : "Live"];
@@ -13793,10 +13808,10 @@
     var s = String(raw).trim();
     if (s.length < 2) return { isJson: false };
     var c = s.charAt(0);
-    if (c !== "{" && c !== "[") return { isJson: false };
-    var v; try { v = JSON.parse(s); } catch (e) { return { isJson: false }; }
-    if (v === null || typeof v !== "object") return { isJson: false };
-    return { isJson: true, kind: Array.isArray(v) ? "array" : "object", value: v };
+    if (c !== "{" && c !== "[" && c !== '"') return { isJson: false };   // '"' = a JSON-encoded string that may wrap JSON
+    var jl = dcParseJsonLoose(s);
+    if (!jl) return { isJson: false };
+    return { isJson: true, kind: Array.isArray(jl.value) ? "array" : "object", value: jl.value };
   }
   function qeJsonIsPlainObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
   function qeJsonCellStr(v) {
