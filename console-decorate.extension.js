@@ -19910,7 +19910,7 @@ processJSON();
     watchNavigation();
   }
 
-  /* @strip:start dev
+  /*
    * ── "Open in new tab" for Data Cloud LIST rows (generic engine) ──────────────────
    * Problem: DC list rows (DMO, DLO, CI, Segments, Data Streams, …) aren't real links —
    * the clickable label is a custom-event cell (href="javascript:void(0)"), so right-click
@@ -20459,7 +20459,6 @@ processJSON();
       }, 1000);
     }
   } catch (e) {}
-  /* @strip:end */
 
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
   // Lightning SPA: when the tool injects, the URL/route may not be final yet, so the

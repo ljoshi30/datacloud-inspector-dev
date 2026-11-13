@@ -260,7 +260,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
         <div class="acc-body">${desc}</div>
       </details>`;
   }
-  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment", "Activation"])
+  const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment", "Activation", "Open in New Tab"])
     .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
@@ -398,7 +398,8 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "<li>Generates a copyable <b>Mermaid</b> ERD you can paste into Lucidchart, draw.io, GitHub, or any Markdown doc.</li>" +
       "<li>Includes a <b>cardinality legend</b> (one-to-many, etc.) so relationships read clearly.</li>" +
       "<li><b>Searchable entity cards</b> &mdash; look up any object and see everything it connects to.</li>" +
-      "</ul>") +
+      "</ul>");
+  const newTabRow =
     acc("&#128194;", "Open in New Tab (lists &amp; nav)", ["&#10697;"],
       "<p><b>The gap:</b> most Data Cloud list rows and menu items aren&rsquo;t real links &mdash; the name runs a script, so right-click &rarr; &ldquo;Open in new tab&rdquo; does nothing and you end up duplicating the whole tab.</p>" +
       "<ul>" +
@@ -536,7 +537,7 @@ ${includeDev ? "" : `<!-- Cloudflare Web Analytics (PUBLIC install page ONLY —
     <h2>What it does, page by page</h2>
     <p style="font-size:12px;color:var(--muted);margin:0 0 8px">Open any Data Cloud page below and the launcher shows just that page&rsquo;s tools. Each row names the Data Cloud gap it closes &mdash; click to expand. Everything is read-only.</p>
     <div class="chips" style="margin-bottom:10px">${chips}</div>
-    ${sharedRows}${includeDev ? "" : explorerRowPub + segmentRowPub + activationRowPub}${devRows}
+    ${sharedRows}${includeDev ? "" : explorerRowPub + segmentRowPub + activationRowPub}${devRows}${newTabRow}
     <p style="font-size:12px;color:var(--muted);margin:10px 2px 0">Panels are draggable &amp; resizable. The <strong>&times;</strong> on a menu just closes it; click the bookmark again to remove the tool completely.</p>${roadmapNote}
   </div>
   <details class="acc" style="margin-top:16px">
