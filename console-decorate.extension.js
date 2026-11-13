@@ -10587,6 +10587,22 @@
   // at least one loaded row. `autoColumns` = the reduced list to render when the user's Hide-empty choice is ON
   // but this render was handed the full set (reload / filter / reopen / new object) — null when nothing to do.
   // Never hides EVERYTHING (an all-empty result keeps its columns so the table is not blank).
+  // How many loaded rows have NO data in any of the selected columns, and the WHERE that finds rows that do.
+  // Pure. `showPrompt` only when most loaded rows are empty AND more rows exist on the server (so a re-query can help).
+  function dcSparsePlan(cols, rows, serverTotal, totalUnknown) {
+    var n = (rows || []).length, empty = 0;
+    for (var i = 0; i < n; i++) {
+      var r = rows[i], any = false;
+      for (var j = 0; j < cols.length; j++) { var v = r[cols[j]]; if (v !== null && v !== undefined && v !== "") { any = true; break; } }
+      if (!any) empty++;
+    }
+    var moreExist = !!totalUnknown || (serverTotal || 0) > n;
+    return {
+      total: n, emptyRows: empty,
+      showPrompt: n > 0 && cols.length > 0 && empty / n >= 0.5 && moreExist,
+      where: "(" + cols.map(function (c) { return sqlQuoteIdent(c) + " IS NOT NULL"; }).join(" OR ") + ")"
+    };
+  }
   function dcHideEmptyPlan(columns, rows, allColumns, on) {
     var full = allColumns || columns, empty = {};
     full.forEach(function (fn) { empty[fn] = true; });
@@ -11989,6 +12005,25 @@
         + "<div style='font-size:12px;'>This object has <b>0 rows</b>. Columns are shown above; there's no data to display or download.</div>";
       scroll.appendChild(emptyBanner);
     }
+    // The first rows Data Cloud returns can all be empty in the chosen columns, which looks like a broken tool.
+    // Offer a one-click re-query for rows that actually have data (server-side WHERE; no sorting of the table).
+    try {
+      var _sp = dcSparsePlan(allColumns || columns, rows, rows.__serverRowCount, rows.__totalUnknown);
+      var _fsA = _filterState[objectName];
+      if (_sp.showPrompt && !(_fsA && _fsA.active)) {
+        var spBar = document.createElement("div");
+        spBar.style.cssText = "flex-shrink:0;display:flex;align-items:center;gap:10px;padding:7px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;color:#92400e;font-size:12px;";
+        var spTxt = document.createElement("span");
+        spTxt.textContent = _sp.emptyRows.toLocaleString() + " of the " + _sp.total.toLocaleString() + " rows loaded have no data in your selected columns. The table has more rows.";
+        var spBtn = document.createElement("button");
+        spBtn.textContent = "Load rows that have data";
+        spBtn.title = "Re-runs the query with WHERE (any selected column) IS NOT NULL. Read-only; uses Data Cloud credits like any load.";
+        spBtn.style.cssText = "border:1px solid #d97706;background:#f59e0b;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+        spBtn.onclick = function () { spBtn.disabled = true; spBtn.textContent = "Loading…"; runFilter(_sp.where); };
+        spBar.appendChild(spTxt); spBar.appendChild(spBtn);
+        panel.appendChild(spBar);
+      }
+    } catch (e) {}
     panel.appendChild(scroll);
     try { applyColVizCss(); } catch (e) {}   // now the scroll area exists: shows the 'all columns hidden' overlay in the right place
     // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.

@@ -96,4 +96,17 @@ ok(/dsLastObj === objectName/.test(src)&&/_auraSniff\.dsLastObj = q\.objectName/
 ok(/gotNum/.test(src)&&/Count returned no number/.test(src),"Count never shows a fake 0 when no number came back");
 ok(/__totalUnknown = true/.test(src)&&/&& !rows\.__totalUnknown/.test(src),"an unknown server total is never reported as complete");
 ok(!/if \(cands\.indexOf\("default"\) < 0\) cands\.push\("default"\)/.test(src)&&!/dsCandidates\.push\("default"\)/.test(src),"no forced 'default' retry after a confirmed space");
+{ // BEHAVIOR: sparse-rows prompt
+  const a1=src.indexOf("  function dcSparsePlan("),a2=src.indexOf("  function dcHideEmptyPlan(",a1);
+  ok(a1>0&&a2>a1,"dcSparsePlan found");
+  const f=new Function("sqlQuoteIdent",src.slice(a1,a2)+";return dcSparsePlan;")(n=>'"'+n+'"');
+  const E={a:null,b:""},D={a:"x",b:null};
+  let p=f(["a","b"],[E,E,E,D],5000,false);
+  ok(p.showPrompt&&p.emptyRows===3&&p.where==='("a" IS NOT NULL OR "b" IS NOT NULL)',"mostly-empty rows + more on server -> prompt with an OR-IS-NOT-NULL where");
+  ok(!f(["a","b"],[E,E,E,D],4,false).showPrompt,"no prompt when the loaded rows ARE the whole table (nothing more to find)");
+  ok(!f(["a","b"],[D,D,D,E],5000,false).showPrompt,"no prompt when most rows have data");
+  ok(f(["a"],[E,E],0,true).showPrompt,"unknown total counts as 'more may exist'");
+  ok(!f([],[E],5000,false).showPrompt&&!f(["a"],[],5000,false).showPrompt,"no prompt without columns or rows");
+  ok(/dcSparsePlan\(allColumns \|\| columns, rows/.test(src)&&/runFilter\(_sp\.where\)/.test(src),"prompt is wired to the existing filter query");
+}
 console.log("explorer data-space source: "+n+" checks passed");
