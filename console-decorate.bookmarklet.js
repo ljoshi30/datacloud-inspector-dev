@@ -6982,7 +6982,8 @@
     Object.keys(_dsByObject).forEach(function (k) { add(_dsByObject[k]); });  // any seen space
     if (_auraSniff.dataSpace != null) add(_auraSniff.dataSpace);
     // Read from page UI as fallback (covers cold-start bookmarklet)
-    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs) add(pageDs); }
+    var _guessDs = "";
+    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs) { if (_pageDsAuth) add(pageDs); else _guessDs = pageDs; } }
     // Derive from object name prefix: TDI_Quote__dlm → "TDI" (last resort, but proven
     // correct for this org pattern where prefix = dataspace). Only use if the prefix is
     // short (≤6 chars) and alphanumeric — avoids false positives on longer prefixes.
@@ -6991,6 +6992,7 @@
       if (prefixMatch) add(prefixMatch[1]);
     }
     add(""); add("default");
+    if (_guessDs) add(_guessDs);        // text-scraped value: tried only after everything else
     return out;
   }
 
@@ -8190,8 +8192,43 @@
   // The page shows "Data Space" label with the value nearby.
   // A valid dataspace is short, alphanumeric (may have underscores/hyphens), no spaces.
   var _pageDataSpaceLabel = "";
+  // true only when the LAST readPageDataSpace() value came from the dropdown component's own value/options
+  // (authoritative). false = it came from scraping page text (a guess).
+  var _pageDsAuth = false;
+  // AUTHORITATIVE read: the Data Space picker is a combobox whose JS properties hold { options:[{label,value}], value }.
+  // `value` is the API name and must be one of the option values - so nothing is guessed from visible text.
+  function dcPickDsFromCombobox(el) {
+    var lbl = ""; try { lbl = String(el.label || (el.getAttribute && el.getAttribute("label")) || (el.getAttribute && el.getAttribute("aria-label")) || ""); } catch (e) {}
+    if (!/data\s*-?\s*space/i.test(lbl)) return null;
+    var v = ""; try { v = el.value; } catch (e) {}
+    if (v && typeof v === "object") { try { v = v.value || v.name || v.apiName || ""; } catch (e) { v = ""; } }
+    var opts = null; try { opts = el.options; } catch (e) {}
+    if (!v || typeof v !== "string") return null;
+    if (opts && opts.length) {
+      var hit = null;
+      for (var i = 0; i < opts.length; i++) { var o = opts[i]; if (o && (o.value === v || o.name === v || o.apiName === v)) { hit = o; break; } }
+      if (!hit) return null;                      // value not among the component's own options -> not trustworthy
+      return { name: v, label: String(hit.label || "") };
+    }
+    return /^[A-Za-z0-9_-]{1,80}$/.test(v) ? { name: v, label: "" } : null;
+  }
+  function dcReadDsFromComponent() {
+    var found = null;
+    try {
+      eachElement(document, function (el) {
+        if (found) return;
+        var t = tagOf(el);
+        if (t !== "lightning-combobox" && t !== "lightning-base-combobox" && t !== "lightning-select" && t.indexOf("data-space") < 0) return;
+        found = dcPickDsFromCombobox(el);
+      });
+    } catch (e) {}
+    return found;
+  }
   function readPageDataSpace() {
     var ds = "";
+    _pageDsAuth = false;
+    var _auth = dcReadDsFromComponent();
+    if (_auth && _auth.name) { _pageDsAuth = true; if (_auth.label) _pageDataSpaceLabel = _auth.label; return _auth.name; }
     var isValidDs = function (s) {
       if (!s || s.length === 0 || s.length >= 30) return false;
       if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
@@ -11561,7 +11598,7 @@
       // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
-      try { var _preDs3 = readPageDataSpace(); if (_preDs3) { dcAdoptPageDs(objectName, _preDs3); } } catch (e) {}
+      try { var _preDs3 = readPageDataSpace(); if (_preDs3 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs3); } } catch (e) {}
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
@@ -13348,7 +13385,7 @@
       // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
       try {
         var _preDs = readPageDataSpace();
-        if (_preDs) { dcAdoptPageDs(objectName, _preDs); }
+        if (_preDs && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs); }
       } catch (e) {}
       viewAllBtn.disabled = true;
       var wantRows = (cachedRows && cachedRows.length > 0) ? cachedRows.length : 1000;
@@ -13465,7 +13502,7 @@
       // Restore = repopulate the picker AND open the full-columns table for the saved
       // set (via the one-shot query) — no blank writes to SF's native table.
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
-      try { var _preDs2 = readPageDataSpace(); if (_preDs2) { dcAdoptPageDs(objectName, _preDs2); } } catch (e) {}
+      try { var _preDs2 = readPageDataSpace(); if (_preDs2 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs2); } } catch (e) {}
       ensureQueryContext(function (ready) {
         if (!ready) { hideSpinner(); showSortHelp("Restore saved"); return; }
         // Same auto-dataspace step as "Show selected columns' data" so Restore works on

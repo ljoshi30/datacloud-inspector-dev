@@ -77,4 +77,17 @@ console.log("explorer all-attempts: "+n+" checks passed");
   ok(/delete _dsGuess\[q\.objectName\]/.test(src)&&/function establishDataSpace\(objectName, cb\) \{[^]{0,200}?if \(dcDsConfirmed\(objectName\)\)/.test(src),"establishDataSpace skips the auto-sort only for a confirmed space; sniffing clears the guess flag");
 }
 ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sniffer ignores our OWN calls (dc*, dcsql-, dcraw-, dcqe*) so our failed data-space guesses are never learned");
+{ // BEHAVIOR: data space read from the dropdown component's own value/options, never from page text
+  const a1=src.indexOf("  function dcPickDsFromCombobox("),a2=src.indexOf("  function readPageDataSpace(",a1);
+  ok(a1>0&&a2>a1,"combobox reader found");
+  const run=(els)=>new Function("eachElement","tagOf","document",src.slice(a1,a2)+";return dcReadDsFromComponent();")((d,f)=>els.forEach(e=>f(e)),(e)=>e.tag,{});
+  const opts=[{label:"default",value:"default"},{label:"TD Insurance",value:"TD_Insurance_ds"}];
+  let r=run([{tag:"lightning-combobox",label:"Data Space",value:"TD_Insurance_ds",options:opts}]);
+  ok(r&&r.name==="TD_Insurance_ds"&&r.label==="TD Insurance","returns the option VALUE (API name) and its label, not the visible text");
+  ok(run([{tag:"lightning-combobox",label:"Data Space",value:"SpaceTD",options:opts}])===null,"a value that is not one of the component's own options is rejected (no guess)");
+  ok(run([{tag:"lightning-combobox",label:"Object type",value:"x",options:[{label:"x",value:"x"}]}])===null,"other comboboxes are ignored");
+  ok(run([{tag:"div",label:"Data Space",value:"TD"}])===null,"plain elements are ignored");
+  ok(/if \(_preDs && _pageDsAuth\)/.test(src)&&/_preDs2 && _pageDsAuth/.test(src)&&/_preDs3 && _pageDsAuth/.test(src),"pre-flight adopts the page value only when it is authoritative");
+  ok(/if \(_guessDs\) add\(_guessDs\)/.test(src),"text-scraped data space is tried only after every other candidate");
+}
 console.log("explorer data-space source: "+n+" checks passed");
