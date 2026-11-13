@@ -68,10 +68,13 @@ console.log("explorer all-attempts: "+n+" checks passed");
 { // BEHAVIOR: the page-DOM data space never overrides the one Salesforce's own query used for the object
   const a1=src.indexOf("  function dcAdoptPageDs("),a2=src.indexOf("  function resolveDataSpace(",a1);
   ok(a1>0&&a2>a1,"dcAdoptPageDs found");
-  const mk=()=>{const st={_auraSniff:{dataSpace:null},_dsByObject:{}};return {st,f:new Function("_auraSniff","_dsByObject",src.slice(a1,a2)+";return dcAdoptPageDs;")(st._auraSniff,st._dsByObject)}};
+  const mk=()=>{const st={_auraSniff:{dataSpace:null},_dsByObject:{},_dsGuess:{}};const g=new Function("_auraSniff","_dsByObject","_dsGuess",src.slice(a1,a2)+";return {adopt:dcAdoptPageDs,conf:dcDsConfirmed};")(st._auraSniff,st._dsByObject,st._dsGuess);return {st,f:g.adopt,conf:g.conf}};
   let m=mk();m.st._dsByObject.Obj="SfRealSpace";m.st._auraSniff.dataSpace="SfRealSpace";m.f("Obj","SpaceTD");
   ok(m.st._dsByObject.Obj==="SfRealSpace"&&m.st._auraSniff.dataSpace==="SfRealSpace","DOM guess does NOT overwrite the sniffed per-object data space");
   m=mk();m.f("Obj","FromDom");ok(m.st._dsByObject.Obj==="FromDom"&&m.st._auraSniff.dataSpace==="FromDom","with nothing sniffed, the DOM value is used as a fallback");
+  m=mk();m.f("Obj","SpaceTD");ok(m.conf("Obj")===false,"a page-dropdown guess is NOT 'established' (auto-sort must still run)");
+  m=mk();m.st._dsByObject.Obj="Real";m.st._auraSniff.dataSpace="Real";ok(m.conf("Obj")===true,"a Salesforce-sniffed data space IS established");
+  ok(/delete _dsGuess\[q\.objectName\]/.test(src)&&/function establishDataSpace\(objectName, cb\) \{[^]{0,200}?if \(dcDsConfirmed\(objectName\)\)/.test(src),"establishDataSpace skips the auto-sort only for a confirmed space; sniffing clears the guess flag");
 }
 ok(/if \(\/\^dc\/i\.test\(String\(act\.id \|\| ""\)\)\) continue;/.test(src),"sniffer ignores our OWN calls (dc*, dcsql-, dcraw-, dcqe*) so our failed data-space guesses are never learned");
 console.log("explorer data-space source: "+n+" checks passed");

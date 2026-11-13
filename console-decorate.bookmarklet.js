@@ -6949,8 +6949,14 @@
   function dcAdoptPageDs(objectName, ds) {
     if (!ds) return;
     if (objectName && _dsByObject[objectName] != null) return;
-    if (_auraSniff && _auraSniff.dataSpace == null) _auraSniff.dataSpace = ds;
-    if (objectName) _dsByObject[objectName] = ds;
+    if (_auraSniff && _auraSniff.dataSpace == null) { _auraSniff.dataSpace = ds; _auraSniff.dsGuess = true; }
+    if (objectName) { _dsByObject[objectName] = ds; _dsGuess[objectName] = true; }
+  }
+  // A page-dropdown value is only a GUESS. Salesforce authorizes our queries only after ITS OWN query ran for the
+  // object, so a guess must never count as "established" (that skipped the auto-sort and caused the denied errors).
+  function dcDsConfirmed(objectName) {
+    if (objectName && _dsByObject[objectName] != null) return !_dsGuess[objectName];
+    return _auraSniff.dataSpace != null && !_auraSniff.dsGuess;
   }
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
@@ -7075,6 +7081,7 @@
   // The ONLY reliable source is the {objectName, selectedDataSpaceName} pair the page
   // itself sends — so we remember it here, keyed by objectName.
   var _dsByObject = {};
+  var _dsGuess = {};   // objects whose data space came from the page dropdown (unconfirmed guess)
 
   function decodeFormField(v) { try { return decodeURIComponent((v || "").replace(/\+/g, " ")); } catch (e) { return v || ""; } }
 
@@ -7109,8 +7116,8 @@
             _auraSniff.template = act;
             _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;   // lets the sort guide notice "the page just ran a query"
             if (q.objectName) _auraSniff.objectName = q.objectName;
-            if (q.selectedDataSpaceName != null) _auraSniff.dataSpace = q.selectedDataSpaceName;
-            if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
+            if (q.selectedDataSpaceName != null) { _auraSniff.dataSpace = q.selectedDataSpaceName; _auraSniff.dsGuess = false; }
+            if (q.objectName && q.selectedDataSpaceName != null) { _dsByObject[q.objectName] = q.selectedDataSpaceName; delete _dsGuess[q.objectName]; }
           }
           // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
           if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || "")) && String(act.id || "").indexOf("dc-") !== 0) {   // never learn from OUR OWN guesses (ids start "dc-")
@@ -7253,8 +7260,7 @@
   // fall back to the candidate list. Idempotent-safe: clicks twice to restore sort order.
   function establishDataSpace(objectName, cb) {
     // Already known? Done immediately — no page interaction needed.
-    var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-    if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
+    if (dcDsConfirmed(objectName)) { cb(true); return; }
     var fired = false;
     var _dxSortTarget = null;   // the sort control we click; reused for the restore-click
     // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM. The real sort trigger is
@@ -7316,8 +7322,7 @@
     }
     (function poll() {
       if (done) return;
-      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-      var got = ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null);
+      var got = dcDsConfirmed(objectName);
       if (got) {
         // Restore the original sort order once (best-effort), then proceed after a short
         // settle so this restore query can't collide with the caller's upcoming data query.
@@ -13200,8 +13205,12 @@
       if (detail) {
         det = document.createElement("div");
         det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
-        var dt = document.createElement("b"); dt.textContent = "The data load failed. Salesforce said: ";
-        det.appendChild(dt); det.appendChild(document.createTextNode(String(detail).slice(0, 700)));
+        // Not an error the user can act on: keep it out of sight (collapsed) - the guide is the only visible step.
+        det.style.cssText = "margin-bottom:6px;font-size:10px;color:#6b7280;user-select:text;word-break:break-word;";
+        var dsum = document.createElement("details");
+        var dsm = document.createElement("summary"); dsm.textContent = "Technical details"; dsm.style.cssText = "cursor:pointer;";
+        dsum.appendChild(dsm); dsum.appendChild(document.createTextNode(String(detail).slice(0, 700)));
+        det.appendChild(dsum);
         savedNote.appendChild(det);
       }
       _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn, onReady: function () { if (det && det.parentNode) det.parentNode.removeChild(det); } });
