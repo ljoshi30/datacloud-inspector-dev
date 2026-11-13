@@ -9355,6 +9355,20 @@
 
   // Download an arbitrary rows[]×columns[] set as CSV (used by the full-table view,
   // so ALL columns export with data — not just SF's 10).
+  // Styled HTML table for the clipboard: Excel / Google Sheets paste it WITH the bold coloured header,
+  // borders and column widths (plain TSV carries no formatting). Fields are HTML-escaped.
+  function qeToHtmlTable(cols, rows, widths) {
+    var e = function (v) { return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+    var bd = "border:1px solid #cbd5e1;";
+    var h = '<table style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11pt;">';
+    if (widths) { h += "<colgroup>"; cols.forEach(function (c, i) { h += '<col width="' + Math.round((widths[i] || 18) * 7) + '">'; }); h += "</colgroup>"; }
+    h += "<tr>" + cols.map(function (c) { return '<th style="' + bd + 'background:#1e293b;color:#ffffff;font-weight:bold;text-align:left;padding:4px 8px;">' + e(c) + "</th>"; }).join("") + "</tr>";
+    rows.forEach(function (r, ri) {
+      var bg = ri % 2 ? "background:#f1f5f9;" : "";
+      h += "<tr>" + cols.map(function (c) { var v = r[c]; if (v && typeof v === "object") v = JSON.stringify(v); return '<td style="' + bd + bg + 'padding:3px 8px;vertical-align:top;">' + e(v) + "</td>"; }).join("") + "</tr>";
+    });
+    return h + "</table>";
+  }
   // Formatted Excel (.xlsx) of the loaded rows: JSON-blob columns expanded into one column per key,
   // numbers stored as numbers, bold frozen filtered header, sized columns. Built in memory.
   function downloadRowsXlsx(objectName, columns, rows, btn) {
@@ -14753,7 +14767,18 @@
     btnRow.appendChild(runBtn);
     btnRow.appendChild(streamBtn);
     btnRow.appendChild(templatesBtn);
-    btnRow.appendChild(downloadBtn);
+    const xlsxMainBtn = document.createElement("button");
+    xlsxMainBtn.textContent = "⬇ Download Excel";
+    xlsxMainBtn.title = "Formatted Excel: bold coloured header, auto-sized columns, JSON blobs split into separate columns, numbers as numbers.";
+    xlsxMainBtn.style.cssText = downloadBtn.style.cssText.replace(/background:[^;]+;?/, "background:linear-gradient(135deg,#16a34a,#15803d);") + "display:none;margin-left:6px;";
+    xlsxMainBtn.onclick = () => {
+      if (!_lastResult || !_lastResult.data || !_lastResult.data.length) return;
+      var fnI = document.getElementById("dc-qe-filename");
+      var nm = ((fnI && fnI.value.trim()) || _lastResult.filename || "results").replace(/\.(csv|xlsx)$/i, "");
+      downloadRowsXlsx(nm, _lastResult.columns || [], _lastResult.data, xlsxMainBtn);
+    };
+    btnRow.appendChild(downloadBtn); btnRow.appendChild(xlsxMainBtn);
+    new MutationObserver(function () { var d = downloadBtn.style.display === "none" ? "none" : "inline-block"; if (xlsxMainBtn.style.display !== d) xlsxMainBtn.style.display = d; }).observe(downloadBtn, { attributes: true, attributeFilter: ["style"] });
     btnRow.appendChild(viewBtn);
     btnRow.appendChild(infoBtn);
 
@@ -17031,7 +17056,12 @@
       shBtn.style.cssText = "border:1px solid #cbd5e1;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#334155;background:#fff;margin-right:8px;";
       shBtn.onclick = function () {
         var pp = qePrepResults(allCols, rows.slice(0, showing), expChk.checked), tsv = qeToTsv(pp.cols, pp.rows), done = function () { shBtn.textContent = "\u2713 Copied - paste into Sheets"; setTimeout(function () { shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)"; }, 1800); };
-        try { navigator.clipboard.writeText(tsv).then(done, function () { throw 0; }); }
+        try {
+          if (typeof ClipboardItem === "function" && navigator.clipboard && navigator.clipboard.write) {
+            var htm = qeToHtmlTable(pp.cols, pp.rows, pp.widths);
+            navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([htm], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })]).then(done, function () { return navigator.clipboard.writeText(tsv).then(done); });
+          } else navigator.clipboard.writeText(tsv).then(done, function () { throw 0; });
+        }
         catch (ex) { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e2) { shBtn.textContent = "Copy blocked by the browser"; } ta.remove(); }
       };
       var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
