@@ -63,3 +63,5 @@ ok(/_mdl\.style\.display === "none"\) \{ clearSpot\(\); return; \}/.test(src),"s
 console.log("explorer misc: "+n+" checks passed");
 ok(/function showSortHelp\(again, detail\)/.test(src)&&/showSortHelp\("Show selected columns' data", msg\)/.test(src)&&/showSortHelp\("Restore saved", rmsg\)/.test(src),"a failed load shows Salesforce's real error above the connect card (not the card alone)");
 console.log("explorer failed-load detail: "+n+" checks passed");
+ok(/_allErrs\.push\(/.test(src)&&/All attempts: /.test(src),"failed SQL load lists EVERY (table, data space) attempt with its error, not just the first");
+console.log("explorer all-attempts: "+n+" checks passed");

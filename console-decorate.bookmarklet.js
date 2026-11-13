@@ -8626,6 +8626,7 @@
       var combos = [];
       spaces.forEach(function (sp) { names.forEach(function (nm) { combos.push({ tbl: nm, ds: sp }); }); });
 
+      var _allErrs = [];      // every combo's error, shown in the failure message so the real cause is visible
       var _firstErr = null;   // remember the FIRST combo's error (the most meaningful)
       function tryCombo(ci) {
         var c = combos[ci];
@@ -8634,12 +8635,13 @@
         }).catch(function (err) {
           var msg = String(err && err.message || err);
           if (ci === 0 && !_firstErr) _firstErr = "[tried table=\"" + c.tbl + "\" dataspace=" + JSON.stringify(c.ds) + "] " + msg;
+          _allErrs.push(c.tbl + " @ " + JSON.stringify(c.ds) + ": " + msg.replace(/\s+/g, " ").slice(0, 120));
           // Wrong table OR wrong data space (incl. "denied authorization", which means
           // the object isn't in that space / no access there) → try the next combo.
           if (/does not exist|not found|42P01|INVALID_ARGUMENT|invalid|denied authorization|not authorized|no access/i.test(msg) && ci + 1 < combos.length) { tryCombo(ci + 1); return; }
           // Surface the FIRST combo's error (the proven-good combo) — trailing combos
           // are just fallbacks and their errors are noise.
-          reject(new Error("SQL query failed: " + (_firstErr || msg)));
+          reject(new Error("SQL query failed: " + (_firstErr || msg) + (_allErrs.length > 1 ? "  ||  All attempts: " + _allErrs.join(" | ") : "")));
         });
       }
       tryCombo(0);
