@@ -13183,7 +13183,6 @@
       if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
       savedNote.innerHTML = "";
       if (detail) {
-        try { console.warn("[Data360 Inspector] load failed:", detail); } catch (e) {}
         var det = document.createElement("div");
         det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
         var dt = document.createElement("b"); dt.textContent = "The data load failed. Salesforce said: ";

@@ -21,7 +21,7 @@ ok(m.sn.querySeq===3,"each query is counted");
 // ---- wiring: both old plain messages are gone and both surfaces use the guide
 ok(!/One quick step to load your data/.test(src),"old grey 'One quick step' callout removed");
 ok(!/<b>One-time setup:<\/b>/.test(src),"old blue 'One-time setup' hint removed");
-ok(/function showSortHelp\(again\)\s*\{[\s\S]{0,500}dcBuildSortGuide\(/.test(src),"data-space error path uses the guide");
+ok(/function showSortHelp\(again, detail\)\s*\{[\s\S]{0,1400}dcBuildSortGuide\(/.test(src),"data-space error path uses the guide");
 ok(/lockBtn: again === "Restore saved" \? restoreBtn : viewAllBtn/.test(src),"guide locks the ORIGINAL button (no duplicate)");
 ok(!/dc-guide-go/.test(src),"no guide-owned action button anywhere");
 ok(/_sortGuide\.dcStop\(\)/.test(src),"a new guide stops the old one (no stacked locks)");
