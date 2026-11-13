@@ -13196,14 +13196,15 @@
     function showSortHelp(again, detail) {
       if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
       savedNote.innerHTML = "";
+      var det = null;
       if (detail) {
-        var det = document.createElement("div");
+        det = document.createElement("div");
         det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
         var dt = document.createElement("b"); dt.textContent = "The data load failed. Salesforce said: ";
         det.appendChild(dt); det.appendChild(document.createTextNode(String(detail).slice(0, 700)));
         savedNote.appendChild(det);
       }
-      _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn });
+      _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn, onReady: function () { if (det && det.parentNode) det.parentNode.removeChild(det); } });
       savedNote.appendChild(_sortGuide);
     }
 
