@@ -178,7 +178,7 @@ console.log("\n7. source presence (fix wired; QE independent of Data Explorer)")
   ok("already-exported guard warns + saves credits (memo by normalized SQL)", /var _lastStreamExport = null/.test(src) && /_lastStreamExport && _lastStreamExport\.sqlKey === sqlKey/.test(src) && /Already exported/.test(src));
   ok("memo only set on real non-cancelled result (not on cancel/0 rows)", /!res\.cancelled && res\.totalRows > 0[\s\S]{0,80}_lastStreamExport = \{ sqlKey: sqlKey/.test(src));
   ok("viewer-limit heads-up: warns when export exceeds Excel (1,048,576) / Sheets (10M cells/cols)", /var EXCEL_MAX = 1048576, SHEETS_CELLS = 10000000/.test(src) && /sheetsMax = nCols > 0 \? Math\.floor\(SHEETS_CELLS \/ nCols\)/.test(src) && /viewers truncate/.test(src));
-  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ var le = lastEmpty; var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
+  ok("qeStreamFullExport returns columns so Sheets cell-math works", /function result\(\) \{ var le = lastEmpty;[^\n]*?var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
 }
 
 // ── 8. STREAMING full export (no cap, memory-flat to disk) ────────────────────────────
@@ -198,7 +198,7 @@ console.log("\n8. streaming full export present + guarded");
   // BUG FIX: result() must report the REAL cancel state (was hardcoded false → a cancelled
   // partial export looked "complete" and got memoized as a full export, then wrongly warned
   // "already exported, don't re-run"). finishOk runs on both end-of-data AND cancel.
-  ok("stream result() reports the real cancel flag (not hardcoded false)", /function result\(\) \{ var le = lastEmpty; var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
+  ok("stream result() reports the real cancel flag (not hardcoded false)", /function result\(\) \{ var le = lastEmpty;[^\n]*?var exp = [^\n]*?return \{ totalRows: got, cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(src));
   ok("no leftover hardcoded cancelled:false in the stream result", !/cancelled: false, columns: cols/.test(src));
   ok("cancel-state fix synced into the bookmarklet build too", /cancelled: cancelled\(\), expected: exp, incomplete: !!\(exp && got < exp\), lastEmpty: [^\n]*?columns: cols/.test(bm));
   ok("closes the file writer on success AND failure (no leaked handle)", /writer\.close\(\)/.test(src) && /function fail\(/.test(src));
@@ -213,8 +213,8 @@ console.log("\n8. streaming full export present + guarded");
   // when count !== 0 (or count unavailable).
   ok("Export ALL counts before prompting for a file (count-first gate)", /Checking for rows…/.test(src) && /runQeCount\(_preCountSql, ds\)/.test(src));
   ok("Export ALL with 0 rows shows 'Nothing to export' and does NOT open the save dialog", /pc && pc\.ok && pc\.count === 0/.test(src) && /Nothing to export/.test(src) && /return;\s*\/\/ never open the save dialog for an empty result/.test(src));
-  ok("save-picker is gated behind the count (startExportStream called only when not-0)", /startExportStream\(\);\s*\n\s*\}\);/.test(src) && /function startExportStream\(splitOpt\)/.test(src) && src.indexOf("pc.count === 0") < src.indexOf("showSplitChoice(pc.count)") && src.indexOf("showSplitChoice(pc.count)") < src.lastIndexOf("startExportStream();\n        });"));
-  ok("split choice also comes AFTER the 0-row gate and only when the browser has showDirectoryPicker", /canSplit && pc && pc\.ok && pc\.count > EXCEL_ROWS/.test(src) && /typeof window\.showDirectoryPicker === "function"/.test(src));
+  ok("save-picker is gated behind the count (startExportStream called only when not-0)", /startExportStream\(\);\s*\n\s*\}\);/.test(src) && /function startExportStream\(splitOpt\)/.test(src) && src.indexOf("pc.count === 0") < src.indexOf("showSplitChoice(pc.count") && src.indexOf("showSplitChoice(pc.count") < src.lastIndexOf("startExportStream();\n        });"));
+  ok("split choice also comes AFTER the 0-row gate and only when the browser has showDirectoryPicker", /\(canSplit \|\| qeCanXlsx\(\)\) && pc && pc\.ok && pc\.count > EXCEL_ROWS/.test(src) && /typeof window\.showDirectoryPicker === "function"/.test(src));
   // Poll ceilings cut from ~30s to ~9s so a genuinely-empty/0-row table fails fast (reported 35s).
   ok("fetch cold-start poll ceiling reduced to ~9s (FE_MAX_POLL = 6)", /var FE_MAX_POLL = 6;/.test(src));
   ok("stream cold-start poll ceiling reduced to ~9s (MAX_POLL = 6)", /POLL_MS = 1500, MAX_POLL = 6;/.test(src));
@@ -345,6 +345,7 @@ console.log("\n8. streaming full export present + guarded");
       runQeCount: function () { return Promise.resolve({ ok: true, count: 5 }); },
       qeDirectCountSql: function (q) { return null; },
       startExportStream: function () {},
+      qeCanXlsx: function () { return false; },
       // vars the ENCLOSING streamBtn.onclick legitimately declares before goBtn (so the
       // guard flags only TRUE cross-.then leaks, not these in-scope locals):
       sql: 'SELECT * FROM "T__dll"', ds: "DS", tableName: "T__dll", hasLimit: false,
