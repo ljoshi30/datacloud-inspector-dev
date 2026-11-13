@@ -15220,6 +15220,135 @@
     // batch (slow + billed rows processed) and the cursor's 1-hour life (extension path).
     // onProgress(fetched). isCancelled() lets the user stop. Resolves { totalRows, cancelled }.
     // Requires showSaveFilePicker (Chromium). Caller checks qeCanStream() first.
+    // ── STREAMING .xlsx writer (memory-flat, multi-sheet) ──────────────────────────────
+    // Builds a real Excel workbook straight onto a FileSystemWritableFileStream, one sheet per
+    // `sheetRows` data rows (header repeated on each sheet, frozen + bold + filter). Nothing is
+    // held in memory beyond the current batch: every sheet is its own deflate-compressed zip entry
+    // written as the rows arrive; the small workbook/rels parts are appended at the END (zip entry
+    // order is free), when the real sheet count is known. Strings are inline (no shared-string table,
+    // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
+    // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
+    function dcXlsxStream(out, sheetRows) {
+      var enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
+      var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+      function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
+      function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
+      function emit(bytes) { pos += bytes.length; return out.write(bytes); }
+      function colLetter(i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+      function xe(s) { return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+      function cell(v, style) {
+        var s = style ? " s='1'" : "";
+        if (v == null || v === "") return "<c" + s + "/>";
+        if (typeof v === "number" && isFinite(v)) return "<c" + s + "><v>" + v + "</v></c>";
+        if (typeof v === "boolean") return "<c" + s + " t='b'><v>" + (v ? 1 : 0) + "</v></c>";
+        var t = typeof v === "object" ? JSON.stringify(v) : String(v);
+        if (t.length > 32767) t = t.slice(0, 32767);   // Excel's per-cell limit; longer text would corrupt the file
+        return "<c" + s + " t='inlineStr'><is><t xml:space='preserve'>" + xe(t) + "</t></is></c>";
+      }
+      function startEntry(name) {
+        var cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), r = cs.readable.getReader();
+        var e = { name: name, nameB: enc.encode(name), crc: 0xFFFFFFFF, usize: 0, csize: 0, offset: pos, w: w };
+        var h = []; u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0808); u16(h, 8); u16(h, 0); u16(h, 0x21); u32(h, 0); u32(h, 0); u32(h, 0); u16(h, e.nameB.length); u16(h, 0);
+        e.pump = emit(new Uint8Array(h)).then(function () { return emit(e.nameB); }).then(function () {
+          return (function loop() { return r.read().then(function (x) { if (x.done) return; e.csize += x.value.length; return emit(x.value).then(loop); }); })();
+        });
+        return e;
+      }
+      function entryWrite(e, str) {
+        var b = enc.encode(str), c = e.crc;
+        for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8);
+        e.crc = c; e.usize += b.length;
+        if (e.usize > 4000000000) throw new Error("A sheet is too large for one workbook part - use a smaller rows-per-sheet or split CSV files.");
+        return e.w.write(b);
+      }
+      function endEntry(e) {
+        return e.w.close().then(function () { return e.pump; }).then(function () {
+          e.crc = (e.crc ^ 0xFFFFFFFF) >>> 0;
+          var d = []; u32(d, 0x08074b50); u32(d, e.crc); u32(d, e.csize); u32(d, e.usize);
+          entries.push(e); return emit(new Uint8Array(d));
+        });
+      }
+      function wholeEntry(name, text) { var e = startEntry(name); return entryWrite(e, text).then(function () { return endEntry(e); }); }
+      function sheetHead() {
+        var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
+          "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
+          "<cols><col min='1' max='" + nC + "' width='18' customWidth='1'/></cols><sheetData><row>";
+        for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
+        return x + "</row>";
+      }
+      function openSheet() { sheetNo++; rowsInSheet = 0; cur = startEntry("xl/worksheets/sheet" + sheetNo + ".xml"); return entryWrite(cur, sheetHead()); }
+      function closeSheet() {
+        if (!cur) return Promise.resolve();
+        var e = cur; cur = null;
+        var last = colLetter(Math.max(0, cols.length - 1)) + (rowsInSheet + 1);
+        sheetNames.push("Rows " + (((sheetNo - 1) * sheetRows) + 1) + "-" + (((sheetNo - 1) * sheetRows) + rowsInSheet));
+        return entryWrite(e, "</sheetData><autoFilter ref='A1:" + last + "'/></worksheet>").then(function () { return endEntry(e); });
+      }
+      var chain = Promise.resolve();
+      function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
+      return {
+        setCols: function (c) { cols = c.slice(); },
+        sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
+        // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
+        addRows: function (rows) {
+          return serial(function () {
+            var i = 0;
+            function step() {
+              var buf = "";
+              while (i < rows.length) {
+                if (!cur || rowsInSheet >= sheetRows) {
+                  var pend = buf; buf = "";
+                  return Promise.resolve(pend && cur ? entryWrite(cur, pend) : null).then(closeSheet).then(openSheet).then(step);
+                }
+                var r = rows[i++], x = "<row>";
+                for (var k = 0; k < cols.length; k++) x += cell(r[k], false);
+                buf += x + "</row>"; rowsInSheet++;
+              }
+              return buf ? entryWrite(cur, buf) : null;
+            }
+            return step();
+          });
+        },
+        // Finalise: close the open sheet, append workbook parts + central directory, close the file.
+        close: function () {
+          return serial(function () {
+            if (ended) return null; ended = true;
+            var p = cur ? Promise.resolve() : openSheet();   // never produce a workbook with zero sheets
+            return p.then(closeSheet).then(function () {
+              var n = sheetNames.length, ct = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/xl/workbook.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'/><Override PartName='/xl/styles.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'/>";
+              var wb = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets>", rel = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>";
+              for (var s = 1; s <= n; s++) {
+                ct += "<Override PartName='/xl/worksheets/sheet" + s + ".xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'/>";
+                wb += "<sheet name='" + xe(sheetNames[s - 1]) + "' sheetId='" + s + "' r:id='rId" + s + "'/>";
+                rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
+              }
+              rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
+              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='2'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='2'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='0' borderId='0' xfId='0' applyFont='1'/></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
+              return wholeEntry("[Content_Types].xml", ct + "</Types>")
+                .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
+                .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
+                .then(function () { return wholeEntry("xl/_rels/workbook.xml.rels", rel); })
+                .then(function () { return wholeEntry("xl/styles.xml", styles); });
+            }).then(function () {
+              var cdStart = pos, cdSize = 0, chain2 = Promise.resolve();
+              entries.forEach(function (e) {
+                chain2 = chain2.then(function () {
+                  var c = []; u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0808); u16(c, 8); u16(c, 0); u16(c, 0x21); u32(c, e.crc); u32(c, e.csize); u32(c, e.usize); u16(c, e.nameB.length); u16(c, 0); u16(c, 0); u16(c, 0); u16(c, 0); u32(c, 0); u32(c, e.offset);
+                  cdSize += c.length + e.nameB.length;
+                  return emit(new Uint8Array(c)).then(function () { return emit(e.nameB); });
+                });
+              });
+              return chain2.then(function () {
+                var z = []; u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, entries.length); u16(z, entries.length); u32(z, cdSize); u32(z, cdStart); u16(z, 0);
+                return emit(new Uint8Array(z));
+              });
+            }).then(function () { return out.close(); });
+          });
+        }
+      };
+    }
+    function qeCanXlsx() { try { return typeof window.showSaveFilePicker === "function" && typeof CompressionStream === "function" && typeof TextEncoder === "function"; } catch (e) { return false; } }
+
     function qeCanStream() { try { return typeof window.showSaveFilePicker === "function"; } catch (e) { return false; } }
     // `split` (optional, bookmarklet-safe): { dirHandle, partRows, baseName } → ONE continuous scan that is
     // written as several CSV files (part001, part002 …) of at most `partRows` data rows each, every part with
@@ -15229,10 +15358,10 @@
     // have been written is NOT treated as end-of-data (Data Cloud can return an empty page while a later
     // page is still being prepared): the same page is retried a few times, and if it stays empty the
     // result is flagged `incomplete` with the shortfall instead of reporting a clean success.
-    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split, expected) {
+    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split, expected, xl) {
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       return new Promise(function (resolve, reject) {
-        var writer = null, cols = null, got = 0, closed = false;
+        var writer = null, cols = null, got = 0, closed = false, xw = null;   // xw: streaming .xlsx writer when xl = { sheetRows }
         var headerLine = "", partIdx = 0, inPart = 0, partFiles = [];
         var partRows = split ? Math.max(1, split.partRows | 0) : 0;
         var lastEmpty = null;   // what Data Cloud reported on the last empty page (shown if the export ends early)
@@ -15251,12 +15380,13 @@
         // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
         // partial export look "complete" and get memoized as if the whole table was exported
         // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
-        function result() { var le = lastEmpty; var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), lastEmpty: (exp && got < exp) ? le : null, columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "" }; }
+        function result() { var le = lastEmpty; var shN = xw ? xw.sheets() : 0; var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), lastEmpty: (exp && got < exp) ? le : null, columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "", sheets: shN }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
           cols = (metadata || []).map(function (m) { return m && m.name; });
           if (cols.length) {
+            if (xl) { xw.setCols(cols); return; }
             headerLine = cols.map(esc).join(",") + "\n";
             if (split) return;                    // split mode: each part writes its own header when it opens
             return writer.write(headerLine);
@@ -15273,6 +15403,11 @@
             .then(function (w) { writer = w; closed = false; partFiles.push(name); return headerLine ? w.write(headerLine) : undefined; });
         }
         function writeRows(data) {
+          if (xl) {   // Excel workbook: positional rows go to the streaming writer (it rotates sheets)
+            var batchRows = [];
+            for (var q = 0; q < data.length; q++) { var rw = data[q]; if (!Array.isArray(rw)) continue; if (got >= cap) break; batchRows.push(rw); got++; }
+            return batchRows.length ? xw.addRows(batchRows) : Promise.resolve();
+          }
           if (!split) {
             // Build ONE string for the whole batch, write once (fewer awaits), then release it.
             var buf = "";
@@ -15324,7 +15459,7 @@
             });
         }
         (split ? Promise.resolve(null) : openWritable(0)).then(function (w) {
-          writer = w;
+          if (xl) { xw = dcXlsxStream(w, Math.max(1000, Math.min(1048575, xl.sheetRows | 0 || 1000000))); writer = xw; } else writer = w;   // xw.close() finalises a valid workbook even on cancel/failure
           // ── EXTENSION cursor path (efficient — no re-scan) ──
           if (typeof extBridgePresent === "function" && extBridgePresent()) {
             runDcSqlViaBridge(sql, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (first) {
@@ -16446,7 +16581,7 @@
           var EXCEL_ROWS = 1048576;
           var canSplit = false; try { canSplit = typeof window.showDirectoryPicker === "function"; } catch (e) {}
           _expectedRows = (pc && pc.ok && pc.count > 0) ? pc.count : 0;
-          if (canSplit && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count); return; }
+          if ((canSplit || qeCanXlsx()) && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count, canSplit); return; }
           // The browser only opens the save dialog shortly after a click. If the count took longer than
           // that, opening it now would fail ("Must be handling a user gesture"), so ask for one more click.
           var gestureLive = true; try { if (navigator.userActivation) gestureLive = !!navigator.userActivation.isActive; } catch (e) {}
@@ -16463,15 +16598,16 @@
         var rb = document.getElementById("dc-ready-save");
         if (rb) rb.onclick = function () { startExportStream(); };
       }
-      function showSplitChoice(total) {
+      function showSplitChoice(total, canFolder) {
         var DEF = 1000000, MAXP = 1048575;   // 1,048,576 sheet rows minus the header row
         var parts0 = Math.ceil(total / DEF);
         cardBody.innerHTML = ""
           + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Large result: " + total.toLocaleString() + " rows</span></div>"
-          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;'>Excel shows at most <b>1,048,576</b> rows per sheet, so one file this big would be cut off when opened in Excel. You can save it as one file, or split it into several Excel-sized files.</div>"
-          + "<div style='font-size:11px;color:#475569;background:#f8fafc;border-radius:6px;padding:8px 9px;margin-bottom:10px;line-height:1.6;'>Rows per file: <input id='dc-split-rows' type='number' min='1000' max='" + MAXP + "' value='" + DEF + "' style='width:100px;border:1px solid #cbd5e1;border-radius:4px;padding:2px 4px;font:600 11px -apple-system,sans-serif;'> <span id='dc-split-info' style='color:#0369a1;font-weight:600;'></span><br><span style='color:#64748b;'>It is still one pass over the table (no extra credits for splitting). Each file has its own header row. You pick a folder; the files are saved inside a new sub-folder, so nothing is overwritten.</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;'>Excel shows at most <b>1,048,576</b> rows per sheet, so one file this big would be cut off when opened in Excel. Save it as <b>one Excel workbook with several sheets</b> (the data simply continues sheet after sheet), as several CSV files, or as one big CSV.</div>"
+          + "<div style='font-size:11px;color:#475569;background:#f8fafc;border-radius:6px;padding:8px 9px;margin-bottom:10px;line-height:1.6;'>Rows per sheet / file: <input id='dc-split-rows' type='number' min='1000' max='" + MAXP + "' value='" + DEF + "' style='width:100px;border:1px solid #cbd5e1;border-radius:4px;padding:2px 4px;font:600 11px -apple-system,sans-serif;'> <span id='dc-split-info' style='color:#0369a1;font-weight:600;'></span><br><span style='color:#64748b;'>It is still one pass over the table (no extra credits for splitting). Each sheet / file has its own header row. The workbook keeps the header frozen and adds filters; CSV parts are saved inside a new sub-folder of the folder you pick, so nothing is overwritten. For very large exports (millions of rows) CSV files open faster than one huge workbook.</span></div>"
           + "<div style='display:flex;gap:8px;'>"
-          + "<button id='dc-split-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Split into files…</button>"
+          + (qeCanXlsx() ? "<button id='dc-split-xlsx' title='One .xlsx file; every sheet holds up to the rows-per-sheet number. Written straight to disk, so memory stays flat.' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#047857);'>Excel workbook…</button>" : "")
+          + (canFolder ? "<button id='dc-split-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Split into CSV files…</button>" : "")
           + "<button id='dc-split-one' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>One file</button>"
           + "</div>";
         var inp = document.getElementById("dc-split-rows"), info = document.getElementById("dc-split-info");
@@ -16479,14 +16615,17 @@
         function upd() { var n = readN(); info.textContent = "→ " + Math.ceil(total / n).toLocaleString() + " files"; }
         inp.oninput = upd; upd();
         document.getElementById("dc-split-one").onclick = function () { startExportStream(); };
-        document.getElementById("dc-split-go").onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ partRows: n }); };
+        var goB = document.getElementById("dc-split-go"); if (goB) goB.onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ partRows: n }); };
+        var xlB = document.getElementById("dc-split-xlsx"); if (xlB) xlB.onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ xlsx: true, sheetRows: n }); };
       }
       var _expectedRows = 0;
       function startExportStream(splitOpt) {
         var handle, splitCfg = null;
+        var xl = (splitOpt && splitOpt.xlsx) ? { sheetRows: splitOpt.sheetRows } : null;
         var startT = Date.now();
-        var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
-        var pick = splitOpt
+        var opts = xl ? { suggestedName: tableName + "_" + todayStr() + "_full.xlsx", types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] }
+                      : { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
+        var pick = (splitOpt && !xl)
           ? function () {
               return window.showDirectoryPicker({ mode: "readwrite" }).then(function (dir) {
                 var d = new Date(), z = function (n) { return (n < 10 ? "0" : "") + n; };
@@ -16518,7 +16657,7 @@
             if (card.style.display !== "none") renderStreamCard();
           }
           renderStreamCard();
-          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg, _expectedRows);
+          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg, _expectedRows, xl);
         }).then(function (res) {
           streamBtn.disabled = false;
           setExportBusy(false);
@@ -16537,14 +16676,20 @@
           var overSheets = nCols > 0 && res.totalRows > sheetsMax;
           var viewerNote = "";
           var nParts = (res.parts && res.parts.length) || 0;
-          if (nParts) {
+          if (xl && res.sheets) {
+            viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
+              + "\ud83d\udcd7 Saved as one Excel workbook with <b>" + res.sheets + "</b> sheet" + (res.sheets === 1 ? "" : "s") + " of up to <b>" + xl.sheetRows.toLocaleString() + "</b> rows each (sheet names show the row range). The header is repeated, frozen and filterable on every sheet."
+              + (res.cancelled ? "<br><b>Stopped early:</b> the workbook holds the rows written so far." : "")
+              + (nCols > 0 && xl.sheetRows * nCols > SHEETS_CELLS ? "<br>Google Sheets holds ~10M cells per file - use CSV parts or a smaller rows-per-sheet for Sheets." : "")
+              + "</div>";
+          } else if (nParts) {
             var cellsPerPart = res.partRows * nCols;
             viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
               + "📁 Saved in folder <b>" + String(res.folderName).replace(/</g, "&lt;") + "</b>: <b>" + nParts + "</b> file" + (nParts === 1 ? "" : "s") + " (<b>" + res.parts[0] + "</b>" + (nParts > 1 ? " … <b>" + res.parts[nParts - 1] + "</b>" : "") + "), up to " + res.partRows.toLocaleString() + " rows each, in order, each with its own header row."
               + "<br>Every file opens fully in Excel." + (nCols > 0 && cellsPerPart > SHEETS_CELLS ? "<br>Google Sheets holds ~10M cells per file, so use a smaller rows-per-file for Sheets." : "")
               + (res.cancelled ? "<br><b>Stopped early:</b> the last file is partial; the files before it are complete." : "")
               + "</div>";
-          } else if (!res.cancelled && (overExcel || overSheets)) {
+          } else if (!xl && !res.cancelled && (overExcel || overSheets)) {
             viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
               + "📄 The CSV has <b>all " + res.totalRows.toLocaleString() + "</b> rows, but viewers truncate:"
               + "<br>• <b>Excel</b> shows max " + EXCEL_MAX.toLocaleString() + " rows" + (overExcel ? " — <b>this file is larger</b>" : "")
