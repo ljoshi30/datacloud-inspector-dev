@@ -27,3 +27,7 @@ assert(clean("SELECT '--x;' AS a FROM t /* c */ ;")==="SELECT '--x;' AS a FROM t
 assert(/qeFetchExport\(sql, ds, onProgress, isCancelled\) \{\s*sql = qeCleanForRun\(sql\)/.test(src),"wired into fetch");
 assert(/function qeStreamFullExport[^\n]*\n\s*sql = qeCleanForRun\(sql\)/.test(src),"wired into export ALL");
 console.log("qe-clean-sql: 7 checks passed");
+// whitespace hygiene: collapse outside strings, preserve inside strings, drop zero-width/nbsp
+const w=clean("  SELECT a,​ b\n\t FROM   \"T\"  WHERE x = 'a   b\tc'   \n LIMIT 5 ; ");
+assert.strictEqual(w,"SELECT a, b FROM \"T\" WHERE x = 'a   b\tc' LIMIT 5");
+console.log("whitespace trim ok");

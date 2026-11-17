@@ -8227,17 +8227,31 @@
     if (_now - _dsCompCache.t < 1500) return _dsCompCache.v;
     var r = dcReadDsFromComponentUncached(); _dsCompCache.t = _now; _dsCompCache.v = r; return r;
   }
-  function dcReadDsFromComponentUncached() {
-    var found = null;
+  // Every authoritative Data Space picker on the page. A Query Editor workspace can hold several tabs (and
+  // other panels), each with its own picker in the DOM — reading the FIRST match could return a hidden
+  // tab's space, so the query ran against the wrong space (0 rows) while Salesforce's own Run worked.
+  function dcAllDsFromComponents() {
+    var all = [];
     try {
       eachElement(document, function (el) {
-        if (found) return;
         var t = tagOf(el);
         if (t !== "lightning-combobox" && t !== "lightning-base-combobox" && t !== "lightning-select" && t.indexOf("data-space") < 0) return;
-        found = dcPickDsFromCombobox(el);
+        var r = dcPickDsFromCombobox(el); if (!r) return;
+        var vis = false;
+        try {
+          var bb = el.getBoundingClientRect();
+          vis = bb.width > 0 && bb.height > 0 && (typeof el.checkVisibility !== "function" || el.checkVisibility());
+        } catch (e) {}
+        all.push({ name: r.name, label: r.label, visible: vis });
       });
     } catch (e) {}
-    return found;
+    return all;
+  }
+  function dcReadDsFromComponentUncached() {
+    var all = dcAllDsFromComponents();
+    if (!all.length) return null;
+    for (var i = 0; i < all.length; i++) if (all[i].visible) return { name: all[i].name, label: all[i].label };   // the picker the user can see
+    return { name: all[0].name, label: all[0].label };
   }
   function readPageDataSpace() {
     var ds = "";
@@ -15251,6 +15265,21 @@
     // Make the editor text safe to send: drop -- and /* */ comments (string-aware) and trailing semicolons.
     // Without this a trailing ";" defeated the "strip trailing LIMIT" step, so the batch SQL became
     // "... LIMIT 10; LIMIT 10" and a leading comment line was sent along with the query.
+    // Query Editor data space: prefer the space Salesforce's OWN Run Query just used (queryDCSql param) — that run is the
+    // proof the user sees rows; fall back to the picker, then candidates. Fixes "SF shows rows, our tool shows 0" when the
+    // picker read is empty/stale (the workspace header is plain text, not a combobox).
+    function qeResolveDs(sql) {
+      var sniffed = (typeof _auraSniff !== "undefined" && _auraSniff && _auraSniff.dsLastObj == null && _auraSniff.dataSpace) ? String(_auraSniff.dataSpace) : "";
+      if (sniffed) return sniffed;
+      var ds = readPageDataSpace();
+      if (!ds) {
+        var fm = String(sql || "").match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
+        var t = fm ? fm[1].replace(/"/g, "") : "";
+        var c = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(t) : [""];
+        ds = c[0] || "";
+      }
+      return ds;
+    }
     function qeCleanForRun(sql) {
       var s0 = String(sql || ""), out = "", i = 0, n = s0.length, inStr = false;
       while (i < n) {
@@ -15259,6 +15288,8 @@
         if (ch === "'") { inStr = true; out += ch; i++; continue; }
         if (ch === "-" && nx === "-") { while (i < n && s0[i] !== "\n") i++; continue; }
         if (ch === "/" && nx === "*") { i += 2; while (i < n && !(s0[i] === "*" && s0[i + 1] === "/")) i++; i += 2; continue; }
+        if (/[\u200B-\u200D\uFEFF\u2060]/.test(ch)) { i++; continue; }   // zero-width / BOM chars pasted from docs/chat: invisible, but break the parser
+        if (/\s/.test(ch)) { if (out && !/\s$/.test(out)) out += " "; i++; continue; }   // collapse tabs/newlines/nbsp/runs of spaces (outside strings only)
         out += ch; i++;
       }
       return out.replace(/[\s;]+$/, "").replace(/^\s+/, "");
@@ -16322,13 +16353,7 @@
       }
       if (!sql || sql.length < 6) { showGuide(); return; }
       var tableName = extractTableName(sql);
-      var ds = readPageDataSpace();
-      if (!ds) {
-        var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
-        var tableInSql = fromMatch ? fromMatch[1].replace(/"/g, "") : "";
-        var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
-        ds = dsCandidates[0] || "";
-      }
+      var ds = qeResolveDs(sql);
       // Strip SQL comments BEFORE building the count. A leading "-- ..." block (or /* */)
       // is common in shared queries; left in, it produces fragile wrapped SQL like
       // "SELECT COUNT(*) FROM (-- comment\n...)" where a line comment can swallow structure.
@@ -16515,13 +16540,7 @@
       var tableName = extractTableName(sql);
       var preview = sql.length > 120 ? sql.substring(0, 120) + "…" : sql;
 
-      var ds = readPageDataSpace();
-      if (!ds) {
-        var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
-        var tableInSql = fromMatch ? fromMatch[1].replace(/"/g, "") : "";
-        var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
-        ds = dsCandidates[0] || "";
-      }
+      var ds = qeResolveDs(sql);
 
       runBtn.disabled = true; lockExportAll(true); runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
@@ -16586,7 +16605,7 @@
               + "<span style='font:600 14px -apple-system,sans-serif;color:#92400e;'>No results</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Query returned <b>0 rows</b>. Nothing to export.<br>"
               + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span>"
-              + "<div style='margin-top:6px;color:#64748b;font-size:10.5px;font-family:monospace;word-break:break-all;max-height:56px;overflow:auto;background:#f8fafc;border-radius:4px;padding:4px 6px;' title='The exact SQL that was sent'>Sent: " + qeCleanForRun(sql).replace(/\s+/g, " ").slice(0, 400).replace(/</g, "&lt;") + (res.rowsProcessed != null ? "<br>Rows processed: " + res.rowsProcessed : "") + "</div></div>";
+              + "<div style='margin-top:6px;color:#64748b;font-size:10.5px;font-family:monospace;word-break:break-word;max-height:220px;overflow:auto;background:#f8fafc;border-radius:4px;padding:4px 6px;user-select:text;' title='The exact SQL that was sent (full text)'>Data space sent (API name): <b>" + (ds || "(none)") + "</b><br>Sent: " + qeCleanForRun(sql).replace(/\s+/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;") + (res.rowsProcessed != null ? "<br>Rows processed: " + res.rowsProcessed + (res.rowsProcessed > 0 ? " — the query RAN but matched no rows in this data space. If Salesforce shows rows, check the Data Space selected on the tab matches the one above (the same table can hold different rows per space)." : "") : "") + (function () { try { var d = dcAllDsFromComponents(), seen = {}, o = []; d.forEach(function (x) { var k = x.name + (x.visible ? "" : " (hidden)"); if (!seen[k]) { seen[k] = 1; o.push(k); } }); return o.length > 1 ? "<br>Data Space pickers on page: " + o.join(", ") : ""; } catch (e) { return ""; } })() + "</div></div>";
             downloadBtn.style.display = "none";
             return;
           }
@@ -16675,8 +16694,7 @@
         return;
       }
       var tableName = extractTableName(sql);
-      var ds = readPageDataSpace();
-      if (!ds) { var fmm = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i); var tn = fmm ? fmm[1].replace(/"/g, "") : ""; var dc = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tn) : [""]; ds = dc[0] || ""; }
+      var ds = qeResolveDs(sql);
       var hasLimit = /\bLIMIT\s+\d+/i.test(sql);
       card.style.display = "block";
       // ── Already-exported guard (save credits) ──────────────────────────────────────
