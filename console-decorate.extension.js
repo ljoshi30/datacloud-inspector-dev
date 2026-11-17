@@ -15248,7 +15248,23 @@
     // rowsProcessed }. In EXTENSION mode the documented endpoint doesn't expose
     // rowsProcessed, so it defers to the shared exportPaginatedCsv (rowsProcessed=null),
     // exactly like the Count path does.
+    // Make the editor text safe to send: drop -- and /* */ comments (string-aware) and trailing semicolons.
+    // Without this a trailing ";" defeated the "strip trailing LIMIT" step, so the batch SQL became
+    // "... LIMIT 10; LIMIT 10" and a leading comment line was sent along with the query.
+    function qeCleanForRun(sql) {
+      var s0 = String(sql || ""), out = "", i = 0, n = s0.length, inStr = false;
+      while (i < n) {
+        var ch = s0[i], nx = s0[i + 1];
+        if (inStr) { out += ch; if (ch === "'") { if (nx === "'") { out += nx; i += 2; continue; } inStr = false; } i++; continue; }
+        if (ch === "'") { inStr = true; out += ch; i++; continue; }
+        if (ch === "-" && nx === "-") { while (i < n && s0[i] !== "\n") i++; continue; }
+        if (ch === "/" && nx === "*") { i += 2; while (i < n && !(s0[i] === "*" && s0[i + 1] === "/")) i++; i += 2; continue; }
+        out += ch; i++;
+      }
+      return out.replace(/[\s;]+$/, "").replace(/^\s+/, "");
+    }
     function qeFetchExport(sql, ds, onProgress, isCancelled) {
+      sql = qeCleanForRun(sql);
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       // ── Extension path: QE-PRIVATE cursor paging (fully independent of Data Explorer) ──
       // Previously this reused the SHARED exportPaginatedCsv, coupling Query Editor to Data
@@ -15504,6 +15520,7 @@
     // page is still being prepared): the same page is retried a few times, and if it stays empty the
     // result is flagged `incomplete` with the shortfall instead of reporting a clean success.
     function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split, expected, xl) {
+      sql = qeCleanForRun(sql);
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       return new Promise(function (resolve, reject) {
         var writer = null, cols = null, got = 0, closed = false, xw = null;   // xw: streaming .xlsx writer when xl = { sheetRows }
@@ -16568,7 +16585,8 @@
               + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
               + "<span style='font:600 14px -apple-system,sans-serif;color:#92400e;'>No results</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Query returned <b>0 rows</b>. Nothing to export.<br>"
-              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span></div>";
+              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span>"
+              + "<div style='margin-top:6px;color:#64748b;font-size:10.5px;font-family:monospace;word-break:break-all;max-height:56px;overflow:auto;background:#f8fafc;border-radius:4px;padding:4px 6px;' title='The exact SQL that was sent'>Sent: " + qeCleanForRun(sql).replace(/\s+/g, " ").slice(0, 400).replace(/</g, "&lt;") + (res.rowsProcessed != null ? "<br>Rows processed: " + res.rowsProcessed : "") + "</div></div>";
             downloadBtn.style.display = "none";
             return;
           }

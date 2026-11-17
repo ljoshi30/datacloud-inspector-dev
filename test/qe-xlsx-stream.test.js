@@ -58,7 +58,7 @@ function readZip(buf) {
     const eng = src.slice(a, a2) + src.slice(e0, b);
     const bytes = []; const handle = { createWritable: () => Promise.resolve({ write: v => { bytes.push(Buffer.from(v)); return Promise.resolve(); }, close: () => Promise.resolve() }) };
     const rowsAll = []; for (let r = 0; r < 2500; r++) rowsAll.push(["id" + r, r]);
-    const env = { extBridgePresent: () => true, DC_PAGE_SIZE: 1000, window: {}, _auraSniff: {}, dataSpaceCandidates: () => [], dcLearnSpace: () => {},
+    const env = { extBridgePresent: () => true, qeCleanForRun: s => s, DC_PAGE_SIZE: 1000, window: {}, _auraSniff: {}, dataSpaceCandidates: () => [], dcLearnSpace: () => {},
       runDcSqlViaBridge: () => Promise.resolve({ metadata: [{ name: "Id" }, { name: "N" }], data: rowsAll.slice(0, 1000), rowCount: 2500, queryId: "q" }),
       fetchPageViaBridge: (q, off) => Promise.resolve({ data: rowsAll.slice(off, off + 1000) }) };
     const fn = new Function(...Object.keys(env), eng + "; return qeStreamFullExport;")(...Object.values(env));
