@@ -15649,7 +15649,7 @@
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
             .then(function (r) { return r.text(); }).then(function (txt) {
               if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
-              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("Unexpected non-JSON reply from Salesforce (data space \"" + (space || "default") + "\"): " + String(txt || "").replace(/\s+/g, " ").slice(0, 140) + " — if this keeps happening, click SF's Run Query button once, then retry.")); return; }
               var a = j && j.actions && j.actions[0];
               if (!a || a.state !== "SUCCESS") {
                 var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
@@ -15954,7 +15954,7 @@
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
             .then(function (r) { return r.text(); }).then(function (txt) {
               if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first, then retry.")); return; }
-              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("Unexpected non-JSON reply from Salesforce (data space \"" + (space || "default") + "\"): " + String(txt || "").replace(/\s+/g, " ").slice(0, 140) + " — if this keeps happening, click SF's Run Query button once, then retry.")); return; }
               var a = j && j.actions && j.actions[0];
               if (!a || a.state !== "SUCCESS") {
                 var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
@@ -16847,7 +16847,7 @@
             return r;
           }, function (e) {
             lastErr = lastErr || e;
-            if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
+            if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid|non-JSON/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
             throw (i > 0 && lastErr) ? lastErr : e;
           });
         }
@@ -17152,7 +17152,7 @@
               return { r: r, space: spaces[i] };
             }, function (e) {
               firstErr = firstErr || e;
-              if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
+              if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid|non-JSON/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
               throw firstErr;
             });
           }
