@@ -14882,64 +14882,58 @@
     var modal = document.createElement("div"); modal.id = "dc-qe-snap-help";
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
     var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(560px,94vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    box.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(640px,94vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
     var hdr = document.createElement("div");
     hdr.style.cssText = "padding:13px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
     hdr.innerHTML = "<div style='font:700 15px system-ui'>Snapshots &amp; Compare</div>";
     var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
     closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
-    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    closeX.title = "Close"; closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.55;";
     var code = function (t) { return "<code style='background:#eef2ff;color:#4338ca;border-radius:4px;padding:1px 5px;font:600 12px SF Mono,monospace'>" + t + "</code>"; };
     var det = "margin:10px 0 0;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#f8fafc;";
     var sum = "cursor:pointer;font:700 12px system-ui;color:#4338ca;outline:none;";
+    var sec = function (t) { return "<div style='font:700 12px system-ui;margin:14px 0 5px'>" + t + "</div>"; };
     body.innerHTML =
-      // ── the crisp part: 3 lines everyone reads ──
-      // ── WHY this exists: the problem it solves, in plain words ──
-      "<div style='font-size:13px'><b>Why use this?</b> A query only shows you <b>today's</b> result. If you run the same query again later, there's no built-in way to see <b>what changed</b>. This lets you save a result and compare a later run against it, so you can spot exactly what was added, removed, or changed — without eyeballing two exports.</div>"
+      "<div><b>What is this?</b> It shows you <b>what changed</b> between two versions of the same data: which rows are <span style='color:#059669'><b>new</b></span>, which are <span style='color:#dc2626'><b>gone</b></span>, and which were <span style='color:#b45309'><b>edited</b></span> (and exactly which fields). Use it for segment membership, records before/after a job, data-quality checks, or any query result that changes over time.</div>"
 
-      + "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin:10px 0'>"
-      + "Works for <b>any query</b> — any object or table. Handy whenever a result changes over time: audience/segment membership, records before vs after a job, data-quality checks, row counts, config, and so on. If you only ever need the latest result, you can ignore these buttons.</div>"
+      + sec("Two ways to use it")
+      + "<div style='display:flex;gap:10px;flex-wrap:wrap'>"
+      + "<div style='flex:1;min-width:210px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:8px;padding:9px 12px'><b>&#8644; Compare CSVs</b> <span style='color:#4338ca;font-size:11px'>(recommended)</span><br>Pick any two CSV files, older and newer. No row limit. Works for files from teammates or other orgs. Also in the Data Explorer menu.</div>"
+      + "<div style='flex:1;min-width:210px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:8px;padding:9px 12px'><b>Snapshots</b><br>Save a query result, run the same query later, then Compare the screen against the saved copy. Handy for small results (first 2,000 rows).</div></div>"
 
-      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>How it works</div>"
-      + "<div style='font-size:13px'><b>Compare</b> diffs the rows <b>on screen now</b> against a <b>saved snapshot</b> → "
-      + "<span style='color:#059669'>+added</span> / <span style='color:#dc2626'>−removed</span> / <span style='color:#b45309'>~changed</span>. "
-      + "The current result doesn't need saving — just run the query. Save only to keep a run for later.</div>"
+      + sec("In 3 steps (Compare CSVs)")
+      + "<ol style='margin:0;padding-left:20px'>"
+      + "<li>Download the CSV of each run (<b>Fetch &amp; Export</b> or <b>Download CSV</b>).</li>"
+      + "<li>Click <b>Compare CSVs</b> and choose the <b>older</b> file, then the <b>newer</b> one.</li>"
+      + "<li>Click <b>Compare</b>. The key is picked for you; change it only if the result looks wrong.</li></ol>"
 
       + "<div style='background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:9px 12px;margin:12px 0;color:#166534'>"
-      + "<b>Key = how rows are matched between runs.</b> Pick a column with a <b>unique value for each row that stays the same over time</b> — usually an <b>ID</b> or <b>primary-key</b> column.<br>"
-      + "<span style='color:#92400e'>✗ Avoid columns that repeat across rows (like a status or type) or that change when the record changes (like a JSON or hash value) — the tool warns you if your choice looks risky.</span></div>"
+      + "<b>The Key matches a row in the old file to the same row in the new file.</b> It is auto-detected: the best column is one whose value is <b>unique per row and does not change between runs</b> (an ID). If one column is not unique, the tool tries a <b>combination</b> (like OrderId + LineNo).<br>"
+      + "<span style='color:#92400e'>&#10007; Avoid generated values that differ on every run (hashes, new random IDs) and columns that repeat (status, type). If the key changes when a row is edited, that row looks like it was removed and then added instead of changed. The tool warns you and suggests a better key with one click.</span></div>"
 
-      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>Test in 3 steps</div>"
-      + "<ol style='margin:0;padding-left:20px'>"
-      + "<li>Run a query → <b>Save snapshot</b> (name it <code>day1</code>).</li>"
-      + "<li>Later / next run: run the <b>same</b> query again.</li>"
-      + "<li>Pick <code>day1</code> → <b>Compare</b>. Done.</li></ol>"
-      + "<div style='font-size:11px;color:#64748b;margin-top:5px'>Want to see it work right away? Save a snapshot, change one value in your data, run the same query again, then Compare — that row shows up under ~changed.</div>"
+      + sec("Reading the result")
+      + "<ul style='margin:0;padding-left:18px'>"
+      + "<li><b>Changed</b>: same key in both files, but a field differs. Shows only the fields that differ, before and after.</li>"
+      + "<li><b>Added</b>: key only in the newer file. <b>Removed</b>: key only in the older file.</li>"
+      + "<li><b>Duplicates</b> (only if present): rows dropped because their key repeats. This means the key is not unique enough.</li>"
+      + "<li>Use <b>Group</b> to cluster rows (by row, by field, or by any column), <b>Filter</b> to search, <b>Wrap</b> for long text, and <b>Full screen</b> for more room.</li>"
+      + "<li><b>Excel</b> downloads every difference. <b>Copy summary</b> gives a short text you can paste into a ticket or chat.</li></ul>"
 
-      // ── everything else: collapsed, read only if curious ──
-      + "<details style='" + det + "'><summary style='" + sum + "'>Why don't I see my saved snapshot?</summary>"
-      + "<div style='margin-top:7px'>Each snapshot is tied to the <b>query you ran when you saved it</b>. If you change the query in any way — different columns, a different filter, a different row limit, or a different table — it counts as a <b>new query</b>, and only snapshots from that same query appear.<br><br>"
-      + "<b>To compare over time, run the same query each time</b> (same text) and save a snapshot on each run.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Too many changes? Use Options</summary>"
+      + "<div style='margin-top:7px'>Some columns change on every row (a last-modified time, a load timestamp). The tool spots them and offers <b>Ignore these</b> in one click. In <b>Options</b> you can also ignore columns yourself and treat these as equal: <b>upper/lower case</b>, <b>extra spaces</b>, and <b>1 vs 1.0</b>. Nothing is deleted; <b>Reset</b> undoes it. Columns that exist in only one file are listed as new or dropped and do not mark every row as changed.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>How to choose a good Key</summary>"
-      + "<div style='margin-top:7px'>A good key uniquely identifies a row <b>and</b> doesn't change over time.<br><br>"
-      + "If you pick a column whose value changes when the record is edited (such as a JSON or hash value), an edited row will look like it was <b>removed and then added</b>, instead of <b>changed</b>. Keep those as normal columns — then their change shows up correctly under ~changed.<br><br>"
-      + "If two rows share the same key value, the tool keeps the first and warns you (“duplicate key — first kept”), so pick a column that's truly unique.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Snapshots: save, compare, history</summary>"
+      + "<div style='margin-top:7px'>Run a query, click <b>Save snapshot</b> and name it (for example <code>day1</code>). Next time, run the <b>same</b> query, pick <code>day1</code> and click <b>Compare</b>. Up to 5 snapshots are kept per query, newest first. <b>History</b> lists them with row counts and how many rows were added, removed or edited since the previous run.<br><br>"
+      + "<b>Don't see your snapshot?</b> A snapshot belongs to the exact query it was saved from. Change the columns, filter, limit or table and it counts as a new query. Run the same query text each time. Snapshots live in <b>this browser</b> only and are limited to about 5MB; for bigger results use Compare CSVs.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>Keeping several snapshots &amp; comparing</summary>"
-      + "<div style='margin-top:7px'>You can save a snapshot on each run and give each a name (up to 5 are kept per query, newest first). Compare looks at <b>two at a time</b>: the result on screen now vs the <b>one</b> snapshot you pick — so you can compare today against yesterday, or against any earlier saved run.</div></details>"
-
-      + "<details style='" + det + "'><summary style='" + sum + "'>Comparing large results — use Compare CSVs</summary>"
-      + "<div style='margin-top:7px'>Snapshots and on-screen results hold up to the first <b>2,000 rows</b>, and browser storage caps a snapshot at about 5MB. For bigger results, click <b>Download CSV</b> on each run (it saves <b>all</b> rows), then use <b>Compare CSVs</b> to diff any two files with the same added/removed/changed logic — no row limit, and the files work across machines or teammates.</div></details>"
-
-      + "<details style='" + det + "'><summary style='" + sum + "'>Edge cases &amp; limits</summary>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Limits &amp; warnings</summary>"
       + "<ul style='margin:7px 0 0;padding-left:18px'>"
-      + "<li>No key → warns, no diff. Duplicate keys → warns “first kept”.</li>"
-      + "<li>Columns differ between runs → warns which were added/removed.</li>"
-      + "<li>Too big (&gt;~5MB) → tells you the size, doesn't half-save; use Download CSV.</li>"
-      + "<li>No LIMIT → saves all fetched rows (≤49,999); check the “saved N rows” count.</li>"
-      + "<li>Stored in <b>this browser</b> only; clearing browser data removes them.</li></ul></details>";
+      + "<li>Files must have a header row and share at least one column name.</li>"
+      + "<li>If the key repeats, only the first row per key is compared and you are warned.</li>"
+      + "<li>A 150,000-row pair opened in under a second in testing; the screen shows the first 300 to 500 rows per tab, while Excel has all of them.</li>"
+      + "<li>JSON columns show only the paths that differ, not the whole value.</li>"
+      + "<li>Nothing is uploaded: files are read in your browser only.</li></ul></details>";
     box.appendChild(body);
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
@@ -14974,16 +14968,16 @@
     };
     body.innerHTML =
       "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin-bottom:12px'>"
-      + "Pick two CSV files (for example, two <b>Download CSV</b> exports of the same query from different runs). This shows what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span>, and <span style='color:#b45309'>changed</span>. No row limit — good for large results.</div>"
-      + mkFileRow("Older file", "(the earlier run)")
+      + "Choose an <b>older</b> and a <b>newer</b> CSV (for example, two exports of the same query). You will see what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span> and <span style='color:#b45309'>changed</span>. The key is picked for you. Files stay in your browser; nothing is uploaded.</div>"
+      + mkFileRow("1. Older file", "(the earlier run)")
       + "<input type='file' id='dc-csv-old' title='Choose the OLDER export (the baseline, before)' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-old-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
-      + mkFileRow("Newer file", "(the later run)")
+      + mkFileRow("2. Newer file", "(the later run)")
       + "<input type='file' id='dc-csv-new' title='Choose the NEWER export (after) to compare against the older one' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-new-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
       + "<div style='display:flex;align-items:center;gap:6px;margin:4px 0 2px'><span style='font:700 12px system-ui'>Key column:</span>"
       + "<select id='dc-csv-key' title='Column used to match a row in the old file with the same row in the new file. Must be unique and unchanged between runs. Auto-picked when possible.' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
-      + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>The column that uniquely identifies a row (usually an ID). Rows are matched by this between the two files.</div>"
+      + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>Matches each row in the old file to the same row in the new file. Best: a unique ID that does not change between runs. Auto-picked when possible; you can change it.</div>"
       + "<div id='dc-csv-msg' style='font-size:11px;color:#b45309;min-height:14px;margin-bottom:8px'></div>"
       + "<button id='dc-csv-go' title='Compare the two files: shows Changed / Added / Removed rows' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
 

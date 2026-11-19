@@ -261,7 +261,7 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       </details>`;
   }
   const chips = ["DLO &rarr; DMO Mapping Canvas", "Data Stream", "DLO", "DMO"].concat(includeDev ? [] : ["Data Explorer", "Segment", "Activation", "Open in New Tab"])
-    .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
+    .concat(includeDev ? ["Data Graph", "Formula fields", "Identity Resolution", "Data Explorer", "Query Editor", "Compare CSVs", "Segment", "Activation", "Data Space Filters", "Data Transform", "Data Model (ERD)", "Open in New Tab"] : [])
     .map(c => `<span class="chip">${c}</span>`).join("");
 
   const sharedRows =
@@ -366,6 +366,18 @@ function makeHtml(hrefSafe, includeDev, buildId) {
       "</ul>" +
       "<span class=\"gi\">Saved column choices stay in your own browser (per org, cleared after 90 days). Nothing is written back to Salesforce.</span>") +
     qeAccordion +
+    acc("&#8644;", "Compare CSVs", ["Added", "Removed", "Changed", "Auto key", "Excel"],
+      "<p><b>The gap:</b> when a result changes between two runs (segment members, records before/after a job, a data-quality check), the only way to see <b>what</b> changed is to scan two exports by eye.</p>" +
+      "<p>Pick an <b>older</b> and a <b>newer</b> CSV and get the differences, sorted into tabs:</p>" +
+      "<ul>" +
+      "<li><b>Changed</b> &mdash; same row in both files, but a field differs. Shows only the fields that differ, before and after (for JSON columns, only the paths that differ).</li>" +
+      "<li><b>Added</b> / <b>Removed</b> &mdash; rows that exist only in the newer / older file.</li>" +
+      "<li><b>Duplicates</b> &mdash; appears only when the matching column repeats, so you know the match is unreliable.</li>" +
+      "</ul>" +
+      "<p><b>Rows are matched by a key</b>, and the key is <b>picked for you</b> (a unique column that does not change between runs, or a combination such as OrderId + LineNo). If a better key exists you get a one-click suggestion.</p>" +
+      "<p><b>Make it readable:</b> group by row, field or any column; filter; wrap long text; full screen. If a column changes on every row (a last-modified time) it is flagged with a one-click <b>Ignore</b>. <b>Options</b> also ignore upper/lower case, extra spaces and 1 vs 1.0.</p>" +
+      "<p><b>Take it with you:</b> <b>Excel</b> downloads every difference (Type, Key, Field, Before, After). <b>Copy summary</b> gives a short text for a ticket or chat. Saved <b>snapshots</b> and a <b>History</b> view do the same for results kept in the browser.</p>" +
+      "<span class=\"gi\">Find it in the Query Editor toolbar (<b>&#8644; Compare CSVs</b>) and the Data Explorer menu. Files are read in your browser only; nothing is uploaded and nothing is written to Salesforce.</span>") +
     acc("&#127937;", "Segment", ["Export Rules", "API Names", "Container Path"],
       "<p><b>The gap:</b> the segment builder shows rules by friendly <b>label</b> &mdash; but the same label can mean different fields on different objects, so you can&rsquo;t be sure which field a rule actually targets. The <b>API name</b> makes it exact &mdash; and there&rsquo;s no way to take the rules with you.</p>" +
       "<ul>" +
@@ -683,6 +695,7 @@ verifyHtml(pubHtml, pub.bmLoader, "public");
   const forbidden = [
     [/acc-nm">Query Editor</, "Query Editor accordion row (stripped from public)"],
     [/acc-nm">Data Transform</, "Data Transform accordion row (stripped from public)"],
+    [/acc-nm">Compare CSVs</, "Compare CSVs accordion row (dev-only, stripped from public)"],
     [/Data Model \(ERD\)/, "Data Model / ERD (dev-only, stripped from public)"],
     [/acc-nm">Data Graph</, "Data Graph accordion row (dev-only, stripped from public)"],
     [/chip">Data Graph</, "Data Graph chip (dev-only, stripped from public)"],
