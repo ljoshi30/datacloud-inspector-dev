@@ -7092,6 +7092,19 @@
   var _dsByObject = {};
   var _dsGuess = {};   // objects whose data space came from the page dropdown (unconfirmed guess)
 
+  // Object names (DLO/DMO/CI) seen in Salesforce's OWN /aura responses as the user browses
+  // (object lists, Query Editor tree, mapping pages…). There is no listing API we can call from a
+  // bookmarklet, so this passive, read-only harvest is how the Helpful Queries table list learns real
+  // objects. Capped + size-guarded + fully try/caught so it can never affect the page.
+  var _dcObjSeen = {}, _dcObjSeenN = 0;
+  function dcHarvestObjects(text) {
+    try {
+      if (!text || text.length > 3000000 || _dcObjSeenN > 3000) return;
+      var m = String(text).match(/\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/g);
+      if (!m) return;
+      for (var i = 0; i < m.length && _dcObjSeenN <= 3000; i++) if (!_dcObjSeen[m[i]]) { _dcObjSeen[m[i]] = 1; _dcObjSeenN++; }
+    } catch (e) {}
+  }
   function decodeFormField(v) { try { return decodeURIComponent((v || "").replace(/\+/g, " ")); } catch (e) { return v || ""; } }
 
   // Pull the aura.* credentials + query params out of a captured x-www-form-urlencoded body.
@@ -7157,7 +7170,12 @@
           var url = (typeof input === "string") ? input : (input && input.url) || "";
           if (/\/aura/i.test(url) && init && init.body) absorbAuraForm(init.body);
         } catch (e) {}
-        return of.apply(this, arguments);
+        var fp = of.apply(this, arguments);
+        try {
+          var fu = (typeof input === "string") ? input : (input && input.url) || "";
+          if (/\/aura/i.test(fu) && fp && fp.then) fp.then(function (r) { try { r.clone().text().then(dcHarvestObjects, function () {}); } catch (e) {} }, function () {});
+        } catch (e) {}
+        return fp;
       };
     } catch (e) {}
     try {
@@ -7165,6 +7183,7 @@
       XMLHttpRequest.prototype.open = function (m, u) { this.__dcU = u; return oo.apply(this, arguments); };
       XMLHttpRequest.prototype.send = function (b) {
         try { if (/\/aura/i.test(String(this.__dcU || "")) && b) absorbAuraForm(b); } catch (e) {}
+        try { if (/\/aura/i.test(String(this.__dcU || ""))) this.addEventListener("load", function () { try { if (!this.responseType || this.responseType === "text") dcHarvestObjects(this.responseText); } catch (e) {} }); } catch (e) {}
         return os.apply(this, arguments);
       };
     } catch (e) {}
@@ -16607,14 +16626,21 @@
       var RECENT = "dcGuidedRecentTables";
       function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
       function remember(t) { try { if (!t) return; var r = recent().filter(function (x) { return x !== t; }); r.unshift(t); localStorage.setItem(RECENT, JSON.stringify(r.slice(0, 15))); } catch (e) {} }
+      // Returns [{n: name, ds: data space or ""}] — current data space first. Sources, best first:
+      // (1) objects Salesforce itself queried (confirmed data space), (2) object names seen in Salesforce's own
+      // responses while browsing, (3) names visible on this page / in the editor, (4) recent, (5) standard IDR tables.
+      function curDs() { try { return String(qeResolveDs("") || ""); } catch (e) { return ""; } }
       function tableNames() {
         if (st.tables) return st.tables;
-        var seen = {}, out = [];
-        function add(n) { if (n && !seen[n]) { seen[n] = 1; out.push(n); } }
-        recent().forEach(add);
-        try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(add); } catch (e) {}
-        ["IndividualIdentityLink__dlm", "UnifiedIndividual__dlm", "ContactPointEmailIdentityLink__dlm", "ContactPointAddressIdentityLink__dlm", "ContactPointPhoneIdentityLink__dlm", "PartyIdentificationIdentityLink__dlm", "UnifiedLinkssotAccount__dlm"].forEach(add);
-        return (st.tables = out.slice(0, 300));
+        var seen = {}, out = [], cur = curDs();
+        function add(n, ds) { if (!n) return; if (seen[n]) { if (ds && !seen[n].ds) seen[n].ds = ds; return; } seen[n] = { n: n, ds: ds || "" }; out.push(seen[n]); }
+        try { Object.keys(_dsByObject).forEach(function (k) { if (!_dsGuess[k]) add(k, _dsByObject[k]); }); } catch (e) {}
+        try { Object.keys(_dcObjSeen).forEach(function (k) { add(k, (_dsByObject[k] != null && !_dsGuess[k]) ? _dsByObject[k] : ""); }); } catch (e) {}
+        try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(function (n) { add(n, ""); }); } catch (e) {}
+        recent().forEach(function (n) { add(n, ""); });
+        ["IndividualIdentityLink__dlm", "UnifiedIndividual__dlm", "ContactPointEmailIdentityLink__dlm", "ContactPointAddressIdentityLink__dlm", "ContactPointPhoneIdentityLink__dlm", "PartyIdentificationIdentityLink__dlm", "UnifiedLinkssotAccount__dlm"].forEach(function (n) { add(n, ""); });
+        out.sort(function (a, b) { var ra = (a.ds === cur && cur) ? 0 : (a.ds ? 1 : 2), rb = (b.ds === cur && cur) ? 0 : (b.ds ? 1 : 2); return ra - rb || (a.n < b.n ? -1 : 1); });
+        return (st.tables = out.slice(0, 600));
       }
       function loadCols(t, cb) {
         if (!qeValidIdent(t)) { cb(); return; }
@@ -16679,7 +16705,7 @@
       function renderForm() {
         var f = body.querySelector("#dc-g-form"); if (!f || !st.check) return;
         var v = st.vals, h = "";
-        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (n) { return "<option value='" + esc(n) + "'>"; }).join("") + "</datalist>";
+        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : "") + ">"; }).join("") + "</datalist>";
         st.check.fields.forEach(function (fd) {
           var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
           if (fd.kind === "range") {
@@ -16690,7 +16716,7 @@
           if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
-          if (fd.kind === "table") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='text' list='dc-g-tables' id='" + id + "' placeholder='start typing or paste the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
+          if (fd.kind === "table") { var nt = tableNames(), ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables' id='" + id + "' placeholder='click, then pick from the list or type the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + " objects known from this session (" + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Open a DLO/DMO list or run a query to teach it more.</div></div>"; return; }
           // column kinds
           var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
           if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
@@ -16708,6 +16734,7 @@
             if (k === "t" || k === "t2") { msg("Reading columns…"); loadCols(st.vals[k], function (m) { renderForm(); msg(m, !!m); }); }
           };
         });
+        f.querySelectorAll(".dc-g-refresh").forEach(function (b) { b.onclick = function () { st.tables = null; renderForm(); }; });
         ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.onchange = function () { st.vals[k] = el.value; }; });
       }
       function collect() {

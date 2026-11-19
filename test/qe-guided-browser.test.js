@@ -3,8 +3,10 @@
 const fs=require("fs"),http=require("http"),cp=require("child_process"),assert=require("assert");
 const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
 const pure=src.slice(src.indexOf("var QG = (function"),src.indexOf("// @@GUIDED-END"));
+const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  function decodeFormField"));
 const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
 const html="<!doctype html><meta charset=utf-8><body>Tables: Policy__dlm and Other__dll here<script>"+`
+var _dsByObject={Confirmed__dlm:"TD Insurance",Other_space__dlm:"Other"},_dsGuess={};function qeResolveDs(){return "TD Insurance";}
 window.__sqls=[];window.__classic=0;
 function makeDraggable(){}function addResizeHandle(){}function todayStr(){return "2026-11-19"}
 function qeValidIdent(s){return !!s&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s).trim());}
@@ -24,7 +26,8 @@ function qeFetchExport(sql){window.__sqls.push(sql);
  if(/AS inside/.test(sql))return Promise.resolve({columns:["total"],rowData:[{total:"100",inside:"25"}],totalRows:1,blobUrl:"blob:x"});
  if(/SELECT \\* FROM "Policy__dlm" WHERE "CreatedDate__c" BETWEEN/.test(sql))return Promise.resolve({columns:["Id__c"],rowData:[{Id__c:"r1"},{Id__c:"r2"}],totalRows:2,blobUrl:"blob:x"});
  return Promise.resolve({columns:["total"],rowData:[{total:"0"}],totalRows:1,blobUrl:"blob:x"});}
-`+pure+";"+ui+`
+`+harv+";"+pure+";"+ui+`
+dcHarvestObjects('{"a":[{"name":"Harvested_Obj__dlm"},{"x":"My_Ci__cio"},{"junk":"notanobject__c"}]}');
 openGuidedChecks();<\/script>`;
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 (async()=>{
@@ -47,6 +50,11 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev(P+".innerText.includes('Distinct values in a field')&&"+P+".innerText.includes('Table health scan')"),"explore goal lists distinct values + health scan");
  await ev(P+".querySelector('[data-chk=distinct]').click()");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Policy__dlm')&&[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Other__dll')"),"table list picked up names visible on the page");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].map(o=>o.value).slice(0,2).join()")==="Confirmed__dlm,Other_space__dlm"||await ev("document.querySelector('#dc-g-tables option').value")==="Confirmed__dlm","objects with confirmed CURRENT data space are suggested first");
+ ok(await ev("document.querySelector('#dc-g-tables option').label.includes('data space: TD Insurance')"),"suggestion shows its data space");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Harvested_Obj__dlm')&&[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='My_Ci__cio')"),"names harvested from Salesforce responses are suggested");
+ ok(await ev("![...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='notanobject__c')"),"non-DLO/DMO names are not harvested");
+ ok(await ev("document.querySelector('.dc-g-refresh')!==null&&document.querySelector('#dc-qe-guided-panel').innerText.includes('objects known from this session')"),"refresh button + object count shown");
  // empty submit -> validation message
  await ev("document.querySelector('#dc-g-run').click()");
  ok(await ev("document.querySelector('#dc-g-msg').textContent.includes('Fill in')"),"empty form gives a clear message, runs nothing");
