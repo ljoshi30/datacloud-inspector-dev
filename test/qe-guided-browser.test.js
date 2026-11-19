@@ -5,7 +5,7 @@ const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
 const pure=src.slice(src.indexOf("var QG = (function"),src.indexOf("// @@GUIDED-END"));
 const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  function decodeFormField"));
 const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
-const html="<!doctype html><meta charset=utf-8><body>Tables: Policy__dlm and Other__dll here<script>"+`
+const html="<!doctype html><meta charset=utf-8><body>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
 var _dsByObject={Confirmed__dlm:"TD Insurance",Other_space__dlm:"Other"},_dsGuess={};function qeResolveDs(){return "TD Insurance";}
 window.__sqls=[];window.__classic=0;
 function makeDraggable(){}function addResizeHandle(){}function todayStr(){return "2026-11-19"}
@@ -17,7 +17,7 @@ function openTemplatesPanel(){window.__classic++;}
 function ensureQueryContext(cb){cb(true);}
 function toHome(){var b=document.querySelector('#dc-g-back2');if(b)b.click();b=document.querySelector('#dc-g-back');if(b)b.click();}
 function qeFetchExport(sql){window.__sqls.push(sql);
- var m=sql.indexOf("Missing__dlm")>=0&&/LIMIT 1$/.test(sql);
+ var m=(sql.indexOf("Missing__dlm")>=0||/"Foo_Bar__dlm"/.test(sql))&&/LIMIT 1$/.test(sql);
  if(m)return Promise.reject(new Error('table "Missing__dlm" does not exist'));
  if(/LIMIT 1$/.test(sql))return Promise.resolve({columns:["Id__c","Email__c","CreatedDate__c"],columnTypes:{Id__c:"VARCHAR",Email__c:"VARCHAR",CreatedDate__c:"TIMESTAMP"},rowData:[],totalRows:0,blobUrl:"blob:x"});
  if(/AS dup_values/.test(sql))return Promise.resolve({columns:["dup_values","dup_rows"],rowData:[{dup_values:"3",dup_rows:"7"}],totalRows:1,blobUrl:"blob:x"});
@@ -54,7 +54,7 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelector('#dc-g-tables option').label.includes('data space: TD Insurance')"),"suggestion shows its data space");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Harvested_Obj__dlm')&&[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='My_Ci__cio')"),"names harvested from Salesforce responses are suggested");
  ok(await ev("![...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='notanobject__c')"),"non-DLO/DMO names are not harvested");
- ok(await ev("document.querySelector('.dc-g-refresh')!==null&&document.querySelector('#dc-qe-guided-panel').innerText.includes('objects known from this session')"),"refresh button + object count shown");
+ ok(await ev("document.querySelector('.dc-g-refresh')!==null&&document.querySelector('#dc-qe-guided-panel').innerText.includes('objects found')"),"refresh button + object count shown");
  // empty submit -> validation message
  await ev("document.querySelector('#dc-g-run').click()");
  ok(await ev("document.querySelector('#dc-g-msg').textContent.includes('Fill in')"),"empty form gives a clear message, runs nothing");
@@ -92,6 +92,15 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev("toHome()");await ev(P+".querySelector('[data-goal=loaded]').click()");await ev(P+".querySelector('[data-chk=rowcount]').click()");
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Missing__dlm';t.onchange()");await wait(200);
  ok(await ev("document.querySelector('#dc-g-msg').textContent.includes('not found in this data space')"),"missing table: explains data space");
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=explore]').click()");await ev(P+".querySelector('[data-chk=distinct]').click()");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='CAMEP_SFP_TDI_identity_663F1D12__dll')"),"object-list row (label with hyphens) becomes the DLO API name when the DLO tab is active");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Real_Attr__dll')&&![...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Some_Label__dll')"),"a row that carries a real API name uses it as-is");
+ // switch rail to Data Model Objects, refresh, pick a derived DMO name whose first guess does not exist
+ await ev("document.getElementById('r-dlo').className='';document.getElementById('r-dmo').className='slds-is-active';document.querySelector('.dc-g-refresh').click()");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Foo_Bar__dlm')"),"after switching to the DMO tab + refresh, rows get the __dlm suffix");
+ await ev("var t=document.querySelector('#dc-g-f-t');t.value='Foo_Bar__dlm';t.onchange()");await wait(300);
+ ok(await ev("document.querySelector('#dc-g-f-t').value")==="ssot__Foo_Bar__dlm","wrong first guess falls back to the ssot__ name automatically");
+ ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","columns load for the corrected name");
  // classic link
  await ev("toHome();document.querySelector('#dc-g-classic').click()");
  ok(await ev("window.__classic")===1&&await ev("!document.querySelector('#dc-qe-guided-panel')"),"classic SQL templates still reachable");

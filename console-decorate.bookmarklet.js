@@ -16629,6 +16629,57 @@
       // Returns [{n: name, ds: data space or ""}] — current data space first. Sources, best first:
       // (1) objects Salesforce itself queried (confirmed data space), (2) object names seen in Salesforce's own
       // responses while browsing, (3) names visible on this page / in the editor, (4) recent, (5) standard IDR tables.
+      // Read the object list Salesforce shows on the left of the Query Editor (Data Model Objects / Data
+      // Lake Objects / Calculated Insights tabs). Rows are draggable; they show LABELS, not API names, so:
+      // (a) any row whose attributes/children carry a real API name (…__dll/__dlm/__cio) is taken as-is;
+      // (b) otherwise the API name is DERIVED from the label + the active tab (hyphen/space -> underscore, tab
+      //     decides the suffix) and tried at pick time, with alternates (a standard DMO is ssot__<name>__dlm).
+      function deepAll(sel, root, acc, guard) {
+        acc = acc || []; guard = guard || { n: 0 };
+        try {
+          (root || document).querySelectorAll(sel).forEach(function (e) { acc.push(e); });
+          var all = (root || document).querySelectorAll("*");
+          for (var i = 0; i < all.length && guard.n < 30000; i++) { guard.n++; if (all[i].shadowRoot) deepAll(sel, all[i].shadowRoot, acc, guard); }
+        } catch (e) {}
+        return acc;
+      }
+      function activeTabKind() {
+        var names = { "data model objects": "dmo", "data lake objects": "dlo", "calculated insights": "ci", "data graphs": "dg" }, found = "";
+        deepAll("a,button,li,div,span,lightning-button-icon,lightning-vertical-navigation-item").forEach(function (el) {
+          if (found || (guidedPanelEl && guidedPanelEl.contains(el))) return;
+          var tx = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          if (!names[tx]) return;
+          var n = el;
+          for (var d = 0; d < 5 && n; d++, n = n.parentElement || (n.getRootNode && n.getRootNode().host)) {
+            var cls = String(n.className && n.className.baseVal != null ? n.className.baseVal : n.className || "");
+            if ((n.getAttribute && (n.getAttribute("aria-selected") === "true" || n.getAttribute("aria-current") === "true" || n.getAttribute("aria-current") === "page")) || /(^|[\s_-])(is-active|active|selected|is-selected)(\s|$)/.test(cls)) { found = names[tx]; return; }
+          }
+        });
+        return found;
+      }
+      function scanTree() {
+        var res = [], kind = activeTabKind(), sfx = { dlo: "__dll", dmo: "__dlm", ci: "__cio" }, re = /\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/;
+        deepAll('[draggable="true"]').forEach(function (el) {
+          if (guidedPanelEl && guidedPanelEl.contains(el)) return;
+          var label = ((el.innerText || el.textContent || "").split("\n")[0] || "").replace(/\s+/g, " ").trim();
+          if (!label || label.length > 140) return;
+          var blob = label + " " + Array.prototype.map.call(el.attributes || [], function (a) { return a.value; }).join(" ");
+          el.querySelectorAll("[title],[data-name],[data-id],[data-api-name],[data-key],[data-value]").forEach(function (c) { blob += " " + Array.prototype.map.call(c.attributes, function (a) { return a.value; }).join(" "); });
+          var m = blob.match(re);
+          if (m) { res.push({ n: m[0], ds: "", tree: "api" }); return; }
+          if (!sfx[kind]) return;
+          var base = label.replace(/[\s\-.]+/g, "_").replace(/[^A-Za-z0-9_]/g, "");
+          if (!/^[A-Za-z]/.test(base)) return;
+          var alts = kind === "dmo" ? [base + "__dlm", "ssot__" + base + "__dlm"] : [base + sfx[kind]];
+          res.push({ n: alts[0], alts: alts, ds: "", tree: kind, label: label });
+        });
+        return res;
+      }
+      function altsAfter(t) {
+        var e = tableNames().filter(function (o) { return o.n === t || (o.alts && o.alts.indexOf(t) >= 0); })[0];
+        if (!e || !e.alts) return [];
+        var i = e.alts.indexOf(t); return i >= 0 ? e.alts.slice(i + 1) : [];
+      }
       function curDs() { try { return String(qeResolveDs("") || ""); } catch (e) { return ""; } }
       function tableNames() {
         if (st.tables) return st.tables;
@@ -16636,6 +16687,7 @@
         function add(n, ds) { if (!n) return; if (seen[n]) { if (ds && !seen[n].ds) seen[n].ds = ds; return; } seen[n] = { n: n, ds: ds || "" }; out.push(seen[n]); }
         try { for (var dk in _dsByObject) if (!_dsGuess[dk]) add(dk, _dsByObject[dk]); } catch (e) {}   // suggestions only: never used to pick a space for another object
         try { Object.keys(_dcObjSeen).forEach(function (k) { add(k, (_dsByObject[k] != null && !_dsGuess[k]) ? _dsByObject[k] : ""); }); } catch (e) {}
+        try { scanTree().forEach(function (o) { add(o.n, o.ds); if (o.alts) seen[o.n].alts = o.alts; if (o.label) seen[o.n].label = o.label; seen[o.n].tree = o.tree; }); } catch (e) {}
         try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(function (n) { add(n, ""); }); } catch (e) {}
         recent().forEach(function (n) { add(n, ""); });
         ["IndividualIdentityLink__dlm", "UnifiedIndividual__dlm", "ContactPointEmailIdentityLink__dlm", "ContactPointAddressIdentityLink__dlm", "ContactPointPhoneIdentityLink__dlm", "PartyIdentificationIdentityLink__dlm", "UnifiedLinkssotAccount__dlm"].forEach(function (n) { add(n, ""); });
@@ -16649,14 +16701,15 @@
         if (c === "loading") { return; }
         colsCache[t] = "loading";
         ensureQueryContext(function (ready) {
-          if (!ready) { colsCache[t] = "fail"; cb("Not connected: run any query with Salesforce's Run Query button first."); return; }
+          if (!ready) { colsCache[t] = "fail"; cb("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then try again."); return; }
           qeFetchExport(qeTemplates.fieldsProbe(t), qeDsForSql(qeTemplates.fieldsProbe(t)), function () {}, function () { return false; }).then(function (r) {
             colsCache[t] = (r.columns || []).map(function (n) { return { name: n, type: (r.columnTypes || {})[n] || "" }; });
             if (!colsCache[t].length) colsCache[t] = "fail";
             cb();
           }).catch(function (e) {
             colsCache[t] = "fail";
-            var m = String(e && e.message || e);
+            var m = String(e && e.message || e), nx = /does not exist|not found/i.test(m) ? altsAfter(t) : [];
+            if (nx.length) { st.vals.t = nx[0]; loadCols(nx[0], cb); return; }   // derived-from-label name was wrong: try the next likely API name
             cb(/does not exist|not found/i.test(m) ? "Table not found in this data space. Check the name and the data space you are in." : m);
           });
         });
@@ -16705,7 +16758,7 @@
       function renderForm() {
         var f = body.querySelector("#dc-g-form"); if (!f || !st.check) return;
         var v = st.vals, h = "";
-        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : "") + ">"; }).join("") + "</datalist>";
+        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : (o.label ? " label='" + esc(o.n + "  ·  from the object list: " + o.label) + "'" : "")) + ">"; }).join("") + "</datalist>";
         st.check.fields.forEach(function (fd) {
           var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
           if (fd.kind === "range") {
@@ -16716,7 +16769,7 @@
           if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
-          if (fd.kind === "table") { var nt = tableNames(), ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables' id='" + id + "' placeholder='click, then pick from the list or type the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + " objects known from this session (" + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Open a DLO/DMO list or run a query to teach it more.</div></div>"; return; }
+          if (fd.kind === "table") { var nt = tableNames(), ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables' id='" + id + "' placeholder='click, then pick from the list or type the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + " objects found (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
           // column kinds
           var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
           if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
@@ -16775,7 +16828,7 @@
         btn.disabled = true; btn.textContent = "Running…"; out.innerHTML = "";
         function fail(e) { btn.disabled = false; btn.textContent = "▶ Run check"; var m = String(e && e.message || e); if (/does not exist|not found/i.test(m)) m += " (Check the table name and that you are in the right data space.)"; out.innerHTML = "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#b91c1c;'>" + esc(m) + "</div>"; }
         ensureQueryContext(function (ready) {
-          if (!ready) { fail(new Error("Not connected: run any query with Salesforce's Run Query button first.")); return; }
+          if (!ready) { fail(new Error("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then press Run again.")); return; }
           qeFetchExport(sumSql, ds, function () {}, function () { return false; }).then(function (r) {
             var row = (r.rowData && r.rowData[0]) || {}, vd = chk.verdict(row, p), c = LEVEL[vd.level] || LEVEL.info;
             btn.disabled = false; btn.textContent = "▶ Run check";
