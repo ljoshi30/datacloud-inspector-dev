@@ -7097,7 +7097,28 @@
   // bookmarklet, so this passive, read-only harvest is how the Helpful Queries table list learns real
   // objects. Capped + size-guarded + fully try/caught so it can never affect the page.
   var _dcObjSeen = {}, _dcObjSeenN = 0;
+  // Exact data space API names learned from Salesforce's own responses: { label: apiName }. Only objects that sit under a
+  // data-space key (or carry one) are taken, so a label is never paired with an unrelated name.
+  var _dsLabelToName = {};
+  function dcHarvestSpacePairs(text) {
+    try {
+      if (!/data.?space/i.test(text)) return;
+      var j = JSON.parse(text), n = 0;
+      (function walk(v, key, depth) {
+        if (!v || typeof v !== "object" || depth > 9 || n > 60000) return; n++;
+        if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) walk(v[i], key, depth + 1); return; }
+        var hint = /data.?space/i.test(String(key || "")), ks = Object.keys(v);
+        if (!hint) for (var h = 0; h < ks.length; h++) if (/data.?space/i.test(ks[h])) { hint = true; break; }
+        if (hint && typeof v.label === "string") {
+          var nm = v.name || v.apiName || v.developerName || v.dataSpaceName || v.value;
+          if (typeof nm === "string" && /^[A-Za-z0-9_]{1,80}$/.test(nm) && nm !== v.label) _dsLabelToName[v.label] = nm;
+        }
+        for (var k = 0; k < ks.length; k++) walk(v[ks[k]], ks[k], depth + 1);
+      })(j, "", 0);
+    } catch (e) {}
+  }
   function dcHarvestObjects(text) {
+    try { if (text && text.length < 3000000 && text.charAt(0) === "{") dcHarvestSpacePairs(text); } catch (e) {}
     try {
       if (!text || text.length > 3000000 || _dcObjSeenN > 3000) return;
       var m = String(text).match(/\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/g);
@@ -15707,6 +15728,7 @@
       var sniffed = (typeof _auraSniff !== "undefined" && _auraSniff && _auraSniff.dsLastObj == null && _auraSniff.dataSpace) ? String(_auraSniff.dataSpace) : "";
       if (sniffed) return sniffed;
       var ds = readPageDataSpace();
+      if (!ds) { try { ds = qeWorkspaceSpaceExact(); } catch (e) { ds = ""; } }   // exact API name read from the workspace header, never derived from its label
       if (!ds) {
         var fm = String(sql || "").match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
         var t = fm ? fm[1].replace(/"/g, "") : "";
@@ -15745,17 +15767,45 @@
       } catch (e) {}
       return lab;
     }
-    function qeSpaceVariants(label) {
-      var v = [], l = String(label || "").trim();
-      if (!l) return v;
-      [l, l.replace(/\s+/g, "_"), l.replace(/\s+/g, ""), l.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")].forEach(function (x) { if (x && v.indexOf(x) < 0) v.push(x); });
-      return v;
+    // EXACT API name of the workspace's data space (no guessing): (1) read it off the header's own components - walk up from the
+    // "Data Space" label through shadow hosts and look for a { label:"TD Insurance", name|apiName|value:"<api>" } pair or a
+    // dataSpace*-named string property; (2) the label->name pair Salesforce itself sent in a response. "" if neither exists.
+    function qeWorkspaceSpaceExact() {
+      var label = qeWorkspaceSpaceLabel(), found = "";
+      if (!label) return "";
+      function scan(v, depth, seen) {
+        if (found || !v || typeof v !== "object" || depth > 3 || seen.indexOf(v) >= 0) return; seen.push(v);
+        if (Array.isArray(v)) { for (var i = 0; i < v.length && i < 80; i++) scan(v[i], depth + 1, seen); return; }
+        var lab = v.label || v.displayName || v.title, nm = v.name || v.apiName || v.developerName || v.dataSpaceName || v.value;
+        if (lab === label && typeof nm === "string" && /^[A-Za-z0-9_]{1,80}$/.test(nm) && nm !== label) { found = nm; return; }
+        var ks = []; try { ks = Object.keys(v); } catch (e) {}
+        for (var k = 0; k < ks.length && k < 60 && !found; k++) { var x; try { x = v[ks[k]]; } catch (e) { continue; } if (x && typeof x === "object") scan(x, depth + 1, seen); }
+      }
+      try {
+        eachElement(document, function (el) {
+          if (found || el.children.length || !/^\s*Data\s*Space\s*:?\s*$/i.test(el.textContent || "")) return;
+          var cur = el;
+          for (var up = 0; up < 40 && cur && !found; up++) {
+            var names = ["dataSpace", "dataspace", "selectedDataSpace", "dataSpaceName", "dataSpaceApiName", "selectedDataSpaceName", "workspace", "workspaceData", "record", "value", "data"];
+            var own = []; try { own = Object.keys(cur); } catch (e) {}
+            names.concat(own).forEach(function (pn) {
+              if (found) return; var pv; try { pv = cur[pn]; } catch (e) { return; }
+              if (typeof pv === "string") { if (/data.?space/i.test(pn) && /^[A-Za-z0-9_]{1,80}$/.test(pv) && pv !== label && !_badDsNames.test(pv)) found = pv; }
+              else if (pv && typeof pv === "object") scan(pv, 0, []);
+            });
+            var nx = cur.parentElement; if (!nx) { try { var rn = cur.getRootNode && cur.getRootNode(); nx = rn && rn.host ? rn.host : null; } catch (e) { nx = null; } }
+            cur = nx;
+          }
+        });
+      } catch (e) {}
+      if (!found && _dsLabelToName[label]) found = _dsLabelToName[label];
+      return found;
     }
     function qeKnownSpaces(first) {
       var seen = {}, out = [];
       function add(x) { if (x == null) return; x = String(x); if (!seen[x]) { seen[x] = 1; out.push(x); } }
       add(first);
-      try { qeSpaceVariants(qeWorkspaceSpaceLabel()).forEach(add); } catch (e) {}
+      try { var wx = qeWorkspaceSpaceExact(); if (wx) { seen = {}; out = []; add(wx); add(first); } } catch (e) {}
       try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
       try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
       try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}

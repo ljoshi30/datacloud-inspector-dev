@@ -6,7 +6,7 @@ const pure=src.slice(src.indexOf("var QG = (function"),src.indexOf("// @@GUIDED-
 const spc=src.slice(src.indexOf("    function qeWorkspaceSpaceLabel"),src.indexOf("    function qeCleanForRun"));
 const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  function decodeFormField"));
 const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
-const html="<!doctype html><meta charset=utf-8><body><div id=wh><div>Data Space</div><div>TD Insurance</div></div>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
+const html="<!doctype html><meta charset=utf-8><body><div id=wh><div>Data Space</div><div>TD Insurance</div></div><script>document.getElementById('wh').dataSpace={label:'TD Insurance',name:'TD_Insurance_X'};<\/script>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
 var _dsByObject={Confirmed__dlm:"TD Insurance",Other_space__dlm:"Other"},_dsGuess={};function qeResolveDs(){return "TD Insurance";}
 function eachElement(root,fn){root.querySelectorAll("*").forEach(fn);}function readPageDataSpace(){return ""}
 var _badDsNames=/^(Selected|Select|None|All)$/i,_auraSniff={dataSpace:null};window.__sqls=[];window.__classic=0;
@@ -19,7 +19,7 @@ function openTemplatesPanel(){window.__classic++;}
 function ensureQueryContext(cb){cb(true);}
 function toHome(){var b=document.querySelector('#dc-g-back2');if(b)b.click();b=document.querySelector('#dc-g-back');if(b)b.click();}
 function qeFetchExport(sql,ds){window.__sqls.push(sql+' @'+ds);
- if(/"Header__dlm"/.test(sql)&&ds!=='TD_Insurance')return Promise.reject(new Error('table "Header__dlm" does not exist'));
+ if(/"Header__dlm"/.test(sql)&&ds!=='TD_Insurance_X')return Promise.reject(new Error('table "Header__dlm" does not exist'));
  if(/"Spaced__dlm"/.test(sql)&&ds!=='Other')return Promise.reject(new Error('table "Spaced__dlm" does not exist'));
  var m=(sql.indexOf("Missing__dlm")>=0||/"Foo_Bar__dlm"/.test(sql))&&/LIMIT 1$/.test(sql);
  if(m)return Promise.reject(new Error('table "Missing__dlm" does not exist'));
@@ -66,7 +66,7 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  // pick a table -> columns dropdown appears with a sensible default
  // workspace header says 'Data Space / TD Insurance' (label only): derived name is tried and kept only because it works
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Header__dlm';t.onchange()");await wait(300);
- ok(await ev("window.__sqls.some(function(q){return /Header__dlm/.test(q)&&/@TD_Insurance$/.test(q)})"),"workspace header label 'TD Insurance' is tried as TD_Insurance");
+ ok(await ev("window.__sqls.some(function(q){return /Header__dlm/.test(q)&&/@TD_Insurance_X$/.test(q)})&&!window.__sqls.some(function(q){return /@TD_Insurance$|@TDInsurance$|@TD Insurance$/.test(q)})"),"exact API name read from the header component is used; the label is never turned into a guessed name");
  ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","columns load via the header-derived data space");
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Policy__dlm';t.onchange()");await wait(200);
  ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","column is a dropdown after choosing a table");
