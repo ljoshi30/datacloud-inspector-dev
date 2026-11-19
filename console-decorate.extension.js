@@ -16395,7 +16395,7 @@
       function missingIn(id, goals, title, plain, defs, words) {
         return {
           id: id, goals: goals, title: title, plain: plain,
-          fields: [{ k: "t", kind: "table", label: words.a, def: defs.t }, { k: "c", kind: "col", label: words.ac, def: defs.c, pick: "id" }, { k: "t2", kind: "table", label: words.b, def: defs.t2 }, { k: "c2", kind: "col2", label: words.bc, def: defs.c2, pick: "id" }],
+          fields: [{ k: "t", kind: "table", label: words.a, def: defs.t, role: words.ra }, { k: "c", kind: "col", label: words.ac, def: defs.c, pick: "id" }, { k: "t2", kind: "table", label: words.b, def: defs.t2, role: words.rb }, { k: "c2", kind: "col2", label: words.bc, def: defs.c2, pick: "id" }],
           summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN b." + Q(p.c2) + " IS NULL THEN 1 ELSE 0 END), 0) AS missing FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL"; },
           rows: function (p) { return "SELECT a.* FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL AND b." + Q(p.c2) + " IS NULL"; },
           verdict: function (r) {
@@ -16554,8 +16554,8 @@
           rows: function (p) { return "SELECT UnifiedRecordId__c, COUNT(*) AS source_records FROM " + T(p) + " GROUP BY UnifiedRecordId__c HAVING COUNT(*) > " + lastN(p) + " ORDER BY COUNT(*) DESC"; },
           verdict: function (r, p) { var b = num(r.big_profiles); return b ? { level: "bad", text: fmt(b) + " unified profile" + (b === 1 ? " has" : "s have") + " more than " + lastN(p) + " source records (largest: " + fmt(r.largest) + "). Suspect over-merging." } : { level: "ok", text: "No unified profile has more than " + lastN(p) + " source records." }; },
           next: "Open the biggest profile's source records and look for a shared placeholder value (test@test.com, 0000000000)." },
-        missingIn("idrSourceMissing", ["idr"], "Source records missing from identity resolution", "Every source record you expect to be resolved should appear in the link table. Finds the ones that did not.", { t2: "IndividualIdentityLink__dlm", c2: "SourceRecordId__c" }, { a: "Source table (DLO/DMO)", ac: "Its record ID column", b: "Identity link table", bc: "Link column", next: "Missing records often fail a ruleset filter or have no match-rule fields filled in." }),
-        missingIn("idrUnifiedNoSource", ["idr"], "Unified profiles with no source records", "Unified profiles that have no row in the link table. Should be none.", { t: "UnifiedIndividual__dlm", c: "ssot__Id__c", t2: "IndividualIdentityLink__dlm", c2: "UnifiedRecordId__c" }, { a: "Unified table", ac: "Its ID column", b: "Identity link table", bc: "Link column", next: "A mismatch can mean a stale unified table or a different ruleset's link table; pick the matching pair." }),
+        missingIn("idrSourceMissing", ["idr"], "Source records missing from identity resolution", "Every source record you expect to be resolved should appear in the link table. Finds the ones that did not.", { t2: "IndividualIdentityLink__dlm", c2: "SourceRecordId__c" }, { ra: "source", rb: "link", a: "Source table (DLO/DMO)", ac: "Its record ID column", b: "Identity link table", bc: "Link column", next: "Missing records often fail a ruleset filter or have no match-rule fields filled in." }),
+        missingIn("idrUnifiedNoSource", ["idr"], "Unified profiles with no source records", "Unified profiles that have no row in the link table. Should be none.", { t: "UnifiedIndividual__dlm", c: "ssot__Id__c", t2: "IndividualIdentityLink__dlm", c2: "UnifiedRecordId__c" }, { ra: "unified", rb: "link", a: "Unified table", ac: "Its ID column", b: "Identity link table", bc: "Link column", next: "A mismatch can mean a stale unified table or a different ruleset's link table; pick the matching pair." }),
         { id: "splitValue", goals: ["idr", "contact"], title: "Same value under different unified profiles", plain: "Finds e.g. one email that sits in several unified profiles, meaning identity resolution did not join them.",
           fields: [{ k: "t", kind: "table", label: "Table with both columns" }, { k: "c", kind: "col", label: "Value column (email, phone…)", pick: "text" }, { k: "c2", kind: "col2same", label: "Unified ID column", pick: "id" }],
           summary: function (p) { return "SELECT COUNT(*) AS split_values FROM (SELECT " + Q(p.c) + " AS v FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1) x"; },
@@ -16698,6 +16698,23 @@
         out.sort(function (a, b) { var ra = (a.ds === cur && cur) ? 0 : (a.ds ? 1 : 2), rb = (b.ds === cur && cur) ? 0 : (b.ds ? 1 : 2); return ra - rb || (a.n < b.n ? -1 : 1); });
         return (st.tables = out.slice(0, 600));
       }
+      function roleOf(fd) { return fd.role || (/IdentityLink/.test(fd.def || "") ? "link" : (/^Unified/.test(fd.def || "") ? "unified" : "")); }
+      function forRole(role) {
+        var cur = curDs(), all = tableNames().filter(function (o) { return !(o.ds && cur && o.ds !== cur); });   // hide objects confirmed in a different data space
+        var f = all;
+        if (role === "link") f = all.filter(function (o) { return /Link/i.test(o.n); });
+        else if (role === "unified") f = all.filter(function (o) { return /^Unified/i.test(o.n) && !/Link/i.test(o.n); });
+        else if (role === "source") f = all.filter(function (o) { return !/Link/i.test(o.n) && !/^Unified/i.test(o.n); });
+        return { list: f.length ? f : all, total: all.length, filtered: !!f.length && f.length !== all.length };
+      }
+      function ensureCols() {
+        if (!st.check) return;
+        st.check.fields.forEach(function (fd) {
+          if (fd.kind !== "table") return;
+          var t = st.vals[fd.k];
+          if (t && qeValidIdent(t) && colsCache[t] === undefined) loadCols(t, function (m) { renderForm(); if (m) msg(m, true); });
+        });
+      }
       function loadCols(t, cb) {
         if (!qeValidIdent(t)) { cb(); return; }
         var c = colsCache[t];
@@ -16755,6 +16772,7 @@
         body.querySelector("#dc-g-back2").onclick = function (e) { e.preventDefault(); goalScreen(st.goal); };
         body.querySelector("#dc-g-run").onclick = run;
         renderForm();
+        ensureCols();
         if (st.vals.t) loadCols(st.vals.t, function (m) { renderForm(); msg(m); });
       }
       function msg(m, bad) { var e = body.querySelector("#dc-g-msg"); if (e) { e.textContent = m || ""; e.style.color = bad ? "#dc2626" : "#64748b"; } }
@@ -16762,7 +16780,7 @@
       function renderForm() {
         var f = body.querySelector("#dc-g-form"); if (!f || !st.check) return;
         var v = st.vals, h = "";
-        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : (o.label ? " label='" + esc(o.n + "  ·  from the object list: " + o.label) + "'" : "")) + ">"; }).join("") + "</datalist>";
+        var dlOf = function (role) { return "<datalist id='dc-g-tables-" + (role || "all") + "'>" + forRole(role).list.map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : (o.label ? " label='" + esc(o.n + "  ·  from the object list: " + o.label) + "'" : "")) + ">"; }).join("") + "</datalist>"; }, dl = "", dlSeen = {};
         st.check.fields.forEach(function (fd) {
           var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
           if (fd.kind === "range") {
@@ -16773,7 +16791,7 @@
           if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
-          if (fd.kind === "table") { var nt = tableNames(), ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables' id='" + id + "' placeholder='click, then pick from the list or type the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + " objects found (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
+          if (fd.kind === "table") { var role = roleOf(fd); if (!dlSeen[role || "all"]) { dlSeen[role || "all"] = 1; dl += dlOf(role); } var fr = forRole(role), nt = fr.list, ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables-" + (role || "all") + "' id='" + id + "' placeholder='" + (role === "link" ? "pick the identity link table" : role === "unified" ? "pick the unified table" : "click, then pick from the list or type the API name") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + (fr.filtered ? " " + role + " tables (of " + fr.total + " objects" : " objects found") + " (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
           // column kinds
           var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
           if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
@@ -16791,6 +16809,7 @@
             if (k === "t" || k === "t2") { msg("Reading columns…"); loadCols(st.vals[k], function (m) { renderForm(); msg(m, !!m); }); }
           };
         });
+        setTimeout(ensureCols, 0);
         f.querySelectorAll(".dc-g-refresh").forEach(function (b) { b.onclick = function () { st.tables = null; renderForm(); }; });
         ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.onchange = function () { st.vals[k] = el.value; }; });
       }

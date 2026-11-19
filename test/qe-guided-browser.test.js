@@ -49,11 +49,11 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev(P+".querySelector('[data-goal=explore]').click()");
  ok(await ev(P+".innerText.includes('Distinct values in a field')&&"+P+".innerText.includes('Table health scan')"),"explore goal lists distinct values + health scan");
  await ev(P+".querySelector('[data-chk=distinct]').click()");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Policy__dlm')&&[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Other__dll')"),"table list picked up names visible on the page");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].map(o=>o.value).slice(0,2).join()")==="Confirmed__dlm,Other_space__dlm"||await ev("document.querySelector('#dc-g-tables option').value")==="Confirmed__dlm","objects with confirmed CURRENT data space are suggested first");
- ok(await ev("document.querySelector('#dc-g-tables option').label.includes('data space: TD Insurance')"),"suggestion shows its data space");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Harvested_Obj__dlm')&&[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='My_Ci__cio')"),"names harvested from Salesforce responses are suggested");
- ok(await ev("![...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='notanobject__c')"),"non-DLO/DMO names are not harvested");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Policy__dlm')&&[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Other__dll')"),"table list picked up names visible on the page");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].map(o=>o.value).slice(0,2).join()")==="Confirmed__dlm,Other_space__dlm"||await ev("document.querySelector('#dc-g-tables-all option').value")==="Confirmed__dlm","objects with confirmed CURRENT data space are suggested first");
+ ok(await ev("document.querySelector('#dc-g-tables-all option').label.includes('data space: TD Insurance')"),"suggestion shows its data space");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Harvested_Obj__dlm')&&[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='My_Ci__cio')"),"names harvested from Salesforce responses are suggested");
+ ok(await ev("![...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='notanobject__c')"),"non-DLO/DMO names are not harvested");
  ok(await ev("document.querySelector('.dc-g-refresh')!==null&&document.querySelector('#dc-qe-guided-panel').innerText.includes('objects found')"),"refresh button + object count shown");
  // empty submit -> validation message
  await ev("document.querySelector('#dc-g-run').click()");
@@ -93,14 +93,21 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Missing__dlm';t.onchange()");await wait(200);
  ok(await ev("document.querySelector('#dc-g-msg').textContent.includes('not found in this data space')"),"missing table: explains data space");
  await ev("toHome();");await ev(P+".querySelector('[data-goal=explore]').click()");await ev(P+".querySelector('[data-chk=distinct]').click()");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='CAMEP_SFP_TDI_identity_663F1D12__dll')"),"object-list row (label with hyphens) becomes the DLO API name when the DLO tab is active");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Real_Attr__dll')&&![...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Some_Label__dll')"),"a row that carries a real API name uses it as-is");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='CAMEP_SFP_TDI_identity_663F1D12__dll')"),"object-list row (label with hyphens) becomes the DLO API name when the DLO tab is active");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Real_Attr__dll')&&![...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Some_Label__dll')"),"a row that carries a real API name uses it as-is");
  // switch rail to Data Model Objects, refresh, pick a derived DMO name whose first guess does not exist
  await ev("document.getElementById('r-dlo').className='';document.getElementById('r-dmo').className='slds-is-active';document.querySelector('.dc-g-refresh').click()");
- ok(await ev("[...document.querySelectorAll('#dc-g-tables option')].some(o=>o.value==='Foo_Bar__dlm')"),"after switching to the DMO tab + refresh, rows get the __dlm suffix");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Foo_Bar__dlm')"),"after switching to the DMO tab + refresh, rows get the __dlm suffix");
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Foo_Bar__dlm';t.onchange()");await wait(300);
  ok(await ev("document.querySelector('#dc-g-f-t').value")==="ssot__Foo_Bar__dlm","wrong first guess falls back to the ssot__ name automatically");
  ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","columns load for the corrected name");
+ // role-based suggestions + dependent columns
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=idr]').click()");await ev(P+".querySelector('[data-chk=idrSourceMissing]').click()");await wait(300);
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-link option')].length>0&&[...document.querySelectorAll('#dc-g-tables-link option')].every(o=>/Link/i.test(o.value))"),"link-table field suggests ONLY identity-link objects");
+ ok(await ev("[...document.querySelectorAll('#dc-g-tables-source option')].length>0&&[...document.querySelectorAll('#dc-g-tables-source option')].every(o=>!/Link/i.test(o.value)&&!/^Unified/i.test(o.value))"),"source-table field hides link/unified helper tables");
+ ok(await ev("document.querySelector('#dc-g-f-t').getAttribute('list')")==="dc-g-tables-source"&&await ev("document.querySelector('#dc-g-f-t2').getAttribute('list')")==="dc-g-tables-link","each table field points at its own role list");
+ ok(await ev("document.querySelector('#dc-g-f-c2')&&document.querySelector('#dc-g-f-c2').tagName")==="SELECT","link column becomes a dropdown automatically from the prefilled link table (no extra click)");
+ ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","source ID column loads from the chosen source table");
  // classic link
  await ev("toHome();document.querySelector('#dc-g-classic').click()");
  ok(await ev("window.__classic")===1&&await ev("!document.querySelector('#dc-qe-guided-panel')"),"classic SQL templates still reachable");
