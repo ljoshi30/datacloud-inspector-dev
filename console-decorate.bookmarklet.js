@@ -15726,6 +15726,17 @@
       } catch (e) {}
       return qeResolveDs(sql);
     }
+    // Every data space this page session has actually seen (never invented), best guess first.
+    function qeKnownSpaces(first) {
+      var seen = {}, out = [];
+      function add(x) { if (x == null) return; x = String(x); if (!seen[x]) { seen[x] = 1; out.push(x); } }
+      add(first);
+      try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
+      try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
+      try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}
+      add(""); add("default");
+      return out;
+    }
     function qeCleanForRun(sql) {
       var s0 = String(sql || ""), out = "", i = 0, n = s0.length, inStr = false;
       while (i < n) {
@@ -17033,7 +17044,7 @@
           templateArea.style.display = "none";
           return;
         }
-        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " +
+        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " + (res.space != null ? "<span style='color:#64748b;'>data space: " + String(res.space || "default").replace(/[&<>]/g, "") + ". </span>" : "") +
           "<span style='color:#92400e;'>Templates below scan the whole table (billed on rows processed) — cost is roughly the same whether you Count or Fetch a sample.</span>";
         templateArea.style.display = "block";
         populateTemplateSel(); // refresh field inputs now that display is visible
@@ -17065,13 +17076,24 @@
           if (!ready) { objStatus.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
           var sql = qeTemplates.existsProbe(name);
           var ds = qeDsForSql(sql);
-          runQeCount(sql, ds).then(function (r) {
-            var result = { count: r.count || 0 };
+          var spaces = qeKnownSpaces(ds), firstErr = null;
+          function tryAt(i) {
+            return runQeCount(sql, spaces[i]).then(function (r) {
+              if (i > 0) { _dsByObject[name] = spaces[i]; delete _dsGuess[name]; }
+              return { r: r, space: spaces[i] };
+            }, function (e) {
+              firstErr = firstErr || e;
+              if (/does not exist|not found|doesn.t exist/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
+              throw firstErr;
+            });
+          }
+          tryAt(0).then(function (o) {
+            var r = o.r, result = { count: r.count || 0, space: o.space };
             probeCache[name] = result;
             if (objInput.value.trim() === name) showProbeResult(result);
           }).catch(function (err) {
             var msg = String(err && err.message || err);
-            var result = { error: /does not exist/i.test(msg) ? "Object not found — check the name and Data Space." : msg };
+            var result = { error: /does not exist/i.test(msg) ? "Object not found in any data space this page has used (" + spaces.map(function (x) { return x || "default"; }).join(", ") + "). Check the name, or run one query with Salesforce's own Run Query in the data space you want." : msg };
             probeCache[name] = result;
             if (objInput.value.trim() === name) showProbeResult(result);
           });
