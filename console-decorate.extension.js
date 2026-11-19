@@ -14560,6 +14560,15 @@
         if (rk.length > 8) h += "<div style='font-size:12px;margin-top:4px'>…and " + (rk.length - 8) + " more</div>";
         h += "</div>";
       }
+      var dupWarn = diff.warnings.filter(function (w) { return /duplicate key/.test(w); });
+      var tot = diff.added.length + diff.removed.length + diff.changed.length + diff.unchanged;
+      if (dupWarn.length || (diff.unchanged === 0 && diff.changed.length + diff.added.length + diff.removed.length > 0 && tot > 0)) {
+        h += "<div style='background:#fff7ed;border:1px solid #fdba74;border-left:4px solid #f97316;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#7c2d12'>"
+          + "<b>&#9888; Check the Key column first.</b> "
+          + (dupWarn.length ? "The key <b>" + esc(keyCols.join(" + ")) + "</b> is not unique (" + esc(dupWarn.join("; ")) + "), so only the first row of each repeat is compared. " : "")
+          + (diff.unchanged === 0 ? "<b>0 rows are identical</b>, which usually means every run produces different IDs, so this looks like two different data loads rather than a before/after of the same records. " : "")
+          + "Pick a column that is unique <u>and</u> stays the same between runs (for example a source/business ID, not a generated hash), then Compare again.</div>";
+      }
       if (!diff.changed.length) return h + empty("No existing row was edited.");
       // club all edits by field, then by identical before → after pair
       var byField = {}, order = [];
@@ -14571,8 +14580,16 @@
       }); });
       order.sort(function (x, y) { return byField[y].rows - byField[x].rows; });
       var clip = function (v) { v = String(v); return v === "" ? "<i style='color:#94a3b8'>(empty)</i>" : esc(v.length > 90 ? v.slice(0, 90) + "…" : v); };
-      h += "<div style='font:700 14px system-ui;margin:4px 0 8px'>Fields that changed (grouped)</div>";
-      order.forEach(function (f) {
+      var vol = order.filter(function (f) { return byField[f].rows >= 3 && byField[f].np === byField[f].rows; });
+      var real = order.filter(function (f) { return vol.indexOf(f) < 0; });
+      if (vol.length) {
+        h += "<div style='background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;color:#334155'>"
+          + "<b>Different in almost every row, with a new value each time (" + vol.length + " field" + (vol.length === 1 ? "" : "s") + "):</b> these look auto-generated (IDs, keys, timestamps), so they are probably noise, not real business changes.<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:6px'>"
+          + vol.map(function (f) { return "<span style='background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:2px 8px;font:12px ui-monospace,Menlo,monospace'>" + esc(f) + " <b>" + byField[f].rows + "</b></span>"; }).join("") + "</div></div>";
+      }
+      h += "<div style='font:700 14px system-ui;margin:4px 0 8px'>" + (vol.length ? "Fields with meaningful repeated changes" : "Fields that changed (grouped)") + "</div>";
+      if (!real.length) h += empty("Every changed field has a unique value per row, see the list above.");
+      real.forEach(function (f) {
         var g = byField[f], ps = Object.keys(g.pairs).map(function (k) { return g.pairs[k]; }).sort(function (x, y) { return y.n - x.n; });
         h += "<div style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:8px;padding:9px 12px'>"
           + "<div style='display:flex;gap:10px;align-items:center'><b style='font-size:13px'>" + esc(f) + "</b><span style='margin-left:auto;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>changed in " + sh(g.rows, "row") + "</span></div>";
@@ -14975,6 +14992,12 @@
     btnRow.appendChild(runBtn);
     btnRow.appendChild(streamBtn);
     btnRow.appendChild(templatesBtn);
+    const cmpCsvBtn = document.createElement("button");
+    cmpCsvBtn.textContent = "\u21C4 Compare CSVs";
+    cmpCsvBtn.title = "Compare two downloaded CSV files (older vs newer): see added / removed / changed rows. No query needed.";
+    cmpCsvBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    cmpCsvBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
+    btnRow.appendChild(cmpCsvBtn);
     const xlsxMainBtn = document.createElement("button");
     xlsxMainBtn.textContent = "⬇ Download Excel";
     xlsxMainBtn.title = "Formatted Excel: bold coloured header, auto-sized columns, JSON blobs split into separate columns, numbers as numbers.";
@@ -17566,7 +17589,11 @@
     menu.appendChild(menuCloseX);
     menu.appendChild(colBtn);
     menu.appendChild(exportBtn);
+    const cmpIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 5h10M9 2l3 3-3 3M14 11H4m3 3l-3-3 3-3'/></svg>";
+    const cmpRow = mkBtn("dc-explore-cmp-btn", "Compare CSVs", "Compare two downloaded CSV files (older vs newer): added / removed / changed rows", "linear-gradient(135deg,#6366f1,#4338ca)", cmpIconSvg, "Diff two CSV exports");
+    cmpRow.onclick = (e) => { e.stopPropagation(); closeMenu(); try { openQeCsvCompare(); } catch (err) { dcExploreToast("Compare CSVs is unavailable here."); } };
     menu.appendChild(reopenBtn);
+    menu.appendChild(cmpRow);
 
     const fab = document.createElement("button");
     fab.id = "dc-fab";

@@ -3,7 +3,7 @@ const fs=require("fs"),http=require("http"),cp=require("child_process"),assert=r
 const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
 const code=src.slice(src.indexOf("  function openQeDiffModal"),src.indexOf("  // ── Snapshot/Compare in-tool help"));
 const html="<!doctype html><meta charset=utf-8><body><script>function makeDraggable(){}"+code+`
-var diff={added:[{Id:"A1",Name:"Jacob",Dob:"1959",City:"X"},{Id:"A2",Name:"Zed",Dob:"2000",City:"Q"}],removed:[{Id:"R1",Name:"Jacob",Dob:"1959",City:"X"}],unchanged:3,warnings:["7 duplicate key(s)"],
+var diff={added:[{Id:"A1",Name:"Jacob",Dob:"1959",City:"X"},{Id:"A2",Name:"Zed",Dob:"2000",City:"Q"}],removed:[{Id:"R1",Name:"Jacob",Dob:"1959",City:"X"}],unchanged:0,warnings:["7 duplicate key(s)"],
 changed:[{key:"K1",fields:["Seg","Match"],before:{Seg:"DM",Match:'{"a":1,"b":[1,2]}'},after:{Seg:"AB",Match:'{"a":2,"b":[1,2]}'}},{key:"K2",fields:["Seg"],before:{Seg:"X"},after:{Seg:"Y"}}]};
 openQeDiffModal(diff,["Id"],{ts:Date.now()});<\/script>`;
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -23,6 +23,7 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('Fields that changed')"),"summary is default");
  ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('changed in 2 rows')"),"Seg clubbed across 2 rows");
  ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('1 record look like the same record')"),"re-key insight (R1->A1)");
+ ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('Check the Key column first')"),"key-quality verdict");
  ok(await ev("!!document.querySelector('#dc-diff-xl')&&!!document.querySelector('#dc-diff-cp')"),"export + copy buttons");
  await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Changed/.test(b.textContent)).click()");
  ok(await ev("document.querySelectorAll('#dc-qe-diff-modal details').length")===2,"one card per changed row");
