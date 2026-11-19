@@ -14438,11 +14438,12 @@
     var bar = document.createElement("div");
     bar.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;";
     var tabs = [
+      { id: "summary", label: "★ Summary", n: "", c: "#4338ca", bg: "#e0e7ff" },
       { id: "changed", label: "✎ Changed", n: diff.changed.length, c: "#b45309", bg: "#fef3c7" },
       { id: "added", label: "+ Added", n: diff.added.length, c: "#047857", bg: "#d1fae5" },
       { id: "removed", label: "− Removed", n: diff.removed.length, c: "#b91c1c", bg: "#fee2e2" }
     ];
-    var active = diff.changed.length ? "changed" : diff.added.length ? "added" : diff.removed.length ? "removed" : "changed";
+    var active = "summary";
     var q = "";
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 18px;min-height:0;background:#f8fafc;";
     var tabEls = {};
@@ -14509,13 +14510,47 @@
       if (items.length > 300) h += "<div style='font-size:12px;color:#64748b'>Showing first 300 of " + items.length + " changed rows.</div>";
       return h;
     }
+    function summaryView() {
+      var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
+      var h = "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:14px;font-size:14px;line-height:1.7;color:#0f172a'>"
+        + "<div style='font:700 15px system-ui;margin-bottom:6px'>What happened between the two runs</div>"
+        + "<div><b style='color:#047857'>" + sh(diff.added.length, "row") + " new</b> (in current, not in previous) &nbsp;&bull;&nbsp; "
+        + "<b style='color:#b91c1c'>" + sh(diff.removed.length, "row") + " gone</b> (in previous, not in current) &nbsp;&bull;&nbsp; "
+        + "<b style='color:#b45309'>" + sh(diff.changed.length, "row") + " edited</b> (same key, different values) &nbsp;&bull;&nbsp; "
+        + "<b style='color:#64748b'>" + diff.unchanged + " identical</b></div>"
+        + "<div style='font-size:12px;color:#64748b;margin-top:4px'>Rows are matched by <b>" + esc(keyCols.join(" + ")) + "</b>. Click a tab above for the full rows.</div></div>";
+      if (!diff.changed.length) return h + empty("No existing row was edited.");
+      // club all edits by field, then by identical before → after pair
+      var byField = {}, order = [];
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) {
+        var g = byField[f]; if (!g) { g = byField[f] = { rows: 0, pairs: {}, np: 0 }; order.push(f); }
+        g.rows++;
+        var b = ch.before[f] == null ? "" : String(ch.before[f]), a = ch.after[f] == null ? "" : String(ch.after[f]);
+        var k = b + "\u0001" + a; if (!g.pairs[k]) { g.pairs[k] = { b: b, a: a, n: 0 }; g.np++; } g.pairs[k].n++;
+      }); });
+      order.sort(function (x, y) { return byField[y].rows - byField[x].rows; });
+      var clip = function (v) { v = String(v); return v === "" ? "<i style='color:#94a3b8'>(empty)</i>" : esc(v.length > 90 ? v.slice(0, 90) + "…" : v); };
+      h += "<div style='font:700 14px system-ui;margin:4px 0 8px'>Fields that changed (grouped)</div>";
+      order.forEach(function (f) {
+        var g = byField[f], ps = Object.keys(g.pairs).map(function (k) { return g.pairs[k]; }).sort(function (x, y) { return y.n - x.n; });
+        h += "<div style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:8px;padding:9px 12px'>"
+          + "<div style='display:flex;gap:10px;align-items:center'><b style='font-size:13px'>" + esc(f) + "</b><span style='margin-left:auto;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>changed in " + sh(g.rows, "row") + "</span></div>";
+        ps.slice(0, 4).forEach(function (p2) {
+          h += "<div style='margin-top:5px;font:12px/1.5 ui-monospace,Menlo,monospace;word-break:break-word'><span style='background:#fef2f2;color:#7f1d1d;padding:1px 6px;border-radius:4px'>" + clip(p2.b) + "</span> &rarr; <span style='background:#f0fdf4;color:#14532d;padding:1px 6px;border-radius:4px'>" + clip(p2.a) + "</span>"
+            + (p2.n > 1 ? " <b style='color:#475569'>&times; " + p2.n + " rows</b>" : "") + "</div>";
+        });
+        if (ps.length > 4) h += "<div style='margin-top:5px;font-size:12px;color:#64748b'>…and " + (ps.length - 4) + " other different value" + (ps.length - 4 === 1 ? "" : "s") + " (see the Changed tab)</div>";
+        h += "</div>";
+      });
+      return h;
+    }
     function paint() {
       tabs.forEach(function (t) {
         var on = t.id === active, b = tabEls[t.id];
         b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
-        b.textContent = t.label + "  " + t.n;
+        b.textContent = t.n === "" ? t.label : t.label + "  " + t.n;
       });
-      body.innerHTML = active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444");
+      body.innerHTML = active === "summary" ? summaryView() : active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444");
       body.scrollTop = 0;
     }
     paint();
