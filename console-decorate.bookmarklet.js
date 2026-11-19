@@ -14406,9 +14406,54 @@
       out.push({ col: c, uniqPrev: up, uniqCurr: uc, overlap: ov, score: score });
     });
     out.sort(function (a, b) { return b.score - a.score; });
-    return out.slice(0, 5);
+    // No good single column? Try PAIRS of the most-unique columns (e.g. Account + Month).
+    if ((!out[0] || out[0].score < 0.9) && P.length && C.length) {
+      var cand = out.concat([]).sort(function (x, y) { return Math.min(y.uniqPrev, y.uniqCurr) - Math.min(x.uniqPrev, x.uniqCurr); });
+      var cs = (cols || []).filter(function (c) { return !out.some(function (o) { return o.col === c; }); });   // columns skipped above (low-uniqueness are in `out`)
+      var pool = out.slice(0).sort(function (x, y) { return y.overlap - x.overlap; }).slice(0, 8).map(function (x) { return x.col; });
+      var pairs = [];
+      for (var i1 = 0; i1 < pool.length; i1++) for (var j1 = i1 + 1; j1 < pool.length; j1++) {
+        var A = pool[i1], B = pool[j1], sp2 = new Set(), sc2 = new Set(), k, v2;
+        for (k = 0; k < P.length; k++) sp2.add(String(P[k][A]) + "\u0001" + String(P[k][B]));
+        for (k = 0; k < C.length; k++) sc2.add(String(C[k][A]) + "\u0001" + String(C[k][B]));
+        var up2 = sp2.size / P.length, uc2 = sc2.size / C.length, in2 = 0;
+        sp2.forEach(function (x) { if (sc2.has(x)) in2++; });
+        var sco = Math.min(1, Math.min(up2, uc2) * (in2 / sp2.size));
+        pairs.push({ col: A + " + " + B, cols: [A, B], uniqPrev: up2, uniqCurr: uc2, overlap: in2 / sp2.size, score: sco });
+      }
+      pairs.sort(function (a, b) { return b.score - a.score; });
+      if (pairs[0] && (!out[0] || pairs[0].score > out[0].score + 0.15)) out = pairs.slice(0, 2).concat(out);
+    }
+    return out.slice(0, 6);
   }
-  function qeDiffSnapshots(prev, curr, keyCols) {
+  // JSON diff by PATH: only the paths whose value differs (matchKeys[0].EmailAddress: a -> b).
+  function qeJsonPathDiff(bv, av, cap) {
+    var pj = function (v) { var t = String(v == null ? "" : v).trim(); if (t.charAt(0) !== "{" && t.charAt(0) !== "[") return undefined; try { return JSON.parse(t); } catch (e) { return undefined; } };
+    var b = pj(bv), a = pj(av); if (b === undefined || a === undefined) return null;
+    var fb = {}, fa = {};
+    var flat = function (o, pth, out) {
+      if (o !== null && typeof o === "object") { var ks = Object.keys(o); if (!ks.length) out[pth || "$"] = Array.isArray(o) ? "[]" : "{}"; ks.forEach(function (k) { flat(o[k], pth ? pth + (Array.isArray(o) ? "[" + k + "]" : "." + k) : (Array.isArray(o) ? "[" + k + "]" : k), out); }); }
+      else out[pth || "$"] = o === null ? "null" : String(o);
+    };
+    flat(b, "", fb); flat(a, "", fa);
+    var seen = {}, rows = [];
+    Object.keys(fb).concat(Object.keys(fa)).forEach(function (k) {
+      if (seen[k]) return; seen[k] = 1;
+      var x = fb.hasOwnProperty(k) ? fb[k] : null, y = fa.hasOwnProperty(k) ? fa[k] : null;
+      if (x !== y) rows.push({ path: k, before: x, after: y });
+    });
+    return { rows: rows.slice(0, cap || 200), total: rows.length };
+  }
+  function qeDiffSnapshots(prev, curr, keyCols, opts) {
+    opts = opts || {};
+    var ign = {}; (opts.ignore || []).forEach(function (c) { ign[c] = 1; });
+    var nv = function (v) {
+      var x = v == null ? "" : String(v);
+      if (opts.trim) x = x.replace(/\s+/g, " ").trim();
+      if (opts.ci) x = x.toLowerCase();
+      if (opts.num && /^-?\d+(\.\d+)?$/.test(x.trim())) x = String(parseFloat(x));
+      return x;
+    };
     var warnings = [];
     var prevRows = (prev && prev.rows) || [], currRows = (curr && curr.rows) || [];
     if (!keyCols || !keyCols.length) { warnings.push("no key column selected"); return { added: [], removed: [], changed: [], unchanged: 0, warnings: warnings }; }
@@ -14418,8 +14463,9 @@
     if (addedCols.length) warnings.push("new columns: " + addedCols.join(", "));
     if (droppedCols.length) warnings.push("removed columns: " + droppedCols.join(", "));
     var prevMap = new Map(), currMap = new Map(), dupPrev = 0, dupCurr = 0;
-    prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) dupPrev++; else prevMap.set(k, r); });
-    currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) dupCurr++; else currMap.set(k, r); });
+    var dupRows = [];
+    prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) { dupPrev++; dupRows.push({ __file: "previous (dropped)", __key: k, row: r }); } else prevMap.set(k, r); });
+    currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) { dupCurr++; dupRows.push({ __file: "current (dropped)", __key: k, row: r }); } else currMap.set(k, r); });
     if (dupPrev) warnings.push(dupPrev + " duplicate key(s) in previous (first kept)");
     if (dupCurr) warnings.push(dupCurr + " duplicate key(s) in current (first kept)");
     var allCols = currCols.slice(); prevCols.forEach(function (c) { if (allCols.indexOf(c) < 0) allCols.push(c); });
@@ -14427,11 +14473,11 @@
     currMap.forEach(function (cr, k) {
       if (!prevMap.has(k)) { added.push(cr); return; }
       var pr = prevMap.get(k), diffFields = [];
-      allCols.forEach(function (c) { var a = pr[c] == null ? "" : String(pr[c]); var b = cr[c] == null ? "" : String(cr[c]); if (a !== b) diffFields.push(c); });
+      allCols.forEach(function (c) { if (ign[c]) return; var a = nv(pr[c]); var b = nv(cr[c]); if (a !== b) diffFields.push(c); });
       if (diffFields.length) changed.push({ key: k, before: pr, after: cr, fields: diffFields }); else unchanged++;
     });
     prevMap.forEach(function (pr, k) { if (!currMap.has(k)) removed.push(pr); });
-    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings };
+    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings, dupRows: dupRows };
   }
 
   // Render the diff (added/removed/changed) in a modal with sections.
@@ -14461,6 +14507,7 @@
       { id: "added", label: "+ Added", n: diff.added.length, c: "#047857", bg: "#d1fae5" },
       { id: "removed", label: "− Removed", n: diff.removed.length, c: "#b91c1c", bg: "#fee2e2" }
     ];
+    if (diff.dupRows && diff.dupRows.length) tabs.push({ id: "dups", label: "⧉ Duplicates", n: diff.dupRows.length, c: "#475569", bg: "#e2e8f0" });
     var active = diff.changed.length ? "changed" : diff.added.length ? "added" : diff.removed.length ? "removed" : "changed";
     var q = "";
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 18px;min-height:0;background:#f8fafc;";
@@ -14488,7 +14535,31 @@
       box.style.top = fullOn ? "0" : "3vh"; box.style.borderRadius = fullOn ? "0" : "12px";
       fsBtn2.textContent = fullOn ? "⤓ Exit full screen" : "⛶ Full screen";
     };
-    bar.appendChild(grpSel); bar.appendChild(wrapBtn2); bar.appendChild(fsBtn2);
+    var optBtn = document.createElement("button"); optBtn.textContent = "⚙ Options"; optBtn.title = "Ignore columns (timestamps, audit fields) and normalize case / whitespace / numbers";
+    optBtn.style.cssText = wrapBtn2.style.cssText;
+    optBtn.onclick = function () {
+      var ex = modal.querySelector("#dc-cmp-opts"); if (ex) { ex.remove(); return; }
+      if (!ctx || typeof ctx.rerun !== "function") return;
+      var o = ctx.opts || {}, allc = []; ((ctx.curr && ctx.curr.columns) || []).concat((ctx.prev && ctx.prev.columns) || []).forEach(function (c) { if (allc.indexOf(c) < 0) allc.push(c); });
+      var pop = document.createElement("div"); pop.id = "dc-cmp-opts";
+      pop.style.cssText = "position:absolute;top:118px;right:18px;z-index:5;width:380px;max-height:70vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.3);padding:14px;font:13px system-ui;color:#0f172a";
+      var ch2 = function (id, lab, on) { return "<label style='display:block;margin:4px 0'><input type='checkbox' id='" + id + "' " + (on ? "checked" : "") + "> " + lab + "</label>"; };
+      pop.innerHTML = "<div style='font:700 14px system-ui;margin-bottom:6px'>Compare options</div>"
+        + ch2("dc-o-ci", "Ignore upper/lower case", o.ci) + ch2("dc-o-trim", "Ignore extra spaces / line breaks", o.trim) + ch2("dc-o-num", "Treat 1, 1.0 and 1.00 as the same", o.num)
+        + "<div style='font:700 12px system-ui;margin:10px 0 4px'>Ignore these columns <span style='font-weight:400;color:#64748b'>(not compared)</span></div>"
+        + "<input id='dc-o-find' placeholder='find a column…' style='width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;margin-bottom:6px'>"
+        + "<div id='dc-o-cols' style='max-height:240px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;padding:4px 8px'>" + allc.map(function (c) { return "<label data-c='" + esc(c).toLowerCase() + "' style='display:block;margin:2px 0;font-size:12px'><input type='checkbox' value=\"" + esc(c) + "\" " + ((o.ignore || []).indexOf(c) >= 0 ? "checked" : "") + "> " + esc(c) + "</label>"; }).join("") + "</div>"
+        + "<div style='display:flex;gap:8px;margin-top:10px'><button id='dc-o-apply' style='cursor:pointer;border:none;background:#4338ca;color:#fff;border-radius:8px;padding:8px 14px;font:700 12px system-ui'>Apply &amp; re-compare</button><button id='dc-o-reset' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:8px 14px;font:600 12px system-ui'>Reset</button></div>";
+      box.appendChild(pop);
+      pop.querySelector("#dc-o-find").oninput = function () { var qq = this.value.toLowerCase(); pop.querySelectorAll("#dc-o-cols label").forEach(function (l) { l.style.display = l.getAttribute("data-c").indexOf(qq) >= 0 ? "block" : "none"; }); };
+      pop.querySelector("#dc-o-apply").onclick = function () {
+        var ign2 = []; pop.querySelectorAll("#dc-o-cols input:checked").forEach(function (i) { ign2.push(i.value); });
+        var no = { ci: pop.querySelector("#dc-o-ci").checked, trim: pop.querySelector("#dc-o-trim").checked, num: pop.querySelector("#dc-o-num").checked, ignore: ign2 };
+        modal.remove(); ctx.rerun(keyCols, no);
+      };
+      pop.querySelector("#dc-o-reset").onclick = function () { modal.remove(); ctx.rerun(keyCols, {}); };
+    };
+    bar.appendChild(grpSel); bar.appendChild(wrapBtn2); bar.appendChild(fsBtn2); if (ctx) bar.appendChild(optBtn);
     bar.appendChild(search);
     var xl = document.createElement("button"); xl.id = "dc-diff-xl"; xl.innerHTML = "&#11015; Excel";
     xl.title = "Download every difference as one Excel sheet (Type, Key, Field, Before, After)";
@@ -14563,12 +14634,30 @@
           + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:260px'><col><col></colgroup><thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Key</th><th style='text-align:left;padding:6px 12px'>Before</th><th style='text-align:left;padding:6px 12px'>After</th></tr></thead><tbody>";
         by[f].slice(0, 300).forEach(function (ch) {
           h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:12px ui-monospace,Menlo,monospace;word-break:break-all'>" + esc(ch.key) + "</td>"
-            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'>" + cellHtml(ch.before[f], true) + "</td>"
-            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'>" + cellHtml(ch.after[f], true) + "</td></tr>";
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'>" + pairCells(ch.before[f], ch.after[f])[0] + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'>" + pairCells(ch.before[f], ch.after[f])[1] + "</td></tr>";
         });
         h += "</tbody></table></details>";
       });
       return h;
+    }
+    function dupRowsFlat() {
+      return (diff.dupRows || []).map(function (d) { var o = { "Dropped from": d.__file, "Repeated key": d.__key }; Object.keys(d.row).forEach(function (k) { o[k] = d.row[k]; }); return o; });
+    }
+    // value cells for one changed field: JSON -> only the differing paths; otherwise plain pretty value
+    function pairCells(b0, a0) {
+      var jd2 = qeJsonPathDiff(b0, a0, 60);
+      if (jd2 && jd2.total > 0) {
+        var side = function (k) {
+          var h = "<div style='font:11px system-ui;color:#64748b;margin-bottom:4px'>" + jd2.total + " JSON path" + (jd2.total === 1 ? "" : "s") + " differ</div>";
+          jd2.rows.forEach(function (r) { var v = r[k]; h += "<div style='margin-bottom:3px'><span style='color:#4338ca;font-weight:700'>" + esc(r.path) + "</span>: " + (v === null ? "<i style='opacity:.6'>(absent)</i>" : esc(v)) + "</div>"; });
+          if (jd2.total > jd2.rows.length) h += "<div style='font-size:11px;opacity:.7'>…" + (jd2.total - jd2.rows.length) + " more</div>";
+          return h;
+        };
+        return [side("before"), side("after")];
+      }
+      var b = pretty(b0), a = pretty(a0);
+      return [b === "" ? "<i style='color:#fca5a5'>(empty)</i>" : esc(b), a === "" ? "<i style='color:#86efac'>(empty)</i>" : esc(a)];
     }
     function changedCards() {
       var items = diff.changed.filter(function (ch) { return !q || hit(ch.key) || ch.fields.some(function (f) { return hit(f) || hit(ch.before[f]) || hit(ch.after[f]); }); });
@@ -14583,10 +14672,10 @@
           + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:200px'><col><col></colgroup>"
           + "<thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Field</th><th style='text-align:left;padding:6px 12px'>Before (previous)</th><th style='text-align:left;padding:6px 12px'>After (current)</th></tr></thead><tbody>";
         ch.fields.forEach(function (f) {
-          var b = pretty(ch.before[f]), a = pretty(ch.after[f]);
+          var pc = pairCells(ch.before[f], ch.after[f]);
           h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:700 12px system-ui;color:#0f172a;word-break:break-word'>" + esc(f) + "</td>"
-            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'><div style='max-height:260px;overflow:auto'>" + (b === "" ? "<i style='color:#fca5a5'>(empty)</i>" : esc(b)) + "</div></td>"
-            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'><div style='max-height:260px;overflow:auto'>" + (a === "" ? "<i style='color:#86efac'>(empty)</i>" : esc(a)) + "</div></td></tr>";
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'><div style='max-height:300px;overflow:auto'>" + pc[0] + "</div></td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'><div style='max-height:300px;overflow:auto'>" + pc[1] + "</div></td></tr>";
         });
         h += "</tbody></table></details>";
       });
@@ -14627,17 +14716,36 @@
     function noticesView() {
       var h = "";
       var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
-      if (ctx && ctx.prev && ctx.curr && keyCols.length === 1) {
+      if (ctx && ctx.prev && ctx.curr && keyCols.length >= 1) {
         if (!ctx.sugg) ctx.sugg = qeSuggestKeys(ctx.prev, ctx.curr, (ctx.curr.columns || []).filter(function (c) { return (ctx.prev.columns || []).indexOf(c) >= 0; }));
-        var top = ctx.sugg[0], cur = ctx.sugg.filter(function (x) { return x.col === keyCols[0]; })[0];
+        var top = ctx.sugg[0], cur = ctx.sugg.filter(function (x) { return x.col === keyCols.join(" + "); })[0];
         var curScore = cur ? cur.score : 0;
-        if (top && top.col !== keyCols[0] && top.score >= 0.4 && top.score > curScore + 0.15) {
+        if (top && top.col !== keyCols.join(" + ") && top.score >= 0.4 && top.score > curScore + 0.15) {
           h += "<div style='background:#ecfdf5;border:1px solid #6ee7b7;border-left:4px solid #10b981;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#065f46;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
             + "<div style='flex:1;min-width:260px'><b>&#10024; Better key found: " + esc(top.col) + "</b><br>It is unique in " + Math.round(Math.min(top.uniqPrev, top.uniqCurr) * 100) + "% of rows and " + Math.round(top.overlap * 100) + "% of its values appear in both runs. "
             + "Your current key <b>" + esc(keyCols[0]) + "</b> scores " + Math.round(curScore * 100) + "/100 (" + Math.round(top.score * 100) + "/100 for the suggestion).</div>"
             + "<button id='dc-use-key' style='cursor:pointer;border:none;background:#059669;color:#fff;border-radius:8px;padding:9px 15px;font:700 12px system-ui'>Re-compare using " + esc(top.col) + "</button></div>";
-        } else if (top && top.col === keyCols[0]) {
+        } else if (top && top.col === keyCols.join(" + ")) {
           h += "<div style='font-size:12px;color:#047857;margin-bottom:10px'>&#10003; Key looks good: " + esc(top.col) + " is unique and shared between both runs.</div>";
+        }
+      }
+      if (ctx && ctx.sugg && ctx.sugg.length > 1) {
+        var ties = ctx.sugg.filter(function (x) { return x.score >= 0.9 && x.score >= ctx.sugg[0].score - 0.02 && x.col !== keyCols.join(" + "); });
+        if (ties.length) {
+          h += "<div style='font-size:12px;color:#475569;margin-bottom:10px'>Other equally good keys (click to re-compare): ";
+          ties.slice(0, 5).forEach(function (x, ti) { h += "<button data-tie='" + ctx.sugg.indexOf(x) + "' style='cursor:pointer;margin:2px 4px 2px 0;border:1px solid #6ee7b7;background:#ecfdf5;color:#065f46;border-radius:999px;padding:3px 10px;font:600 11px system-ui'>" + esc(x.col) + "</button>"; });
+          h += "</div>";
+        }
+      }
+      // noise: columns that change in nearly EVERY changed row (timestamps, generated values) -> one click to ignore
+      if (ctx && diff.changed.length >= 3) {
+        var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
+        var noisy = Object.keys(cnt).filter(function (f) { return cnt[f] >= diff.changed.length * 0.9; });
+        if (noisy.length) {
+          h += "<div style='background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #64748b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;color:#334155;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+            + "<div style='flex:1;min-width:260px'><b>" + noisy.length + " column" + (noisy.length === 1 ? "" : "s") + " change in almost every changed row</b> (" + noisy.slice(0, 6).map(esc).join(", ") + (noisy.length > 6 ? ", …" : "") + "). These are often timestamps or generated values. Ignore them to see only the real changes.</div>"
+            + "<button id='dc-ign-noise' style='cursor:pointer;border:none;background:#475569;color:#fff;border-radius:8px;padding:9px 15px;font:700 12px system-ui'>Ignore these " + noisy.length + "</button></div>";
+          ctx._noisy = noisy;
         }
       }
       var rk = findRekeyed();
@@ -14665,7 +14773,7 @@
         b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
         b.textContent = t.n === "" ? t.label : t.label + "  " + t.n;
       });
-      body.innerHTML = noticesView() + (active === "changed" ? (view === "field" ? changedByField() : changedCards()) : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444"));
+      body.innerHTML = noticesView() + (active === "changed" ? (view === "field" ? changedByField() : changedCards()) : active === "added" ? rowsTable(diff.added, "#10b981") : active === "dups" ? rowsTable(dupRowsFlat(), "#64748b") : rowsTable(diff.removed, "#ef4444"));
       body.scrollTop = 0;
       // group-by control: changed tab -> By row / By field ; added/removed -> any column
       var opts = "";
@@ -14673,7 +14781,10 @@
       else { var src2 = (active === "added" ? diff.added : diff.removed)[0] || {}; opts = "<option value=''>Group: none</option>" + Object.keys(src2).map(function (c) { return "<option value=\"" + esc(c) + "\"" + (grp === c ? " selected" : "") + ">Group by " + esc(c) + "</option>"; }).join(""); }
       grpSel.innerHTML = opts;
       var uk = body.querySelector("#dc-use-key");
-      if (uk && ctx && typeof ctx.rerun === "function") uk.onclick = function () { modal.remove(); ctx.rerun(ctx.sugg[0].col); };
+      if (uk && ctx && typeof ctx.rerun === "function") uk.onclick = function () { modal.remove(); ctx.rerun(ctx.sugg[0].cols || [ctx.sugg[0].col]); };
+      body.querySelectorAll("[data-tie]").forEach(function (tb) { tb.onclick = function () { var x = ctx.sugg[parseInt(tb.getAttribute("data-tie"), 10)]; modal.remove(); ctx.rerun(x.cols || [x.col]); }; });
+      var ig = body.querySelector("#dc-ign-noise");
+      if (ig && ctx) ig.onclick = function () { var o = Object.assign({}, ctx.opts || {}); o.ignore = (o.ignore || []).concat(ctx._noisy || []); modal.remove(); ctx.rerun(keyCols, o); };
     }
     paint();
 
@@ -14681,6 +14792,38 @@
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
     try { makeDraggable(box, hdr); } catch (e) {}
+  }
+
+  // Snapshot HISTORY: every saved run of this query with row count + what changed vs the run before it (trend at a glance).
+  function openQeSnapHistory(snaps, current, keyCols) {
+    var esc = function (x) { return String(x == null ? "" : x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+    var old = document.getElementById("dc-qe-hist"); if (old) old.remove();
+    var seq = [{ label: "Current result (on screen)", ts: Date.now(), columns: current.columns, rows: current.rows, cur: true }].concat(snaps);   // newest first
+    var data = seq.map(function (sn, i) {
+      var prev = seq[i + 1], d = prev && keyCols.length ? qeDiffSnapshots(prev, sn, keyCols) : null;
+      return { sn: sn, n: (sn.rows || []).length, d: d, delta: prev ? (sn.rows || []).length - (prev.rows || []).length : null };
+    });
+    var mx = Math.max.apply(null, data.map(function (x) { return x.n; }).concat([1]));
+    var modal = document.createElement("div"); modal.id = "dc-qe-hist";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;font-family:-apple-system,'Segoe UI',sans-serif;";
+    var box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:12px;width:min(980px,96vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4)";
+    var h = "<div style='padding:14px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;justify-content:space-between;align-items:center'><div><div style='font:700 16px system-ui'>Snapshot history</div><div style='font:12px system-ui;opacity:.9'>Each run vs the run before it &middot; key: " + esc(keyCols.join(" + ") || "(none chosen)") + "</div></div><button id='dc-hist-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer'>&times;</button></div>";
+    h += "<div style='overflow:auto;padding:14px 18px'><table style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr style='text-align:left;color:#475569;font:700 11px system-ui;text-transform:uppercase'><th style='padding:6px 8px'>Run</th><th style='padding:6px 8px'>Rows</th><th style='padding:6px 8px;min-width:160px'>Size</th><th style='padding:6px 8px'>vs previous run</th></tr></thead><tbody>";
+    data.forEach(function (x, i) {
+      var when = x.sn.cur ? "" : (x.sn.ts ? new Date(x.sn.ts).toLocaleString() : "");
+      var chg = x.d ? "<span style='color:#047857;font-weight:700'>+" + x.d.added.length + " new</span> &nbsp; <span style='color:#b91c1c;font-weight:700'>&minus;" + x.d.removed.length + " gone</span> &nbsp; <span style='color:#b45309;font-weight:700'>~" + x.d.changed.length + " edited</span> &nbsp; <span style='color:#64748b'>" + x.d.unchanged + " same</span>" : "<span style='color:#94a3b8'>" + (keyCols.length ? "first run" : "pick a key to compare") + "</span>";
+      var dl = x.delta == null ? "" : " <span style='color:" + (x.delta > 0 ? "#047857" : x.delta < 0 ? "#b91c1c" : "#64748b") + ";font:600 11px system-ui'>" + (x.delta > 0 ? "+" : "") + x.delta + "</span>";
+      h += "<tr style='border-top:1px solid #eef2f6;background:" + (x.sn.cur ? "#f5f3ff" : "#fff") + "'><td style='padding:8px'><b>" + esc(x.sn.label || (x.sn.cur ? "" : "(unnamed)")) + "</b><div style='font-size:11px;color:#64748b'>" + esc(when) + "</div></td>"
+        + "<td style='padding:8px;font-weight:700'>" + x.n.toLocaleString() + dl + "</td>"
+        + "<td style='padding:8px'><div style='height:9px;border-radius:5px;background:#e2e8f0'><div style='height:9px;border-radius:5px;background:#6366f1;width:" + Math.max(2, Math.round(100 * x.n / mx)) + "%'></div></div></td>"
+        + "<td style='padding:8px'>" + chg + "</td></tr>";
+    });
+    h += "</tbody></table><div style='font-size:12px;color:#64748b;margin-top:10px'>Save a snapshot after each run to build this history. Use <b>Compare</b> on any two runs for the row-level detail.</div></div>";
+    box.innerHTML = h; modal.appendChild(box);
+    modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    box.querySelector("#dc-hist-x").onclick = function () { modal.remove(); };
   }
 
   // ── Snapshot/Compare in-tool help ("i") ───────────────────────────────────
@@ -14843,7 +14986,7 @@
       var d = qeDiffSnapshots(snapOld, snapNew, keyCols);
       // label the diff header as the older file (prevSnap carries .label/.ts; use filename)
       var pSnap = { label: "older CSV", columns: snapOld.columns };
-      var cx = { prev: snapOld, curr: snapNew }; cx.rerun = function (col) { var d2 = qeDiffSnapshots(snapOld, snapNew, [col]); openQeDiffModal(d2, [col], pSnap, cx); };
+      var cx = { prev: snapOld, curr: snapNew }; cx.rerun = function (col, o) { var ks = Array.isArray(col) ? col : [col]; cx.opts = o || cx.opts; var d2 = qeDiffSnapshots(snapOld, snapNew, ks, cx.opts); openQeDiffModal(d2, ks, pSnap, cx); };
       openQeDiffModal(d, keyCols, pSnap, cx);
     };
 
@@ -17445,6 +17588,10 @@
       csvCmpBtn.title = "Compare two CSV files (e.g. two Download CSV exports from different runs). No row limit — good for large results.";
       csvCmpBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#4338ca;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 11px system-ui;";
       csvCmpBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
+      var histBtn = document.createElement("button");
+      histBtn.textContent = "History"; histBtn.title = "See every saved run of this query: row counts and what changed between runs";
+      histBtn.style.cssText = csvCmpBtn.style.cssText;
+      histBtn.onclick = function () { try { openQeSnapHistory(qeSnapList(snapSql), { columns: allCols, rows: rows }, [keySel.value].filter(Boolean)); } catch (e) {} };
       // "?" help — opens the full how-it-works + testing-steps guide (no org calls).
       var helpBtn = document.createElement("button");
       helpBtn.textContent = "i"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
@@ -17495,7 +17642,7 @@
         var keyCols = [keySel.value].filter(Boolean);
         var curSnap = { columns: allCols, rows: rows }, oldSnap = list[idx];
         var d = qeDiffSnapshots(oldSnap, curSnap, keyCols);
-        var cx = { prev: oldSnap, curr: curSnap }; cx.rerun = function (col) { var d2 = qeDiffSnapshots(oldSnap, curSnap, [col]); openQeDiffModal(d2, [col], oldSnap, cx); };
+        var cx = { prev: oldSnap, curr: curSnap }; cx.rerun = function (col, o) { var ks = Array.isArray(col) ? col : [col]; cx.opts = o || cx.opts; var d2 = qeDiffSnapshots(oldSnap, curSnap, ks, cx.opts); openQeDiffModal(d2, ks, oldSnap, cx); };
         openQeDiffModal(d, keyCols, oldSnap, cx);
       };
       delBtn.onclick = function () {
@@ -17509,7 +17656,7 @@
         setTimeout(function () { snapMsg.textContent = ""; }, 2000);
       };
       snapBar.appendChild(saveSnapBtn); snapBar.appendChild(keyWrap);
-      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(csvCmpBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
+      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(csvCmpBtn); snapBar.appendChild(histBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
       refreshSnapList();
 
       box.appendChild(hdr);

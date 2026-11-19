@@ -4,7 +4,7 @@ const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
 const sk=src.slice(src.indexOf("  function qeSuggestKeys"),src.indexOf("  function qeDiffSnapshots"));
 const code=sk+src.slice(src.indexOf("  function openQeDiffModal"),src.indexOf("  // ── Snapshot/Compare in-tool help"));
 const html="<!doctype html><meta charset=utf-8><body><script>function makeDraggable(){}"+code+`
-var diff={added:[{Id:"A1",Name:"Jacob",Dob:"1959",City:"X"},{Id:"A2",Name:"Zed",Dob:"2000",City:"Q"}],removed:[{Id:"R1",Name:"Jacob",Dob:"1959",City:"X"}],unchanged:0,warnings:["7 duplicate key(s)"],
+var diff={added:[{Id:"A1",Name:"Jacob",Dob:"1959",City:"X"},{Id:"A2",Name:"Zed",Dob:"2000",City:"Q"}],removed:[{Id:"R1",Name:"Jacob",Dob:"1959",City:"X"}],unchanged:0,warnings:["7 duplicate key(s)"],dupRows:[{__file:"previous (dropped)",__key:"K9",row:{Id:"K9",Name:"dup"}}],
 changed:[{key:"K1",fields:["Seg","Match"],before:{Seg:"DM",Match:'{"a":1,"b":[1,2]}'},after:{Seg:"AB",Match:'{"a":2,"b":[1,2]}'}},{key:"K2",fields:["Seg"],before:{Seg:"X"},after:{Seg:"Y"}}]};
 openQeDiffModal(diff,["Id"],{ts:Date.now()});<\/script>`;
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -27,7 +27,7 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Changed/.test(b.textContent)).click()");
  ok(await ev("document.querySelectorAll('#dc-qe-diff-modal details').length")===2,"one card per changed row");
  ok(await ev("document.querySelector('#dc-qe-diff-modal details').innerText.includes('2 fields changed')"),"field count");
- ok(await ev("document.querySelector('#dc-qe-diff-modal details').innerText.includes('\"a\": 2')"),"JSON pretty-printed after");
+ ok(await ev("document.querySelector('#dc-qe-diff-modal details').innerText.includes('1 JSON path differ')"),"JSON shows only the differing path");
  ok(await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].map(b=>b.textContent.replace(/\\s+/g,' ')).join('|')").then?true:true,"");
  await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Added/.test(b.textContent)).click()");
  ok(await ev("document.querySelectorAll('#dc-qe-diff-modal tbody tr').length")===2,"added tab shows 2 rows");
@@ -42,9 +42,16 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelectorAll('#dc-qe-diff-modal details').length")===2,"added grouped by City -> 2 groups");
  await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Full screen/.test(b.textContent)).click()");
  ok(await ev("document.querySelector('#dc-qe-diff-modal > div').getBoundingClientRect().width")>=1590,"fullscreen widens");
+ ok(await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].some(b=>/Duplicates/.test(b.textContent))"),"duplicates tab appears when rows were dropped");
+ await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Duplicates/.test(b.textContent)).click()");
+ ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('previous (dropped)')"),"duplicates tab lists dropped rows");
  await ev('var P=[],C=[];for(var i=0;i<30;i++){P.push({H:"p"+i,S:"s"+i});C.push({H:"c"+i,S:"s"+i});}\nvar rr=null;openQeDiffModal({added:[],removed:[],changed:[],unchanged:0,warnings:[]},["H"],{ts:1},{prev:{columns:["H","S"],rows:P},curr:{columns:["H","S"],rows:C},rerun:function(c){window.__re=c;}});');
  ok(await ev("!!document.querySelector('#dc-use-key')"),"better-key suggestion shown (H hash -> S)");
  await ev("document.querySelector('#dc-use-key').click()");
- ok(await ev("window.__re")==="S","one click re-runs with suggested key S");
+ ok(await ev("JSON.stringify(window.__re)")==='["S"]',"one click re-runs with suggested key S");
+ await ev("openQeDiffModal({added:[],removed:[],changed:[1,2,3].map(function(i){return {key:'k'+i,fields:['Mod','N'],before:{Mod:'t1',N:'a'+i},after:{Mod:'t2',N:'b'+i}};}),unchanged:5,warnings:[]},['Id'],{ts:1},{prev:{columns:['Id','Mod','N'],rows:[]},curr:{columns:['Id','Mod','N'],rows:[]},rerun:function(k,o){window.__o=o;}})");
+ ok(await ev("!!document.querySelector('#dc-ign-noise')"),"noise (changed in every row) offers one-click ignore");
+ await ev("document.querySelector('#dc-ign-noise').click()");
+ ok(await ev("JSON.stringify(window.__o.ignore)")==='["Mod","N"]',"ignore passes noisy columns to re-compare");
  console.log("qe-diff-modal-browser: "+n+" checks passed");ch.kill();srv.close();process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1)});
