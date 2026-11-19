@@ -15727,10 +15727,35 @@
       return qeResolveDs(sql);
     }
     // Every data space this page session has actually seen (never invented), best guess first.
+    // The Query Editor workspace header shows "Data Space" + its LABEL (e.g. "TD Insurance") as plain text. The API name
+    // isn't shown, so these are only CANDIDATES to try: a name is used only if the table is really found with it.
+    function qeWorkspaceSpaceLabel() {
+      var lab = "";
+      try {
+        eachElement(document, function (el) {
+          if (lab || el.children.length) return;
+          if (!/^\s*Data\s*Space\s*:?\s*$/i.test(el.textContent || "")) return;
+          var par = el.parentElement, tx = "";
+          for (var d = 0; d < 3 && par && !tx; d++, par = par.parentElement) {
+            tx = String(par.innerText || par.textContent || "").replace(/Data\s*Space\s*:?/i, "").replace(/\s+/g, " ").trim();
+            if (tx.length > 60) tx = "";
+          }
+          if (tx && /^[\w .&'-]+$/.test(tx)) lab = tx;
+        });
+      } catch (e) {}
+      return lab;
+    }
+    function qeSpaceVariants(label) {
+      var v = [], l = String(label || "").trim();
+      if (!l) return v;
+      [l, l.replace(/\s+/g, "_"), l.replace(/\s+/g, ""), l.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "")].forEach(function (x) { if (x && v.indexOf(x) < 0) v.push(x); });
+      return v;
+    }
     function qeKnownSpaces(first) {
       var seen = {}, out = [];
       function add(x) { if (x == null) return; x = String(x); if (!seen[x]) { seen[x] = 1; out.push(x); } }
       add(first);
+      try { qeSpaceVariants(qeWorkspaceSpaceLabel()).forEach(add); } catch (e) {}
       try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
       try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
       try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}
@@ -16763,13 +16788,7 @@
       // Run a query; if the table "does not exist" in the guessed data space, retry in every other space this page session
       // has actually seen (never invented names), remember the one that works for that table and report it (r._space).
       function qeFetchAnySpace(sql, onProg, cancel) {
-        var first = qeDsForSql(sql), tried = {}, cands = [];
-        function add(x) { if (x == null) return; x = String(x); if (!tried[x]) { tried[x] = 1; cands.push(x); } }
-        add(first);
-        try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
-        try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
-        try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}
-        add(""); add("default");
+        var cands = qeKnownSpaces(qeDsForSql(sql));
         var fm = String(sql || "").match(/\bFROM\s+\(?\s*"?([A-Za-z0-9_]+)"?/i), tbl = fm ? fm[1] : "", lastErr = null;
         function go(i) {
           return qeFetchExport(sql, cands[i], onProg || function () {}, cancel || function () { return false; }).then(function (r) {
@@ -16778,7 +16797,7 @@
             return r;
           }, function (e) {
             lastErr = lastErr || e;
-            if (/does not exist|not found|doesn.t exist/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
+            if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
             throw (i > 0 && lastErr) ? lastErr : e;
           });
         }
@@ -17083,7 +17102,7 @@
               return { r: r, space: spaces[i] };
             }, function (e) {
               firstErr = firstErr || e;
-              if (/does not exist|not found|doesn.t exist/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
+              if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
               throw firstErr;
             });
           }
