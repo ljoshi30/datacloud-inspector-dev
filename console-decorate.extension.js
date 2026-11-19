@@ -16634,7 +16634,7 @@
         if (st.tables) return st.tables;
         var seen = {}, out = [], cur = curDs();
         function add(n, ds) { if (!n) return; if (seen[n]) { if (ds && !seen[n].ds) seen[n].ds = ds; return; } seen[n] = { n: n, ds: ds || "" }; out.push(seen[n]); }
-        try { Object.keys(_dsByObject).forEach(function (k) { if (!_dsGuess[k]) add(k, _dsByObject[k]); }); } catch (e) {}
+        try { for (var dk in _dsByObject) if (!_dsGuess[dk]) add(dk, _dsByObject[dk]); } catch (e) {}   // suggestions only: never used to pick a space for another object
         try { Object.keys(_dcObjSeen).forEach(function (k) { add(k, (_dsByObject[k] != null && !_dsGuess[k]) ? _dsByObject[k] : ""); }); } catch (e) {}
         try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(function (n) { add(n, ""); }); } catch (e) {}
         recent().forEach(function (n) { add(n, ""); });
