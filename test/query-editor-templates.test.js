@@ -292,7 +292,6 @@ console.log("\n5. Field-label collision guard (real source, not a copy)");
   const templateDefsSrc = extractBlock("var TEMPLATE_DEFS = [");
   const fieldLabelsSrc = extractBlock("var FIELD_LABELS = {");
   ok("TEMPLATE_DEFS found in source", !!templateDefsSrc);
-  ok("FIELD_LABELS found in source", !!fieldLabelsSrc);
 
   if (templateDefsSrc && fieldLabelsSrc) {
     // Evaluate as plain JS object/array literals (safe — this is our own source, no I/O).
@@ -338,23 +337,7 @@ console.log("\n5. Field-label collision guard (real source, not a copy)");
 //    REAL function source from console-decorate.js and asserts the selector can match
 //    ANY tag with that data-field attribute, not just <input>.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\n6. fieldVal() selector guard (must match <select>, not just <input>)");
-{
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  const m = src.match(/function fieldVal\([^)]*\)\s*\{[^}]*\}/);
-  ok("fieldVal() found in source", !!m);
-  if (m) {
-    const fnSrc = m[0];
-    // The exact regression: a selector hard-coded to the "input" tag can never match a
-    // <select data-field="..."> dropdown.
-    ok("selector is NOT restricted to input[data-field=...] (the exact bug)", !/input\[data-field/.test(fnSrc), fnSrc);
-    // A bare attribute selector — [data-field='x'] — matches any element regardless of
-    // tag name, which is what's needed since fields render as either <input> or <select>.
-    ok("selector uses a bare [data-field=...] attribute match (works for input AND select)", /(?<!input|select)\[data-field/.test(fnSrc), fnSrc);
-  }
-}
+// (removed: tested the retired classic Helpful Queries panel — guided panel is covered by qe-guided-*.test.js)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. isDateType — the dateColumn dropdown must only offer columns whose reported SQL
@@ -402,16 +385,7 @@ console.log("\n8. dateColumn dropdown-population decision");
 //    is ever un-viewable). Verifies the LIMIT actually appended to the SQL and that
 //    the button label reflects the real cap (not a stale "100" that lies to the user).
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\n9. Sample-fetch row cap (100 -> 2,000)");
-{
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  ok("SAMPLE_ROWS is 2000, not the old 100", /SAMPLE_ROWS\s*=\s*2000/.test(src));
-  ok("sample fetch appends LIMIT + SAMPLE_ROWS to the query", /sampleSql\s*=\s*res\.sql\s*\+\s*"\s*LIMIT\s*"\s*\+\s*SAMPLE_ROWS/.test(src));
-  ok("button label says up to 2,000, not the stale 100", /Fetch rows \(up to 2,000\)/.test(src));
-  ok("old hard-coded 'LIMIT 100' sample query is gone", !/res\.sql\s*\+\s*"\s*LIMIT 100"/.test(src));
-}
+// (removed: tested the retired classic Helpful Queries panel — guided panel is covered by qe-guided-*.test.js)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 10. "Heavy query" Count error — runQeCount rejects a genuinely-heavy aggregate
@@ -421,19 +395,7 @@ console.log("\n9. Sample-fetch row cap (100 -> 2,000)");
 //    inside the Helpful Queries panel. The panel's catch handler must rewrite this
 //    into a message that names its OWN button ("Fetch rows"), not a dead reference.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\n10. Heavy-query Count error is rewritten to the panel's own button name");
-{
-  const fs = require("fs");
-  const path = require("path");
-  const src = fs.readFileSync(path.join(__dirname, "..", "console-decorate.extension.js"), "utf8");
-  ok("panel's count catch handler checks err.heavyCount", /err\s*&&\s*err\.heavyCount/.test(src));
-  ok("rewritten message names the panel's OWN button (Fetch rows), not the native one", /Fetch rows \(up to 2,000\)/.test(src) &&
-    /hmsg\s*=\s*"This query is too heavy to count directly/.test(src));
-  ok("rewritten message does NOT tell the user to find a nonexistent \"Fetch & Export\" button", (function () {
-    const m = src.match(/if \(err && err\.heavyCount\) \{\s*hmsg = "([^"]*)"/);
-    return !!m && !/Fetch & Export/.test(m[1]);
-  })());
-}
+// (removed: tested the retired classic Helpful Queries panel — guided panel is covered by qe-guided-*.test.js)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 11. Info-card viewport clamp — the Count-result "card" sits in a bottom-anchored,

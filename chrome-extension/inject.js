@@ -16454,26 +16454,7 @@
     // reference — verified before writing this, nothing invented. Mirrored 1:1 in
     // test/query-editor-templates.test.js; keep both in sync if you change these.
     var qeTemplates = {
-      existsProbe:          (obj)                       => `SELECT COUNT(*) AS row_count FROM ${sqlQuoteIdent(obj)}`,
       fieldsProbe:          (obj)                       => `SELECT * FROM ${sqlQuoteIdent(obj)} LIMIT 1`,
-      exactDuplicates:      (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} HAVING COUNT(*) > 1`,
-      nullsOrBlanks:        (obj, col)                  => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(col)} IS NULL OR TRIM(${sqlQuoteIdent(col)}) = ''`,
-      valueDistribution:    (obj, col)                  => `SELECT ${sqlQuoteIdent(col)}, COUNT(*) AS value_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(col)} ORDER BY COUNT(*) DESC`,
-      normalizedDuplicates: (obj, col)                  => `SELECT UPPER(TRIM(${sqlQuoteIdent(col)})) AS normalized_value, COUNT(*) AS dup_count FROM ${sqlQuoteIdent(obj)} GROUP BY UPPER(TRIM(${sqlQuoteIdent(col)})) HAVING COUNT(*) > 1`,
-      betweenDates:         (obj, dateCol, from, to)      => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} BETWEEN ${dateOrTimestampLiteral(from)} AND ${dateOrTimestampLiteral(to)}`,
-      orphanedForeignKey:   (childObj, childFk, parentObj, parentKey) => `SELECT c.* FROM ${sqlQuoteIdent(childObj)} c LEFT JOIN ${sqlQuoteIdent(parentObj)} p ON c.${sqlQuoteIdent(childFk)} = p.${sqlQuoteIdent(parentKey)} WHERE p.${sqlQuoteIdent(parentKey)} IS NULL`,
-      cardinalityCheck:     (obj, fkCol, expected)       => `SELECT ${sqlQuoteIdent(fkCol)}, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY ${sqlQuoteIdent(fkCol)} HAVING COUNT(*) <> ${Number(expected)}`,
-      // linkDmo is user-supplied — an org can have MULTIPLE Identity Resolution rulesets,
-      // each producing its own separately-named link DMO (e.g. IndividualIdentityLink__dlm,
-      // UnifiedLinkssotAccount001__dlm, ...). There is no single universal name and no
-      // SQL-queryable catalog to auto-discover it, so — same as every other object field
-      // in this panel — the user types the exact one they want to check.
-      irConsolidationRate:  (linkDmo) => { var t = sqlQuoteIdent(linkDmo); return `SELECT ${t}.ssot__DataSourceId__c AS DataSourceId__c, ${t}.ssot__DataSourceObjectId__c AS DataSourceObjectId__c, APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c) AS unq_Unified_Individuals__c, COUNT(${t}.SourceRecordId__c) AS cnt_Source_Records__c, (1 - APPROX_COUNT_DISTINCT(${t}.UnifiedRecordId__c)/COUNT(${t}.SourceRecordId__c))*100 AS per_consolidation_rate__c FROM ${t} GROUP BY DataSourceId__c, DataSourceObjectId__c`; },
-      safeTypeCheck:        (obj, col, type)             => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE TRY_CAST(${sqlQuoteIdent(col)} AS ${type}) IS NULL AND ${sqlQuoteIdent(col)} IS NOT NULL`,
-      freshnessCheck:       (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} < CURRENT_DATE - INTERVAL '${Number(days)} days'`,
-      recordAge:            (obj, dateCol)               => `SELECT *, CURRENT_DATE - ${sqlQuoteIdent(dateCol)} AS days_old FROM ${sqlQuoteIdent(obj)}`,
-      rollingWindow:        (obj, dateCol, days)         => `SELECT * FROM ${sqlQuoteIdent(obj)} WHERE ${sqlQuoteIdent(dateCol)} >= CURRENT_DATE - INTERVAL '${Number(days)} days'`,
-      trendByPeriod:        (obj, dateCol, period)       => `SELECT DATE_TRUNC('${period}', ${sqlQuoteIdent(dateCol)}) AS period, COUNT(*) AS record_count FROM ${sqlQuoteIdent(obj)} GROUP BY DATE_TRUNC('${period}', ${sqlQuoteIdent(dateCol)}) ORDER BY period`,
     };
 
     // Identifier-safety validation — mirrors test/query-editor-templates.test.js
@@ -16719,6 +16700,12 @@
           verdict: function (r) { var b = num(r.bad), t = num(r.total); if (!b) return { level: "ok", text: "No empty values in " + fmt(t) + " rows." }; return { level: b === t ? "bad" : "warn", text: fmt(b) + " of " + fmt(t) + " rows (" + pct(b, t) + "%) are empty." }; },
           next: "Required fields (IDs, emails) should be 0%." },
         dupCheck("dupes", false), dupCheck("normdupes", true),
+        { id: "cardinality", goals: ["mapping"], title: "Keys that do not appear exactly N times", plain: "Checks a one-to-one / one-to-N relationship: lists every key that shows up a different number of times than expected (N=1 means each key must be unique).",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id", label: "Key column" }, { k: "n", kind: "num", label: "Each key should appear exactly (times)", def: "1" }],
+          summary: function (p) { var n = Math.max(0, Math.floor(Number(p.n))) || 1; return "SELECT COUNT(*) AS keys_total, COALESCE(SUM(CASE WHEN record_count <> " + n + " THEN 1 ELSE 0 END), 0) AS off FROM (SELECT " + Q(p.c) + ", COUNT(*) AS record_count FROM " + T(p) + " GROUP BY " + Q(p.c) + ") x"; },
+          rows: function (p) { var n = Math.max(0, Math.floor(Number(p.n))) || 1; return "SELECT " + Q(p.c) + ", COUNT(*) AS record_count FROM " + T(p) + " GROUP BY " + Q(p.c) + " HAVING COUNT(*) <> " + n + " ORDER BY record_count DESC"; },
+          verdict: function (r, p) { var o = num(r.off), t = num(r.keys_total), n = Math.max(0, Math.floor(Number(p.n))) || 1; return o ? { level: "warn", text: fmt(o) + " of " + fmt(t) + " keys do not appear exactly " + n + " time" + (n === 1 ? "" : "s") + "." } : { level: "ok", text: "All " + fmt(t) + " keys appear exactly " + n + " time" + (n === 1 ? "" : "s") + "." }; },
+          next: "Open the rows to see which keys repeat too often or too rarely." },
         { id: "distinct", goals: ["explore", "mapping"], title: "Distinct values in a field", plain: "Lists every different value in a column with how often it appears, so you can eyeball typos, unexpected codes and blanks.",
           fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "any", label: "Field" }], inline: true,
           summary: function (p) { return "SELECT COUNT(*) AS total, COUNT(" + Q(p.c) + ") AS non_null, COUNT(DISTINCT " + Q(p.c) + ") AS distinct_values FROM " + T(p); },
@@ -16802,7 +16789,7 @@
         { id: "dates", icon: "📅", title: "Dates and times", sub: "between two dates or times, trend and gaps, impossible dates" }
       ];
       // One home goal per check, so the same feature never appears under several goals.
-      var HOME = { health: "loaded", fresh: "loaded", blank: "loaded", dupes: "loaded", distinct: "loaded", typecheck: "mapping", mapMissing: "mapping", dqBySource: "idrready", dqPerIndividual: "idrready", splitValue: "idrready", idrHealth: "idr", idrBySource: "idr", idrOverMerge: "idr", idrSourceMissing: "idr", idrUnifiedNoSource: "idr", email: "contact", whitespace: "contact", casemix: "contact", normdupes: "contact", between: "dates", trend: "dates", datesanity: "dates" };
+      var HOME = { health: "loaded", fresh: "loaded", blank: "loaded", dupes: "loaded", distinct: "loaded", typecheck: "mapping", mapMissing: "mapping", cardinality: "mapping", dqBySource: "idrready", dqPerIndividual: "idrready", splitValue: "idrready", idrHealth: "idr", idrBySource: "idr", idrOverMerge: "idr", idrSourceMissing: "idr", idrUnifiedNoSource: "idr", email: "contact", whitespace: "contact", casemix: "contact", normdupes: "contact", between: "dates", trend: "dates", datesanity: "dates" };
       checks.forEach(function (c) { c.goals = [HOME[c.id] || "loaded"]; });
       // Pre-select a likely column. pick: id | date | text | any. Returns "" if nothing fits.
       function pickDefault(cols, pick, only) {
@@ -16823,10 +16810,8 @@
     })();
     // @@GUIDED-END
 
-    var templatesPanelEl = null;
-    function closeTemplatesPanel() { if (templatesPanelEl) { templatesPanelEl.remove(); templatesPanelEl = null; } }
 
-    // ── Guided Checks panel (dev-only; sits on top of the classic Helpful Queries) ──
+    // ── Guided Checks panel (dev-only) ──
     var guidedPanelEl = null;
     function closeGuidedPanel() { if (guidedPanelEl) { guidedPanelEl.remove(); guidedPanelEl = null; } }
     function openGuidedChecks() {
@@ -16994,11 +16979,10 @@
         st.goal = null; st.check = null;
         var h = "<button id='dc-g-quick' style='display:block;width:100%;text-align:left;border:1px solid #d97706;background:#fffbeb;border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;color:#92400e;'>⚡ Not sure where to start? Scan a table</div><div style='font-size:11px;color:#78350f;margin-top:2px;'>One query reports every column: how full it is, how many different values, earliest/latest dates, and any repeated IDs.</div></button><div style='font-size:12px;color:#475569;margin-bottom:10px;'>Or pick what you want to find out. You choose the table and column from lists; the tool writes and runs the query and tells you in plain words if it looks OK.</div><div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>";
         QG.goals.forEach(function (g) { h += "<button data-goal='" + g.id + "' style='text-align:left;border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;'>" + g.icon + " " + esc(g.title) + "</div><div style='font-size:11px;color:#64748b;margin-top:2px;'>" + esc(g.sub) + "</div></button>"; });
-        h += "</div><div style='margin-top:12px;font-size:11px;color:#64748b;'>Prefer to write SQL yourself? <a href='#' id='dc-g-classic' style='color:#b45309;'>Open the classic SQL templates</a>. Each check runs a Data Query (billed by rows scanned).</div>";
+        h += "</div><div style='margin-top:12px;font-size:11px;color:#64748b;'>Each check runs a Data Query (billed by rows scanned).</div>";
         body.innerHTML = h;
         body.querySelectorAll("[data-goal]").forEach(function (b) { b.onclick = function () { goalScreen(b.getAttribute("data-goal")); }; });
         body.querySelector("#dc-g-quick").onclick = function () { st.goal = "loaded"; formScreen("health"); };
-        body.querySelector("#dc-g-classic").onclick = function (e) { e.preventDefault(); closeGuidedPanel(); openTemplatesPanel(); };
       }
       function goalScreen(gid) {
         st.goal = gid;
@@ -17152,431 +17136,6 @@
       try { makeDraggable(panel, hdr); } catch (e) {}
       try { addResizeHandle(panel, 380, 300); } catch (e) {}
       home();
-    }
-
-    function openTemplatesPanel() {
-      closeTemplatesPanel();
-      var panel = document.createElement("div");
-      templatesPanelEl = panel;
-      panel.id = "dc-qe-templates-panel";
-      panel.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);width:min(560px,92vw);max-height:82vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:#1e293b;";
-
-      var hdr = document.createElement("div");
-      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;cursor:move;";
-      hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries</div>";
-      var closeX = document.createElement("button");
-      closeX.innerHTML = "✕";
-      closeX.style.cssText = "border:none;background:none;font-size:16px;color:#92400e;cursor:pointer;padding:4px 8px;";
-      closeX.onclick = closeTemplatesPanel;
-      hdr.appendChild(closeX);
-      panel.appendChild(hdr);
-
-      var body = document.createElement("div");
-      body.style.cssText = "padding:16px 18px;";
-      panel.appendChild(body);
-
-      // Step 1: object name (free text — works for ANY DLO/DMO, on any page, unlike a
-      // scraped dropdown which only works when that exact object happens to be on screen).
-      var objRow = document.createElement("div");
-      objRow.style.cssText = "margin-bottom:12px;";
-      objRow.innerHTML = "<label style='display:block;font-weight:600;margin-bottom:4px;'>Object (DLO/DMO) name</label>";
-      var objInput = document.createElement("input");
-      objInput.type = "text";
-      objInput.placeholder = "e.g. TDI_Individual__dlm";
-      objInput.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;";
-      objRow.appendChild(objInput);
-      var objStatus = document.createElement("div");
-      objStatus.style.cssText = "margin-top:6px;font-size:11px;color:#64748b;min-height:14px;";
-      objRow.appendChild(objStatus);
-      body.appendChild(objRow);
-
-      // Size/existence probe result — cached per object name so retyping the same name
-      // doesn't re-probe. A plain COUNT(*) with no WHERE/GROUP BY/JOIN is usually
-      // answerable from stored metadata (near-free) — this both validates the name
-      // AND gives an honest heads-up about scan cost for the templates below.
-      var probeCache = {};
-      var probeTimer = null;
-      objInput.addEventListener("input", function () {
-        clearTimeout(probeTimer);
-        var name = objInput.value.trim();
-        templateArea.style.display = "none";
-        if (!name) { objStatus.textContent = ""; return; }
-        if (!qeValidIdent(name)) { objStatus.innerHTML = "<span style='color:#dc2626;'>Only letters, numbers, and underscores — no spaces or quotes.</span>"; return; }
-        if (probeCache[name]) { showProbeResult(probeCache[name]); return; }
-        objStatus.innerHTML = "<span style='color:#64748b;'>Checking object…</span>";
-        probeTimer = setTimeout(function () { runProbe(name); }, 500); // debounce while typing
-      });
-
-      // Field-name cache per object. Populated by fetchFieldsFor() after the object probe
-      // succeeds. ANY failure (network, permissions, empty result, timeout) leaves this
-      // unset for that object — renderFields() then falls back to a free-text input, so
-      // the user is NEVER blocked from proceeding even if the auto-fetch doesn't work.
-      var fieldsCache = {};
-
-      function showProbeResult(res) {
-        if (res.error) {
-          objStatus.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>";
-          templateArea.style.display = "none";
-          return;
-        }
-        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " + (res.space != null ? "<span style='color:#64748b;'>data space: " + String(res.space || "default").replace(/[&<>]/g, "") + ". </span>" : "") +
-          "<span style='color:#92400e;'>Templates below scan the whole table (billed on rows processed) — cost is roughly the same whether you Count or Fetch a sample.</span>";
-        templateArea.style.display = "block";
-        populateTemplateSel(); // refresh field inputs now that display is visible
-        fetchFieldsFor(objInput.value.trim());
-      }
-
-      // One extra tiny query (SELECT * LIMIT 1) to read real column names from the
-      // query's own result metadata — reuses the EXISTING qeFetchExport runner, no new
-      // query path. LIMIT 1 means at most one row of data is ever pulled, and it still
-      // returns column metadata even when the table has ZERO rows.
-      function fetchFieldsFor(name) {
-        if (fieldsCache[name]) { renderFields(); return; } // already have it (success OR failure noted)
-        var ds = qeDsForSql(qeTemplates.fieldsProbe(name));
-        qeFetchExport(qeTemplates.fieldsProbe(name), ds, function () {}, function () { return false; }).then(function (r) {
-          fieldsCache[name] = { columns: (r.columns || []).slice(), types: r.columnTypes || {} };
-          if (objInput.value.trim() === name) renderFields();
-        }).catch(function () {
-          fieldsCache[name] = { columns: [], types: {} }; // failure → renderFields() falls back to free text
-          if (objInput.value.trim() === name) renderFields();
-        });
-      }
-      // A dateColumn dropdown should only ever offer REAL date/timestamp columns — picking
-      // a text column there produces "cannot compare 'text' and 'timestamp'" from the
-      // engine. Matches on the SQL type name reported in query metadata.
-      function isDateType(t) { return /date|timestamp/i.test(String(t || "")); }
-
-      function runProbe(name) {
-        ensureQueryContext(function (ready) {
-          if (!ready) { objStatus.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
-          var sql = qeTemplates.existsProbe(name);
-          var ds = qeDsForSql(sql);
-          var spaces = qeKnownSpaces(ds), firstErr = null;
-          function tryAt(i) {
-            return runQeCount(sql, spaces[i]).then(function (r) {
-              if (i > 0) { _dsByObject[name] = spaces[i]; delete _dsGuess[name]; }
-              return { r: r, space: spaces[i] };
-            }, function (e) {
-              firstErr = firstErr || e;
-              if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid|non-JSON/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
-              throw firstErr;
-            });
-          }
-          tryAt(0).then(function (o) {
-            var r = o.r, result = { count: r.count || 0, space: o.space };
-            probeCache[name] = result;
-            if (objInput.value.trim() === name) showProbeResult(result);
-          }).catch(function (err) {
-            var msg = String(err && err.message || err);
-            var result = { error: /does not exist/i.test(msg) ? "Object not found in any data space this page has used (" + spaces.map(function (x) { return x || "default"; }).join(", ") + "). Workspace header label: " + (_dsDiag.label ? "'" + _dsDiag.label + "'" : "not found") + "; API name read from page: none. Checked: " + _dsDiag.hosts.slice(0, 8).join(" > ") + ". Run one query with Salesforce's own Run Query to teach the tool the space." : msg };
-            probeCache[name] = result;
-            if (objInput.value.trim() === name) showProbeResult(result);
-          });
-        });
-      }
-
-      // Step 2: template picker + dynamic fields (shown once the object probe succeeds).
-      var templateArea = document.createElement("div");
-      templateArea.style.display = "none";
-      body.appendChild(templateArea);
-
-      var groupSel = document.createElement("select");
-      groupSel.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;margin-bottom:8px;";
-      var groups = Array.from(new Set(TEMPLATE_DEFS.map(function (t) { return t.group; })));
-      groups.forEach(function (g) { var o = document.createElement("option"); o.value = g; o.textContent = g; groupSel.appendChild(o); });
-      templateArea.appendChild(groupSel);
-
-      var templateSel = document.createElement("select");
-      templateSel.style.cssText = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;font:12px -apple-system,sans-serif;margin-bottom:8px;";
-      templateArea.appendChild(templateSel);
-
-      var helpText = document.createElement("div");
-      helpText.style.cssText = "font-size:11px;color:#64748b;margin-bottom:6px;line-height:1.5;";
-      templateArea.appendChild(helpText);
-
-      // Live, OBJECT-SPECIFIC example — instantiates the template's example() with the
-      // object name actually typed above, so it's obvious what will happen before
-      // picking any columns (per user request — a generic description wasn't enough).
-      var exampleText = document.createElement("div");
-      exampleText.style.cssText = "font-size:11px;color:#0d6efd;background:#eff6ff;border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.5;";
-      templateArea.appendChild(exampleText);
-
-      var fieldsWrap = document.createElement("div");
-      fieldsWrap.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-bottom:10px;";
-      templateArea.appendChild(fieldsWrap);
-
-      var sqlPreview = document.createElement("pre");
-      sqlPreview.style.cssText = "background:#0f172a;color:#e2e8f0;border-radius:8px;padding:10px 12px;font:11px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin-bottom:10px;min-height:20px;";
-      templateArea.appendChild(sqlPreview);
-
-      var actionRow = document.createElement("div");
-      actionRow.style.cssText = "display:flex;gap:8px;";
-      var checkBtn = document.createElement("button");
-      checkBtn.textContent = "# Check (Count)";
-      checkBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#8b5cf6,#7c3aed);";
-      var sampleBtn = document.createElement("button");
-      sampleBtn.textContent = "👁 Fetch rows (up to 2,000)";
-      sampleBtn.style.cssText = "flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#059669);";
-      actionRow.appendChild(checkBtn);
-      actionRow.appendChild(sampleBtn);
-      templateArea.appendChild(actionRow);
-
-      var resultArea = document.createElement("div");
-      resultArea.style.cssText = "margin-top:10px;font-size:12px;color:#334155;line-height:1.6;";
-      templateArea.appendChild(resultArea);
-
-      function currentDef() { return TEMPLATE_DEFS.find(function (t) { return t.key === templateSel.value; }); }
-
-      function populateTemplateSel() {
-        templateSel.innerHTML = "";
-        TEMPLATE_DEFS.filter(function (t) { return t.group === groupSel.value; }).forEach(function (t) {
-          var o = document.createElement("option"); o.value = t.key; o.textContent = t.label; templateSel.appendChild(o);
-        });
-        renderFields();
-      }
-      groupSel.onchange = populateTemplateSel;
-
-      // Every field key gets its OWN distinct label — "object" must never say "Column",
-      // and vice versa, or the user can't tell which box the object name goes in (this
-      // is exactly the bug that produced FROM "<column name>" instead of FROM "<object>").
-      var FIELD_LABELS = {
-        object: "Object (DLO/DMO) name — already filled in from above",
-        column: "Column to check",
-        childObject: "Child object (the one WITH the foreign key)",
-        childFk: "Child object's foreign-key column",
-        parentObject: "Parent object (the one the FK should point to)",
-        parentKey: "Parent object's key column",
-        fkColumn: "Foreign-key column (groups rows by this)",
-        expected: "Expected count per group (e.g. 1)",
-        dateColumn: "Date column (must be a date/timestamp field)",
-        days: "Days (whole number)",
-        type: "Expected type (e.g. DATE, INTEGER, NUMERIC)",
-        period: "Period — type one: day, week, month, quarter, year",
-        fromDate: "From — type/paste a date or timestamp, use the picker, or click Now",
-        toDate: "To — type/paste a date or timestamp, use the picker, or click Now",
-        linkDmo: "Identity Resolution link DMO (e.g. IndividualIdentityLink__dlm)",
-      };
-      var FIELD_DEFAULTS = { days: "90", expected: "1", type: "DATE", period: "month" };
-      // Fields that mean "an object name" — pre-fill from the Object box above and lock
-      // them read-only there so the object name can only ever be entered ONCE, in ONE
-      // place, removing any chance of it landing in the wrong box.
-      var OBJECT_FIELDS = { object: 1, childObject: 1, parentObject: 1 };
-      // Fields that name a column ON THE OBJECT TYPED ABOVE — these become a dropdown of
-      // real field names once fetchFieldsFor() succeeds for that object. NOTE: childFk and
-      // parentKey are NOT in this set — they belong to childObject/parentObject, which the
-      // user can edit to a DIFFERENT object we haven't fetched fields for. Auto-fetching
-      // for those too would mean fetching on every keystroke of two more text boxes; kept
-      // as free text intentionally rather than half-building that.
-      var OWN_OBJECT_COLUMN_FIELDS = { column: 1, dateColumn: 1, fkColumn: 1 };
-
-      function renderFields() {
-        fieldsWrap.innerHTML = "";
-        helpText.textContent = "";
-        exampleText.textContent = "";
-        var def = currentDef();
-        if (!def) return;
-        helpText.textContent = def.help;
-        var objName = objInput.value.trim();
-        if (objName && typeof def.example === "function") { try { exampleText.textContent = "💡 " + def.example(objName); } catch (e) {} }
-        var fieldsInfo = fieldsCache[objName] || {};
-        var fetchedCols = fieldsInfo.columns || [];
-        var fetchedTypes = fieldsInfo.types || {};
-        def.fields.forEach(function (f) {
-          var row = document.createElement("div");
-          var lbl = document.createElement("label");
-          lbl.style.cssText = "display:block;font-size:11px;font-weight:600;margin-bottom:3px;color:#475569;";
-          lbl.textContent = FIELD_LABELS[f] || f;
-          var inp;
-          // dateColumn is restricted to columns whose reported SQL type is date/timestamp
-          // — every other fetchable field (column, fkColumn) offers all columns.
-          var optionsForField = f === "dateColumn" ? fetchedCols.filter(function (c) { return isDateType(fetchedTypes[c]); }) : fetchedCols;
-          if (OWN_OBJECT_COLUMN_FIELDS[f] && fetchedCols.length > 0 && (f !== "dateColumn" || optionsForField.length > 0)) {
-            // Auto-fetch succeeded — real column names as a dropdown, can't be mistyped.
-            inp = document.createElement("select");
-            var placeholder = document.createElement("option");
-            placeholder.value = ""; placeholder.textContent = "— choose a column —";
-            inp.appendChild(placeholder);
-            optionsForField.forEach(function (c) { var o = document.createElement("option"); o.value = c; o.textContent = c; inp.appendChild(o); });
-          } else {
-            // No fetched fields yet, fetch failed, or this field isn't fetchable (e.g.
-            // childFk/parentKey) — free-text fallback so the user is never blocked.
-            inp = document.createElement("input");
-            inp.type = "text";
-          }
-          var dateTypeWarning = null;
-          if (f === "dateColumn" && inp.tagName !== "SELECT" && fetchedCols.length > 0 && optionsForField.length === 0) {
-            // Fetch succeeded but found NO date/timestamp columns — say so explicitly,
-            // otherwise a bare free-text box looks like the fetch just failed.
-            dateTypeWarning = document.createElement("div");
-            dateTypeWarning.style.cssText = "font-size:10px;color:#b45309;margin-bottom:3px;";
-            dateTypeWarning.textContent = "No date/timestamp columns detected on this object — type the column name manually.";
-          }
-          inp.dataset.field = f;
-          if (OBJECT_FIELDS[f]) {
-            // "object" is always THIS object — pre-filled + read-only, can't be mistyped
-            // or confused with a column field. childObject/parentObject for the
-            // orphaned-FK template are editable (they name TWO different objects).
-            inp.value = objInput.value.trim();
-            if (f === "object") { inp.readOnly = true; inp.style.background = "#f1f5f9"; inp.style.color = "#64748b"; }
-          } else if (inp.tagName !== "SELECT") {
-            inp.value = FIELD_DEFAULTS[f] || "";
-          }
-          inp.style.cssText += "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font:12px -apple-system,sans-serif;";
-          inp.addEventListener("input", updatePreview);
-          inp.addEventListener("change", updatePreview);
-          row.appendChild(lbl);
-          if (dateTypeWarning) row.appendChild(dateTypeWarning);
-          if (f === "fromDate" || f === "toDate") {
-            // Date/time fields get THREE ways to fill them (per user request: "if user
-            // pastes [a timestamp] otherwise date picker will also helpful"):
-            //   1. Type/paste directly into the text box (accepts date OR full timestamp)
-            //   2. A native datetime-local picker — click the calendar icon, pick visually
-            //   3. "Now" button — one click = today's date + current time, no typing at all
-            var inputRow = document.createElement("div");
-            inputRow.style.cssText = "display:flex;gap:6px;";
-            inp.style.flex = "1";
-            var picker = document.createElement("input");
-            picker.type = "datetime-local";
-            picker.title = "Pick a date and time visually — fills the box on the left";
-            picker.style.cssText = "border:1px solid #cbd5e1;border-radius:6px;padding:6px 6px;font:12px -apple-system,sans-serif;width:130px;";
-            picker.addEventListener("change", function () {
-              if (picker.value) { inp.value = picker.value.replace("T", " ") + ":00"; updatePreview(); }
-            });
-            var nowBtn = document.createElement("button");
-            nowBtn.type = "button";
-            nowBtn.textContent = "Now";
-            nowBtn.title = "Fill with today's date and the current time";
-            nowBtn.style.cssText = "border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px;padding:6px 10px;font:600 11px -apple-system,sans-serif;color:#1e3a5f;cursor:pointer;white-space:nowrap;";
-            nowBtn.addEventListener("click", function () {
-              var d = new Date();
-              var pad = function (n) { return String(n).padStart(2, "0"); };
-              inp.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
-              updatePreview();
-            });
-            inputRow.appendChild(inp); inputRow.appendChild(picker); inputRow.appendChild(nowBtn);
-            row.appendChild(inputRow);
-          } else {
-            row.appendChild(inp);
-          }
-          fieldsWrap.appendChild(row);
-        });
-        updatePreview();
-      }
-      templateSel.onchange = renderFields;
-
-      // BUG FIX: a column dropdown renders as <select>, not <input> — the old selector
-      // ("input[data-field=...]") never matched it, so a chosen dropdown value was
-      // silently ignored and validation always saw "" ("must contain only letters,
-      // numbers, underscores") even with a value visibly selected. Match either tag.
-      function fieldVal(name) { var el = fieldsWrap.querySelector("[data-field='" + name + "']"); return el ? el.value.trim() : ""; }
-
-      // Builds the SQL for the current template + field values, or returns {error} if
-      // any input fails validation. NEVER returns a SQL string built from bad input.
-      function buildCurrentSql() {
-        var def = currentDef();
-        if (!def) return { error: "Pick a template." };
-        var vals = {};
-        for (var i = 0; i < def.fields.length; i++) {
-          var f = def.fields[i], v = fieldVal(f);
-          if (f === "days") { if (!qeValidatePositiveInt(v)) return { error: "Days must be a positive whole number." }; vals[f] = parseInt(v, 10); continue; }
-          if (f === "expected") { if (!qeValidateNonNegativeInt(v)) return { error: "Expected count must be a non-negative whole number." }; vals[f] = parseInt(v, 10); continue; }
-          if (f === "type") { if (!/^[A-Za-z]+$/.test(v)) return { error: "Type must be a plain SQL type name (e.g. DATE, INTEGER)." }; vals[f] = v.toUpperCase(); continue; }
-          if (f === "period") { if (!/^(day|week|month|quarter|year)$/i.test(v)) return { error: "Period must be day, week, month, quarter, or year." }; vals[f] = v.toLowerCase(); continue; }
-          if (f === "fromDate" || f === "toDate") { if (!dateOrTimestampLiteral(v)) return { error: (FIELD_LABELS[f] || f) + " must be a date (2026-01-31) or a full timestamp (2026-01-31 14:30:00)." }; vals[f] = v; continue; }
-          if (!qeValidIdent(v)) return { error: (FIELD_LABELS[f] || f) + " must contain only letters, numbers, and underscores." };
-          vals[f] = v;
-        }
-        if (def.key === "betweenDates" && vals.fromDate > vals.toDate) return { error: "\"From date\" must be on or before \"To date\"." };
-        try {
-          switch (def.key) {
-            case "exactDuplicates":      return { sql: qeTemplates.exactDuplicates(vals.object, vals.column) };
-            case "nullsOrBlanks":        return { sql: qeTemplates.nullsOrBlanks(vals.object, vals.column) };
-            case "valueDistribution":    return { sql: qeTemplates.valueDistribution(vals.object, vals.column) };
-            case "normalizedDuplicates": return { sql: qeTemplates.normalizedDuplicates(vals.object, vals.column) };
-            case "safeTypeCheck":        return { sql: qeTemplates.safeTypeCheck(vals.object, vals.column, vals.type) };
-            case "orphanedForeignKey":   return { sql: qeTemplates.orphanedForeignKey(vals.childObject, vals.childFk, vals.parentObject, vals.parentKey) };
-            case "cardinalityCheck":     return { sql: qeTemplates.cardinalityCheck(vals.object, vals.fkColumn, vals.expected) };
-            case "irConsolidationRate":  return { sql: qeTemplates.irConsolidationRate(vals.linkDmo) };
-            case "freshnessCheck":       return { sql: qeTemplates.freshnessCheck(vals.object, vals.dateColumn, vals.days) };
-            case "betweenDates":         return { sql: qeTemplates.betweenDates(vals.object, vals.dateColumn, vals.fromDate, vals.toDate) };
-            case "rollingWindow":        return { sql: qeTemplates.rollingWindow(vals.object, vals.dateColumn, vals.days) };
-            case "recordAge":            return { sql: qeTemplates.recordAge(vals.object, vals.dateColumn) };
-            case "trendByPeriod":        return { sql: qeTemplates.trendByPeriod(vals.object, vals.dateColumn, vals.period) };
-            default: return { error: "Unknown template." };
-          }
-        } catch (e) { return { error: "Could not build SQL: " + e.message }; }
-      }
-
-      function updatePreview() {
-        var res = buildCurrentSql();
-        if (res.error) { sqlPreview.textContent = res.error; sqlPreview.style.color = "#f87171"; }
-        else { sqlPreview.textContent = res.sql; sqlPreview.style.color = "#e2e8f0"; }
-      }
-
-      function runTemplate(mode) {
-        var res = buildCurrentSql();
-        if (res.error) { resultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
-        var ds = qeDsForSql(res.sql);
-        var btn = mode === "count" ? checkBtn : sampleBtn;
-        var origText = btn.textContent;
-        btn.disabled = true; btn.textContent = "Running…";
-        resultArea.textContent = "";
-        ensureQueryContext(function (ready) {
-          if (!ready) { btn.disabled = false; btn.textContent = origText; resultArea.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
-          if (mode === "count") {
-            runQeCount(res.sql, ds).then(function (r) {
-              btn.disabled = false; btn.textContent = origText;
-              resultArea.innerHTML = "<b>" + (r.count || 0).toLocaleString() + "</b> matching row" + ((r.count === 1) ? "" : "s") +
-                (r.rowsProcessed != null ? " <span style='color:#94a3b8;font-size:10px;'>(" + r.rowsProcessed.toLocaleString() + " rows processed)</span>" : "");
-            }).catch(function (err) {
-              btn.disabled = false; btn.textContent = origText;
-              var hmsg = String(err && err.message || err);
-              // runQeCount's own "too heavy" message says "Use Fetch & Export instead" —
-              // that's the NATIVE Query Editor button's name, which doesn't exist inside
-              // this panel. Point at the actual equivalent button here so the advice is
-              // followable, not a dead reference. (Templates with heavy aggregates —
-              // e.g. IR consolidation rate's two APPROX_COUNT_DISTINCT — are the ones
-              // most likely to hit this; it's Data Cloud genuinely needing to materialize
-              // the whole result, not a bug — Count and Fetch cost the same here anyway.)
-              if (err && err.heavyCount) {
-                hmsg = "This query is too heavy to count directly — it aggregates a large result, which Data Cloud must fully materialize either way. Click \"👁 Fetch rows (up to 2,000)\" below instead — it streams rows and shows the total when done.";
-              }
-              resultArea.innerHTML = "<span style='color:#dc2626;'>" + hmsg + "</span>";
-            });
-          } else {
-            // 2,000 rows — matches the View Results table's own display cap (see
-            // qeFetchExport's rowData.length < 2000 guard), so everything fetched here is
-            // viewable. The CSV download always contains every row that WAS fetched (up
-            // to this same 2,000) — raise SAMPLE_ROWS if you need more, or use ▶ Fetch &
-            // Export on the full query for the true unbounded export.
-            var SAMPLE_ROWS = 2000;
-            var sampleSql = res.sql + " LIMIT " + SAMPLE_ROWS;
-            qeFetchExport(sampleSql, ds, function (fetched) {
-              btn.textContent = "Fetching " + fetched.toLocaleString() + "…";
-            }, function () { return false; }).then(function (r) {
-              btn.disabled = false; btn.textContent = origText;
-              setLastResult({ blobUrl: r.blobUrl, filename: "helpful_query_sample.csv", rowCount: r.totalRows, cols: r.columns.length, columns: r.columns, tableName: objInput.value.trim(), data: r.rowData || [], sql: sampleSql });
-              downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block";
-              var cappedNote = r.totalRows >= SAMPLE_ROWS ? " (capped at " + SAMPLE_ROWS.toLocaleString() + " — there may be more; download the CSV for everything fetched, or narrow the check first)" : "";
-              resultArea.innerHTML = "<b>" + r.totalRows.toLocaleString() + "</b> row" + (r.totalRows === 1 ? "" : "s") + " fetched" + cappedNote + ". Use <b>👁 View Results</b> or <b>⬇ Download CSV</b> above.";
-            }).catch(function (err) {
-              btn.disabled = false; btn.textContent = origText;
-              resultArea.innerHTML = "<span style='color:#dc2626;'>" + String(err && err.message || err) + "</span>";
-            });
-          }
-        });
-      }
-      checkBtn.onclick = function () { runTemplate("count"); };
-      sampleBtn.onclick = function () { runTemplate("sample"); };
-
-      populateTemplateSel();
-      document.body.appendChild(panel);
-      // Make the panel movable/resizable like the other floating panels (Data Explorer's
-      // results table, SQL editor) — drag by the header, resize from the bottom-right grip.
-      // Wasn't wired up before, so the panel was stuck in one spot for every user.
-      try { makeDraggable(panel, hdr); } catch (e) {}
-      try { addResizeHandle(panel, 380, 300); } catch (e) {}
-      objInput.focus();
     }
 
     // Build the Count result HTML (shared by a fresh count and a cache hit so they look
@@ -26226,7 +25785,7 @@ processJSON();
     // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.721"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.722"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

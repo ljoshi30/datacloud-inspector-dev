@@ -6,7 +6,7 @@ const pure=src.slice(src.indexOf("var QG = (function"),src.indexOf("// @@GUIDED-
 const spc=src.slice(src.indexOf("    function qeWorkspaceSpaceLabel"),src.indexOf("    function qeCleanForRun"));
 const oos=src.slice(src.indexOf("  var _oosAt = 0;"),src.indexOf("  function haveCredsOnly"));
 const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  function decodeFormField"));
-const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
+const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    // Build the Count result HTML"));
 const html="<!doctype html><meta charset=utf-8><body><x-hdr id=wh><div>Data Space</div><div>TD Insurance</div></x-hdr><script>customElements.define('x-hdr',class extends HTMLElement{get currentSpaceInfo(){return {label:'TD Insurance',name:'TD_Insurance_X'};}});<\/script><runtime_cdp-query-workspace id=ws></runtime_cdp-query-workspace><lst-common-list-internal id=lst></lst-common-list-internal><script>customElements.define('runtime_cdp-query-workspace',class extends HTMLElement{get recordId(){return window.__rid||'20mDQ000000GmdmYAC';}});customElements.define('lst-common-list-internal',class extends HTMLElement{get records(){return window.__recs||[{apiName:'DataQueryWorkspace',fields:{Id:{value:'20mDQ000000GmdmYAC'},Name:{value:'TDI IDR Queries'},DataSpace:{displayValue:null,value:'TD_Insurance'}}}];}});<\/script>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
 var _dsByObject={Confirmed__dlm:"TD Insurance",Other_space__dlm:"Other"},_dsGuess={};function qeResolveDs(){return "TD Insurance";}
 function eachElement(root,fn){root.querySelectorAll("*").forEach(fn);}function readPageDataSpace(){return ""}
@@ -18,7 +18,6 @@ function qeValidIdent(s){return !!s&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s).t
 function qeDsForSql(){return "TD"}
 var qeTemplates={fieldsProbe:function(t){return 'SELECT * FROM "'+t+'" LIMIT 1';}};
 function setLastResult(r){window.__last=r;}
-function openTemplatesPanel(){window.__classic++;}
 function ensureQueryContext(cb){cb(true);}
 function toHome(){var b=document.querySelector('#dc-g-back2');if(b)b.click();b=document.querySelector('#dc-g-back');if(b)b.click();}
 function qeFetchExport(sql,ds){window.__sqls.push(sql+' @'+ds);
@@ -149,8 +148,13 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev("toHome();");await ev(P+".querySelector('[data-goal=dates]').click()");await ev(P+".querySelector('[data-chk=between]').click()");await wait(300);
  await ev("document.querySelector('[data-dc-preset=\"7\"]').click()");
  ok(await ev("!!document.querySelector('#dc-g-d1').value&&!!document.querySelector('#dc-g-d2').value&&document.querySelector('#dc-g-d1').value<document.querySelector('#dc-g-d2').value"),"'Last 7 days' preset fills both dates");
- // classic link
- await ev("toHome();document.querySelector('#dc-g-classic').click()");
- ok(await ev("window.__classic")===1&&await ev("!document.querySelector('#dc-qe-guided-panel')"),"classic SQL templates still reachable");
+ // classic panel is gone; its unique check (cardinality) lives in the guided panel
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=mapping]').click()");
+ ok(await ev("!!document.querySelector('[data-chk=cardinality]')&&!document.querySelector('#dc-g-classic')&&typeof openTemplatesPanel==='undefined'"),"classic link removed; cardinality check offered under mapping");
+ await ev("document.querySelector('[data-chk=cardinality]').click()");await wait(300);
+ await ev("var t=document.querySelector('#dc-g-f-t');t.value='Policy__dlm';t.onchange()");await wait(300);
+ await ev("var c=document.querySelector('#dc-g-f-c');c.value='Email__c';c.onchange();document.querySelector('#dc-g-f-n').value='2';document.querySelector('#dc-g-f-n').onchange&&document.querySelector('#dc-g-f-n').onchange()");
+ await ev("document.querySelector('#dc-g-run').click()");await wait(300);
+ ok(await ev("window.__sqls.some(function(q){return /HAVING COUNT\\(\\*\\) <> 2|record_count <> 2/.test(q)})"),"cardinality builds the expected-N SQL from the form value");
  console.log("\n"+n+" checks passed");ws.close();ch.kill();srv.close();process.exit(0);
 })().catch(e=>{console.error("FAIL",e.message);process.exit(1);});

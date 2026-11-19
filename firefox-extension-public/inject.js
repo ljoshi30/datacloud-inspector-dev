@@ -18840,7 +18840,7 @@ processJSON();
     // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.721"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.722"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
