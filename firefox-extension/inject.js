@@ -49,7 +49,7 @@
       try {
         var _offT = document.createElement("div");
         _offT.id = "dc-off-toast";
-        _offT.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
+        _offT.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
         _offT.innerHTML = "<span style='color:#f87171;font-size:15px;line-height:1'>&#9711;</span>Data 360 Inspector turned off";
         document.body.appendChild(_offT);
         requestAnimationFrame(function () { _offT.style.opacity = "1"; });
@@ -63,6 +63,27 @@
   // clear any prior toggle-OFF flag so the persistent ⧉ overlays resume.
   try { window.__dcOff = false; } catch (e) {}
 
+  // Shared ON indicator for FAB toggle rows: green "● ON" on the title + soft green tint (same look as
+  // API Tooltip / Field origin). Idempotent; OFF removes it. Pure cosmetics, never throws.
+  window.__dcPaintOn = function (row, on) {
+    try {
+      if (!row) return;
+      var t = row.querySelector("span:first-child"); if (!t) return;
+      var old = t.querySelector(".dc-on-badge"); if (old) old.remove();
+      if (on) {
+        var b = document.createElement("span"); b.className = "dc-on-badge";
+        b.style.cssText = "color:#34d399;font-size:11px;font-weight:700;margin-left:6px;";
+        b.textContent = "● ON"; t.appendChild(b);
+      }
+      // OFF must restore the launcher's dark row colour — an empty string would delete the inline
+      // background and let the browser's default (white) button colour show on first load.
+      var base = on ? "rgba(52,211,153,.12)" : "#111827";
+      row.style.background = base;
+      // Hover handlers elsewhere reset to plain dark on leave, which would drop the green ON tint
+      // after one hover. Re-assert the correct resting colour for the current state instead.
+      row.onmouseleave = function () { row.style.background = base; };
+    } catch (e) {}
+  };
   // ── "Open in new tab" ⧉ enable flag — PERSISTED so a user can silence just the ⧉ (not the
   // whole tool) from the FAB menu on a page that has one, and it carries to nav pages that
   // don't. localStorage so it survives reloads. Default ON. Exposed as window.__dcNewTabEnabled
@@ -1313,7 +1334,7 @@
     ["targetLabel", "Target Field (label)"], ["targetApi", "Target Field API"], ["targetType", "Target Type"],
   ];
   function rowsToTable(rows, sep) {
-    const esc = sep === "," ? (s) => (/[",\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
+    const esc = sep === "," ? (s) => (/[",\r\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
     const head = EXPORT_COLS.map((c) => c[1]).join(sep);
     const body = rows.map((r) => EXPORT_COLS.map((c) => esc(r[c[0]] == null ? "" : r[c[0]])).join(sep)).join("\n");
     return head + "\n" + body;
@@ -1321,13 +1342,10 @@
 
   // Make an element draggable by a handle (pointer-based; sets left/top).
   function makeDraggable(el, handle) {
-    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
-    const down = (e) => {
-      // ignore drags that start on interactive controls or selectable text
-      const tg = e.target;
-      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,[style*='user-select:text'],.dc-ac-sub")) return;
-      if (tg && window.getComputedStyle(tg).userSelect === "text") return;
-      dragging = true;
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, armed = false, pid = null;
+    const THRESH = 4;   // px of movement before a press on selectable text becomes a drag
+    const begin = () => {
+      dragging = true; armed = false;
       const r = el.getBoundingClientRect();
       // pin to left/top and drop any centering transform
       el.style.setProperty("left", r.left + "px", "important");
@@ -1335,13 +1353,31 @@
       el.style.setProperty("right", "auto", "important");
       el.style.setProperty("bottom", "auto", "important");
       el.style.setProperty("transform", "none", "important");
-      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
-      e.preventDefault();
+      ox = r.left; oy = r.top;
+      try { window.getSelection().removeAllRanges(); } catch (e) {}
+      try { handle.setPointerCapture(pid); } catch (e) {}
+      document.documentElement.style.setProperty("user-select", "none", "important");
+    };
+    const down = (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const tg = e.target;
+      // never hijack real controls
+      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,label")) return;
+      sx = e.clientX; sy = e.clientY; pid = e.pointerId;
+      // Title / info text stays selectable on a plain click or double-click, but dragging
+      // from it moves the panel (after a few px) — so the WHOLE header is a drag handle.
+      armed = true;
       window.addEventListener("pointermove", move, true);
       window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", up, true);
     };
     const move = (e) => {
-      if (!dragging) return;
+      if (!dragging) {
+        if (!armed) return;
+        if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < THRESH) return;
+        begin();
+      }
+      e.preventDefault();
       let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
       // keep on-screen
       const w = el.offsetWidth || 200, h = 40;
@@ -1350,8 +1386,15 @@
       el.style.setProperty("left", nx + "px", "important");
       el.style.setProperty("top", ny + "px", "important");
     };
-    const up = () => { dragging = false; window.removeEventListener("pointermove", move, true); window.removeEventListener("pointerup", up, true); };
+    const up = () => {
+      if (dragging) { try { handle.releasePointerCapture(pid); } catch (e) {} document.documentElement.style.removeProperty("user-select"); }
+      dragging = false; armed = false;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+    };
     handle.style.cursor = "move";
+    handle.style.touchAction = "none";
     handle.addEventListener("pointerdown", down, true);
   }
 
@@ -1506,7 +1549,7 @@
     render();
   }
 
-  /* @strip:start dev */
+  /* (released to public) */
   // ===== FOCUS DMO ===== (IN-DEV — stripped from the public build until tested)
   // Verify ONE DMO's mappings without fighting SF's wire spaghetti. We DON'T touch
   // SF's canvas (proven dead end: its wires are anonymous + can't be removed, and
@@ -1810,7 +1853,6 @@
     try { makeDraggable(panel, hdr); } catch (e) {}
     try { addResizeHandle(panel, 420, 320); } catch (e) {} // drag the bottom-right grip to resize
   }
-  /* @strip:end */
 
   // Fully remove the tool from the page: inline names off, tooltip + tags gone,
   // export modal closed, control bar removed, timers stopped. Re-running the
@@ -1822,6 +1864,8 @@
     // Close in-dev Data Explorer surfaces too (guarded — stripped from public build).
     try { if (typeof closeExploreModal === "function") closeExploreModal(); } catch (e) {}
     try { if (typeof closeAllColumnsTable === "function") closeAllColumnsTable(); } catch (e) {}
+    try { if (typeof closeCellView === "function") closeCellView(); } catch (e) {}
+    try { if (typeof dcSweepOverlays === "function") dcSweepOverlays(); } catch (e) {}
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
@@ -2026,10 +2070,9 @@
       return b;
     };
 
-    /* @strip:start dev */
+    /* (released to public) */
     const focusIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><circle cx='7' cy='7' r='4.2'/><path d='M10.2 10.2L14 14' stroke-linecap='round'/></svg>";
     const foc = mkBtn("dc-focus-btn",  "Focus DMO",     "Isolate one DMO's mappings — dim the rest, list its field pairs", "linear-gradient(135deg,#14b8a6,#0d9488)", focusIconSvg, "Verify one DMO at a time");
-    /* @strip:end */
     const tog = mkBtn("dc-toggle-btn", "API Tooltip",  "Show API name on hover",  "linear-gradient(135deg,#3b82f6,#2563eb)", tooltipIconSvg, "Hover to see API names");
     const inl = mkBtn("dc-inline-btn", "Pin API names","Pin API names on canvas",  "linear-gradient(135deg,#ec4899,#db2777)", pinIconSvg,     "Pin all on canvas");
     const exp = mkBtn("dc-export-btn", "Export",       "Export mappings",          "linear-gradient(135deg,#f59e0b,#d97706)", exportIconSvg,  "All fields with types");
@@ -2041,17 +2084,15 @@
 
     tog.onclick = (e) => { e.stopPropagation(); toggle(); };
     inl.onclick = (e) => { e.stopPropagation(); toggleInline(); };
-    /* @strip:start dev */
+    /* (released to public) */
     foc.onclick = (e) => { e.stopPropagation(); openFocusPanel(); };
-    /* @strip:end */
     exp.onclick = (e) => { e.stopPropagation(); openExport(); };
 
     menu.appendChild(closeX);
     menu.appendChild(tog);
     menu.appendChild(inl);
-    /* @strip:start dev */
+    /* (released to public) */
     menu.appendChild(foc);
-    /* @strip:end */
     menu.appendChild(exp);
 
     // --- FAB circle button ---
@@ -2135,7 +2176,7 @@
       if (/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DataStream";
       if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
       if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
-      /* @strip:start dev */
+      // (Segment page detection — public: needed for the Segment export launcher.)
       // Segment by URL always wins. The component-DOM fallback (for wizard routes that don't
       // name Segment in the URL) is only trusted when BOTH: (a) the URL isn't clearly ANOTHER
       // detail page, AND (b) the URL is a plausible builder route — a /cmp/ lightning-component
@@ -2149,7 +2190,6 @@
       if (looksLikeBuilderRoute
           && !(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
           && (findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0)) return "Segment";
-      /* @strip:end */
     } catch (e) {}
     return null;
   }
@@ -3235,15 +3275,18 @@
   // On detail pages, show a single "Download fields CSV" button instead.
   // ── Segment rules readers ─────────────────────────────────────────────────
 
-  /* @strip:start dev
-   * IN-DEVELOPMENT FEATURES — Segment rule export + Data Explorer column tooling.
-   * Physically removed from the public build by build.js (@strip markers). The
-   * full source keeps them so we can keep iterating; do not remove the markers. */
+  /* Segment export + Data Explorer (public). The SQL-export helpers, the transform viewer and the Query Editor tooling
+   * inside this region are wrapped in their own strip blocks below and stay dev-only. */
+  // Salesforce's drag handles carry a screen-reader instruction ("Press Spacebar to start reordering this
+  // filter, then use the Up and Down arrow keys to move it.") inside the rule's DOM. It is UI help text,
+  // never data, so every text reader drops it — otherwise it leaks into labels (container titles, rule rows).
+  var DC_A11Y_NOISE = /Press\s+(?:the\s+)?(?:Space(?:bar)?|Enter)\s+to\s+(?:start|begin)\s+(?:reordering|moving|dragging)[^.]*?\bmove\s+it\.?|(?:then\s+)?use\s+the\s+Up\s+and\s+Down\s+arrow\s+keys?[^.]*?\./gi;
+  function dcCleanUiText(t) { return t ? String(t).replace(DC_A11Y_NOISE, " ").replace(/\s+/g, " ").trim() : ""; }
   function shadowEls(el) {
     try { const sr = el.shadowRoot; if (!sr) return []; return Array.from(sr.querySelectorAll("*")); } catch (e) { return []; }
   }
   function shadowTexts(el) {
-    return shadowEls(el).map(e => (e.textContent || "").trim().replace(/\s+/g, " ")).filter(Boolean);
+    return shadowEls(el).map(e => dcCleanUiText((e.textContent || "").trim().replace(/\s+/g, " "))).filter(Boolean);
   }
   // Leaf-only shadow text tokens (childless elements), shadow-piercing, de-duped
   // in DOM order. Avoids the concatenated container blobs shadowTexts() returns.
@@ -3254,7 +3297,7 @@
       try {
         if (ch.shadowRoot) return;
         if ((ch.childElementCount || 0) > 0) return;
-        const t = (ch.textContent || "").trim().replace(/\s+/g, " ");
+        const t = dcCleanUiText((ch.textContent || "").trim().replace(/\s+/g, " "));
         if (t && t.length < 160 && out[out.length - 1] !== t) out.push(t);
       } catch (e) {}
     });
@@ -3276,7 +3319,7 @@
         else if (c.nodeType === 1) { out += " "; walk(c); }
       }
     })(el);
-    return out.replace(/\s+/g, " ").trim();
+    return dcCleanUiText(out);
   }
 
   // ── Container Path capture cache (for the EXPORT) ───────────────────────────────────
@@ -3443,7 +3486,7 @@
     result.segmentType = readSegmentType();
     // Read ONLY from real SF label->value form structures (slds-form-element /
     // test-id__field-label). We deliberately do NOT do fuzzy CSS-class substring
-    // matching (e.g. class contains "publish") — that used to grab the Chatter
+    // matching — that used to grab the Chatter
     // publisher's "Share an update…Share this" as the Publish Schedule. Every value
     // below is keyed by the literal on-screen label, so it's what SF actually shows.
     const pairs = readAllFormPairs();
@@ -4417,7 +4460,7 @@
       }
 
       // ── row heights: wrap-aware, honouring BOTH merge directions ──────────────
-      // A vertically-merged wrapped cell (e.g. the per-block Notes) is satisfied by
+      // A vertically-merged wrapped cell is satisfied by
       // the SUM of its spanned rows, so distribute its needed height across them
       // instead of forcing it all onto the first row.
       var LINE = 15, self = this;
@@ -4969,7 +5012,7 @@
         if (rec.groups.length > 1) paintBar(MID, rec.start, rec.end, rec.groupOp || "OR", "medium", false);
       }
       // Outer rail joins top-level blocks — only meaningful when there are 2+.
-      // A single block (e.g. one nested segment / one condition) joins nothing.
+      // A single block joins nothing.
       if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true, tree.seqEntity);
 
       // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
@@ -5408,6 +5451,7 @@
   })();
 
 
+  /* @strip:start dev */
   /* ── Segment criteria → APPROXIMATE Data Cloud SQL (dev-only; already inside the dev-gated segment
    *    region, so NO own @strip markers — nesting @strip blocks breaks the non-greedy stripper) ──
    * Translates the captured condition TREE (the same {type:set|simple|aggregation|ci|nested-segment}
@@ -5677,7 +5721,7 @@
     }
     // leafSql(node, ctxObj): ctxObj = the object this leaf is being rendered WITHIN (defaults to the
     // segment's FROM individual). A leaf whose object == ctxObj is a plain predicate. A leaf on a
-    // DIFFERENT object (e.g. a Calculated Insight on another object, at top level) must be a CORRELATED
+    // DIFFERENT object must be a CORRELATED
     // EXISTS over its path — a bare reference to an unjoined table would be invalid SQL. When a leaf is
     // the INNER filter of an aggregation, the caller passes ctxObj=container, so it stays a bare predicate
     // (it's already inside that subquery's FROM) and is NOT wrongly re-correlated.
@@ -5884,6 +5928,7 @@
     if (!where) return header + "-- (no include criteria)";
     return header + "SELECT *\nFROM " + from + "\nWHERE " + where + ";";
   }
+  /* @strip:end */
 
   // ── Segment export modal ──────────────────────────────────────────────────
 
@@ -6444,7 +6489,7 @@
         "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
         "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
         "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
-        "<button class='sec' id='dc-d-sql' title='Copy this tab&apos;s criteria as SQL. With the extension it uses Salesforce&apos;s real stored criteria (accurate joins/operators); as a bookmarklet it reconstructs from the page (approximate).'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL</button>" +
+/* @strip:start dev */"<button class='sec' id='dc-d-sql' title='Copy this tab&apos;s criteria as SQL. With the extension it uses Salesforce&apos;s real stored criteria (accurate joins/operators); as a bookmarklet it reconstructs from the page (approximate).'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><ellipse cx='8' cy='4' rx='5' ry='2' fill='none' stroke='currentColor' stroke-width='1.4'/><path d='M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2' fill='none' stroke='currentColor' stroke-width='1.4'/></svg>Copy SQL</button>" +/* @strip:end */
       "</div>" +
       "<div class='bd'>" + panesHtml + "</div>" +
       "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
@@ -6523,6 +6568,7 @@
       }
     })();
 
+    /* @strip:start dev */
     // Copy APPROXIMATE SQL for the CURRENT tab's criteria tree (illustrative — verify before running).
     // (dev-only via the enclosing segment region — no own @strip marker; nesting @strip breaks the stripper.)
     (function () {
@@ -6636,6 +6682,7 @@
           });
       };
     })();
+    /* @strip:end */
 
     detailExportEl.querySelector("#dc-d-copy").onclick = (e) => {
       const d = tabData[currentModalTab] || {};
@@ -6873,7 +6920,7 @@
   }
 
   // Small transient toast near the Explorer launcher — used to tell the user why an
-  // action can't run (e.g. no object selected) instead of the button doing nothing.
+  // action can't run instead of the button doing nothing.
   function dcExploreToast(msg) {
     try {
       var existing = document.getElementById("dc-explore-toast");
@@ -6897,6 +6944,32 @@
   // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
   // UI placeholder text that must never be treated as a real dataspace name.
   var _badDsNames = /^(Selected|Select|Sort|Filter|Edit|View|Loading|None|All|Default selection)$/i;
+  // The data space read from the page's dropdown is only a FALLBACK. If Salesforce's own query for this object already
+  // told us its data space (sniffed), that wins — never overwrite it with a DOM guess.
+  function dcAdoptPageDs(objectName, ds) {
+    if (!ds) return;
+    if (objectName && _dsByObject[objectName] != null) return;
+    if (_auraSniff && _auraSniff.dataSpace == null) { _auraSniff.dataSpace = ds; _auraSniff.dsGuess = true; }
+    if (objectName) { _dsByObject[objectName] = ds; _dsGuess[objectName] = true; }
+  }
+  // A page-dropdown value is only a GUESS. Salesforce authorizes our queries only after ITS OWN query ran for the
+  // object, so a guess must never count as "established" (that skipped the auto-sort and caused the denied errors).
+  function dcDsConfirmed(objectName) {
+    // Per-OBJECT only: in an org with several data spaces, the space last used for ANOTHER object proves nothing here.
+    return !!(objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]);
+  }
+  // The last sniffed space is usable for an object only if it was learned for THAT object (or from the Query Editor,
+  // which is not tied to an object). A space learned for a different object is stale and must not be reused.
+  // Remember a space that just WORKED for a query - together with the table it worked for.
+  function dcLearnSpace(space, sql) {
+    if (!space) return;
+    var m = String(sql || "").match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+    _auraSniff.dataSpace = space; _auraSniff.dsLastObj = m ? m[1] : null;
+  }
+  function dcSniffedSpaceApplies(objectName) {
+    if (_auraSniff.dataSpace == null || _badDsNames.test(_auraSniff.dataSpace)) return false;
+    return !_auraSniff.dsLastObj || _auraSniff.dsLastObj === objectName;
+  }
   function resolveDataSpace(objectName) {
     // 1) authoritative: the space the page itself queried THIS object with
     if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
@@ -6907,8 +6980,10 @@
     var sel = null;
     eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
     if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string" && !_badDsNames.test(v2)) return v2; } catch (e) {} } }
-    // 3) last sniffed space this session (the object currently open usually matches)
-    if (_auraSniff.dataSpace != null && !_badDsNames.test(_auraSniff.dataSpace)) return _auraSniff.dataSpace;
+    // 3) the space currently selected in the page's own Data Space dropdown (read from the component, validated)
+    var _cur = dcReadDsFromComponent(); if (_cur && _cur.name) return _cur.name;
+    // 4) last sniffed space - only if it was learned for THIS object (never one learned for another object)
+    if (dcSniffedSpaceApplies(objectName)) return _auraSniff.dataSpace;
     return "";   // unknown → caller tries candidate spaces (incl. "default")
   }
   // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
@@ -6917,18 +6992,13 @@
   function dataSpaceCandidates(objectName) {
     var out = [], seen = {};
     var add = function (s) { if (s != null && !seen[s]) { seen[s] = 1; out.push(s); } };
-    add(resolveDataSpace(objectName));                 // best guess first (may be "")
-    Object.keys(_dsByObject).forEach(function (k) { add(_dsByObject[k]); });  // any seen space
-    if (_auraSniff.dataSpace != null) add(_auraSniff.dataSpace);
+    // This object's own space, as used by Salesforce's own query for it, is the ONLY candidate: never try other
+    // spaces (a same-named table in another space would silently return the wrong rows).
+    if (objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]) return [_dsByObject[objectName]];
+    add(resolveDataSpace(objectName));
     // Read from page UI as fallback (covers cold-start bookmarklet)
-    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs) add(pageDs); }
-    // Derive from object name prefix: TDI_Quote__dlm → "TDI" (last resort, but proven
-    // correct for this org pattern where prefix = dataspace). Only use if the prefix is
-    // short (≤6 chars) and alphanumeric — avoids false positives on longer prefixes.
-    if (objectName) {
-      var prefixMatch = objectName.match(/^([A-Za-z0-9]{2,6})_/);
-      if (prefixMatch) add(prefixMatch[1]);
-    }
+    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs && _pageDsAuth) add(pageDs); }
+    // No name is ever derived from the object name or from page text: only values Salesforce itself provided.
     add(""); add("default");
     return out;
   }
@@ -6969,9 +7039,29 @@
     // would match the STALE record-list component left mounted from the previous Explorer
     // page (Lightning SPA doesn't unmount on in-tab nav) → wrong FAB until reload.
     if (typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "DataExplore")) return false;
-    // DOM check: the record-list LWC component is definitive for a real Explorer page
-    if (findRecordListEl()) return true;
+    // one.app HASH routes (the Mapping Canvas, Explorer, etc.) carry no path to match. When the
+    // hash decodes to a componentDef, the URL IS authoritative: it is Data Explorer only if it
+    // names the dataViewTab. This stops a record-list component left MOUNTED from an earlier
+    // Explorer visit in the same tab (SPA doesn't unmount) from showing the Explorer launcher
+    // on the Mapping Canvas or any other hash page (reported bug).
+    var hashDecoded = (typeof decodeHashRoute === "function") ? decodeHashRoute(h) : "";
+    if (hashDecoded) return /dataViewTab/i.test(hashDecoded);
+    // The Mapping Canvas is never Data Explorer, even if a stale record list is still mounted.
+    try { if (typeof findVisibleByTag === "function" && findVisibleByTag(TAGGING_CMP).length) return false; } catch (e) {}
+    // DOM check: a VISIBLE record-list LWC component (hidden/stale copies don't count)
+    var rl = findRecordListEl();
+    if (rl && isVisible(rl)) return true;
     return false;
+  }
+
+  // Decode a one.app "#<base64 JSON>" route to its text, or "" if the URL has no such hash.
+  function decodeHashRoute(h) {
+    try {
+      var m = String(h || location.href).match(/#([A-Za-z0-9+\/=_-]{20,})$/);
+      if (!m) return "";
+      var b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      try { return decodeURIComponent(escape(atob(b))); } catch (e) { return atob(b); }
+    } catch (e) { return ""; }
   }
 
   // ── Safety limits for the Data Explorer query/render (prevents browser freeze) ──
@@ -6994,19 +7084,133 @@
   // The 10-column limit is UI-ONLY — the backend returns ALL requested columns in one
   // call. So we passively capture a live request's aura.context/token/pageURI, then
   // replay the SAME read-only query with EVERY selected column. No dialog, no batching.
-  var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false };
+  var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false, querySeq: 0 };
   // REAL data space per object, captured from the page's own queries. The data space is
   // NOT derivable from the object name (e.g. DLO "RH_Profile__dll" is NOT in space "RH").
   // The ONLY reliable source is the {objectName, selectedDataSpaceName} pair the page
   // itself sends — so we remember it here, keyed by objectName.
   var _dsByObject = {};
+  var _dsGuess = {};   // objects whose data space came from the page dropdown (unconfirmed guess)
 
+  // Object names (DLO/DMO/CI) seen in Salesforce's OWN /aura responses as the user browses
+  // (object lists, Query Editor tree, mapping pages…). There is no listing API we can call from a
+  // bookmarklet, so this passive, read-only harvest is how the Helpful Queries table list learns real
+  // objects. Capped + size-guarded + fully try/caught so it can never affect the page.
+  var _dcObjSeen = {}, _dcObjSeenN = 0;
+  // Exact data space API names learned from Salesforce's own responses: { label: apiName }. Only objects that sit under a
+  // data-space key (or carry one) are taken, so a label is never paired with an unrelated name.
+  var _dsLabelToName = {};
+  function dcHarvestSpacePairs(text) {
+    try {
+      if (!/data.?space/i.test(text)) return;
+      var j = JSON.parse(text), n = 0;
+      (function walk(v, key, depth) {
+        if (!v || typeof v !== "object" || depth > 9 || n > 60000) return; n++;
+        if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) walk(v[i], key, depth + 1); return; }
+        var hint = /data.?space/i.test(String(key || "")), ks = Object.keys(v);
+        if (!hint) for (var h = 0; h < ks.length; h++) if (/data.?space/i.test(ks[h])) { hint = true; break; }
+        if (hint && typeof v.label === "string") {
+          var nm = v.name || v.apiName || v.developerName || v.dataSpaceName || v.value;
+          if (typeof nm === "string" && /^[A-Za-z0-9_]{1,80}$/.test(nm) && nm !== v.label) _dsLabelToName[v.label] = nm;
+        }
+        for (var k = 0; k < ks.length; k++) walk(v[ks[k]], ks[k], depth + 1);
+      })(j, "", 0);
+    } catch (e) {}
+  }
+  // ── Workspace data space, EXACT (no guessing). Proven on the live page: the workspace header shows only the LABEL, but the
+  // workspace is a DataQueryWorkspace record whose field "DataSpace" holds the API name. The record id is on
+  // <runtime_cdp-query-workspace>.recordId (and in the URL). Source 1: Salesforce's own cached list view / record data in the DOM
+  // (recordData / records / data carry DataSpace.value). Source 2: ask Salesforce for that one field of that one record (read-only).
+  var _wsSpaceByRecord = {}, _wsSpaceInflight = {}, _wsSpaceErr = "";
+  function qeWorkspaceRecordId() {
+    var rid = "";
+    try {
+      eachElement(document, function (el) {
+        if (String(el.tagName || "").toLowerCase() !== "runtime_cdp-query-workspace") return;
+        var v = ""; try { v = String(el.recordId || ""); } catch (e) {}
+        if (!/^[A-Za-z0-9]{15,18}$/.test(v)) return;
+        var vis = false; try { vis = !!(el.getClientRects && el.getClientRects().length); } catch (e) { vis = true; }
+        if (!rid || vis) rid = v;   // a visible workspace wins over a hidden (kept-alive) one
+      });
+    } catch (e) {}
+    if (!rid) { try { var m = String(location.pathname).match(/\/DataQueryWorkspace\/([A-Za-z0-9]{15,18})(?:\/|$)/); if (m) rid = m[1]; } catch (e) {} }
+    return rid;
+  }
+  function qeSpaceFromDomRecords(rid) {
+    var found = "";
+    function fromList(arr) {
+      if (!Array.isArray(arr)) return;
+      for (var i = 0; i < arr.length && !found; i++) {
+        var r = arr[i]; if (!r || typeof r !== "object") continue;
+        var f = r.fields, v = null;
+        if (f && f.Id && f.Id.value === rid && f.DataSpace) v = f.DataSpace.value;          // lst-common-list-internal.records
+        else if ((r.id === rid || r["__v.Id"] === rid) && r.DataSpace) v = r.DataSpace.value; // list datatable .data / recordData
+        if (typeof v === "string" && /^[A-Za-z0-9_]{1,80}$/.test(v)) found = v;
+      }
+    }
+    try {
+      eachElement(document, function (el) {
+        if (found) return;
+        var t = String(el.tagName || "").toLowerCase();
+        if (!/^(lst-|lightning-datatable|runtime_cdp-)/.test(t)) return;
+        ["recordData", "records", "data"].forEach(function (p) { if (found) return; var x; try { x = el[p]; } catch (e) { return; } fromList(x); });
+      });
+    } catch (e) {}
+    return found;
+  }
+  function qeCachedWorkspaceSpace() {
+    var rid = qeWorkspaceRecordId(); if (!rid) return "";
+    if (_wsSpaceByRecord[rid]) return _wsSpaceByRecord[rid];
+    var d = qeSpaceFromDomRecords(rid); if (d) _wsSpaceByRecord[rid] = d;
+    return d;
+  }
+  function qeFindDataSpaceValue(v, depth) {
+    if (!v || typeof v !== "object" || depth > 8) return "";
+    if (v.DataSpace && typeof v.DataSpace === "object" && typeof v.DataSpace.value === "string") return v.DataSpace.value;
+    var ks = Object.keys(v);
+    for (var i = 0; i < ks.length; i++) { var r = qeFindDataSpaceValue(v[ks[i]], depth + 1); if (r) return r; }
+    return "";
+  }
+  // Calls cb() when done (never rejects, never blocks longer than the request). Result lands in _wsSpaceByRecord.
+  function qePrimeWorkspaceSpace(cb) {
+    var done = false; function fin() { if (done) return; done = true; try { cb(); } catch (e) {} }
+    try {
+      var rid = qeWorkspaceRecordId();
+      if (!rid || qeCachedWorkspaceSpace() || !haveCredsOnly() || typeof fetch !== "function") { fin(); return; }
+      if (_wsSpaceInflight[rid]) { _wsSpaceInflight[rid].push(fin); return; }
+      _wsSpaceInflight[rid] = [fin];
+      _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;
+      var act = { id: "dcws-" + _auraSniff.querySeq + ";a", descriptor: "aura://RecordUiController/ACTION$getRecordWithFields", callingDescriptor: "UNKNOWN", params: { recordId: rid, fields: ["DataQueryWorkspace.DataSpace"] } };
+      var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+      var to = setTimeout(function () { _wsSpaceErr = "timeout"; flush(); }, 8000);
+      function flush() { clearTimeout(to); var q = _wsSpaceInflight[rid] || []; delete _wsSpaceInflight[rid]; q.forEach(function (f) { try { f(); } catch (e) {} }); }
+      fetch("/aura?r=" + _auraSniff.querySeq + "&aura.RecordUi.getRecordWithFields=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+        .then(function (r) { return r.text(); }).then(function (txt) {
+          try {
+            var j = JSON.parse(txt), a = j && j.actions && j.actions[0];
+            var v = (a && a.state === "SUCCESS") ? qeFindDataSpaceValue(a.returnValue, 0) : "";
+            if (/^[A-Za-z0-9_]{1,80}$/.test(v)) _wsSpaceByRecord[rid] = v; else _wsSpaceErr = (a && a.state) || "no DataSpace in reply";
+          } catch (e) { _wsSpaceErr = "unreadable reply"; }
+          flush();
+        }, function () { _wsSpaceErr = "network"; flush(); });
+    } catch (e) { fin(); }
+  }
+  function dcHarvestObjects(text) {
+    try { if (text && text.length < 3000000 && text.charAt(0) === "{") dcHarvestSpacePairs(text); } catch (e) {}
+    try {
+      if (!text || text.length > 3000000 || _dcObjSeenN > 3000) return;
+      var m = String(text).match(/\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/g);
+      if (!m) return;
+      for (var i = 0; i < m.length && _dcObjSeenN <= 3000; i++) if (!_dcObjSeen[m[i]]) { _dcObjSeen[m[i]] = 1; _dcObjSeenN++; }
+    } catch (e) {}
+  }
   function decodeFormField(v) { try { return decodeURIComponent((v || "").replace(/\+/g, " ")); } catch (e) { return v || ""; } }
 
   // Pull the aura.* credentials + query params out of a captured x-www-form-urlencoded body.
   // aura.context / aura.token / aura.pageURI are SESSION-GLOBAL — identical across EVERY
   // aura action — so we grab them from ANY /aura POST (telemetry, navigation, etc.), which
   // the page fires constantly. objectName + dataSpace come only from a CdpDataView.query.
+  var _graphCalls = {};   // graph name -> data space, learned from Salesforce's own View calls
   function absorbAuraForm(body) {
     var s = String(body || "");
     var parts = s.split("&"), map = {};
@@ -7024,17 +7228,26 @@
         for (var ai = 0; ai < actions.length; ai++) {
           var act = actions[ai];
           if (!act || !act.params) continue;
+          // Our OWN calls (ids dc-, dcsql-, dcraw-, dcqe*...) are never evidence of what the page uses: learning from them
+          // let our failed data-space guesses become the 'page's' data space, and made our own query look like the
+          // page's sort. Only Salesforce's own traffic teaches the sniffer.
+          if (/^dc/i.test(String(act.id || ""))) continue;
           var q = act.params.query;
           if (q) {
             _auraSniff.template = act;
+            _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;   // lets the sort guide notice "the page just ran a query"
             if (q.objectName) _auraSniff.objectName = q.objectName;
-            if (q.selectedDataSpaceName != null) _auraSniff.dataSpace = q.selectedDataSpaceName;
-            if (q.objectName && q.selectedDataSpaceName != null) _dsByObject[q.objectName] = q.selectedDataSpaceName;
+            if (q.selectedDataSpaceName != null) { _auraSniff.dataSpace = q.selectedDataSpaceName; _auraSniff.dsGuess = false; _auraSniff.dsLastObj = q.objectName || null; }
+            if (q.objectName && q.selectedDataSpaceName != null) { _dsByObject[q.objectName] = q.selectedDataSpaceName; delete _dsGuess[q.objectName]; }
+          }
+          // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
+          if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || "")) && String(act.id || "").indexOf("dc-") !== 0) {   // never learn from OUR OWN guesses (ids start "dc-")
+            _graphCalls[act.params.objectName] = act.params.dataSpaceName;
           }
           // Capture dataspace from QueryWorkspace.queryDCSql params (Query Editor page)
           // Handle both "dataspace" and "dataSpace" casing
           var capturedDs = act.params.dataspace || act.params.dataSpace || act.params.selectedDataSpaceName || "";
-          if (capturedDs) _auraSniff.dataSpace = capturedDs;
+          if (capturedDs) { _auraSniff.dataSpace = capturedDs; _auraSniff.dsLastObj = null; }
         }
       } catch (e) {}
     }
@@ -7056,7 +7269,12 @@
           var url = (typeof input === "string") ? input : (input && input.url) || "";
           if (/\/aura/i.test(url) && init && init.body) absorbAuraForm(init.body);
         } catch (e) {}
-        return of.apply(this, arguments);
+        var fp = of.apply(this, arguments);
+        try {
+          var fu = (typeof input === "string") ? input : (input && input.url) || "";
+          if (/\/aura/i.test(fu) && fp && fp.then) fp.then(function (r) { try { r.clone().text().then(dcHarvestObjects, function () {}); } catch (e) {} }, function () {});
+        } catch (e) {}
+        return fp;
       };
     } catch (e) {}
     try {
@@ -7064,6 +7282,7 @@
       XMLHttpRequest.prototype.open = function (m, u) { this.__dcU = u; return oo.apply(this, arguments); };
       XMLHttpRequest.prototype.send = function (b) {
         try { if (/\/aura/i.test(String(this.__dcU || "")) && b) absorbAuraForm(b); } catch (e) {}
+        try { if (/\/aura/i.test(String(this.__dcU || ""))) this.addEventListener("load", function () { try { if (!this.responseType || this.responseType === "text") dcHarvestObjects(this.responseText); } catch (e) {} }); } catch (e) {}
         return os.apply(this, arguments);
       };
     } catch (e) {}
@@ -7168,8 +7387,7 @@
   // fall back to the candidate list. Idempotent-safe: clicks twice to restore sort order.
   function establishDataSpace(objectName, cb) {
     // Already known? Done immediately — no page interaction needed.
-    var known = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-    if (known || (_auraSniff && _auraSniff.dataSpace)) { cb(true); return; }
+    if (dcDsConfirmed(objectName)) { cb(true); return; }
     var fired = false;
     var _dxSortTarget = null;   // the sort control we click; reused for the restore-click
     // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM. The real sort trigger is
@@ -7231,8 +7449,7 @@
     }
     (function poll() {
       if (done) return;
-      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
-      var got = ds || (_auraSniff && _auraSniff.dataSpace) || (_dsByObject && _dsByObject[objectName] != null);
+      var got = dcDsConfirmed(objectName);
       if (got) {
         // Restore the original sort order once (best-effort), then proceed after a short
         // settle so this restore query can't collide with the caller's upcoming data query.
@@ -7245,7 +7462,9 @@
     })();
   }
 
-  function ensureQueryContext(cb) {
+  function ensureQueryContext(cb0) {
+    // Before any query runs, make sure the workspace's exact data space (DataQueryWorkspace.DataSpace) is known.
+    var cb = function (ok) { try { qePrimeWorkspaceSpace(function () { cb0(ok); }); } catch (e) { cb0(ok); } };
     if (extBridgePresent()) { cb(true); return; }
     if (primeCredsFromAura()) { cb(true); return; }
     if (haveCredsOnly()) { cb(true); return; }
@@ -7279,6 +7498,191 @@
 
   // "Connect to Data Cloud" — renders a button that triggers credential capture, then
   // calls `onConnected()`. Use wherever ensureQueryContext fails in bookmarklet mode.
+  // ── "Sort a column once" guide (Data Explorer) ───────────────────────────────────────────────
+  // Data 360 only lets this tool read a table after Salesforce itself has run one query on it, and the
+  // easiest way to make Salesforce run one is to sort a column. The old message was two plain lines that
+  // people skipped. This card: (1) uses a REAL header name from the table behind the panel, (2) says WHY,
+  // (3) watches for the sort and, the moment it lands, turns green and offers the button.
+  // A→Z / Z→A by visible label (case-insensitive, numeric-aware, stable; ties fall back to the API name).
+  // Returns a NEW array. `labelOf(item)` gives the text to sort on.
+  function dcSortByLabel(items, asc, labelOf) {
+    var key = function (x) { return String(labelOf(x) == null ? "" : labelOf(x)).toLowerCase(); };
+    var out = (items || []).map(function (x, i) { return { x: x, k: key(x), i: i }; });
+    out.sort(function (a, b) {
+      var c = a.k.localeCompare(b.k, undefined, { numeric: true, sensitivity: "base" });
+      return c !== 0 ? (asc ? c : -c) : a.i - b.i;
+    });
+    return out.map(function (o) { return o.x; });
+  }
+  // Pure helper (unit-tested): choose a header label that a person can actually find and click.
+  function dcPickHeaderLabel(texts) {
+    var skip = /^(select( all)?( rows?)?|row( number)?|actions?|#|show actions?|checkbox)$/i;
+    for (var i = 0; i < (texts || []).length; i++) {
+      var t = String(texts[i] == null ? "" : texts[i]).replace(/\s+/g, " ").trim();
+      t = t.replace(/\s*(sort(ed)?( by)?:?\s*(ascending|descending|none)?|ascending|descending)\s*$/i, "").trim();
+      if (t && t.length <= 40 && !skip.test(t)) return t;
+    }
+    return "";
+  }
+  // A column header the user can really see and click: visible, inside the viewport, and not under our panel.
+  // Returns { label, el } or null. The label is read from that same element so name and highlight always match.
+  function dcFindVisibleHeader() {
+    var found = null, panelRect = null;
+    try { if (typeof exploreModalEl !== "undefined" && exploreModalEl && exploreModalEl.isConnected) panelRect = exploreModalEl.getBoundingClientRect(); } catch (e) {}
+    var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    try {
+      eachElement(document, function (el) {
+        if (found || tagOf(el) !== "a") return;
+        var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
+        if (!/slds-th__action/i.test(cls || "")) return;
+        var r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return;
+        if (panelRect && r.right > panelRect.left && r.left < panelRect.right && r.bottom > panelRect.top && r.top < panelRect.bottom) return;
+        var lab = dcPickHeaderLabel([el.getAttribute("title") || el.textContent || ""]);
+        if (!lab) return;
+        found = { label: lab, el: el };
+      });
+    } catch (e) {}
+    return found;
+  }
+  // Full pointer-event sequence (what a real click sends) so Lightning's header handler reacts.
+  function dcClickLikeUser(el) {
+    try {
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
+        var Ctor = (type.indexOf("pointer") === 0 && typeof PointerEvent === "function") ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true, view: window, button: 0 }));
+      });
+    } catch (e) { try { el.click(); } catch (e2) {} }
+  }
+  function dcEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // Builds the guide card. opts: { lockBtn: the page's ORIGINAL action button (locked while waiting, unlocked on ready;
+  // the card never has a button of its own), isReady(): extra readiness test, onReady() }.
+  // Returns the element; el.dcStop() stops watching and restores everything (button, spotlight).
+  function dcBuildSortGuide(opts) {
+    opts = opts || {};
+    if (!document.getElementById("dc-guide-style")) {
+      var st = document.createElement("style"); st.id = "dc-guide-style";
+      st.textContent = "@keyframes dc-guide-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}50%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}" +
+                       "@keyframes dc-guide-bpulse{0%,100%{box-shadow:0 0 0 0 rgba(13,110,253,.45)}50%{box-shadow:0 0 0 8px rgba(13,110,253,0)}}";
+      document.head.appendChild(st);
+    }
+    var hdr = dcFindVisibleHeader();
+    var label = hdr ? hdr.label : "";
+    var box = document.createElement("div");
+    box.setAttribute("data-dc-sort-guide", "1");
+    var baseSeq = _auraSniff.querySeq || 0;
+    var btn = opts.lockBtn || null, saved = null, locked = false;
+    function lock() {
+      if (!btn || locked) return; locked = true;
+      saved = { text: btn.textContent, disabled: btn.disabled, opacity: btn.style.opacity, cursor: btn.style.cursor, title: btn.title, anim: btn.style.animation };
+      btn.disabled = true; btn.style.opacity = "0.55"; btn.style.cursor = "not-allowed";
+      btn.textContent = "🔒 " + saved.text.replace(/^🔒\s*/, "");
+      btn.title = "Locked until you click a column header in the Salesforce table (see the orange box above). It unlocks by itself.";
+    }
+    function unlock(pulse) {
+      if (!btn || !locked) return; locked = false;
+      btn.disabled = saved.disabled; btn.style.opacity = saved.opacity || "1"; btn.style.cursor = saved.cursor || "pointer";
+      btn.textContent = saved.text; btn.title = saved.title;
+      btn.style.animation = pulse ? "dc-guide-bpulse 1.2s ease-in-out 3" : saved.anim;
+    }
+    // spotlight on the REAL header (fixed overlay on <body>; never inserted into Salesforce's own DOM; clicks pass through)
+    var ring = null, tag = null;
+    function placeSpot() {
+      if (!hdr) return;
+      var r = hdr.el.isConnected ? hdr.el.getBoundingClientRect() : null;
+      var vis = r && r.width >= 8 && r.height >= 8 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+      if (!vis) { if (ring) ring.style.display = "none"; if (tag) tag.style.display = "none"; return; }
+      if (!ring) {
+        ring = document.createElement("div"); ring.setAttribute("data-dc-guide-spot", "1");
+        ring.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;border:3px solid #f59e0b;border-radius:6px;animation:dc-guide-pulse 1.5s ease-in-out infinite;box-sizing:border-box;";
+        tag = document.createElement("div"); tag.setAttribute("data-dc-guide-spot", "1");
+        tag.style.cssText = "position:fixed;z-index:2147483640;cursor:pointer;background:#92400e;color:#fff;font:700 11px -apple-system,sans-serif;padding:4px 9px;border-radius:6px;white-space:nowrap;";
+        tag.textContent = "👆 Click this header";
+        tag.title = "Same as clicking the highlighted column header";
+        tag.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); dcClickLikeUser(hdr.el); };
+        document.body.appendChild(ring); document.body.appendChild(tag);
+      }
+      ring.style.display = tag.style.display = "";
+      ring.style.left = (r.left - 3) + "px"; ring.style.top = (r.top - 3) + "px"; ring.style.width = (r.width + 6) + "px"; ring.style.height = (r.height + 6) + "px";
+      tag.style.left = Math.max(4, r.left + 4) + "px"; tag.style.top = (r.bottom + 8) + "px";
+    }
+    function clearSpot() { [ring, tag].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); }); ring = tag = null; }
+    // stepper: 1 click header, 2 Salesforce loads, 3 unlocked
+    function stepper(stage) {
+      function dot(n) {
+        var done = stage > n || (n === 3 && stage >= 3), on = stage === n;
+        var bg = done ? "#16a34a;color:#fff" : on ? "#f59e0b;color:#fff;animation:dc-guide-pulse 1.5s ease-in-out infinite" : "#fde68a;color:#92400e";
+        return "<span style='display:inline-block;width:18px;height:18px;border-radius:50%;background:" + bg + ";font:700 10px/18px sans-serif;text-align:center;'>" + (done ? "&#10003;" : n) + "</span>";
+      }
+      function bar(n) { return "<span style='flex:1;height:2px;min-width:10px;margin:0 6px;background:" + (stage > n ? "#16a34a" : "#fde68a") + ";'></span>"; }
+      function step(n, txt) { return "<span style='display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;color:" + (stage > n || (n === 3 && stage >= 3) ? "#166534" : "#a16207") + ";'>" + dot(n) + txt + "</span>"; }
+      return "<div style='display:flex;align-items:center;margin-top:2px;'>" + step(1, "Click header") + bar(1) + step(2, "Salesforce connects") + bar(2) + step(3, "Button unlocks") + "</div>";
+    }
+    var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:5px;padding:0 7px;font-weight:700;'>" + dcEsc(label) + "</span>" : "<b>any column header</b>";
+    function renderWait(stage) {
+      var title = stage === 1 ? "Click " + chip + " to connect" : "Connecting&hellip; Salesforce is loading the table";
+      var body = stage === 1
+        ? "This tool reads your data through Salesforce&rsquo;s own connection, and Salesforce opens it when a table is sorted. Click the header" + (hdr ? " (highlighted in the table)" : " of any column") + ". It&rsquo;s just a sort: read-only, nothing is changed."
+        : "Hang on a second. The button below unlocks by itself as soon as Salesforce finishes.";
+      box.innerHTML =
+        "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 12px;color:#78350f;font-size:12px;line-height:1.5;'>" +
+        "<div style='font-weight:700;font-size:13px;color:#92400e;margin-bottom:4px;'>" + title + "</div>" +
+        "<div style='margin:0 0 9px;'>" + body + "</div>" +
+        stepper(stage) +
+        "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div></div>";
+    }
+    function renderDone() {
+      box.innerHTML =
+        "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 12px;color:#166534;font-size:12px;line-height:1.45;'>" +
+        "<div style='font-weight:700;font-size:13px;margin-bottom:4px;'>&#10003; Connected. Now press the button below</div>" + stepper(3) + "</div>";
+    }
+    var finished = false, timer = null, started = Date.now(), stage = 1, onClick = null;
+    function cleanup() {
+      finished = true; if (timer) clearInterval(timer);
+      clearSpot();
+      if (onClick) { try { document.removeEventListener("click", onClick, true); } catch (e) {} onClick = null; }
+    }
+    function ready() {
+      if (finished) return; cleanup();
+      renderDone(); unlock(true);
+      if (typeof opts.onReady === "function") { try { opts.onReady(); } catch (e) {} }
+    }
+    // the user clicked a sortable header -> advance to step 2 right away
+    onClick = function (e) {
+      if (finished || stage !== 1) return;
+      try {
+        var path = e.composedPath ? e.composedPath() : [];
+        for (var i = 0; i < path.length; i++) {
+          var n = path[i];
+          if (n && n.nodeType === 1 && tagOf(n) === "a" && /slds-th__action/i.test(typeof n.className === "string" ? n.className : "")) { stage = 2; clearSpot(); renderWait(2); return; }
+        }
+      } catch (err) {}
+    };
+    document.addEventListener("click", onClick, true);
+    function check() {
+      if (finished) return;
+      if (box.__dcSeen && !box.isConnected) { cleanup(); unlock(false); return; }   // panel closed
+      if (box.isConnected) box.__dcSeen = true;
+      // Column picker hidden (closeExploreModal only display:none's it): take the spotlight ring off Salesforce's
+      // header and stand by; it comes back by itself when the picker is reopened.
+      try { var _mdl = box.closest && box.closest("#dc-explore-modal"); if (_mdl && _mdl.style.display === "none") { clearSpot(); return; } } catch (e) {}
+      var sorted = (_auraSniff.querySeq || 0) > baseSeq;                      // the page ran a query after the card appeared
+      var extra = typeof opts.isReady === "function" ? !!opts.isReady() : false;
+      if (sorted || extra) { ready(); return; }
+      placeSpot();
+      var note = box.querySelector(".dc-guide-note");
+      if (note && Date.now() - started > 20000 && !note.textContent) note.textContent = "Still waiting? Clicking a row checkbox in that table also works. Click it once, then click it again to untick it.";
+      if (Date.now() - started > 600000) { cleanup(); unlock(false); }
+    }
+    renderWait(1); lock();
+    timer = setInterval(check, 300);
+    setTimeout(function () { if (!finished) placeSpot(); }, 0);
+    box.dcStop = function () { cleanup(); unlock(false); };
+    box.dcUnlock = function () { unlock(false); };      // release the button but keep watching (fallback)
+    box.dcForceReady = ready;                             // test hook / session poll
+    return box;
+  }
+
   var _connectingInProgress = false;
   function renderConnectButton(container, onConnected) {
     if (extBridgePresent()) { onConnected(); return; }
@@ -7444,6 +7848,107 @@
   }
   var _auraQid = 0;
 
+  // ── Data Graph "View" parity: the SAME aura action Salesforce's own View dialog fires (captured from a real org):
+  //   POST /aura?...CdpDataView.queryDataGraphWithLookupKeys=1
+  //   params { objectName, dataSpaceName, lookupKeys:"[Id__c=<value>]", noCache }
+  // noCache:false = the stored/cached graph, noCache:true = built live ("Real-time View").
+  // Pull the graph JSON out of whatever shape returnValue has (string / wrapper object / the object itself).
+  function dcExtractGraphJson(rv) {
+    function asJson(x) {
+      if (typeof x === "string") { var t = x.trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return undefined; }
+      return x && typeof x === "object" ? x : undefined;
+    }
+    if (typeof rv === "string") return asJson(rv);
+    if (!rv || typeof rv !== "object") return asJson(rv);
+    // Salesforce wraps the graph: [ { fields: { json_blob__c: "<graph as a JSON string>" } } ] (stored AND real-time).
+    // Search the whole reply, breadth-first, for a JSON string. Only a field NAMED like json/blob/graph is trusted anywhere;
+    // any other JSON-looking string is accepted only when the reply is a thin wrapper (single key / single element all the way
+    // down), so a genuine graph that merely contains JSON-looking text is never mistaken for a wrapper.
+    var q = [{ v: rv, d: 0, k: "", thin: true }], named = null, thinHit = null, seen = 0;
+    while (q.length && seen++ < 4000) {
+      var n = q.shift(), x = n.v;
+      if (typeof x === "string") {
+        var t2 = x.trim();
+        if ((t2.charAt(0) === "{" || t2.charAt(0) === "[") && t2.length > 2) {
+          var pj; try { pj = JSON.parse(t2); } catch (e) { pj = null; }
+          if (pj && typeof pj === "object") { if (/json|blob|graph/i.test(n.k)) { named = pj; break; } if (n.thin && !thinHit) thinHit = pj; }
+        }
+      } else if (x && typeof x === "object" && n.d < 8) {
+        var ks = Object.keys(x), thinHere = n.thin && ks.length <= 1;
+        ks.forEach(function (kk) { q.push({ v: x[kk], d: n.d + 1, k: kk, thin: thinHere }); });
+      }
+    }
+    if (named) return named;
+    if (thinHit) return thinHit;
+    if (!Array.isArray(rv)) { var ok2 = Object.keys(rv); for (var oi = 0; oi < ok2.length; oi++) { if (/json|blob|graph/i.test(ok2[oi]) && rv[ok2[oi]] && typeof rv[ok2[oi]] === "object") return rv[ok2[oi]]; } }   // an already-parsed graph under a json/blob/graph key
+    return rv;
+  }
+  // Which field identifies this Data Graph row? Not a fixed name (orgs differ: Id__c, ssot__Id__c, ...): take a top-level
+  // scalar of the graph JSON that ALSO appears, with the same value, as a column of the row; prefer names that look like an id.
+  // Fallback: an id-looking top-level scalar of the blob itself. Returns {key,value} or null. Pure.
+  function dcPickLookupKey(blobText, rowMap) {
+    var top; try { top = JSON.parse(blobText); } catch (e) { return null; }
+    if (Array.isArray(top)) top = top[0];
+    if (!top || typeof top !== "object") return null;
+    var idLike = /(^|_)id(__c)?$/i, scal = function (v) { return typeof v === "string" || typeof v === "number"; };
+    var ks = Object.keys(top).filter(function (k) { return scal(top[k]) && String(top[k]).trim() !== ""; });
+    var hit = ks.filter(function (k) { return rowMap && rowMap[k] !== undefined && String(rowMap[k]).trim() === String(top[k]).trim(); });
+    var pick = hit.filter(function (k) { return idLike.test(k); })[0] || hit[0] || ks.filter(function (k) { return idLike.test(k); })[0];
+    return pick ? { key: pick, value: String(top[pick]).trim() } : null;
+  }
+  // A Data Graph State row names its graph like "Dg_<GraphApiName>_<13-digit timestamp>"; the graph API name is the middle.
+  function dcGraphNameFromCell(t) { var m = /^Dg_(.+?)_\d{9,}$/.exec(String(t || "").trim()); return m ? m[1] : ""; }
+  function dcQueryDataGraph(live, realtime) {
+    return new Promise(function (resolve, reject) {
+      if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected. Sort a column or click Connect first.")); return; }
+      // Candidate (graph name x data space) pairs, the one that worked last time first. A wrong guess gives Salesforce's
+      // generic "Something's not right with the query", so we try the plausible ones and remember the winner.
+      var trimmed = String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "");
+      var names = []; (live.graphHints || []).forEach(function (h) { if (h && names.indexOf(h) < 0) names.push(h); });   // graph name read from the row itself first
+      [trimmed, live.objectName].forEach(function (n) { if (n && names.indexOf(n) < 0) names.push(n); });
+      var spaces = [], seenS = {};
+      var addS = function (x) { if (x && !seenS[x]) { seenS[x] = 1; spaces.push(x); } };
+      addS(live.dataSpace);
+      try { if (typeof dataSpaceCandidates === "function") dataSpaceCandidates(live.objectName).forEach(addS); } catch (e) {}
+      if (!spaces.length) spaces.push("default");
+      var combos = [];
+      var seenGraph = [];
+      names.forEach(function (n) { if (_graphCalls[n]) { seenGraph.push(n + " @ " + _graphCalls[n]); combos.push({ name: n, space: _graphCalls[n] }); } });   // Salesforce's own known-good pair
+      if (live._ok) combos.push(live._ok);
+      names.forEach(function (n) { spaces.forEach(function (sp) { if (!live._ok || live._ok.name !== n || live._ok.space !== sp) combos.push({ name: n, space: sp }); }); });
+      var seenC = {}; combos = combos.filter(function (c) { var k = c.name + "\u0001" + c.space; if (seenC[k]) return false; seenC[k] = 1; return true; }).slice(0, 10);
+      var lastErr = "", lastRaw = "";
+      (function attempt(i) {
+        if (i >= combos.length) {
+          reject(new Error((lastErr || "Request failed") + " [tried " + combos.map(function (c) { return c.name + " @ " + c.space; }).join("; ") + "]" +
+            "\nSalesforce said: " + (lastRaw || "(nothing)") + "\nLookup: [" + live.keyField + "=" + live.keyValue + "], noCache=" + (!!realtime) +
+            "\nGraph/space Salesforce's own View used this session: " + (Object.keys(_graphCalls).map(function (k) { return k + " @ " + _graphCalls[k]; }).join("; ") || "none seen (open Salesforce's View on this row once, then retry)")));
+          return;
+        }
+        var c = combos[i];
+        _auraQid = (_auraQid || 0) + 1;
+        var act = { id: "dc-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", callingDescriptor: "UNKNOWN",
+          params: { objectName: c.name, dataSpaceName: c.space, lookupKeys: "[" + live.keyField + "=" + live.keyValue + "]", noCache: !!realtime } };
+        var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+        fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.CdpDataView.queryDataGraphWithLookupKeys=1", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include"
+        }).then(function (r) { return r.text(); }).then(function (txt) {
+          if (/aura:invalidSession|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Session expired. Run any query in Salesforce first.")); return; }
+          var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Response was not JSON.")); return; }
+          var a2 = json && json.actions && json.actions[0];
+          if (!a2) { reject(new Error("Response had no actions.")); return; }
+          if (a2.state !== "SUCCESS") {
+            try { lastErr = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; lastRaw = JSON.stringify(a2.error).slice(0, 600); } catch (e) { lastErr = a2.state; }
+            attempt(i + 1); return;
+          }
+          var v = dcExtractGraphJson(a2.returnValue);
+          if (v === undefined || v === null) { reject(new Error("Empty graph returned.")); return; }
+          live._ok = c; resolve(v);
+        }).catch(function (err) { reject(new Error("Request failed: " + err)); });
+      })(0);
+    });
+  }
+
   // >100 rows: the Data Explorer's own query is hard-capped at 100 (probe 6) and the
   // REST Query API is CORS-walled (probe 7). But the Data Cloud QUERY EDITOR runs SQL
   // via a same-origin aura action that honors rowLimit (probe 8):
@@ -7517,6 +8022,47 @@
   // Extension-only (pagination requires the sid-cookie background).
   var DC_PAGE_SIZE = 49999;
   var DC_MAX_TOTAL_EXPORT = 500000;   // hard cap (memory + credit safety)
+  // Explorer "Export All" is capped at DC_MAX_TOTAL_EXPORT rows. Every label/message about it comes from here
+  // so the button can never promise "everything" when the table is bigger than the cap.
+  var DC_BIGGER_EXPORT_HINT = " To get the rest, export in slices using a filter.";
+  /* @strip:start dev */
+  DC_BIGGER_EXPORT_HINT = " For the whole table, use Query Editor \u2192 Export ALL, or export in slices using a filter.";
+  /* @strip:end */
+  function dcExportCapInfo(total) {
+    var cap = DC_MAX_TOTAL_EXPORT, t = Number(total) || 0, over = t > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Export first " + cap.toLocaleString() + " of " + t.toLocaleString() + " rows"
+                  : "\u2B07 Export All" + (t ? " (" + t.toLocaleString() + " rows)" : ""),
+      confirmMsg: over
+        ? "This table has " + t.toLocaleString() + " rows, but Export All downloads at most the first " + cap.toLocaleString() + " rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " rows now? You can click Cancel while it runs."
+        : (t ? "Download all " + t.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
+             : "Download up to " + cap.toLocaleString() + " rows from this object? This may take a while. You can click Cancel while it runs."),
+      tip: "Download this object as CSV (ignores any filter), fetched in batches. Limit: the first " + cap.toLocaleString() + " rows per export." + (over ? DC_BIGGER_EXPORT_HINT : "") + " Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.",
+      doneLabel: function (n) { return "\u2713 Exported " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + t.toLocaleString() : ""); },
+      infoSuffix: over ? " &mdash; <b>Export All</b> saves the first " + cap.toLocaleString() + " rows only." + DC_BIGGER_EXPORT_HINT
+                       : " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV"
+    };
+  }
+  // Download CSV when a filter matches MORE rows than are loaded: it re-queries the matching rows, but through the same
+  // engine as Export All, so it is capped at DC_MAX_TOTAL_EXPORT too. Same rule: never say "all" when it is not all.
+  function dcFilteredCsvInfo(matching) {
+    var cap = DC_MAX_TOTAL_EXPORT, m = Number(matching) || 0, over = m > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Download first " + cap.toLocaleString() + " of " + m.toLocaleString() + " filtered"
+                  : "\u2B07 Download CSV (all " + m.toLocaleString() + " filtered)",
+      confirmMsg: over
+        ? m.toLocaleString() + " rows match your filter, but Download CSV fetches at most the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " matching rows now?\n\nFetches in batches \u2014 you can click Cancel while it runs."
+        : m.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches \u2014 you can click Cancel while it runs.",
+      tip: over
+        ? "Downloads the currently loaded rows as CSV. Because your filter matches more rows than are loaded, it fetches the matching rows in batches (cancellable) \u2014 limit: the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT
+        : "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.",
+      doneLabel: function (n) { return "\u2713 Saved " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + m.toLocaleString() + " filtered" : ""); },
+      headerNote: over ? " \u2014 Download CSV saves the first " + cap.toLocaleString() + " matching rows only" : " \u2014 Download CSV will fetch all"
+    };
+  }
+
   // Paginated CSV export: runs a query, then pages through all results building CSV
   // incrementally. Extension-only (pagination needs the sid-cookie background).
   // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
@@ -7532,7 +8078,7 @@
       if (!extBridgePresent()) {
         var BM_PAGE = 49999;
         var BM_MAX = DC_MAX_TOTAL_EXPORT;
-        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
         var rowData = [];
 
@@ -7584,7 +8130,7 @@
         return;
       }
       var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
-      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
       function appendRows(data, metadata) {
         if (!cols.length && metadata && metadata.length) {
           cols = metadata.map(function (m) { return m.name; });
@@ -7770,11 +8316,68 @@
   }
 
   // Read the dataspace from the Query Editor page header.
-  // The page shows "Data Space" label with the value (e.g. "TDI") nearby.
+  // The page shows "Data Space" label with the value nearby.
   // A valid dataspace is short, alphanumeric (may have underscores/hyphens), no spaces.
   var _pageDataSpaceLabel = "";
+  // true only when the LAST readPageDataSpace() value came from the dropdown component's own value/options
+  // (authoritative). false = it came from scraping page text (a guess).
+  var _pageDsAuth = false;
+  // AUTHORITATIVE read: the Data Space picker is a combobox whose JS properties hold { options:[{label,value}], value }.
+  // `value` is the API name and must be one of the option values - so nothing is guessed from visible text.
+  function dcPickDsFromCombobox(el) {
+    var lbl = ""; try { lbl = String(el.label || (el.getAttribute && el.getAttribute("label")) || (el.getAttribute && el.getAttribute("aria-label")) || ""); } catch (e) {}
+    var idHint = ""; try { idHint = String(el.name || (el.getAttribute && (el.getAttribute("name") || el.getAttribute("data-id") || el.getAttribute("data-name"))) || ""); } catch (e) {}
+    if (!/data\s*-?\s*space/i.test(lbl) && !/data[-_ ]?space/i.test(idHint)) return null;   // label (any language) OR the component's own name/id
+    var v = ""; try { v = el.value; } catch (e) {}
+    if (v && typeof v === "object") { try { v = v.value || v.name || v.apiName || ""; } catch (e) { v = ""; } }
+    var opts = null; try { opts = el.options; } catch (e) {}
+    if (!v || typeof v !== "string") return null;
+    if (opts && opts.length) {
+      var hit = null;
+      for (var i = 0; i < opts.length; i++) { var o = opts[i]; if (o && (o.value === v || o.name === v || o.apiName === v)) { hit = o; break; } }
+      if (!hit) return null;                      // value not among the component's own options -> not trustworthy
+      return { name: v, label: String(hit.label || "") };
+    }
+    return /^[A-Za-z0-9_-]{1,80}$/.test(v) ? { name: v, label: "" } : null;
+  }
+  var _dsCompCache = { t: 0, v: null };
+  function dcReadDsFromComponent() {
+    // Whole-document walk: cache briefly so hot callers (cache keys, per-query resolves) stay cheap on slow VDIs.
+    var _now = Date.now();
+    if (_now - _dsCompCache.t < 1500) return _dsCompCache.v;
+    var r = dcReadDsFromComponentUncached(); _dsCompCache.t = _now; _dsCompCache.v = r; return r;
+  }
+  // Every authoritative Data Space picker on the page. A Query Editor workspace can hold several tabs (and
+  // other panels), each with its own picker in the DOM — reading the FIRST match could return a hidden
+  // tab's space, so the query ran against the wrong space (0 rows) while Salesforce's own Run worked.
+  function dcAllDsFromComponents() {
+    var all = [];
+    try {
+      eachElement(document, function (el) {
+        var t = tagOf(el);
+        if (t !== "lightning-combobox" && t !== "lightning-base-combobox" && t !== "lightning-select" && t.indexOf("data-space") < 0) return;
+        var r = dcPickDsFromCombobox(el); if (!r) return;
+        var vis = false;
+        try {
+          var bb = el.getBoundingClientRect();
+          vis = bb.width > 0 && bb.height > 0 && (typeof el.checkVisibility !== "function" || el.checkVisibility());
+        } catch (e) {}
+        all.push({ name: r.name, label: r.label, visible: vis });
+      });
+    } catch (e) {}
+    return all;
+  }
+  function dcReadDsFromComponentUncached() {
+    var all = dcAllDsFromComponents();
+    if (!all.length) return null;
+    for (var i = 0; i < all.length; i++) if (all[i].visible) return { name: all[i].name, label: all[i].label };   // the picker the user can see
+    return { name: all[0].name, label: all[0].label };
+  }
   function readPageDataSpace() {
     var ds = "";
+    _pageDsAuth = false;
+    var _auth = dcReadDsFromComponent();
+    if (_auth && _auth.name) { _pageDsAuth = true; if (_auth.label) _pageDataSpaceLabel = _auth.label; return _auth.name; }
     var isValidDs = function (s) {
       if (!s || s.length === 0 || s.length >= 30) return false;
       if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
@@ -7829,59 +8432,7 @@
     } catch (e) {}
     if (ds) return ds;
 
-    // Strategy 1: find the "Data Space" label element, read sibling/child for the value
-    eachElement(document, function (el) {
-      if (ds) return;
-      var txt = (el.textContent || "").trim();
-      if (/^Data\s*Space$/i.test(txt) && el.children.length === 0) {
-        // First try: next sibling's value attribute (covers Lightning button triggers)
-        var next = el.nextElementSibling;
-        if (next) {
-          var attrVal = next.getAttribute("data-value") || next.getAttribute("value") || "";
-          if (isValidDs(attrVal)) { ds = attrVal; return; }
-          var val = next.textContent.trim().split("\n")[0].trim();
-          if (val && val.length > 0 && val.length < 40) _pageDataSpaceLabel = val;
-          if (isValidDs(val)) { ds = val; return; }
-        }
-        // Look at parent's text minus the label
-        var parent = el.parentElement;
-        if (parent) {
-          var parts = parent.textContent.trim().split(/\s+/);
-          for (var i = 0; i < parts.length; i++) {
-            if (isValidDs(parts[i]) && !/^data$/i.test(parts[i]) && !/^space$/i.test(parts[i])) { ds = parts[i]; return; }
-          }
-        }
-      }
-    });
-    if (ds) return ds;
-    // Strategy 2: look for "Workspace" label followed by the space name
-    eachElement(document, function (el) {
-      if (ds) return;
-      var txt = (el.textContent || "").trim();
-      if (/^Workspace$/i.test(txt) && el.children.length === 0) {
-        var next = el.nextElementSibling;
-        if (next) {
-          var val = next.textContent.trim().split("\n")[0].trim();
-          if (isValidDs(val)) { ds = val; return; }
-        }
-      }
-    });
-    if (ds) return ds;
-    // Strategy 3: look for any element whose parent contains "Data Space" or "Workspace"
-    // and the element itself is a short valid identifier (common SF header layout)
-    eachElement(document, function (el) {
-      if (ds) return;
-      if (el.children.length > 0) return;
-      var txt = (el.textContent || "").trim();
-      if (!isValidDs(txt)) return;
-      var parent = el.parentElement;
-      if (!parent) return;
-      var pTxt = parent.textContent || "";
-      if (/Data\s*Space|Workspace/i.test(pTxt) && pTxt.indexOf(txt) >= 0) {
-        if (!/^(Data|Space|Workspace|Home|Notes|Files)$/i.test(txt)) { ds = txt; return; }
-      }
-    });
-    if (ds) return ds;
+    // (Former text-scraping strategies removed: a value is returned only when the page itself provides it.)
     // Strategy 4: URL may contain dataspace param
     try {
       var urlParams = new URLSearchParams(location.search);
@@ -7967,7 +8518,7 @@
       var ds = (dataSpace != null && dataSpace !== "") ? dataSpace : (_auraSniff.dataSpace != null && _auraSniff.dataSpace !== "") ? _auraSniff.dataSpace : "";
       // Fallback: derive from table name prefix or page header
       if (!ds) { ds = (typeof readPageDataSpace === "function") ? readPageDataSpace() : ""; }
-      if (!ds) { var fm = sql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); if (fm) { var px = fm[1].match(/^([A-Za-z0-9]{2,6})_/); if (px) ds = px[1]; } }
+      // (no data space is ever derived from the table-name prefix; dataSpaceCandidates supplies concrete values)
       var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
       function mapByMeta(data, metadata) {
         var cols = (metadata || []).map(function (m) { return m && m.name; });
@@ -7992,7 +8543,6 @@
         var tblName = fm2 ? fm2[1] : "";
         dataSpaceCandidates(tblName).forEach(function (c) { if (dsCandidates.indexOf(c) < 0) dsCandidates.push(c); });
       }
-      if (dsCandidates.indexOf("default") < 0) dsCandidates.push("default");
       function tryDs(dsi) {
         var trySpace = dsCandidates[dsi] || "";
         _auraQid = (_auraQid || 0) + 1;
@@ -8032,7 +8582,7 @@
               return;
             }
             // Success — remember this dataspace for future queries
-            if (trySpace) _auraSniff.dataSpace = trySpace;
+            dcLearnSpace(trySpace, sql);
             var rv = a.returnValue || {}; var dr = rv.dataRows || rv.rows || []; var meta = rv.metadata || [];
             var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
             resolve(mapByMeta(arrData, meta));
@@ -8059,6 +8609,7 @@
         runDcSqlViaBridge(sqlNoLimit, want, ds).then(function (res) {
           var allData = res.data || [];
           var totalRows = res.rowCount || allData.length;
+          var _totalKnown = !!res.rowCount;   // server omitted the count -> we only know how many we fetched
           var queryId = res.queryId || "";
 
           function mapRows(data) {
@@ -8069,6 +8620,7 @@
               return obj;
             }).filter(Boolean);
             mapped.__serverRowCount = totalRows;
+            if (!_totalKnown && data.length >= want) mapped.__totalUnknown = true;   // may be truncated: do not claim "complete"
             mapped.__queryId = queryId;
             return mapped;
           }
@@ -8145,8 +8697,12 @@
             return obj;
           }).filter(Boolean);
           allRows = allRows.concat(batchRows);
-          if (batchRows.length < Math.min(BM_BATCH, bmWant - offset) || allRows.length >= bmWant) {
+          // The server caps each RESPONSE by payload size, so a page can come back SHORTER than
+          // asked while more rows still exist. A short page is therefore NOT the end: keep paging
+          // by OFFSET until we have `bmWant` rows, an empty page, or the true total (when known).
+          if (batchRows.length === 0 || allRows.length >= bmWant || (bmServerTotal && allRows.length >= bmServerTotal)) {
             allRows.__serverRowCount = bmServerTotal || allRows.length;
+            if (!bmServerTotal && allRows.length >= bmWant) allRows.__totalUnknown = true;   // count unavailable and we stopped at our limit
             resolve(allRows);
           } else {
             fetchBmBatch(allRows.length);
@@ -8186,10 +8742,7 @@
     //    e.g. "TDI_TDI_GI_Individual_Additional__dlm" → "TDI_GI_Individual_Additional__dlm".
     var m = objectName.match(/^([A-Za-z0-9]+)_(\1_.*)$/);
     if (m) add(m[2]);
-    // 3) Generic fallback: strip the FIRST underscore-delimited token (the space
-    //    prefix) once, in case the real table simply carries a space prefix.
-    var us = objectName.indexOf("_");
-    if (us > 0) add(objectName.slice(us + 1));
+    // (the blind "strip the first token" fallback was removed: it could match a DIFFERENT table with that name)
     return out;
   }
   function querySqlAllColumns(objectName, columns, dataSpace, rowLimit) {
@@ -8206,7 +8759,7 @@
       columns.forEach(function (c) { if (c && !seen[c]) { seen[c] = 1; base.push(c); } });
 
       // Build (table, dataspace) combos to try. Probe 9 PROVED the winner is the FULL
-      // object name (e.g. "TDI_TDI_GI_..._dlm") + the REAL data space (e.g. "TDI").
+      // object name + the REAL data space (e.g. "TDI").
       // So try that FIRST, then variants only as fallbacks. The wrong data space — not
       // the name — is the usual "table does not exist" cause.
       // Data space: use ALL authoritative candidates (captured per-object spaces, then
@@ -8223,6 +8776,7 @@
       var combos = [];
       spaces.forEach(function (sp) { names.forEach(function (nm) { combos.push({ tbl: nm, ds: sp }); }); });
 
+      var _allErrs = [];      // every combo's error, shown in the failure message so the real cause is visible
       var _firstErr = null;   // remember the FIRST combo's error (the most meaningful)
       function tryCombo(ci) {
         var c = combos[ci];
@@ -8231,12 +8785,13 @@
         }).catch(function (err) {
           var msg = String(err && err.message || err);
           if (ci === 0 && !_firstErr) _firstErr = "[tried table=\"" + c.tbl + "\" dataspace=" + JSON.stringify(c.ds) + "] " + msg;
+          _allErrs.push(c.tbl + " @ " + JSON.stringify(c.ds) + ": " + msg.replace(/\s+/g, " ").slice(0, 120));
           // Wrong table OR wrong data space (incl. "denied authorization", which means
           // the object isn't in that space / no access there) → try the next combo.
           if (/does not exist|not found|42P01|INVALID_ARGUMENT|invalid|denied authorization|not authorized|no access/i.test(msg) && ci + 1 < combos.length) { tryCombo(ci + 1); return; }
           // Surface the FIRST combo's error (the proven-good combo) — trailing combos
           // are just fallbacks and their errors are noise.
-          reject(new Error("SQL query failed: " + (_firstErr || msg)));
+          reject(new Error("SQL query failed: " + (_firstErr || msg) + (_allErrs.length > 1 ? "  ||  All attempts: " + _allErrs.join(" | ") : "")));
         });
       }
       tryCombo(0);
@@ -8260,22 +8815,24 @@
 
   // Credit-saving cache around loadColumnsData: the last successful result is kept in
   // memory keyed by object + exact column set + row count. Re-viewing the SAME selection
-  // (e.g. after accidentally closing the results table) returns the cached rows WITHOUT
+  // returns the cached rows WITHOUT
   // another Data Cloud query. `force:true` (the Refresh button) bypasses the cache.
   // Returns a Promise<rows>; rows carry a non-enumerable __fromCache flag when reused.
-  function _dataCacheKey(columns, want) {
-    return String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
+  function _dataCacheKey(columns, want, objectName) {
+    // Include the data space: the same object name can exist in two spaces with different rows.
+    var ds = ""; try { ds = objectName ? String(resolveDataSpace(objectName) || "") : ""; } catch (e) {}
+    return ds + "@@" + String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
   }
   function loadColumnsDataCached(objectName, columns, want, force) {
     var cache = exploreCache(objectName);
-    var key = _dataCacheKey(columns, want);
+    var key = _dataCacheKey(columns, want, objectName);
     if (!force && cache.lastData && cache.lastData.key === key && cache.lastData.rows) {
       var cached = cache.lastData.rows;
       try { Object.defineProperty(cached, "__fromCache", { value: true, configurable: true }); } catch (e) {}
       return Promise.resolve(cached);
     }
     return loadColumnsData(objectName, columns, want).then(function (rows) {
-      cache.lastData = { key: key, rows: rows, cols: columns.slice(), want: want };
+      cache.lastData = { key: _dataCacheKey(columns, want, objectName), rows: rows, cols: columns.slice(), want: want };
       return rows;
     });
   }
@@ -8736,6 +9293,183 @@
     setTimeout(poll, 100);
   }
 
+  // Make a result readable in a spreadsheet: (1) JSON-object columns are EXPANDED into one column per key
+  // (Record.Id, Record.LastName, ...) instead of one giant text cell; (2) columns whose every value
+  // is a plain short number become real numbers (IDs with leading zeros / long digit strings stay text);
+  // (3) a sensible width per column. Pure: returns { cols, rows (objects keyed by the new column names), widths }.
+  function qePrepResults(cols, rows, expandJson) {
+    var MAXKEYS = 80, outCols = [], plan = {};
+    cols.forEach(function (c) {
+      var keys = [], seen = {}, objs = 0, nonEmpty = 0, bad = false, parsed = new Array(rows.length);
+      if (expandJson) for (var i = 0; i < rows.length && !bad; i++) {
+        var v = rows[i][c]; if (v == null || v === "") continue; nonEmpty++;
+        var o = null;
+        if (v && typeof v === "object" && !Array.isArray(v)) o = v;
+        else if (typeof v === "string" && v.charAt(0) === "{") { try { var j = JSON.parse(v); if (j && typeof j === "object" && !Array.isArray(j)) o = j; } catch (e) {} }
+        if (!o) { bad = true; break; }
+        parsed[i] = o; objs++;
+        Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+      }
+      if (expandJson && !bad && objs > 0 && objs === nonEmpty && keys.length > 0 && keys.length <= MAXKEYS) {
+        plan[c] = { keys: keys, parsed: parsed, names: keys.map(function (k) { var nm = c + "." + k; return nm; }) };
+        plan[c].names.forEach(function (n) { outCols.push(n); });
+      } else outCols.push(c);
+    });
+    var NUM = /^-?(0|[1-9]\d{0,9})(\.\d{1,6})?$/;
+    var outRows = rows.map(function (r, ri) {
+      var o = {};
+      cols.forEach(function (c) {
+        var pl = plan[c];
+        if (!pl) { o[c] = r[c]; return; }
+        var po = pl.parsed[ri];
+        pl.keys.forEach(function (k, ki) { var v = po ? po[k] : null; o[pl.names[ki]] = (v && typeof v === "object") ? JSON.stringify(v) : v; });
+      });
+      return o;
+    });
+    var widths = outCols.map(function (c) {
+      var w = String(c).length, allNum = true, any = false;
+      for (var i = 0; i < outRows.length; i++) {
+        var v = outRows[i][c]; if (v == null || v === "") continue; any = true;
+        var t = typeof v === "string" ? v : String(v);
+        if (i < 300 && t.length > w) w = t.length;
+        if (allNum && !(typeof v === "number" || NUM.test(t))) allNum = false;
+      }
+      if (allNum && any) for (var q = 0; q < outRows.length; q++) { var vv = outRows[q][c]; if (vv != null && vv !== "" && typeof vv !== "number") outRows[q][c] = Number(vv); }
+      return Math.max(10, Math.min(60, Math.round(w * 1.15) + 2));
+    });
+    return { cols: outCols, rows: outRows, widths: widths };
+  }
+    // ── STREAMING .xlsx writer (memory-flat, multi-sheet) ──────────────────────────────
+    // Builds a real Excel workbook straight onto a FileSystemWritableFileStream, one sheet per
+    // `sheetRows` data rows (header repeated on each sheet, frozen + bold + filter). Nothing is
+    // held in memory beyond the current batch: every sheet is its own deflate-compressed zip entry
+    // written as the rows arrive; the small workbook/rels parts are appended at the END (zip entry
+    // order is free), when the real sheet count is known. Strings are inline (no shared-string table,
+    // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
+    // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
+    function dcXlsxStream(out, sheetRows) {
+      var widths = null, enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
+      var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+      function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
+      function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
+      function emit(bytes) { pos += bytes.length; return out.write(bytes); }
+      function colLetter(i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+      function xe(s) { return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+      function cell(v, style) {
+        var s = style ? " s='1'" : "";
+        if (v == null || v === "") return "<c" + s + "/>";
+        if (typeof v === "number" && isFinite(v)) return "<c" + s + "><v>" + v + "</v></c>";
+        if (typeof v === "boolean") return "<c" + s + " t='b'><v>" + (v ? 1 : 0) + "</v></c>";
+        var t = typeof v === "object" ? JSON.stringify(v) : String(v);
+        if (t.length > 32767) t = t.slice(0, 32767);   // Excel's per-cell limit; longer text would corrupt the file
+        if (!style) s = " s='2'";   // data text wraps (long values stay readable; row height auto-fits in Excel)
+        return "<c" + s + " t='inlineStr'><is><t xml:space='preserve'>" + xe(t) + "</t></is></c>";
+      }
+      function startEntry(name) {
+        var cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), r = cs.readable.getReader();
+        var e = { name: name, nameB: enc.encode(name), crc: 0xFFFFFFFF, usize: 0, csize: 0, offset: pos, w: w };
+        var h = []; u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0808); u16(h, 8); u16(h, 0); u16(h, 0x21); u32(h, 0); u32(h, 0); u32(h, 0); u16(h, e.nameB.length); u16(h, 0);
+        e.pump = emit(new Uint8Array(h)).then(function () { return emit(e.nameB); }).then(function () {
+          return (function loop() { return r.read().then(function (x) { if (x.done) return; e.csize += x.value.length; return emit(x.value).then(loop); }); })();
+        });
+        return e;
+      }
+      function entryWrite(e, str) {
+        var b = enc.encode(str), c = e.crc;
+        for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8);
+        e.crc = c; e.usize += b.length;
+        if (e.usize > 4000000000) throw new Error("A sheet is too large for one workbook part - use a smaller rows-per-sheet or split CSV files.");
+        return e.w.write(b);
+      }
+      function endEntry(e) {
+        return e.w.close().then(function () { return e.pump; }).then(function () {
+          e.crc = (e.crc ^ 0xFFFFFFFF) >>> 0;
+          var d = []; u32(d, 0x08074b50); u32(d, e.crc); u32(d, e.csize); u32(d, e.usize);
+          entries.push(e); return emit(new Uint8Array(d));
+        });
+      }
+      function wholeEntry(name, text) { var e = startEntry(name); return entryWrite(e, text).then(function () { return endEntry(e); }); }
+      function sheetHead() {
+        var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
+          "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
+          "<cols>" + (widths && widths.length === cols.length ? widths.map(function (w, i) { return "<col min='" + (i + 1) + "' max='" + (i + 1) + "' width='" + w + "' customWidth='1'/>"; }).join("") : "<col min='1' max='" + nC + "' width='18' customWidth='1'/>") + "</cols><sheetData><row>";
+        for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
+        return x + "</row>";
+      }
+      function openSheet() { sheetNo++; rowsInSheet = 0; cur = startEntry("xl/worksheets/sheet" + sheetNo + ".xml"); return entryWrite(cur, sheetHead()); }
+      function closeSheet() {
+        if (!cur) return Promise.resolve();
+        var e = cur; cur = null;
+        var last = colLetter(Math.max(0, cols.length - 1)) + (rowsInSheet + 1);
+        sheetNames.push("Rows " + (((sheetNo - 1) * sheetRows) + 1) + "-" + (((sheetNo - 1) * sheetRows) + rowsInSheet));
+        return entryWrite(e, "</sheetData><autoFilter ref='A1:" + last + "'/></worksheet>").then(function () { return endEntry(e); });
+      }
+      var chain = Promise.resolve();
+      function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
+      return {
+        setCols: function (c, w) { cols = c.slice(); widths = w || null; },
+        sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
+        // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
+        addRows: function (rows) {
+          return serial(function () {
+            var i = 0;
+            function step() {
+              var buf = "";
+              while (i < rows.length) {
+                if (!cur || rowsInSheet >= sheetRows) {
+                  var pend = buf; buf = "";
+                  return Promise.resolve(pend && cur ? entryWrite(cur, pend) : null).then(closeSheet).then(openSheet).then(step);
+                }
+                var r = rows[i++], x = "<row>";
+                for (var k = 0; k < cols.length; k++) x += cell(r[k], false);
+                buf += x + "</row>"; rowsInSheet++;
+              }
+              return buf ? entryWrite(cur, buf) : null;
+            }
+            return step();
+          });
+        },
+        // Finalise: close the open sheet, append workbook parts + central directory, close the file.
+        close: function () {
+          return serial(function () {
+            if (ended) return null; ended = true;
+            var p = cur ? Promise.resolve() : openSheet();   // never produce a workbook with zero sheets
+            return p.then(closeSheet).then(function () {
+              var n = sheetNames.length, ct = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/xl/workbook.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'/><Override PartName='/xl/styles.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'/>";
+              var wb = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets>", rel = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>";
+              for (var s = 1; s <= n; s++) {
+                ct += "<Override PartName='/xl/worksheets/sheet" + s + ".xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'/>";
+                wb += "<sheet name='" + xe(sheetNames[s - 1]) + "' sheetId='" + s + "' r:id='rId" + s + "'/>";
+                rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
+              }
+              rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
+              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><color rgb='FFFFFFFF'/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='3'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill><fill><patternFill patternType='solid'><fgColor rgb='FF1E293B'/><bgColor indexed='64'/></patternFill></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='3'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='2' borderId='0' xfId='0' applyFont='1' applyFill='1' applyAlignment='1'><alignment vertical='center'/></xf><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0' applyAlignment='1'><alignment vertical='top' wrapText='1'/></xf></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
+              return wholeEntry("[Content_Types].xml", ct + "</Types>")
+                .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
+                .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
+                .then(function () { return wholeEntry("xl/_rels/workbook.xml.rels", rel); })
+                .then(function () { return wholeEntry("xl/styles.xml", styles); });
+            }).then(function () {
+              var cdStart = pos, cdSize = 0, chain2 = Promise.resolve();
+              entries.forEach(function (e) {
+                chain2 = chain2.then(function () {
+                  var c = []; u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0808); u16(c, 8); u16(c, 0); u16(c, 0x21); u32(c, e.crc); u32(c, e.csize); u32(c, e.usize); u16(c, e.nameB.length); u16(c, 0); u16(c, 0); u16(c, 0); u16(c, 0); u32(c, 0); u32(c, e.offset);
+                  cdSize += c.length + e.nameB.length;
+                  return emit(new Uint8Array(c)).then(function () { return emit(e.nameB); });
+                });
+              });
+              return chain2.then(function () {
+                var z = []; u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, entries.length); u16(z, entries.length); u32(z, cdSize); u32(z, cdStart); u16(z, 0);
+                return emit(new Uint8Array(z));
+              });
+            }).then(function () { return out.close(); });
+          });
+        }
+      };
+    }
+    function qeCanXlsx() { try { return typeof window.showSaveFilePicker === "function" && typeof CompressionStream === "function" && typeof TextEncoder === "function"; } catch (e) { return false; } }
+
+
   // ── Export visible rows to CSV ────────────────────────────────────────────
   function exportExploreCsv(recList) {
     const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
@@ -8756,6 +9490,63 @@
 
   // Download an arbitrary rows[]×columns[] set as CSV (used by the full-table view,
   // so ALL columns export with data — not just SF's 10).
+  // Styled HTML table for the clipboard: Excel / Google Sheets paste it WITH the bold coloured header,
+  // borders and column widths (plain TSV carries no formatting). Fields are HTML-escaped.
+  function qeToHtmlTable(cols, rows, widths) {
+    var e = function (v) { return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+    var bd = "border:1px solid #cbd5e1;";
+    var h = '<table style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11pt;">';
+    if (widths) { h += "<colgroup>"; cols.forEach(function (c, i) { h += '<col width="' + Math.round((widths[i] || 18) * 7) + '">'; }); h += "</colgroup>"; }
+    h += "<tr>" + cols.map(function (c) { return '<th style="' + bd + 'background:#1e293b;color:#ffffff;font-weight:bold;text-align:left;padding:4px 8px;">' + e(c) + "</th>"; }).join("") + "</tr>";
+    rows.forEach(function (r, ri) {
+      var bg = ri % 2 ? "background:#f1f5f9;" : "";
+      h += "<tr>" + cols.map(function (c) { var v = r[c]; if (v && typeof v === "object") v = JSON.stringify(v); return '<td style="' + bd + bg + 'padding:3px 8px;vertical-align:top;white-space:normal;word-wrap:break-word;">' + e(v) + "</td>"; }).join("") + "</tr>";
+    });
+    return h + "</table>";
+  }
+  // Drag the right edge of any header cell to resize that column; double-click the edge to auto-fit again.
+  function dcMakeColsResizable(root) {
+    root.querySelectorAll("th").forEach(function (th) {
+      if (th.querySelector(".dc-col-grip")) return;
+      if (!th.style.position) th.style.position = "relative";
+      th.style.boxSizing = "border-box";
+      var g = document.createElement("div"); g.className = "dc-col-grip"; g.title = "Drag to resize · double-click to auto-fit";
+      g.style.cssText = "position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
+      g.onclick = function (e) { e.stopPropagation(); };
+      g.ondblclick = function (e) { e.stopPropagation(); var tb = th.closest("table"); if (tb) { tb.style.tableLayout = ""; tb.style.width = "100%"; tb.querySelectorAll("th").forEach(function (t) { t.style.width = t.style.minWidth = t.style.maxWidth = ""; }); } };
+      g.onpointerdown = function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var tbl = th.closest("table");
+        // First drag: freeze every column at its current width and switch to fixed layout so the dragged
+        // column really grows/shrinks (cells clip with an ellipsis) instead of the browser re-balancing.
+        if (tbl && tbl.style.tableLayout !== "fixed") {
+          var ths = Array.prototype.slice.call(tbl.querySelectorAll("th")), ws = ths.map(function (t) { return t.getBoundingClientRect().width; }), tot = 0;
+          ths.forEach(function (t, i) { t.style.width = t.style.minWidth = t.style.maxWidth = ws[i] + "px"; tot += ws[i]; });
+          tbl.style.tableLayout = "fixed"; tbl.style.width = tot + "px";
+        }
+        var x0 = e.clientX, w0 = th.getBoundingClientRect().width, t0 = tbl ? parseFloat(tbl.style.width) || 0 : 0;
+        var mv = function (ev) { var w = Math.max(50, w0 + ev.clientX - x0); th.style.width = th.style.minWidth = th.style.maxWidth = w + "px"; if (tbl && t0) tbl.style.width = (t0 + w - w0) + "px"; };
+        var up = function () { window.removeEventListener("pointermove", mv, true); window.removeEventListener("pointerup", up, true); };
+        window.addEventListener("pointermove", mv, true); window.addEventListener("pointerup", up, true);
+      };
+      th.appendChild(g);
+    });
+  }
+  // Formatted Excel (.xlsx) of the loaded rows: JSON-blob columns expanded into one column per key,
+  // numbers stored as numbers, bold frozen filtered header, sized columns. Built in memory.
+  function downloadRowsXlsx(objectName, columns, rows, btn) {
+    if (!rows || !rows.length) { if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows."); return; }
+    var old = btn ? btn.textContent : ""; if (btn) { btn.disabled = true; btn.textContent = "Building…"; }
+    var chunks = [], pp = qePrepResults(columns, rows, true);
+    var x = dcXlsxStream({ write: function (b) { chunks.push(b); return Promise.resolve(); }, close: function () { return Promise.resolve(); } }, 1000000);
+    x.setCols(pp.cols, pp.widths);
+    x.addRows(pp.rows.map(function (r) { return pp.cols.map(function (c) { return r[c]; }); })).then(function () { return x.close(); }).then(function () {
+      var nm = (objectName || "data-explore") + ".xlsx";
+      var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); a.download = nm; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (btn) btn.textContent = "\u2713 Saved";
+    }).catch(function (e) { if (btn) { btn.textContent = "Excel build failed"; btn.title = String(e && e.message || e); } }).then(function () { if (btn) { btn.disabled = false; setTimeout(function () { btn.textContent = old; }, 2000); } });
+  }
   function downloadRowsCsv(objectName, columns, rows) {
     // Don't produce a header-only CSV when the object has no records — tell the user
     // instead of silently downloading an empty file.
@@ -8763,8 +9554,11 @@
       if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows.");
       return;
     }
-    const esc = v => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const header = ["Id"].concat(columns);
+    const esc = v => { const s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    // Header = exactly the columns shown. An "Id" column is added ONLY if the rows really carry
+    // one (Data Cloud objects usually have none → it was always an empty column), and never twice.
+    const header = (columns.indexOf("Id") < 0 && rows.some(r => r && Object.prototype.hasOwnProperty.call(r, "Id")))
+      ? ["Id"].concat(columns) : columns.slice();
     const doDownload = (parts) => {
       const blob = new Blob(parts, { type: "text/csv" });
       const a = document.createElement("a");
@@ -8781,7 +9575,7 @@
       return;
     }
     // Large result → build the CSV string in non-blocking chunks so a wide/tall dataset
-    // (e.g. 50k rows × 117 cols) can't trigger "page unresponsive". Accumulate into a
+    // can't trigger "page unresponsive". Accumulate into a
     // parts array (each part = one chunk of joined lines) and hand it all to Blob at the end.
     const CHUNK = 2000;
     const parts = [header.map(esc).join(",") + "\n"];
@@ -8801,6 +9595,7 @@
     buildChunk();
   }
 
+  /* @strip:start dev */
   // ── "Understand this transform" — plain-language view of a Data Transform ──────
   // Reads the definition (batch node-graph or streaming SQL) and renders sources →
   // steps/joins → output, so you don't have to read raw JSON. Extension-only (the read
@@ -9545,6 +10340,7 @@
       xfHdr.addEventListener("pointerup", function () { _xfDragging = false; });
     }
   }
+  /* @strip:end */
 
   // Render the tool's OWN full-width, scrollable results table showing EVERY selected
   // column with real data (from one queryAllColumns call). This is what removes the
@@ -9571,7 +10367,12 @@
       .sort(function (a, b) { return b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0); });
   }
 
-  function closeAllColumnsTable() { if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
+  // Cancels any Explorer export still running for the table being closed/re-rendered (Hide empty, filter, Reload,
+  // Back to original ...) — otherwise it keeps spending credits with no Cancel button and still downloads.
+  // Table name out of a FROM clause token: strips double quotes and a leading schema ("a"."b" -> b).
+  function dcFromTableName(tok) { var t = String(tok || "").trim().replace(/;$/, ""); var parts = t.match(/"(?:[^"]|"")*"|[^.\s]+/g) || [t]; return String(parts[parts.length - 1]).replace(/^"|"$/g, "").replace(/""/g, '"'); }
+  var _explorerCancelFn = null;
+  function closeAllColumnsTable() { try { if (_explorerCancelFn) { _explorerCancelFn(); _explorerCancelFn = null; } } catch (e) {} if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
   function reopenLastTable() {
     if (_lastTableState && typeof showAllColumnsTable === "function") {
       var s = _lastTableState;
@@ -9580,178 +10381,402 @@
     }
     return false;
   }
-  // Popup showing one cell's FULL value (for long text / JSON / blob fields), with a
-  // Copy button and pretty-print for JSON. Salesforce-like "view field value" behavior.
-  var _cellViewEl = null;
-  function showCellValue(fieldApi, fieldLabel, value) {
-    if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; }
-    var esc2 = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
-    // Try to parse as JSON and render as table/record view
-    var bodyHtml = "";
-    var parsed = null;
-    try { parsed = JSON.parse(value); } catch (e) {}
-    if (parsed && typeof parsed === "object") {
-      // JSON detected — render as formatted record view
-      bodyHtml = renderJsonAsTable(parsed, esc2);
-    } else {
-      // Plain text — show as-is
-      bodyHtml = "<pre style='margin:0;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(value) + "</pre>";
-    }
-    var m = document.createElement("div");
-    _cellViewEl = m;
-    m.style.cssText = "position:fixed;top:3vh;left:50%;transform:translateX(-50%);width:min(1100px,94vw);height:min(90vh,900px);z-index:2147483647;background:#fff;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;resize:both;";
-    m.innerHTML =
-      "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb'>" +
-        "<div style='flex:1'><div style='font-weight:700;font-size:13px'>" + esc2(fieldLabel) + "</div>" +
-        "<div style='font:600 10px SF Mono,Consolas,monospace;color:#5c6b8a'>" + esc2(fieldApi) + (parsed ? " &bull; Record View" : " &bull; " + value.length + " chars") + "</div></div>" +
-        "<button class='dc-cv-json' style='border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 10px;cursor:pointer;font:600 10px system-ui;color:#475569" + (parsed ? "" : ";display:none") + "'>JSON</button>" +
-        "<button class='dc-cv-copy' style='border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui'>Copy</button>" +
-        "<button class='dc-cv-x' style='border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px'>&times;</button>" +
-      "</div>" +
-      "<div class='dc-cv-body' style='overflow:auto;flex:1'>" + bodyHtml + "</div>";
-    document.body.appendChild(m);
-    // Function to wire up all tabs inside the modal (reusable after re-render)
-    function wireUpTabs() {
-      m.querySelectorAll("[data-tabnav]").forEach(function (nav) {
-        nav.onclick = function (e) {
-          var t = e.target; while (t && !t.getAttribute("data-idx") && t !== nav) t = t.parentElement;
-          if (!t || !t.getAttribute("data-idx")) return;
-          var idx = t.getAttribute("data-idx");
-          var group = nav.getAttribute("data-tabnav");
-          m.querySelectorAll("[data-tabgrp='" + group + "']").forEach(function (tb) { tb.style.background = "#f3f2f2"; tb.style.color = "#54698d"; });
-          t.style.background = "#0070d2"; t.style.color = "white";
-          m.querySelectorAll("[data-panegrp='" + group + "']").forEach(function (p) { p.style.display = "none"; });
-          var pane = m.querySelector("[data-panegrp='" + group + "'][data-idx='" + idx + "']");
-          if (pane) pane.style.display = "block";
-        };
-      });
-    }
-    wireUpTabs();
-    window.__dcJsonTabIds = [];
-    m.querySelector(".dc-cv-copy").onclick = function () {
-      try { navigator.clipboard.writeText(value); var b = m.querySelector(".dc-cv-copy"); b.textContent = "Copied!"; setTimeout(function () { b.textContent = "Copy"; }, 1200); } catch (e) {}
-    };
-    // Toggle between table view and raw JSON
-    var showingTable = true;
-    if (parsed) {
-      m.querySelector(".dc-cv-json").onclick = function () {
-        var bodyEl = m.querySelector(".dc-cv-body");
-        var btn = m.querySelector(".dc-cv-json");
-        if (showingTable) {
-          bodyEl.innerHTML = "<pre style='margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font:12px/1.5 SF Mono,Consolas,monospace;color:#1a1a1a'>" + esc2(JSON.stringify(parsed, null, 2)) + "</pre>";
-          btn.textContent = "Table";
-        } else {
-          bodyEl.innerHTML = renderJsonAsTable(parsed, esc2);
-          wireUpTabs(); // Re-attach tab handlers after re-render
-          btn.textContent = "JSON";
-        }
-        showingTable = !showingTable;
-      };
-    }
-    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } };
-    m.querySelector(".dc-cv-x").onclick = close;
-    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
+  // ── Cell value / JSON viewer (Data Explorer) ────────────────────────────────────────────────────
+  // Three views of the same value: Table (record view: summary cards + one tab per nested table), Tree (collapsible,
+  // colour-coded, built lazily so a huge blob never floods the DOM) and Raw (pretty text with line numbers).
+  // Pure helpers below are unit-tested; none of them mutates the caller's object.
+  function dcJsonPathStr(path) {
+    var s = "$";
+    (path || []).forEach(function (p) { s += typeof p === "number" ? "[" + p + "]" : (/^[A-Za-z_$][\w$]*$/.test(p) ? "." + p : "[" + JSON.stringify(p) + "]"); });
+    return s;
   }
-  // Render a JSON object/array as a clean flat table (no inline nesting)
-  function renderJsonAsTable(data, esc2) {
-    if (Array.isArray(data)) {
-      if (data.length === 0) return "<div style='padding:12px;color:#64748b'>Empty array</div>";
-      if (typeof data[0] === "object" && data[0] !== null) {
-        // Get ONLY scalar columns — nested objects become their own tabs at the parent level
-        var cols = [];
-        data.forEach(function (item) { if (item && typeof item === "object") Object.keys(item).forEach(function (k) { if (cols.indexOf(k) < 0 && (!item[k] || typeof item[k] !== "object")) cols.push(k); }); });
-        if (cols.length === 0) cols = Object.keys(data[0] || {}).slice(0, 10);
-        var html = "<table style='border-collapse:collapse;width:100%;font-size:11px;min-width:400px'>";
-        html += "<thead><tr style='background:#fafaf9'>" + cols.map(function (c) { return "<th style='text-align:left;padding:8px;border-bottom:2px solid #d8dde6;text-transform:uppercase;color:#514f4d;white-space:nowrap;font-size:10px'>" + esc2(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead>";
-        html += "<tbody>";
-        data.forEach(function (item, idx) {
-          html += "<tr style='" + (idx % 2 ? "" : "background:#f8fafc") + "'>";
-          cols.forEach(function (c) {
-            var v = item && item[c] != null ? item[c] : "";
-            html += "<td style='padding:8px;border-bottom:1px solid #edeff0;vertical-align:top;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc2(String(v)) + "'>" + esc2(String(v)) + "</td>";
+  // How many leaf values differ between two JSON documents (added / removed / changed)? Pure; capped so it stays fast.
+  // Used to show whether Real-time really returned something different from the stored copy.
+  function dcJsonDiffCount(a, b, cap) {
+    cap = cap || 500; var n = 0;
+    (function walk(x, y, d) {
+      if (n >= cap) return;
+      var ox = x && typeof x === "object", oy = y && typeof y === "object";
+      if (ox && oy && Array.isArray(x) === Array.isArray(y)) {
+        var ks = {}; Object.keys(x).forEach(function (k) { ks[k] = 1; }); Object.keys(y).forEach(function (k) { ks[k] = 1; });
+        if (d > 40) return;
+        Object.keys(ks).forEach(function (k) { walk(x[k], y[k], d + 1); });
+      } else if (ox !== oy || (!ox && x !== y)) { n++; }
+      else if (ox && oy) { n++; }   // array vs object
+    })(a, b, 0);
+    return n;
+  }
+  function dcJsonStats(v) {
+    var st = { nodes: 0, depth: 0, arrays: 0, objects: 0 };
+    (function walk(x, d) {
+      st.nodes++; if (d > st.depth) st.depth = d;
+      if (x && typeof x === "object") {
+        if (Array.isArray(x)) { st.arrays++; x.forEach(function (c) { walk(c, d + 1); }); }
+        else { st.objects++; Object.keys(x).forEach(function (k) { walk(x[k], d + 1); }); }
+      }
+    })(v, 0);
+    return st;
+  }
+  // Which branches must be open to reveal every key/value containing q (case-insensitive)? Capped so a 1-letter query is safe.
+  function dcJsonSearch(root, q, cap) {
+    var out = { open: {}, hits: 0, capped: false };
+    q = String(q || "").toLowerCase(); cap = cap || 300;
+    if (!q) return out;
+    (function walk(x, path) {
+      if (out.hits >= cap) { out.capped = true; return; }
+      var isC = x && typeof x === "object";
+      var key = path.length ? path[path.length - 1] : null;
+      var hit = (typeof key === "string" && key.toLowerCase().indexOf(q) >= 0) || (!isC && String(x).toLowerCase().indexOf(q) >= 0);
+      if (hit) { out.hits++; for (var i = 0; i < path.length; i++) out.open[JSON.stringify(path.slice(0, i))] = true; }
+      if (isC) { if (Array.isArray(x)) x.forEach(function (c, i) { walk(c, path.concat(i)); }); else Object.keys(x).forEach(function (k) { walk(x[k], path.concat(k)); }); }
+    })(root, []);
+    return out;
+  }
+  // Table plan: scalar fields of the root + one tab per nested key (found at ANY depth, merged by key name).
+  function dcJsonTablePlan(data) {
+    var d = JSON.parse(JSON.stringify(data));
+    var asArr = function (v) { return Array.isArray(v) ? v : [v]; };
+    var isObj = function (x) { return x && typeof x === "object" && !Array.isArray(x); };
+    var plan = { scalars: [], tabs: [] }, idx = {};
+    function addTab(name, rows, parent) {
+      if (idx[name] == null) { idx[name] = plan.tabs.length; plan.tabs.push({ name: name, parent: parent || "", rows: [], cols: [], done: 0 }); }
+      var t = plan.tabs[idx[name]]; rows.forEach(function (r) { t.rows.push(r); });
+    }
+    if (Array.isArray(d)) addTab("Rows", d, "");
+    else if (isObj(d)) {
+      Object.keys(d).forEach(function (k) { if (d[k] && typeof d[k] === "object") addTab(k, asArr(d[k]), ""); else plan.scalars.push({ k: k, v: d[k] }); });
+    } else plan.scalars.push({ k: "value", v: d });
+    var changed;
+    do {
+      changed = false;
+      plan.tabs.forEach(function (t) {
+        while (t.done < t.rows.length) {
+          var r = t.rows[t.done++]; changed = true;
+          if (isObj(r)) Object.keys(r).forEach(function (k) { if (r[k] && typeof r[k] === "object") addTab(k, asArr(r[k]), t.name); });
+        }
+      });
+    } while (changed);
+    plan.tabs.forEach(function (t) {
+      t.rows.forEach(function (r) {
+        if (isObj(r)) Object.keys(r).forEach(function (k) { if ((!r[k] || typeof r[k] !== "object") && t.cols.indexOf(k) < 0) t.cols.push(k); });
+        else if (t.cols.indexOf("value") < 0 && !(r && typeof r === "object")) t.cols.push("value");
+      });
+      delete t.done;
+    });
+    return plan;
+  }
+  // One pretty-printed line -> coloured HTML (keys / strings / numbers / booleans / null).
+  function dcJsonColorLine(line, esc) {
+    var m = /^(\s*)("(?:[^"\\]|\\.)*")(\s*:\s*)(.*)$/.exec(line), indent, key = "", rest;
+    if (m) { indent = m[1]; key = "<span class='k'>" + esc(m[2]) + "</span>" + esc(m[3]); rest = m[4]; }
+    else { var mi = /^(\s*)(.*)$/.exec(line); indent = mi[1]; rest = mi[2]; }
+    var vm = /^("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(,?)$/.exec(rest), val;
+    if (vm) {
+      var t = vm[1], cls = t.charAt(0) === '"' ? "s" : t === "null" ? "z" : (t === "true" || t === "false") ? "b" : "n";
+      val = "<span class='" + cls + "'>" + esc(t) + "</span>" + esc(vm[2]);
+    } else val = "<span class='p'>" + esc(rest) + "</span>";
+    return esc(indent) + key + val;
+  }
+  function dcJsonBytes(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+
+  var _cellViewEl = null, _cellViewEsc = null;
+  function closeCellView() {
+    if (_cellViewEl) { try { _cellViewEl.remove(); } catch (e) {} _cellViewEl = null; }
+    if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
+  }
+  // Turn-off backstop: remove any floating overlay of ours that sits directly on <body> but has no dc- id
+  // (JSON viewer, sort-guide spotlight + tag, popups...). Only top-level, position:fixed/absolute elements, so
+  // Salesforce's own app root can never be hit.
+  function dcSweepOverlays() {
+    try {
+      Array.prototype.slice.call(document.body.children).forEach(function (el) {
+        var ours = false;
+        if (el.id && el.id.indexOf("dc-") === 0) ours = true;
+        else {
+          if (typeof el.className === "string" && /(^|\s)dc-/.test(el.className)) ours = true;
+          if (!ours && el.attributes) for (var i = 0; i < el.attributes.length; i++) { if (el.attributes[i].name.indexOf("data-dc") === 0) { ours = true; break; } }
+          if (ours) { var pos = ""; try { pos = getComputedStyle(el).position; } catch (e) {} if (pos !== "fixed" && pos !== "absolute") ours = false; }
+        }
+        if (ours) el.remove();
+      });
+    } catch (e) {}
+  }
+  function dcJsonViewerCss() {
+    if (document.getElementById("dc-jv-style")) return;
+    var st = document.createElement("style"); st.id = "dc-jv-style";
+    st.textContent =
+      ".dc-jv{--ink:#1e293b;--mut:#64748b;--line:#e2e8f0;--acc:#6366f1;}" +
+      ".dc-jv *{box-sizing:border-box}" +
+      ".dc-jv .hd{display:flex;align-items:center;gap:10px;padding:11px 14px;background:linear-gradient(120deg,#1e1b4b,#3730a3 60%,#4f46e5);color:#fff;cursor:move}" +
+      ".dc-jv .ttl{font-weight:700;font-size:14px;letter-spacing:.01em}.dc-jv .sub{font:600 10px SF Mono,Consolas,monospace;color:#c7d2fe;margin-top:2px}" +
+      ".dc-jv .seg{display:inline-flex;background:rgba(255,255,255,.14);border-radius:8px;padding:2px}" +
+      ".dc-jv .seg button{border:none;background:none;color:#e0e7ff;font:600 11px -apple-system,sans-serif;padding:5px 11px;border-radius:6px;cursor:pointer}" +
+      ".dc-jv .seg button.on{background:#fff;color:#3730a3;box-shadow:0 1px 3px rgba(0,0,0,.25)}" +
+      ".dc-jv .btn{border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:7px;padding:5px 11px;font:600 11px -apple-system,sans-serif;cursor:pointer}" +
+      ".dc-jv .btn:hover{background:rgba(255,255,255,.22)}.dc-jv .btn.pri{background:#fff;color:#3730a3;border-color:#fff}" +
+      ".dc-jv .x{border:none;background:none;color:#e0e7ff;font-size:20px;line-height:1;cursor:pointer;padding:0 4px}" +
+      ".dc-jv .bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);flex-wrap:wrap}.dc-jv .bar span,.dc-jv .bar button{white-space:nowrap}" +
+      ".dc-jv .chip{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:2px 9px;font-weight:600}" +
+      ".dc-jv .q{flex:1 1 150px;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
+      ".dc-jv .body{overflow:auto;flex:1;min-height:0;background:#fff;color:var(--ink)}" +
+      ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;padding:10px 14px}" +
+      ".dc-jv .card{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:7px 10px;background:#fff;cursor:copy;min-width:0}" +
+      ".dc-jv .card:hover{background:#f5f7ff}.dc-jv .card .l{font:700 9.5px -apple-system,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}" +
+      ".dc-jv .card .v{font:12.5px SF Mono,Consolas,monospace;word-break:break-all;margin-top:2px}" +
+      ".dc-jv .cards{max-height:30%;overflow:auto;flex:none;border-bottom:1px solid var(--line)}" +
+      ".dc-jv .main{display:flex;flex:1 1 auto;min-height:230px;min-width:0}" +
+      ".dc-jv .rail{flex:none;width:250px;overflow:auto;border-right:1px solid var(--line);background:#f8fafc;padding:6px 0}" +
+      ".dc-jv .rl{font:700 9.5px -apple-system,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#64748b;padding:4px 12px}" +
+      ".dc-jv .ri{display:flex;align-items:center;gap:6px;width:100%;border:none;border-left:3px solid transparent;background:none;text-align:left;padding:6px 10px;font:600 12px -apple-system,sans-serif;color:#334155;cursor:pointer}" +
+      ".dc-jv .ri:hover{background:#eef2ff}.dc-jv .ri.on{background:#e0e7ff;border-left-color:var(--acc);color:#312e81}" +
+      ".dc-jv .ri .nm{flex:1;min-width:0;white-space:normal;word-break:break-word;line-height:1.25}.dc-jv .ri .br{color:#a5b4fc}" +
+      ".dc-jv .ri .n{background:#e2e8f0;color:#475569;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .ri.on .n{background:var(--acc);color:#fff}.dc-jv .ri.empty{opacity:.65}" +
+      ".dc-jv .pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}" +
+      ".dc-jv .ph{display:flex;gap:8px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mut)}.dc-jv .ph b{font-size:13px;color:#312e81}.dc-jv .ph .sp{flex:1}" +
+      ".dc-jv .tw{overflow:auto;flex:1;padding:0 0 10px}" +
+      ".dc-jv table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px}" +
+      ".dc-jv th{position:sticky;top:0;background:#eef2ff;color:#3730a3;text-align:left;padding:7px 10px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid #c7d2fe;white-space:nowrap}" +
+      ".dc-jv td{padding:6px 10px;border-bottom:1px solid #f1f5f9;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px SF Mono,Consolas,monospace;cursor:copy}" +
+      ".dc-jv tbody tr:nth-child(even) td{background:#fafbff}.dc-jv tbody tr:hover td{background:#eef2ff}" +
+      ".dc-jv .nul{color:#64748b;font-style:italic}.dc-jv .bt{background:#ede9fe;color:#6d28d9;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .bf{background:#f1f5f9;color:#64748b;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .num{color:#b45309}" +
+      ".dc-jv .tree{padding:10px 12px 14px;font:12.5px/1.6 SF Mono,Consolas,monospace}" +
+      ".dc-jv .row{white-space:nowrap}.dc-jv .tg{display:inline-block;width:14px;color:#6366f1;cursor:pointer;user-select:none}" +
+      ".dc-jv .kids{margin-left:7px;padding-left:12px;border-left:1px solid var(--g,#c7d2fe)}" +
+      ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#64748b;font-style:italic}.dc-jv .p{color:#64748b}" +
+      ".dc-jv .live{display:inline-flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid #cbd5e1}" +
+      ".dc-jv .sw{display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;padding:2px}.dc-jv .sw i{width:28px;height:16px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}.dc-jv .sw i:after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}" +
+      ".dc-jv .sw[aria-checked=true] i{background:#16a34a}.dc-jv .sw[aria-checked=true] i:after{left:14px}.dc-jv .sw[aria-checked=true]{color:#15803d}" +
+      ".dc-jv .rf{color:#4338ca;border-color:#c7d2fe;background:#fff}.dc-jv .rf[disabled],.dc-jv .sw[disabled]{opacity:.5;cursor:wait}.dc-jv .st{font-size:11px;color:#64748b;white-space:nowrap}.dc-jv .st.bad{color:#b91c1c}" +
+      ".dc-jv .dbox{background:#fef2f2;border-bottom:1px solid #fecaca;color:#7f1d1d;padding:8px 14px;font:11.5px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto;user-select:text}" +
+      ".dc-jv .meta{color:#64748b;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
+      ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
+      ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#64748b;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
+      ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
+    document.head.appendChild(st);
+  }
+  // Parse a cell value as JSON. Data Cloud often stores JSON as a JSON-encoded STRING (double-encoded: "\"{...}\""),
+  // or as an already-parsed object; both must open in Table view, not as plain text. Pure.
+  // Returns { value, text } (text = the JSON text that was actually parsed) or null when it is not a JSON object/array.
+  function dcParseJsonLoose(raw) {
+    if (raw == null) return null;
+    if (typeof raw === "object") { try { return { value: raw, text: JSON.stringify(raw) }; } catch (e) { return null; } }
+    var t = String(raw).replace(/^\uFEFF/, "").trim();
+    for (var i = 0; i < 4; i++) {
+      var v; try { v = JSON.parse(t); } catch (e) { return null; }
+      if (v && typeof v === "object") return { value: v, text: t };
+      if (typeof v !== "string") return null;     // number / boolean / null: not a JSON document
+      t = v.replace(/^\uFEFF/, "").trim();         // a JSON string: unwrap one level and try again
+    }
+    return null;
+  }
+  function showCellValue(fieldApi, fieldLabel, value, live) {
+    closeCellView();
+    dcJsonViewerCss();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
+    var text = value == null ? "" : (typeof value === "object" ? (function () { try { return JSON.stringify(value); } catch (e) { return String(value); } })() : String(value)), parsed = null;
+    var _jl = dcParseJsonLoose(value); if (_jl) { parsed = _jl.value; text = _jl.text; }
+    if (!parsed) live = null;
+    var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv"; m.id = "dc-jv-modal";
+    m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
+    var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
+    var plan = parsed ? dcJsonTablePlan(parsed) : null;
+    m.innerHTML =
+      "<div class='hd'><div style='flex:1;min-width:0'><div class='ttl'>" + esc(fieldLabel) + "</div>" + (fieldApi && fieldApi !== fieldLabel ? "<div class='sub'>" + esc(fieldApi) + "</div>" : "") + "</div>" +
+      (parsed ? "<div class='seg'><button data-v='table' title='Easy to read: each nested list as its own table'>Table</button><button data-v='tree' title='Explore the structure: open and close branches, click a key to copy its path'>Tree</button><button data-v='raw' title='The exact JSON text with line numbers'>Raw</button></div>" : "") +
+      "<button class='btn dc-cv-fs' title='Full screen / back'>&#x26F6;</button><button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
+      "<div class='bar'>" + (parsed
+        ? "<span class='chip'>JSON</span><span class='info'></span>" +
+          (live ? "<span class='live'><button class='sw' data-a='rt' role='switch' aria-checked='false' title='Off: show the stored graph. On: build the graph live from the latest data (same as Salesforce&#39;s Real-time View).'><i></i>Real-time</button><button class='btn rf' data-a='rf' title='Reload the graph now'>&#8635; Refresh</button><span class='st'></span><a class='dt' href='#' style='display:none;font-size:11px;color:#4338ca'>Details</a></span>" : "") +
+          "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
+          "<input class='q' placeholder='Search keys and values…' />"
+        : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
+      "<div class='dbox' style='display:none'></div><div class='body'></div><div class='toast'></div>";
+    if (parsed) m.style.minHeight = "64vh";
+    document.body.appendChild(m);
+    var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
+    var fsOn = false, view = parsed ? "raw" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
+    function toast(t) { toastEl.textContent = t; toastEl.style.opacity = "1"; clearTimeout(tmr); tmr = setTimeout(function () { toastEl.style.opacity = "0"; }, 1100); }
+    function copy(t, msg) { try { navigator.clipboard.writeText(t); toast(msg || "Copied"); } catch (e) { toast("Copy blocked by the browser"); } }
+    function hl(s) {   // escape + highlight the search query
+      s = String(s == null ? "" : s); if (!query) return esc(s);
+      var i = s.toLowerCase().indexOf(query.toLowerCase()); if (i < 0) return esc(s);
+      return esc(s.slice(0, i)) + "<mark>" + esc(s.slice(i, i + query.length)) + "</mark>" + hl2(s.slice(i + query.length));
+    }
+    function hl2(s) { return hl(s); }
+    function cellHtml(v) {
+      if (v === null || v === undefined) return "<span class='nul'>null</span>";
+      if (v === true) return "<span class='bt'>true</span>";
+      if (v === false) return "<span class='bf'>false</span>";
+      if (typeof v === "number") return "<span class='num'>" + hl(v) + "</span>";
+      return hl(v);
+    }
+    function fit(chars, cols) {   // size the window to the data instead of a fixed box
+      if (fsOn) return;
+      var mn = live ? 900 : 0;
+      var w = view === "table" ? Math.max(700, mn, Math.min(cols * 150 + 290, 1500)) : Math.max(980, mn, Math.min(chars * 7.4 + 90, 1300));
+      m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
+    }
+    // ---------------- Table view: left rail (tables, indented under their parent) + the selected table
+    function cleanName(n) { return n.replace(/__(dlm|cio|c)(?=_|$)/, ""); }
+    var depthOf = {};
+    function calcDepth() { depthOf = {}; if (plan) plan.tabs.forEach(function (t) { depthOf[t.name] = t.parent && depthOf[t.parent] != null ? depthOf[t.parent] + 1 : 0; }); }
+    function rowMatches(t, r, cols) {
+      var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r }, q = query.toLowerCase();
+      if (t.name.toLowerCase().indexOf(q) >= 0) return true;   // searching a table's NAME selects all of its rows
+      return cols.some(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(q) >= 0; });
+    }
+    function renderTable() {
+      calcDepth();
+      var h = "";
+      if (plan.scalars.length) {
+        h += "<div class='cards'>" + plan.scalars.map(function (s) {
+          return "<div class='card' data-copy='" + esc(s.v == null ? "" : String(s.v)) + "' title='Click to copy'><div class='l'>" + esc(s.k.replace(/__c$/, "")) + "</div><div class='v'>" + cellHtml(s.v) + "</div></div>";
+        }).join("") + "</div>";
+      }
+      if (plan.tabs.length) {
+        h += "<div class='main'><div class='rail'><div class='rl'>Tables</div>" + plan.tabs.map(function (t, i) {
+          var cols = t.cols.length ? t.cols : ["value"], cnt = t.rows.length, dim = !cnt;
+          var badge = String(cnt);
+          if (query) { var mm = t.rows.filter(function (r) { return rowMatches(t, r, cols); }).length; badge = mm + "/" + cnt; dim = !mm; }
+          return "<button class='ri" + (i === activeTab ? " on" : "") + (dim ? " empty" : "") + "' data-t='" + i + "' title='" + esc(t.name) + "' style='padding-left:" + (10 + depthOf[t.name] * 14) + "px'>" +
+            (depthOf[t.name] ? "<span class='br'>&#8627;</span>" : "") + "<span class='nm'>" + esc(cleanName(t.name)) + "</span><span class='n'>" + badge + "</span></button>";
+        }).join("") + "</div><div class='pane'>";
+        var t = plan.tabs[activeTab];
+        h += "<div class='ph'><b>" + esc(cleanName(t.name)) + "</b> " + (t.parent ? "<span>inside " + esc(cleanName(t.parent)) + "</span>" : "<span>top level</span>") + "<span class='sp'></span><span>" + t.rows.length + " row" + (t.rows.length === 1 ? "" : "s") + "</span></div>";
+        if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#64748b'>Empty: no rows in this table</div>";
+        else {
+          var cols2 = t.cols.length ? t.cols : ["value"];
+          h += "<div class='tw'><table><thead><tr>" + cols2.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          var shown = 0;
+          t.rows.forEach(function (r) {
+            var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r };
+            if (query && !rowMatches(t, r, cols2)) return;
+            shown++;
+            h += "<tr>" + cols2.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
           });
-          html += "</tr>";
-        });
-        html += "</tbody></table>";
-        return html;
+          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#64748b'>No rows match &ldquo;" + esc(query) + "&rdquo; in this table. Tables on the left show how many rows match.</div>" : "") + "</div>";
+        }
+        h += "</div></div>";
       }
-      return "<div style='padding:12px'>" + data.map(function (item, i) { return "<div style='padding:3px 10px;border-bottom:1px solid #f1f5f9;font-size:11px'><span style='color:#64748b;margin-right:8px'>" + (i + 1) + ".</span>" + esc2(String(item)) + "</div>"; }).join("") + "</div>";
+      bodyEl.innerHTML = h;
+      var maxCols = 0; plan.tabs.forEach(function (t) { if (t.cols.length > maxCols) maxCols = t.cols.length; });
+      fit(0, maxCols + 1.4 || 4);
     }
-    // Single object with nested arrays → tabbed view (like Data Graph Visualizer)
-    // Also handles arrays that contain nested objects — flatten them into tabs
-    if (typeof data === "object" && data !== null) {
-      var allKeys = Object.keys(data);
-      var scalarKeys = allKeys.filter(function (k) { return !data[k] || typeof data[k] !== "object"; });
-      var nestedKeys = allKeys.filter(function (k) { return data[k] && typeof data[k] === "object"; });
-      // If this object has arrays inside arrays (Data Graph), collect ALL nested objects
-      // from within array items and promote them to top-level tabs
-      if (nestedKeys.length > 0) {
-        nestedKeys.forEach(function (nk) {
-          var nv = data[nk];
-          if (Array.isArray(nv) && nv.length > 0 && typeof nv[0] === "object") {
-            // Check if items in this array have their own nested objects
-            var subNested = [];
-            nv.forEach(function (item) {
-              if (!item) return;
-              Object.keys(item).forEach(function (sk) {
-                if (item[sk] && typeof item[sk] === "object" && subNested.indexOf(sk) < 0) subNested.push(sk);
-              });
-            });
-            // Promote sub-nested to top-level tabs
-            subNested.forEach(function (snk) {
-              if (nestedKeys.indexOf(snk) < 0) {
-                nestedKeys.push(snk);
-                // Collect all sub-nested items into one array
-                var collected = [];
-                nv.forEach(function (item) {
-                  if (item && item[snk]) {
-                    var subItems = Array.isArray(item[snk]) ? item[snk] : [item[snk]];
-                    subItems.forEach(function (si) { collected.push(si); });
-                  }
-                });
-                data[snk] = collected;
-              }
-            });
-          }
-        });
+    // ---------------- Tree view (children are created only when a branch is opened)
+    var GUIDES = ["#c7d2fe", "#fbcfe8", "#bbf7d0", "#fde68a", "#bae6fd", "#ddd6fe"];
+    function renderTree() {
+      var srch = dcJsonSearch(parsed, query), budget = 4000;
+      var root = document.createElement("div"); root.className = "tree";
+      function leaf(v) {
+        if (v === null) return "<span class='z'>null</span>";
+        if (typeof v === "boolean") return "<span class='b'>" + v + "</span>";
+        if (typeof v === "number") return "<span class='n'>" + v + "</span>";
+        return "<span class='s'>&quot;" + hl(v) + "&quot;</span>";
       }
-      var html2 = "";
-      // Scalar fields as a key-value table (top section)
-      if (scalarKeys.length > 0) {
-        html2 += "<table style='border-collapse:collapse;width:100%;font-size:12px;margin-bottom:12px'>";
-        scalarKeys.forEach(function (k, idx) {
-          var v = data[k];
-          html2 += "<tr style='" + (idx % 2 ? "background:#f8fafc" : "") + "'><td style='padding:6px 12px;border-bottom:1px solid #edeff0;font-weight:600;color:#514f4d;white-space:nowrap;vertical-align:top;width:200px;text-transform:uppercase;font-size:10px'>" + esc2(k.replace(/__c$/, "")) + "</td><td style='padding:6px 12px;border-bottom:1px solid #edeff0;color:#16325c;word-break:break-word;user-select:text'>" + (v == null ? "<span style='color:#94a3b8'>null</span>" : esc2(String(v))) + "</td></tr>";
-        });
-        html2 += "</table>";
+      function node(v, key, path, depth, last) {
+        var wrap = document.createElement("div"), row = document.createElement("div"); row.className = "row"; wrap.appendChild(row);
+        var kHtml = key === null ? "" : "<span class='k' data-path='" + esc(dcJsonPathStr(path)) + "' title='Click to copy path'>&quot;" + hl(key) + "&quot;</span><span class='p'>: </span>";
+        var comma = last ? "" : "<span class='p'>,</span>";
+        if (!v || typeof v !== "object") { row.innerHTML = "<span class='tg'></span>" + (typeof key === "number" ? "" : kHtml) + leaf(v) + comma; return wrap; }
+        var isA = Array.isArray(v), keys = isA ? null : Object.keys(v), n = isA ? v.length : keys.length;
+        var ob = isA ? "[" : "{", cb = isA ? "]" : "}";
+        var pk = JSON.stringify(path), open = depth < 3 || srch.open[pk] || (expandAll && budget-- > 0), built = false;
+        var kids = document.createElement("div"); kids.className = "kids"; kids.style.setProperty("--g", GUIDES[depth % GUIDES.length]);
+        var closeRow = document.createElement("div"); closeRow.className = "row";
+        closeRow.innerHTML = "<span class='tg'></span><span class='p'>" + cb + "</span>" + comma;
+        function head() {
+          row.innerHTML = "<span class='tg col'>" + (open ? "&#9662;" : "&#9656;") + "</span>" + (typeof key === "number" ? "<span class='meta' style='margin:0 6px 0 0'>" + key + "</span>" : kHtml) + "<span class='p'>" + ob + "</span>" +
+            (open ? "" : "<span class='meta col'>" + (n ? n + (isA ? " item" : " key") + (n === 1 ? "" : "s") : "empty") + "</span><span class='p'>" + cb + "</span>" + comma);
+        }
+        function build() {
+          if (built) return; built = true;
+          if (isA) v.forEach(function (c, i) { kids.appendChild(node(c, i, path.concat(i), depth + 1, i === n - 1)); });
+          else keys.forEach(function (k, i) { kids.appendChild(node(v[k], k, path.concat(k), depth + 1, i === n - 1)); });
+        }
+        function sync() { head(); kids.style.display = open && n ? "" : "none"; closeRow.style.display = open && n ? "" : "none"; if (open) build(); }
+        row.onclick = function (e) { if (e.target.closest && e.target.closest(".k")) return; open = !open; sync(); };
+        wrap.appendChild(kids); wrap.appendChild(closeRow); sync();
+        if (open && !n) { head(); row.innerHTML = row.innerHTML.replace(/<span class="meta col">empty<\/span><span class="p">[\]}]<\/span>/, ""); }
+        return wrap;
       }
-      // Nested arrays as tabs (like Data Graph Visualizer)
-      if (nestedKeys.length > 0) {
-        var tabId = "dcjt" + Math.random().toString(36).slice(2, 8);
-        html2 += "<div data-tabnav='" + tabId + "' style='display:flex;flex-wrap:wrap;gap:5px;border-bottom:2px solid #d8dde6;margin-top:12px;padding-bottom:5px'>";
-        nestedKeys.forEach(function (nk, ni) {
-          var count = Array.isArray(data[nk]) ? data[nk].length : 1;
-          var isEmpty = Array.isArray(data[nk]) && data[nk].length === 0;
-          var baseStyle = "padding:8px 12px;cursor:pointer;border-radius:4px;font-weight:600;font-size:12px;";
-          var activeStyle = ni === 0 ? "background:#0070d2;color:white;" : (isEmpty ? "background:#fff1f0;color:#c23934;border:1px dashed #e6b3b3;" : "background:#f3f2f2;color:#54698d;");
-          html2 += "<span data-tabgrp='" + tabId + "' data-idx='" + ni + "' style='" + baseStyle + activeStyle + "'>" + esc2(nk.replace(/__dlm$|__cio$|__c$/, "")) + " (" + count + ")</span>";
-        });
-        html2 += "</div>";
-        nestedKeys.forEach(function (nk, ni) {
-          var nv = data[nk];
-          var arrData = Array.isArray(nv) ? nv : [nv];
-          html2 += "<div data-panegrp='" + tabId + "' data-idx='" + ni + "' style='" + (ni === 0 ? "" : "display:none;") + "padding-top:10px;overflow:auto'>";
-          if (arrData.length === 0) {
-            html2 += "<div style='padding:16px;color:#c23934;font-weight:bold;background:#fff1f0;border-radius:4px;text-align:center'>Empty</div>";
-          } else {
-            html2 += renderJsonAsTable(arrData, esc2);
-          }
-          html2 += "</div>";
-        });
-      }
-      return html2;
+      root.appendChild(node(parsed, null, [], 0, true));
+      bodyEl.innerHTML = ""; bodyEl.appendChild(root);
+      if (query) { var note = document.createElement("div"); note.style.cssText = "padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0"; note.textContent = srch.hits ? srch.hits + (srch.capped ? "+" : "") + " match" + (srch.hits === 1 ? "" : "es") + " highlighted (matching branches are opened)" : "No keys or values match “" + query + "”"; bodyEl.appendChild(note); }
+      var ml = 0; pretty.split("\n").forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
     }
-    return "<pre style='margin:0;padding:12px;font:12px monospace'>" + esc2(String(data)) + "</pre>";
+    // ---------------- Raw view
+    function renderRaw() {
+      var lines = pretty.split("\n"), color = lines.length <= 4000;
+      var g = lines.map(function (_, i) { return i + 1; }).join("\n");
+      var c = color ? lines.map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") : esc(pretty);
+      bodyEl.innerHTML = "<div class='raw'><div class='g'>" + g + "</div><div class='c'>" + c + "</div></div>" +
+        (color ? "" : "<div style='padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0'>Large value (" + lines.length + " lines): shown without colours to stay fast.</div>");
+      var ml = 0; lines.forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
+    }
+    function renderText() {
+      bodyEl.innerHTML = "<pre style='margin:0;padding:14px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 SF Mono,Consolas,monospace;color:#1e293b'>" + esc(text) + "</pre>";
+    }
+    function render() {
+      if (parsed) {
+        m.querySelectorAll(".seg button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === view); });
+        toolsEl.style.display = view === "tree" ? "" : "none";
+        qEl.style.display = view === "raw" ? "none" : "";
+      }
+      if (view === "table") renderTable(); else if (view === "tree") renderTree(); else if (view === "raw") renderRaw(); else renderText();
+    }
+    function infoText() { return dcJsonBytes(text.length) + " \u00b7 " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + " \u00b7 " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep"; }
+    function setData(newText) {
+      text = newText; parsed = JSON.parse(newText); stats = dcJsonStats(parsed); pretty = JSON.stringify(parsed, null, 2); plan = dcJsonTablePlan(parsed);
+      if (activeTab >= plan.tabs.length) activeTab = 0;
+      m.querySelector(".info").textContent = infoText();
+    }
+    var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, dtEl = m.querySelector(".dt"), dboxEl = m.querySelector(".dbox"), lastDetail = "", stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
+    function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
+    var snap = { Stored: text }, cmpTxt = "";   // Stored starts as the copy already in the table; each load is remembered per mode
+    function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago() + cmpTxt; }
+    function compareWithOther(newStr) {
+      var other = snap[modeLbl === "Live" ? "Stored" : "Live"];
+      if (other == null) return "";
+      var A, B; try { A = JSON.parse(newStr); B = JSON.parse(other); } catch (e) { return ""; }
+      var d = dcJsonDiffCount(A, B, 500), nm = modeLbl === "Live" ? "stored copy" : "last live";
+      return d === 0 ? " \u00b7 identical to the " + nm : " \u00b7 " + (d >= 500 ? "500+" : d) + " value" + (d === 1 ? "" : "s") + " differ from the " + nm;
+    }
+    function reload() {
+      if (!live || busy) return; busy = true; if (dtEl) dtEl.style.display = "none"; dboxEl.style.display = "none"; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
+      dcQueryDataGraph(live, rt).then(function (v) {
+        var newStr = JSON.stringify(v); setData(newStr); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; cmpTxt = compareWithOther(newStr); snap[modeLbl] = newStr; paintSt(); render();
+      }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); lastDetail = e.message; if (stEl) stEl.title = e.message; if (dtEl) dtEl.style.display = ""; if (dboxEl.style.display !== "none") dboxEl.textContent = lastDetail; })
+        .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
+    }
+    if (parsed) m.querySelector(".info").textContent = infoText();
+    if (live) { paintSt(); var agoTimer = setInterval(function () { if (!m.isConnected) { clearInterval(agoTimer); return; } if (!busy && !stEl.classList.contains("bad")) paintSt(); }, 15000); }
+    render();
+    // ---- events
+    m.addEventListener("click", function (e) {
+      var t = e.target; if (!t || !t.closest) return;
+      var b = t.closest(".seg button"); if (b) { view = b.getAttribute("data-v"); render(); return; }
+      var tb = t.closest(".ri"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
+      var a = t.closest("[data-a]");
+      if (a && a.getAttribute("data-a") === "rt") { rt = !rt; swEl.setAttribute("aria-checked", rt ? "true" : "false"); reload(); return; }
+      if (a && a.getAttribute("data-a") === "rf") { reload(); return; }
+      var dt = t.closest(".dt"); if (dt) { e.preventDefault(); var openD = dboxEl.style.display === "none"; dboxEl.style.display = openD ? "" : "none"; dboxEl.textContent = lastDetail; if (openD) { var cb = document.createElement("button"); cb.className = "btn"; cb.style.cssText = "color:#7f1d1d;border-color:#fca5a5;background:#fff;margin-left:8px"; cb.textContent = "Copy details"; cb.onclick = function () { copy(lastDetail, "Details copied"); }; dboxEl.insertBefore(cb, dboxEl.firstChild); dboxEl.insertBefore(document.createTextNode("\n"), cb.nextSibling); } return; }
+      if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
+      var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
+      var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }
+    });
+    if (qEl) qEl.addEventListener("input", function () { query = qEl.value.trim(); if (view === "table") renderTable(); else if (view === "tree") renderTree(); });
+    m.querySelector(".dc-cv-copy").onclick = function () { copy(view === "raw" || !parsed ? (parsed ? pretty : text) : text, parsed ? "Copied full JSON" : "Copied"); };
+    var savedBox = "";
+    m.querySelector(".dc-cv-fs").onclick = function () {
+      fsOn = !fsOn;
+      if (fsOn) { savedBox = m.style.cssText; m.style.top = "0"; m.style.left = "0"; m.style.transform = "none"; m.style.width = "100vw"; m.style.height = "100vh"; m.style.maxHeight = "100vh"; m.style.borderRadius = "0"; }
+      else { m.style.cssText = savedBox; fit(0, 0); render(); }
+    };
+    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; } };
+    m.querySelector(".dc-cv-x").onclick = close;
+    _cellViewEsc = function (e) { if (e.key === "Escape" && _cellViewEl === m) { close(); e.stopPropagation(); } };
+    document.addEventListener("keydown", _cellViewEsc, true);
+    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
   }
 
   // Persisted filter state per object so conditions SURVIVE re-renders (Apply re-renders
@@ -9766,6 +10791,7 @@
   var _originalRows = {};
   var _originalColumns = {};
   var _originalWantRows = {};
+  var _originalTotal = {};   // server total of the unfiltered table, restored by Clear / Back to original
   // Per-object set of fieldNames the user has hidden via the column-visibility toggle.
   // Pure view filter — doesn't affect the in-memory data or CSV export.
   var _hiddenColumns = {};
@@ -9875,7 +10901,104 @@
   }
   // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
   // view is filtered to non-empty columns. Defaults to `columns` when not passed.
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // The table is never sorted by us: rows are in the order Data Cloud returned them (no ORDER BY) unless the user's SQL has one.
+  var _orderWarnOff = {};   // per object: user dismissed the "empty columns" note
+  // ORDER BY of the user's own SQL -> [{col,dir}] (dir defaults to ASC like SQL). Pure; top-level clause only.
+  function dcParseOrderBy(sql) {
+    var m = /\bORDER\s+BY\s+([\s\S]+?)(?:\s+(?:LIMIT|OFFSET|FETCH)\b|;|$)/i.exec(String(sql || ""));
+    if (!m) return [];
+    var parts = [], depth = 0, cur = "", i, ch, q = false;
+    for (i = 0; i < m[1].length; i++) {
+      ch = m[1].charAt(i);
+      if (ch === '"') q = !q;
+      if (!q && ch === "(") depth++; else if (!q && ch === ")") depth--;
+      if (!q && depth === 0 && ch === ",") { parts.push(cur); cur = ""; } else cur += ch;
+    }
+    if (cur.trim()) parts.push(cur);
+    return parts.map(function (p) {
+      var t = p.trim(), dm = /\s+(ASC|DESC)(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$/i.exec(t), dir = dm ? dm[1].toUpperCase() : "ASC";
+      var col = (dm ? t.slice(0, dm.index) : t).trim();
+      if (/[()]/.test(col)) col = "(expression)"; else col = col.replace(/^"|"$/g, "").replace(/""/g, '"');
+      return { col: col, dir: dir };
+    }).filter(function (o) { return o.col; });
+  }
+  // The query Salesforce's own grid last ran (the template we clone for <=100-row loads) may carry sort settings. We do not
+  // know their key names in every org/release, so report ANY query key that looks like sorting, verbatim. Pure.
+  function dcTemplateSort(tpl) {
+    var q = tpl && tpl.params && tpl.params.query, out = [];
+    if (!q || typeof q !== "object") return out;
+    Object.keys(q).forEach(function (k) {
+      if (/^(columns|objectName|selectedDataSpaceName)$/.test(k) || !/sort|order/i.test(k)) return;
+      var v = q[k]; if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return;
+      var sv; try { sv = typeof v === "string" ? v : JSON.stringify(v); } catch (e) { sv = String(v); }
+      out.push({ key: k, value: sv.slice(0, 120) });
+    });
+    return out;
+  }
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // Rows are NEVER sorted by us. Order comes from: the user's own SQL ORDER BY; or (<=100-row loads) the Salesforce grid's sort
+  // that rides along in the cloned query; otherwise Data Cloud gives NO ordering guarantee (a reload can return other rows).
+  function dcOrderNote(o) {
+    var rows = o.rows || [], cols = o.columns || [], total = o.total || 0;
+    var ob = o.orderBy || [], ts = o.tplSort || [], order, orderTip = "";
+    if (ob.length) {
+      order = "sorted by " + ob.map(function (x) { return x.col + (x.dir === "DESC" ? " \u2193 descending" : " \u2191 ascending"); }).join(", ") + " (from your SQL)";
+    } else if (o.viaTemplate && ts.length) {
+      var raw = ts.map(function (x) { return x.key + " = " + x.value; }).join("; ");
+      var dirWord = /desc/i.test(raw) ? " (descending)" : (/asc/i.test(raw) ? " (ascending)" : "");
+      order = "follows the sort of Salesforce\u2019s own grid" + dirWord; orderTip = raw;
+    } else {
+      order = (o.fromSql ? "as returned for your SQL" : (o.filtered ? "as returned for your filter" : "as returned by Data Cloud")) + " (no sort \u2014 order is not guaranteed, a reload can show other rows)";
+    }
+    var empty = cols.filter(function (fn) {
+      for (var i = 0; i < rows.length; i++) { var v = rows[i] && rows[i][fn]; if (v !== null && v !== undefined && v !== "") return false; }
+      return rows.length > 0;
+    });
+    var known = total > 0;                       // total unknown (e.g. before Count) -> never claim "every row"
+    var more = !known || total > rows.length;
+    var warn = "", short = "";
+    if (empty.length && more) {     // only when the data COULD be further down; "empty everywhere" is what Hide empty is for
+      short = empty.length + " column" + (empty.length === 1 ? "" : "s") + " empty here \u00B7 may have data further down";
+      warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in these " + rows.length.toLocaleString() +
+        " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") +
+        ". Use Add condition \u2192 column IS NOT NULL to find them, or tick Hide empty to hide these columns.";
+    }
+    return { order: order, orderTip: orderTip, warn: warn, short: short, emptyCols: empty };
+  }
+  // Hide-empty plan (pure, unit-tested). `full` = the whole selected set; `nonEmpty` = those with a value in
+  // at least one loaded row. `autoColumns` = the reduced list to render when the user's Hide-empty choice is ON
+  // but this render was handed the full set (reload / filter / reopen / new object) — null when nothing to do.
+  // Never hides EVERYTHING (an all-empty result keeps its columns so the table is not blank).
+  // How many loaded rows have NO data in any of the selected columns, and the WHERE that finds rows that do.
+  // Pure. `showPrompt` only when most loaded rows are empty AND more rows exist on the server (so a re-query can help).
+  function dcSparsePlan(cols, rows, serverTotal, totalUnknown) {
+    var n = (rows || []).length, empty = 0;
+    for (var i = 0; i < n; i++) {
+      var r = rows[i], any = false;
+      for (var j = 0; j < cols.length; j++) { var v = r[cols[j]]; if (v !== null && v !== undefined && v !== "") { any = true; break; } }
+      if (!any) empty++;
+    }
+    var moreExist = !!totalUnknown || (serverTotal || 0) > n;
+    return {
+      total: n, emptyRows: empty,
+      showPrompt: n > 0 && cols.length > 0 && empty / n >= 0.5 && moreExist,
+      where: "(" + cols.map(function (c) { return sqlQuoteIdent(c) + " IS NOT NULL"; }).join(" OR ") + ")"
+    };
+  }
+  function dcHideEmptyPlan(columns, rows, allColumns, on) {
+    var full = allColumns || columns, empty = {};
+    full.forEach(function (fn) { empty[fn] = true; });
+    (rows || []).forEach(function (r) { full.forEach(function (fn) { var v = r[fn]; if (v !== null && v !== undefined && v !== "") empty[fn] = false; }); });
+    var nonEmpty = full.filter(function (fn) { return !empty[fn]; });
+    var emptyCount = full.length - nonEmpty.length;
+    var auto = (on && emptyCount > 0 && nonEmpty.length > 0 && columns.length === full.length) ? nonEmpty : null;
+    return { full: full, nonEmpty: nonEmpty, emptyCount: emptyCount, autoColumns: auto, canHide: nonEmpty.length > 0 };
+  }
   function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
+    // Hide-empty is a remembered choice: honour it on EVERY render, not only right after a click.
+    var _hep = dcHideEmptyPlan(columns, rows, allColumns, !!window.__dcHideEmpty);
+    if (rows && rows.length && _hep.autoColumns) { return showAllColumnsTable(objectName, _hep.autoColumns, rows, wantRows, _hep.full); }
     // Never open the modal for an empty object — show a FAB-level toast instead.
     if (!rows || !rows.length) {
       dcExploreToast((objectName || "This object") + " has no records — nothing to show.");
@@ -9886,14 +11009,20 @@
     // time in this table). Kept LOCAL so it can never collide with the Query Editor's
     // own export cancel — the two features are fully independent.
     var _explorerExportCancel = false;
+    _explorerCancelFn = function () {
+      _explorerExportCancel = true;
+      // Release the saved Export-All file (up to 500k rows) once this table is gone; a delay lets a just-started download finish.
+      try { var _bu = _exportAllDone && _exportAllDone.blobUrl; if (_bu) { _exportAllDone = null; setTimeout(function () { try { URL.revokeObjectURL(_bu); } catch (e) {} }, 60000); } } catch (e) {}
+    };
     // Remember everything needed to reopen this exact table later, with no re-query.
     _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
     // Cache the original (unfiltered) rows the FIRST time this object is opened, or when
     // no filter is active. Used for zero-credit "Back to original" restore.
     if (!_filterState[objectName] || !_filterState[objectName].active) {
       _originalRows[objectName] = rows;
-      _originalColumns[objectName] = columns;
+      _originalColumns[objectName] = allColumns || columns;   // the FULL set (Hide empty only trims the view)
       _originalWantRows[objectName] = wantRows;
+      if (rows.__serverRowCount) _originalTotal[objectName] = rows.__serverRowCount;
     }
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
     // Field label lookup from whatever we discovered (falls back to the api name).
@@ -9912,19 +11041,43 @@
     const hdr = document.createElement("div");
     hdr.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;flex-shrink:0;cursor:move;";
     const titleWrap = document.createElement("div");
-    titleWrap.style.cssText = "flex:1;user-select:text;cursor:text;";
+    titleWrap.style.cssText = "flex:1;user-select:text;cursor:move;";
     var serverTotal = rows.__serverRowCount || 0;
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var filteredTotal = _filterCount[objectName] || 0;
-    var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? " (filtered)" : "") + " &times; " + columns.length + " cols";
+    var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? ((_filterState[objectName].fromSql && !_filterState[objectName].where) ? " (query result)" : " (filtered)") : "") + " &times; " + columns.length + " cols";
     if (isFiltered && filteredTotal > rows.length) {
-      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span> — Download CSV will fetch all";
+      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span>" + dcFilteredCsvInfo(filteredTotal).headerNote;
     } else if (serverTotal > rows.length) {
       rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
     }
     titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
-      "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>";
-    hdr.appendChild(titleWrap);
+      "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>" +
+      "<div class='dc-ac-order' style='font-size:11px;color:#5c6b8a;margin-top:1px'></div>";
+    (function () {
+      var fs0 = _filterState[objectName] || {};
+      var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where),
+        orderBy: fs0.orderBy || [], tplSort: dcTemplateSort(_auraSniff.template),
+        viaTemplate: !isFiltered && !extBridgePresent() && (wantRows || rows.length) <= 100 });
+      var el = titleWrap.querySelector(".dc-ac-order");
+      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>"; if (on.orderTip) el.title = "Sort settings in the Salesforce grid query: " + on.orderTip;
+      if (on.warn && !_orderWarnOff[objectName]) {
+        var chip = document.createElement("span");
+        chip.style.cssText = "margin-left:8px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:1px 4px 1px 8px;white-space:nowrap;cursor:help";
+        chip.title = on.warn;
+        chip.appendChild(document.createTextNode("\u26A0 " + on.short + " "));
+        var x = document.createElement("span"); x.textContent = "\u2715"; x.title = "Hide this note"; x.setAttribute("role", "button");
+        x.style.cssText = "cursor:pointer;padding:0 5px;color:#b45309;font-weight:700";
+        x.onclick = function (ev) { ev.stopPropagation(); _orderWarnOff[objectName] = true; chip.remove(); };
+        chip.appendChild(x); el.appendChild(chip);
+      }
+    })();
+    // Header layout: row 1 = title/info (left) + full-screen & close (always top-right);
+    // row 2 = all the controls in one wrapping group, so nothing is stranded on its own line.
+    titleWrap.style.minWidth = "0";
+    const topBtns = document.createElement("div"); topBtns.style.cssText = "display:flex;align-items:center;gap:6px;flex-shrink:0;align-self:flex-start;";
+    const ctl = document.createElement("div"); ctl.style.cssText = "flex:1 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
+    hdr.appendChild(titleWrap); hdr.appendChild(topBtns); hdr.appendChild(ctl);
 
     // Rows control — request more than the default page (e.g. 2000). We can only honor
     // ≤100 uses the fast CdpDataView query; >100 switches to the Query Editor's SQL
@@ -9936,7 +11089,7 @@
     rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
     rowsInput.value = String(wantRows || rows.length || 1000);
     rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
-    rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
+    rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
     rowsInput.addEventListener("input", function () {
       var v = parseInt(rowsInput.value, 10);
       if (!v || v < 1) {
@@ -9945,7 +11098,7 @@
         rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
         rowsInput.value = String(DC_MAX_FETCH_ROWS);
       } else {
-        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "Enter how many rows to load (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "). Rows render as you scroll; Download CSV has all loaded rows.";
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
       }
     });
     const reloadBtn = document.createElement("button");
@@ -9956,6 +11109,9 @@
       var raw = parseInt(rowsInput.value, 10) || 1000;
       var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
       if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
+      // Large loads: ask first. Each query is billed by rows PROCESSED, and loading in several
+      // batches re-reads earlier rows, so the cost can exceed the row count. Also slow in VDI.
+      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nLarge loads take longer and use more Data Cloud credits. Credits are billed by rows processed, and rows fetched in several batches may be read more than once.\n\nYou can also use Download CSV to save the rows already loaded, or Export All to save up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.")) return;
       reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
       showTableSpinner(panel, "Loading " + want + " rows…");
       const sub = panel.querySelector(".dc-ac-sub");
@@ -9981,12 +11137,15 @@
         var prevFilterCount = _filterCount[objectName];
         _filterState[objectName] = null;
         _filterCount[objectName] = 0;
-        loadColumnsDataCached(objectName, columns, want, true).then((newRows) => {
+        // Reload the FULL column set — never just the Hide-empty subset, or empty columns would be lost
+        // (and a column that now has data could never come back, and CSV would silently drop them).
+        var _reloadCols = allColumns || columns;
+        loadColumnsDataCached(objectName, _reloadCols, want, true).then((newRows) => {
           // Update original cache with fresh data so Clear/Back-to-original stays current
           _originalRows[objectName] = newRows;
-          _originalColumns[objectName] = columns;
+          _originalColumns[objectName] = _reloadCols;
           _originalWantRows[objectName] = want;
-          showAllColumnsTable(objectName, columns, newRows, want);
+          showAllColumnsTable(objectName, _reloadCols, newRows, want);
         }).catch(function(err) {
           // Restore filter state so the stale-but-visible data still matches the shown filter label
           _filterState[objectName] = prevFilterState;
@@ -10020,8 +11179,9 @@
       return new Promise(function (resolve, reject) {
         if (typeof extBridgePresent === "function" && extBridgePresent()) {
           runRawSql(cSql, ds, 1).then(function (res) {
-            var cnt = 0, cRows = (res && res.rows) || [];
-            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; break; } } } }
+            var cnt = 0, cRows = (res && res.rows) || [], gotNum = false;
+            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; gotNum = true; break; } } } }
+            if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
             resolve({ count: cnt, rowsProcessed: null });
           }).catch(reject);
           return;
@@ -10029,7 +11189,6 @@
         if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — sort a column on the table first to connect.")); return; }
         var cands = [ds];
         if (typeof dataSpaceCandidates === "function") { var fm = cSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
-        if (cands.indexOf("default") < 0) cands.push("default");
         function tryDs(i) {
           var space = cands[i] || "";
           _auraQid = (_auraQid || 0) + 1;
@@ -10044,15 +11203,16 @@
                 if (/denied authorization|not authorized/i.test(String(em)) && i + 1 < cands.length) { tryDs(i + 1); return; }
                 reject(new Error(String(em) || "Count failed")); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, cSql);
               var rv = a.returnValue || {};
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var firstRow = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
-              var cnt = 0;
+              var cnt = 0, gotNum = false;
               if (firstRow != null) {
                 var vals = Array.isArray(firstRow) ? firstRow : (typeof firstRow === "object" ? Object.keys(firstRow).map(function (kk) { return firstRow[kk]; }) : [firstRow]);
-                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; break; } }
+                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; gotNum = true; break; } }
               }
+              if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
               var _rp = (rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount));
               var rowsProcessed = parseInt(_rp, 10); if (isNaN(rowsProcessed)) rowsProcessed = null;
               resolve({ count: cnt, rowsProcessed: rowsProcessed });
@@ -10092,9 +11252,10 @@
           // the footer text if the hint updater is available.
           try {
             rows.__serverRowCount = cnt;
+            if (!(_filterState[objectName] && _filterState[objectName].active)) _originalTotal[objectName] = cnt;
             var _hintEl = panel.querySelector(".dc-scroll-hint");
             if (_hintEl) {
-              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total (Download CSV for all)" : "";
+              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total" : "";
               _hintEl.textContent = rows.length.toLocaleString() + " rows loaded" + _more + " · scroll freely — all rows & columns available, no extra queries.";
             }
           } catch (e) {}
@@ -10109,7 +11270,7 @@
             var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
             info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
             if (_cntTime) info += " <span style='font-size:10px;color:#94a3b8;'>(live count as of " + _cntTime + ")</span>";
-            if (cnt > rows.length) info += " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV";
+            if (cnt > rows.length) info += dcExportCapInfo(cnt).infoSuffix;
             if (rowsProcessed != null && rowsProcessed > 0) {
               // Actual billing basis reported by the engine.
               info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + _dxCreditStr(rowsProcessed) + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
@@ -10123,9 +11284,10 @@
           }
           // Show Export All button if it was hidden (now we know the total)
           var eab = panel.querySelector("#dc-export-all-btn");
-          if (eab && cnt > rows.length) {
+          if (eab && cnt > rows.length && !(_filterState[objectName] && _filterState[objectName].active)) {   // a filtered COUNT is not the object total
             eab.style.display = "";
-            eab.textContent = "⬇ Export All (" + cnt.toLocaleString() + " rows)";
+            eab.textContent = dcExportCapInfo(cnt).label;
+            eab.title = dcExportCapInfo(cnt).tip;
             eab.setAttribute("data-total", cnt);
           }
         }).catch(function (err) {
@@ -10137,21 +11299,19 @@
 
     // "Refresh" — force a fresh query, bypassing the in-memory cache. Use this when
     rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
-    hdr.appendChild(rowsWrap);
+    ctl.appendChild(rowsWrap);
 
     // "Hide empty columns" — data is often sparse (many all-null columns), so this
     // trims the table to only columns that have data in the loaded rows. Pure VIEW
     // filter: CSV still exports the FULL set. Empties are computed from the FULL column
     // set (fullCols) against the fetched rows, so the toggle is stable across re-renders.
-    const fullCols = allColumns || columns;
-    const emptyCols = {}; fullCols.forEach(fn => { emptyCols[fn] = true; });
-    rows.forEach(r => { fullCols.forEach(fn => { var v = r[fn]; if (v !== null && v !== undefined && v !== "") emptyCols[fn] = false; }); });
-    const nonEmptyColumns = fullCols.filter(fn => !emptyCols[fn]);
-    const emptyCount = fullCols.length - nonEmptyColumns.length;
+    const fullCols = _hep.full;
+    const nonEmptyColumns = _hep.nonEmpty;
+    const emptyCount = _hep.emptyCount;
     const hideWrap = document.createElement("label");
     hideWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;cursor:pointer;white-space:nowrap;";
     const hideCb = document.createElement("input"); hideCb.type = "checkbox";
-    hideCb.checked = !!(window.__dcHideEmpty);           // remember choice across re-renders
+    hideCb.checked = columns.length < fullCols.length;   // reflects what is ACTUALLY shown (never a stale flag)
     hideWrap.appendChild(hideCb);
     hideWrap.appendChild(document.createTextNode("Hide empty (" + emptyCount + ")"));
     hideWrap.title = "Show only columns that have data in the loaded rows. CSV still exports all columns.";
@@ -10161,7 +11321,7 @@
       const shown = hideCb.checked ? nonEmptyColumns : fullCols;
       showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
     };
-    if (emptyCount > 0) hdr.appendChild(hideWrap);
+    if (emptyCount > 0 && _hep.canHide) ctl.appendChild(hideWrap);
 
     // ── Column visibility toggle ─────────────────────────────────────────────────
     // Client-side only — hides/shows loaded columns with zero query credits.
@@ -10175,7 +11335,7 @@
     colVizBtn.textContent = "Columns ▾";
     colVizBtn.title = "Show or hide individual columns — no re-query needed.";
     colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
-    hdr.appendChild(colVizBtn);
+    ctl.appendChild(colVizBtn);
 
     // Inject/refresh a <style> block that hides columns via nth-child selectors.
     // Must live outside openColVizPanel so it can be called at initial render too.
@@ -10189,7 +11349,7 @@
         if (_colVizHidden[fn]) {
           hiddenCount++;
           var n = i + 1;
-          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:nth-child(" + n + "){display:none!important}");
+          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:not(.dc-sp):nth-child(" + n + "){display:none!important}");   // .dc-sp = scroll spacer cell, must never be hidden
         }
       });
       if (rules.length) {
@@ -10223,9 +11383,9 @@
           };
           msg.appendChild(showAllLink);
           // Insert into the scroll area so it sits over the table
-          var scrollEl = panel.querySelector("div[style*='flex:1']");
+          var scrollEl = panel.querySelector("#dc-allcols-scroll");   // the table's own scroll area (NOT the header)
           if (scrollEl) { scrollEl.style.position = "relative"; scrollEl.appendChild(msg); }
-          else { panel.appendChild(msg); }
+          else { return; }   // initial call runs before the scroll area exists; it is re-run right after it is added
         }
       } else {
         if (allHiddenEl) allHiddenEl.remove();
@@ -10328,7 +11488,7 @@
     // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
     const sqlBtn = document.createElement("button");
     sqlBtn.textContent = "Edit SQL";
-    sqlBtn.title = "Open a SQL editor to write your own query for this object (single-table SELECT). Advanced alternative to the filter bar.";
+    sqlBtn.title = "Write or edit the SQL for this table yourself (single-table SELECT). Use it when the filter bar is not flexible enough.";
     sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
     sqlBtn.onclick = () => {
       var activeFilter = _filterState[objectName];
@@ -10343,10 +11503,10 @@
     // FIX 5: Download CSV label shows loaded row count
     var filterTotal = _filterCount[objectName] || 0;
     var csvLabel = filterTotal > rows.length
-      ? "⬇ Download CSV (all " + filterTotal.toLocaleString() + " filtered)"
+      ? dcFilteredCsvInfo(filterTotal).label
       : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
     csvBtn.textContent = csvLabel;
-    csvBtn.title = "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.";
+    csvBtn.title = dcFilteredCsvInfo(filterTotal > rows.length ? filterTotal : 0).tip;
     csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     csvBtn.onclick = () => {
       // If a batched download is already running, this click cancels it (Explorer-local flag).
@@ -10359,7 +11519,8 @@
       var fs2 = _filterState[objectName];
       // If filter active and more rows exist than loaded → paginate to get all (cancellable)
       if (fs2 && fs2.active && fc > rows.length) {
-        if (!confirm(fc.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches — you can click Cancel while it runs.")) return;
+        var csvCap = dcFilteredCsvInfo(fc);
+        if (!confirm(csvCap.confirmMsg)) return;
         _explorerExportCancel = false;
         csvBtn.dataset.exporting = "true"; csvBtn.disabled = false;
         csvBtn.textContent = "✕ Cancel export";
@@ -10378,6 +11539,7 @@
           csvBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + " rows…)";
         }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreCsvUi();
+          if (csvCap.capped) csvBtn.textContent = csvCap.doneLabel(res.totalRows);
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
           setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
@@ -10400,8 +11562,8 @@
     // Export All always shows full object count (not filtered). Use Count button result if available.
     var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
     var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
-    exportAllBtn.textContent = "⬇ Export All" + (exportAllTotal ? " (" + exportAllTotal.toLocaleString() + " rows)" : "");
-    exportAllBtn.title = "Download EVERY row of this object as CSV (ignores any filter), fetched in batches from Salesforce. Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.";
+    exportAllBtn.textContent = dcExportCapInfo(exportAllTotal).label;
+    exportAllBtn.title = dcExportCapInfo(exportAllTotal).tip;
     exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
     // No records loaded and none reported on the server → nothing to export.
     if (!rows.length && !serverTotal) {
@@ -10432,17 +11594,17 @@
         }
         // fall through to a fresh export
       }
-      var btnTotal = parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0;
-      var confirmMsg = btnTotal
-        ? "Download all " + btnTotal.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
-        : "Download ALL records from this object? This may take a while. You can click Cancel while it runs.";
+      // Export All is ALWAYS the unfiltered object, so a filter's row count must never be used here.
+      var btnTotal = isFiltered ? (_originalTotal[objectName] || 0) : (parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0);
+      var capInfo = dcExportCapInfo(btnTotal);
+      var confirmMsg = capInfo.confirmMsg;
       if (!confirm(confirmMsg)) return;
       _explorerExportCancel = false;
       exportAllBtn.dataset.exporting = "true";
       exportAllBtn.textContent = "✕ Cancel Export";
       exportAllBtn.style.background = "#dc2626"; exportAllBtn.style.borderColor = "#dc2626";
       exportAllBtn.disabled = false; // stays clickable so the user can cancel
-      var originalText = "⬇ Export All" + (btnTotal ? " (" + btnTotal.toLocaleString() + " rows)" : "");
+      var originalText = capInfo.label;
       var restoreBtnUi = function () {
         exportAllBtn.dataset.exporting = "false";
         exportAllBtn.disabled = false;
@@ -10463,7 +11625,7 @@
           exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
         }, function () { return _explorerExportCancel; }).then(function (res) {
           restoreBtnUi();
-          exportAllBtn.textContent = "✓ Exported (" + res.totalRows.toLocaleString() + " rows)";
+          exportAllBtn.textContent = capInfo.doneLabel(res.totalRows);
           if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
           var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
           var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
@@ -10516,8 +11678,50 @@
       };
     }
 
-    if (changeColsBtn) hdr.appendChild(changeColsBtn);
-    hdr.appendChild(sqlBtn); hdr.appendChild(csvBtn); hdr.appendChild(exportAllBtn); hdr.appendChild(closeBtn);
+    if (changeColsBtn) ctl.appendChild(changeColsBtn);
+    // Full screen / restore — same idea as the Activation panel's ⛶. Pure layout: it only changes the
+    // panel's size/position (the table re-windows itself via its ResizeObserver); no data is touched.
+    const fsBtn = document.createElement("button");
+    fsBtn.textContent = "⛶";
+    fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+    fsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 14px -apple-system,sans-serif;color:#1e3a5f;line-height:1;";
+    var _fsOn = false, _fsSaved = null;
+    var _fsProps = ["left", "top", "right", "bottom", "width", "height", "max-width", "transform", "border-radius"];
+    function setFullScreen(on) {
+      if (on === _fsOn) return;
+      if (on) {
+        _fsSaved = _fsProps.map(function (k) { return [k, panel.style.getPropertyValue(k), panel.style.getPropertyPriority(k)]; });
+        panel.style.setProperty("left", "0", "important"); panel.style.setProperty("top", "0", "important");
+        panel.style.setProperty("right", "auto", "important"); panel.style.setProperty("bottom", "auto", "important");
+        panel.style.setProperty("width", "100vw", "important"); panel.style.setProperty("height", "100vh", "important");
+        panel.style.setProperty("max-width", "100vw", "important"); panel.style.setProperty("transform", "none", "important");
+        panel.style.setProperty("border-radius", "0", "important");
+        fsBtn.textContent = "🗗"; fsBtn.title = "Restore the previous size (or press Esc).";
+      } else {
+        _fsProps.forEach(function (k) { panel.style.removeProperty(k); });
+        (_fsSaved || []).forEach(function (t) { if (t[1]) panel.style.setProperty(t[0], t[1], t[2]); });
+        fsBtn.textContent = "⛶"; fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+      }
+      _fsOn = on;
+    }
+    fsBtn.onclick = function () { setFullScreen(!_fsOn); };
+    // Esc restores (only while this panel is full screen and nothing inside it is being edited).
+    var _fsEsc = function (ev) {
+      if (!panel.isConnected) { document.removeEventListener("keydown", _fsEsc, true); return; }
+      if (ev.key === "Escape" && _fsOn) { setFullScreen(false); ev.stopPropagation(); }
+    };
+    document.addEventListener("keydown", _fsEsc, true);
+    const xlsxBtn = document.createElement("button");
+    xlsxBtn.textContent = "⬇ Excel";
+    xlsxBtn.title = "Download the loaded rows as a formatted Excel file: JSON-blob columns are expanded into separate columns, numbers stay numbers, header is bold/frozen/filterable.";
+    xlsxBtn.style.cssText = csvBtn.style.cssText.replace(/background:[^;]+;/, "background:#16a34a;").replace(/border:[^;]+;/, "border:1px solid #16a34a;");
+    xlsxBtn.onclick = () => downloadRowsXlsx(objectName, fullCols, rows, xlsxBtn);
+    const wrapBtn = document.createElement("button");
+    wrapBtn.textContent = "↵ Wrap";
+    wrapBtn.title = "Wrap long values onto up to 3 lines per row (rows stay a fixed height so scrolling stays smooth). Hover a cell for the full value, or click it to open the viewer.";
+    wrapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    wrapBtn.onclick = () => { const on = wrapBtn.dataset.on !== "1"; wrapBtn.dataset.on = on ? "1" : "0"; wrapBtn.style.background = on ? "#e0f2fe" : "#fff"; wrapBtn.style.borderColor = on ? "#0284c7" : "#cbd5e1"; if (typeof setWrapMode === "function") setWrapMode(on); };
+    ctl.appendChild(sqlBtn); ctl.appendChild(csvBtn); ctl.appendChild(xlsxBtn); ctl.appendChild(wrapBtn); ctl.appendChild(exportAllBtn); topBtns.appendChild(fsBtn); topBtns.appendChild(closeBtn);
     panel.appendChild(hdr);
 
     // ── Type-aware FILTER row ───────────────────────────────────────────────────
@@ -10771,7 +11975,7 @@
       // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
       _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
       _filterCount[objectName] = 0;
-      try { var _preDs3 = readPageDataSpace(); if (_preDs3) { if (_auraSniff) _auraSniff.dataSpace = _preDs3; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs3; } } catch (e) {}
+      try { var _preDs3 = readPageDataSpace(); if (_preDs3 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs3); } } catch (e) {}
       const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
       ensureQueryContext(function (ready) {
         if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
@@ -10904,9 +12108,10 @@
         fStatus.textContent = "";
         var origCols = _originalColumns[objectName] || columns;
         var origWant = _originalWantRows[objectName] || wantRows;
-        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, allColumns);
+        if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
+        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, origCols);   // 5th arg = the ORIGINAL full set, never the SQL result's columns
       } else {
-        // No cache (e.g. page was refreshed mid-session) — fall back to re-query
+        // No cache — fall back to re-query
         runFilter(null);
       }
     };
@@ -10926,7 +12131,8 @@
         _filterState[objectName] = null;
         _filterCount[objectName] = 0;
         if (_originalRows[objectName] && _originalRows[objectName].length) {
-          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, allColumns);
+          if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
+          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, _originalColumns[objectName] || allColumns);
         } else {
           // No cache — re-query without filter
           var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
@@ -10961,6 +12167,7 @@
 
     // scroll area + table
     const scroll = document.createElement("div");
+    scroll.id = "dc-allcols-scroll";
     // overscroll-behavior:contain stops a left/right overscroll from triggering the
     // browser's swipe-to-go-back (which was navigating away / "closing" the page when
     // scrolling back toward the left on wide tables). Also isolates vertical bounce.
@@ -11007,7 +12214,7 @@
       thDistinct.style.cssText = "position:absolute;top:3px;right:30px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
       thDistinct.onclick = function (e) {
         e.stopPropagation();
-        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length);
+        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length) && !rows.__totalUnknown;
         var rect; try { rect = thDistinct.getBoundingClientRect(); } catch (ex) { rect = { left: 100, top: 60, bottom: 80 }; }
         dcShowDistinct(fn, meta[fn] || fn, rows, rect, complete);
       };
@@ -11071,7 +12278,7 @@
     });
     thead.appendChild(htr); table.appendChild(thead);
     // body — RENDER CAP: only build DOM for the first DC_MAX_RENDER_ROWS rows so a huge
-    // result (e.g. 50k) can't freeze the tab. ALL rows stay in `rows` for CSV export.
+    // result can't freeze the tab. ALL rows stay in `rows` for CSV export.
     const tbody = document.createElement("tbody");
     const fmt = (v) => v == null ? "" : (typeof v === "boolean" ? (v ? "true" : "false") : String(v));
     // PERF: build LEAN cells — no per-cell buttons or listeners. For a wide table
@@ -11085,19 +12292,33 @@
     // it here (height + overflow hidden + nowrap) so a long value can never wrap to two
     // lines and desync the scroll position from the rendered rows.
     const TD_CSS = "box-sizing:border-box;height:31px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    // WRAP mode keeps the fixed-row-height contract (so virtual scrolling stays exact): every row is
+    // WRAP_H tall and each cell shows up to 3 wrapped lines inside a clipped box; the full value is in
+    // the tooltip and the cell viewer. (Variable-height rows would desync the scrollbar and freeze VDI.)
+    const WRAP_H = 66;
+    const TD_WRAP_CSS = "box-sizing:border-box;height:" + WRAP_H + "px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;overflow:hidden;white-space:normal;vertical-align:top;";
+    let _wrapOn = false;
     function buildRowEl(r, ri) {
       const tr = document.createElement("tr");
-      tr.style.cssText = "height:31px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
+      tr.style.cssText = "height:" + (_wrapOn ? WRAP_H : 31) + "px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
       for (let ci = 0; ci < columns.length; ci++) {
         const fn = columns[ci];
         const td = document.createElement("td");
         const val = fmt(r[fn]);
-        td.style.cssText = TD_CSS;
-        td.textContent = val;
+        td.style.cssText = _wrapOn ? TD_WRAP_CSS : TD_CSS;
+        if (_wrapOn && val !== "") {
+          const box = document.createElement("div");
+          box.style.cssText = "max-height:" + (WRAP_H - 14) + "px;overflow:hidden;line-height:17px;word-break:break-word;pointer-events:none;";
+          box.textContent = val; td.appendChild(box);
+        } else td.textContent = val;
         if (val !== "") { td.title = val; td.setAttribute("data-c", ci); }
         tr.appendChild(td);
       }
       return tr;
+    }
+    function setWrapMode(on) {
+      _wrapOn = !!on; ROW_H = on ? WRAP_H : 31; _measured = false;
+      _win.start = _win.end = -1; renderWindow(true);
     }
     // VIRTUAL (windowed) RENDER — the DOM holds ONLY the rows near the viewport, no matter
     // how many rows are loaded. Scrolling up OR down keeps the live DOM at ~one screenful,
@@ -11115,7 +12336,7 @@
     function mkSpacer() {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = columns.length; td.style.cssText = "padding:0;border:none;";
+      td.colSpan = columns.length; td.className = "dc-sp"; td.style.cssText = "padding:0;border:none;";
       tr.appendChild(td);
       return { tr: tr, td: td };
     }
@@ -11123,8 +12344,8 @@
     function updateScrollHint(total) {
       const hintEl = panel.querySelector(".dc-scroll-hint");
       if (!hintEl) return;
-      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total (Download CSV for all)" : "";
-      hintEl.textContent = total.toLocaleString() + " rows loaded" + more + " · scroll freely — all rows & columns available, no extra queries.";
+      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total" : "";
+      hintEl.textContent = total.toLocaleString() + " rows loaded" + (rows.__totalUnknown && !more ? " (more may exist - press Count for the total)" : more) + " · scroll freely — all rows & columns available, no extra queries.";
     }
     function renderWindow(force) {
       if (!panel.isConnected) return;
@@ -11196,13 +12417,34 @@
         + "<div style='font-size:12px;'>This object has <b>0 rows</b>. Columns are shown above; there's no data to display or download.</div>";
       scroll.appendChild(emptyBanner);
     }
+    // The first rows Data Cloud returns can all be empty in the chosen columns, which looks like a broken tool.
+    // Offer a one-click re-query for rows that actually have data (server-side WHERE; no sorting of the table).
+    try {
+      var _sp = dcSparsePlan(allColumns || columns, rows, rows.__serverRowCount, rows.__totalUnknown);
+      var _fsA = _filterState[objectName];
+      if (_sp.showPrompt && !(_fsA && _fsA.active)) {
+        var spBar = document.createElement("div");
+        spBar.style.cssText = "flex-shrink:0;display:flex;align-items:center;gap:10px;padding:7px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;color:#92400e;font-size:12px;";
+        var spTxt = document.createElement("span");
+        spTxt.textContent = _sp.emptyRows.toLocaleString() + " of the " + _sp.total.toLocaleString() + " rows loaded have no data in your selected columns. The table has more rows.";
+        var spBtn = document.createElement("button");
+        spBtn.textContent = "Load rows that have data";
+        spBtn.title = "Re-runs the query with WHERE (any selected column) IS NOT NULL. Read-only; uses Data Cloud credits like any load.";
+        spBtn.style.cssText = "border:1px solid #d97706;background:#f59e0b;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+        spBtn.onclick = function () { spBtn.disabled = true; spBtn.textContent = "Loading…"; runFilter(_sp.where); };
+        spBar.appendChild(spTxt); spBar.appendChild(spBtn);
+        panel.appendChild(spBar);
+      }
+    } catch (e) {}
     panel.appendChild(scroll);
+    try { applyColVizCss(); } catch (e) {}   // now the scroll area exists: shows the 'all columns hidden' overlay in the right place
     // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.
     const scrollHint = document.createElement("div");
     scrollHint.className = "dc-scroll-hint";
     scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
     panel.appendChild(scrollHint);
     document.body.appendChild(panel);
+    // Opens at the normal window size (the ⛶ button goes full screen; Esc restores).
     try { attachInstantTooltips(panel); } catch (e) {}   // fast tooltips for header/filter buttons
 
     // ── Delegated cell affordances (Copy / View) ────────────────────────────────
@@ -11277,7 +12519,20 @@
       e.stopPropagation();
       if (!_toolsTd) return;
       const info = cellInfo(_toolsTd);
-      showCellValue(info.fn, meta[info.fn] || info.fn, info.val);
+      var live = null;
+      try {   // Data Graph row? then offer Real-time + Refresh using the row's lookup key (Id__c)
+        if (/json_blob/i.test(info.fn)) {
+          var trEl = _toolsTd.closest("tr"), gh = [], rowMap = {};
+          if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) {
+            var cn = colByIndex[parseInt(c.getAttribute("data-c"), 10)], tx = (c.textContent || "").trim();
+            if (cn) rowMap[cn] = tx;
+            var gm = dcGraphNameFromCell(tx); if (gm && gh.indexOf(gm) < 0) gh.push(gm);
+          });
+          var pk = dcPickLookupKey(info.val, rowMap);   // the key field + value come from THIS row's own data, not a fixed name
+          if (pk) live = { objectName: objectName, graphHints: gh, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: pk.key, keyValue: pk.value };
+        }
+      } catch (ex) { live = null; }
+      showCellValue(info.fn, meta[info.fn] || info.fn, info.val, live);
     };
 
     renderRowsChunked(renderRows);
@@ -11296,8 +12551,12 @@
     // just means the data set has fewer records than requested (not a silent cap).
     if (wantRows && rows.length < wantRows) {
       const sub = panel.querySelector(".dc-ac-sub");
+      var _srvTot = rows.__serverRowCount || 0;
+      var _moreOnServer = _srvTot > rows.length;
       if (sub) sub.innerHTML = rows.length.toLocaleString() + " rows &times; " + columns.length + " columns &bull; " +
-        "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but only " + rows.length.toLocaleString() + " records exist (or the source capped it).</span>";
+        (_moreOnServer
+          ? "<span style='color:#b8860b'>loaded " + rows.length.toLocaleString() + " of " + _srvTot.toLocaleString() + " in the table — the server returned fewer rows than requested (" + wantRows.toLocaleString() + "). Click Reload to try again, or use Export All (first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows).</span>"
+          : "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but the table only has " + rows.length.toLocaleString() + " records.</span>");
     }
     if (typeof makeDraggable === "function") try { makeDraggable(panel, hdr); } catch (e) {}
     if (typeof addResizeHandle === "function") try { addResizeHandle(panel, 480, 300); } catch (e) {}
@@ -11307,6 +12566,26 @@
 
   // ── Column picker modal ───────────────────────────────────────────────────
   let exploreModalEl = null;
+
+  // True when a pointer event landed on Salesforce's own grid / column header or on our guide's spotlight tag.
+  // Clicking those must NEVER close the Explorer panel (sorting is how the user connects; the panel has to stay open).
+  function dcIsSfGridOrGuideTarget(e) {
+    try {
+      var path = (e.composedPath && e.composedPath()) || [];
+      for (var pi = 0; pi < path.length; pi++) {
+        var n = path[pi];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.hasAttribute && (n.hasAttribute("data-dc-guide-spot") || n.hasAttribute("data-dc-sort-guide"))) return true;
+        var t = (n.tagName || "").toLowerCase();
+        var role = (n.getAttribute && n.getAttribute("role")) || "";
+        var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
+        if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
+            role === "columnheader" || role === "grid" || role === "gridcell" ||
+            /slds-th__action|slds-table|slds-is-sortable/.test(cls)) return true;
+      }
+    } catch (ex) {}
+    return false;
+  }
 
   function closeExploreModal() {
     if (exploreModalEl) { exploreModalEl.style.display = "none"; }
@@ -11330,7 +12609,7 @@
         if (!exploreModalEl || exploreModalEl.style.display === "none") return;
         var inModal = exploreModalEl.contains(e.target);
         var inBar = barEl2 && barEl2.contains(e.target);
-        if (!inModal && !inBar) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
+        if (!inModal && !inBar && !dcIsSfGridOrGuideTarget(e)) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
       };
       setTimeout(function () { document.addEventListener("pointerdown", onOut2, true); }, 100);
       return;
@@ -11401,7 +12680,7 @@
     hdr.innerHTML = "<div><div style='font-weight:700;font-size:13px'>Column Selector</div><div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(objectName) + " &bull; " + all.length + " fields available</div></div>";
     const closeBtn = document.createElement("button");
     closeBtn.innerHTML = "&#x2715;";
-    closeBtn.title = "Close the column selector (your picks are saved)";
+    closeBtn.title = "Close the column selector";
     closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:15px;color:#5c6b8a;padding:2px 6px;border-radius:4px;line-height:1;";
     closeBtn.onclick = closeExploreModal;
     hdr.appendChild(closeBtn);
@@ -11422,11 +12701,19 @@
     // Sort A→Z / Z→A toggle
     let sortAsc = true;
     const sortBtn = document.createElement("button");
-    sortBtn.title = "Toggle sort order";
+    sortBtn.title = "Sort ALL columns alphabetically (A → Z / Z → A): the list and your selected columns' order";
     sortBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:#1e3a5f;white-space:nowrap;flex-shrink:0;";
     const updateSortLabel = () => { sortBtn.textContent = sortAsc ? "A → Z" : "Z → A"; };
     updateSortLabel();
-    sortBtn.onclick = () => { sortAsc = !sortAsc; updateSortLabel(); renderList(searchInput.value); };
+    sortBtn.onclick = () => {
+      sortAsc = !sortAsc; updateSortLabel();
+      // Also put the SELECTED columns in that order (this is the order the data table uses). Explicit click only,
+      // so a hand-dragged order is never touched unless the user presses this button.
+      const lblOf = (fn) => { const c = all.find(x => x.fieldName === fn); return (c && (c.label || c.fieldName)) || fn; };
+      orderedSelected = dcSortByLabel(orderedSelected.filter(fn => checked.has(fn)), sortAsc, lblOf);
+      persistSelection();
+      renderActiveTab();
+    };
 
     searchRow.appendChild(searchInput);
     searchRow.appendChild(sortBtn);
@@ -11538,10 +12825,10 @@
       if (!q) {
         const selectedInOrder = orderedSelected.filter(fn => checked.has(fn));
         const unchecked = visible.filter(col => !checked.has(col.fieldName));
-        if (!sortAsc) unchecked.reverse();
+        const uncheckedSorted = dcSortByLabel(unchecked, sortAsc, c => c.label || c.fieldName);
         const selectedCols = selectedInOrder.map(fn => visible.find(c => c.fieldName === fn)).filter(Boolean);
         selectedCount = selectedCols.length;
-        visible = [...selectedCols, ...unchecked];
+        visible = [...selectedCols, ...uncheckedSorted];
         // "SELECTED (n)" header pinned above the selected group
         if (selectedCount > 0) {
           const selHdr = document.createElement("div");
@@ -11550,7 +12837,7 @@
           listWrap.appendChild(selHdr);
         }
       } else {
-        if (!sortAsc) visible = visible.slice().reverse();
+        visible = dcSortByLabel(visible, sortAsc, c => c.label || c.fieldName);
       }
 
       // Divider between selected and unselected (only when no search query)
@@ -11688,6 +12975,7 @@
             handle.releasePointerCapture(e.pointerId);
             handle.removeEventListener("pointermove", onMove);
             handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
             // Commit the reorder
             if (toIdx !== fromIdx) {
               orderedSelected.splice(fromIdx, 1);
@@ -11700,8 +12988,19 @@
             persistSelection();   // remember the new order across tab close
           };
 
+          // The browser can cancel a drag (touch scroll, alt-tab, capture lost): undo the lift WITHOUT reordering.
+          const onCancel = () => {
+            try { handle.releasePointerCapture(e.pointerId); } catch (er) {}
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
+            [...listWrap.querySelectorAll("[data-fn]")].forEach(r => { r.style.transform = ""; r.style.transition = ""; });
+            listWrap.style.userSelect = "";
+            renderOrder();
+          };
           handle.addEventListener("pointermove", onMove);
           handle.addEventListener("pointerup",   onUp);
+          handle.addEventListener("pointercancel", onCancel);
         });
       });
     }
@@ -11734,6 +13033,8 @@
 
     // ── SOQL Editor panel ─────────────────────────────────────────────────────
     let soqlPanelEl = null;
+    // LIKE-escape for the filter fallback below (the sibling copy lives in showAllColumnsTable's scope, not this one).
+    function escapeLike(s) { return s.replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_"); }
     let soqlAcDropEl = null;
     // _savedSoqlText / _savedSoqlRanOk / _savedSoqlObjName are module-scoped (declared above
     // showAllColumnsTable) so background rebuilds of _buildExploreModal don't reset them.
@@ -11768,6 +13069,9 @@
       all.forEach(c => { allFieldMap[c.fieldName] = c; });
 
       // ── Highlighter: mirror technique — textarea is transparent, pre shows colors ──
+      // Built ONCE (longest names first so a long field wins over a shorter prefix), not per keystroke.
+      const _fldRe = allFieldNames.length ? new RegExp("\\b(?:" + allFieldNames.slice().sort((a, b) => b.length - a.length)
+        .map(fn => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "g") : null;
       function highlightSoql(raw) {
         const escaped = raw.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
         const ranges = [];
@@ -11784,14 +13088,14 @@
         add(SOQL_KW,  "kw");
         add(SOQL_FN,  "fn");
         add(SOQL_NUM, "num");
-        allFieldNames.forEach(fn => {
-          const re = new RegExp("\\b" + fn.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + "\\b", "g");
-          re.lastIndex = 0; let m2;
-          while ((m2 = re.exec(escaped)) !== null) {
+        if (_fldRe) {
+          _fldRe.lastIndex = 0; let m2;
+          while ((m2 = _fldRe.exec(escaped)) !== null) {
             const s = m2.index, e = m2.index + m2[0].length;
             if (!ranges.some(r => r.s < e && r.e > s)) ranges.push({s, e, cls:"fld"});
+            if (m2[0].length === 0) _fldRe.lastIndex++;
           }
-        });
+        }
         ranges.sort((a,b) => a.s - b.s);
         // Vibrant palette on dark
         const C = {
@@ -11838,8 +13142,8 @@
       const titleWrap = document.createElement("div");
       titleWrap.style.cssText = "flex:1;min-width:0;";
       titleWrap.innerHTML =
-        "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SOQL Editor</div>" +
-        "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(recList.objectName || "") + "</div>";
+        "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SQL Editor</div>" +
+        "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(objectName || recList.objectName || "") + "</div>";
       const scb = document.createElement("button");
       scb.innerHTML = "&#x2715;";
       scb.style.cssText = "border:none;background:rgba(255,255,255,.06);cursor:pointer;font-size:13px;color:#94a3b8;padding:4px 7px;border-radius:6px;line-height:1;flex-shrink:0;transition:background .15s;";
@@ -11854,13 +13158,10 @@
       // ── Editor: highlight layer + transparent textarea ────────────────────
       const buildInitialSoql = () => {
         const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
-        // Strip dataspace prefix from table name for SQL (dataspace passed separately)
-        var rawObjName = recList.objectName || "Unknown__c";
-        var ds0 = (typeof resolveDataSpace === "function") ? resolveDataSpace(rawObjName) : "";
+        // FROM = EXACTLY the table the user selected (the same name shown in the table header and
+        // used by Count / Export). Never stripped or rewritten, whatever the org or Data Space.
+        var rawObjName = objectName || recList.objectName || "Unknown__c";
         var from = rawObjName;
-        if (ds0 && rawObjName.indexOf(ds0 + "_") === 0) {
-          from = rawObjName.slice(ds0.length + 1);
-        }
         const fieldStr = fields.length ? fields.map(function(fn){ return '"' + fn.replace(/"/g,'""') + '"'; }).join(", ") : '"Id"';
         // Include WHERE from active filter (UI or SQL-based)
         var whereClause = "";
@@ -11896,7 +13197,7 @@
         }
         // Use current rowsInput value as the LIMIT (editable by user)
         var lim = DC_MAX_FETCH_ROWS;
-        try { var ri = panel.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
+        try { var ri = soqlPanelEl && soqlPanelEl.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
         return "SELECT " + fieldStr + "\nFROM " + sqlQuoteIdent(from) + whereClause + "\nLIMIT " + lim;
       };
 
@@ -11907,7 +13208,7 @@
       // The highlight <pre> sits behind; textarea is on top with color:transparent
       const hlPre = document.createElement("pre");
       hlPre.setAttribute("aria-hidden","true");
-      hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:hidden;pointer-events:none;z-index:1;box-sizing:border-box;";
+      hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;scrollbar-color:transparent transparent;pointer-events:none;z-index:1;box-sizing:border-box;border:0;";
 
       const textarea = document.createElement("textarea");
       _savedSoqlRanOk = false; // reset — must run successfully to save on next close
@@ -11919,7 +13220,7 @@
       textarea.autocorrect = "off";
       textarea.autocapitalize = "off";
       // color:transparent is the key — lets the hlPre colors show through
-      textarea.style.cssText = "position:relative;z-index:2;display:block;width:100%;box-sizing:border-box;height:160px;min-height:80px;resize:vertical;border:none;padding:14px 16px;font:13px/1.6 'SF Mono',Menlo,Consolas,monospace;color:transparent;caret-color:#a5b4fc;outline:none;background:transparent;tab-size:2;";
+      textarea.style.cssText = "position:relative;z-index:2;display:block;width:100%;box-sizing:border-box;height:160px;min-height:80px;resize:vertical;border:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;color:transparent;caret-color:#a5b4fc;outline:none;background:transparent;margin:0;";
 
       const syncHighlight = () => {
         hlPre.innerHTML = highlightSoql(textarea.value) + "\n ";
@@ -12025,7 +13326,7 @@
         var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
         if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
         var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/^"|"$/g, "").replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
-        var objName = (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
+        var objName = objectName || (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
         // Run the user's REAL SQL server-side (WHERE / ORDER BY / LIMIT all honored) via
         // the documented endpoint (extension) or /aura (bookmarklet), then render the
         // result in OUR own table — the same table with View/Copy/hide-empty features.
@@ -12037,7 +13338,7 @@
             runBtn.disabled = false; runBtn.style.opacity = "1";
             var connectWrap = document.createElement("div");
             connectWrap.style.cssText = "margin-top:8px;";
-            var statusEl = panel.querySelector(".dc-soql-status") || panel;
+            var statusEl = (soqlPanelEl && soqlPanelEl.querySelector(".dc-soql-status")) || soqlPanelEl;
             statusEl.textContent = "";
             statusEl.appendChild(connectWrap);
             renderConnectButton(connectWrap, function () { runBtn.click(); });
@@ -12051,14 +13352,25 @@
           // Extract FROM table from the actual (auto-quoted) SQL so COUNT uses same name as data query
           var fromMatch = soql.match(/\bFROM\s+("(?:[^"]|"")*"|\S+)/i);
           var fromTable = fromMatch ? fromMatch[1] : sqlQuoteIdent(objName);
-          _filterState[objName] = null; // Reset first (FIX 8: clear any UI filter)
-          runRawSql(soql, ds, askRows).then(function (res) {
+          // The result is shown, counted and exported AS objName — a different FROM table would be mislabelled and
+          // every follow-up (Count / Export All / filtered CSV) would query the wrong table. Refuse it plainly.
+          if (fromMatch && dcFromTableName(fromMatch[1]).toLowerCase() !== String(objName).toLowerCase()) {
             runBtn.disabled = false; runBtn.style.opacity = "1";
-            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
-            // FIX 7: If SQL had WHERE, store it as filter state and run COUNT before rendering
+            setStatus("This editor works on " + objName + ". FROM " + dcFromTableName(fromMatch[1]) + " is a different table - open that object in Data Explorer and use its editor.", "warn");
+            return;
+          }
+          // Shared success handler (normal run AND the auto-retry after dropping an unknown column).
+          // The previous filter/original state is only replaced HERE, after a query really succeeded,
+          // so a failed/cancelled run can never leave the table and its filter state out of sync.
+          function finishOk(res) {
+            // 0 rows: the table renderer refuses to open an empty result, so do NOT touch the filter state or close the
+            // editor (that left the old table showing with a stale "SQL filter" record). Tell the user instead.
+            if (!res.rows || !res.rows.length) { runBtn.disabled = false; runBtn.style.opacity = "1"; setStatus("Query ran but returned 0 rows - the table is unchanged.", "warn"); return; }
+            // Keep the user's Rows setting — never replace it with how many rows this query returned.
+            var keepWant = _originalWantRows[objName] || res.rows.length;
             if (whereMatch && whereMatch[1]) {
               var whereClause2 = whereMatch[1].trim();
-              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true };
+              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
               var countSql2 = "SELECT COUNT(*) FROM " + fromTable + " WHERE " + whereClause2;
               runRawSql(countSql2, ds, 1).then(function (cntRes) {
                 var cnt = 0;
@@ -12067,19 +13379,26 @@
                 if (cnt > res.rows.length) res.rows.__serverRowCount = cnt;
                 _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
-                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
               }).catch(function () {
                 _savedSoqlRanOk = true;
                 try { closeSoqlEditor(); } catch (e) {}
-                showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
               });
             } else {
-              _filterState[objName] = null;
+              // No WHERE (e.g. a plain LIMIT): still a QUERY RESULT, not the table's original rows —
+              // flag it so it is never cached as "original" and "Back to original" is offered.
+              _filterState[objName] = { active: true, where: "", conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
               _filterCount[objName] = 0;
               _savedSoqlRanOk = true;
               try { closeSoqlEditor(); } catch (e) {}
-              showAllColumnsTable(objName, res.columns, res.rows, res.rows.length, res.columns);
+              showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
             }
+          }
+          runRawSql(soql, ds, askRows).then(function (res) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+            finishOk(res);
           }).catch(function handleSqlErr(err) {
             var errMsg = String(err && err.message || err);
             // Unknown column: auto-strip bad SELECT columns one at a time, retrying until
@@ -12122,11 +13441,9 @@
                       ? "\"" + stripped[0] + "\" removed (not on this object)"
                       : stripped.length + " columns removed (not on this object): " + stripped.join(", ");
                     setStatus(stripMsg + " — showing " + res2.columns.length + " columns.", "warn");
-                    _savedSoqlRanOk = true;
                     textarea.value = retrySql;
                     syncHighlight();
-                    try { closeSoqlEditor(); } catch(e) {}
-                    showAllColumnsTable(objName, res2.columns, res2.rows, res2.rows.length, res2.columns);
+                    finishOk(res2);
                   }).catch(handleSqlErr); // recurse — strip next bad column if any
                   return;
                 }
@@ -12278,7 +13595,8 @@
         if (acDrop.style.display !== "none") {
           if (e.key==="ArrowDown") { e.preventDefault(); acIdx=Math.min(acIdx+1,acItems.length-1); highlightAcRow(); return; }
           if (e.key==="ArrowUp")   { e.preventDefault(); acIdx=Math.max(acIdx-1,0); highlightAcRow(); return; }
-          if ((e.key==="Enter"||e.key==="Tab") && acIdx>=0 && acItems[acIdx]) {
+          // Only TAB accepts a suggestion (as the hint bar says). Enter always inserts a normal new line.
+          if (e.key==="Tab" && acIdx>=0 && acItems[acIdx]) {
             e.preventDefault();
             insertAcItem(acItems[acIdx], getWordAtCursor(textarea.value,textarea.selectionStart).word);
             return;
@@ -12288,6 +13606,12 @@
         if ((e.ctrlKey||e.metaKey) && e.key==="Enter") { e.preventDefault(); e.stopPropagation(); runBtn.click(); }
       });
       textarea.addEventListener("blur", () => setTimeout(hideAc, 150));
+      // Any caret move that is NOT typing closes the list, so it can never act on a stale position
+      // (this was why Enter/Tab/arrows edited the wrong place after clicking elsewhere).
+      textarea.addEventListener("mousedown", hideAc);
+      textarea.addEventListener("keyup", (e) => {
+        if (["ArrowLeft","ArrowRight","Home","End","PageUp","PageDown"].indexOf(e.key) >= 0) hideAc();
+      });
 
       makeDraggable(soqlPanelEl, sh);
       addResizeHandle(soqlPanelEl, 460, 240);
@@ -12316,6 +13640,30 @@
     const savedColObjs = lsLoad(objectName);
     const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
     if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
+    // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
+    // steps, the exact next click highlighted. `again` = the button name to press afterwards.
+    var _sortGuide = null;
+    // `detail` = the REAL error from the failed load. Without it the user just saw the same card again with no clue
+    // why (the guide only explains how to connect, but the failure may be something else entirely).
+    function showSortHelp(again, detail) {
+      if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
+      savedNote.innerHTML = "";
+      var det = null;
+      if (detail) {
+        det = document.createElement("div");
+        det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
+        // Not an error the user can act on: keep it out of sight (collapsed) - the guide is the only visible step.
+        det.style.cssText = "margin-bottom:6px;font-size:10px;color:#6b7280;user-select:text;word-break:break-word;";
+        var dsum = document.createElement("details");
+        var dsm = document.createElement("summary"); dsm.textContent = "Technical details"; dsm.style.cssText = "cursor:pointer;";
+        dsum.appendChild(dsm); dsum.appendChild(document.createTextNode(String(detail).slice(0, 700)));
+        det.appendChild(dsum);
+        savedNote.appendChild(det);
+      }
+      _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn, onReady: function () { if (det && det.parentNode) det.parentNode.removeChild(det); } });
+      savedNote.appendChild(_sortGuide);
+    }
+
     footer.appendChild(savedNote);
 
     // Data Explorer credit-awareness note (self-contained — separate from Query Editor).
@@ -12340,7 +13688,7 @@
       const b = document.createElement("button");
       b.textContent = icon ? icon + " " + label : label;
       if (tip) b.title = tip;
-      b.style.cssText = "flex:1;border-radius:6px;padding:7px 8px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid " +
+      b.style.cssText = "flex:1 1 auto;border-radius:6px;padding:7px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;border:1px solid " +
         (primary ? "#0d6efd;background:#0d6efd;color:#fff;" : "#c9d0da;background:#fff;color:#1e3a5f;");
       if (!primary) { b.onmouseenter = () => (b.style.background = "#f3f6fb"); b.onmouseleave = () => (b.style.background = "#fff"); }
       return b;
@@ -12350,39 +13698,27 @@
     var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
     var _connHint = null;
     if (!_connectionReady) {
-      viewAllBtn.disabled = true;
-      viewAllBtn.style.opacity = "0.6";
-      viewAllBtn.style.cursor = "not-allowed";
-      viewAllBtn.textContent = "Waiting for session…";
       _connectingInProgress = true;
-      // Show instruction above the button
-      _connHint = document.createElement("div");
-      _connHint.style.cssText = "font-size:11px;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;line-height:1.5;";
-      _connHint.innerHTML = "<b>One-time setup:</b> <b>Sort any column</b> on the SF table behind this modal (click a column header). This establishes the session and the button will enable automatically.";
+      // The guide locks the ORIGINAL button (no second button) and unlocks it when the page has run a query
+      _connHint = dcBuildSortGuide({
+        lockBtn: viewAllBtn,
+        isReady: function () { return !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent()); }
+      });
       footer.insertBefore(_connHint, footer.firstChild);
-      // Poll until connection is ready
       var _connPoll = setInterval(function () {
         if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
           _connectionReady = true;
           _connectingInProgress = false;
           clearInterval(_connPoll);
-          viewAllBtn.disabled = false;
-          viewAllBtn.style.opacity = "1";
-          viewAllBtn.style.cursor = "pointer";
-          viewAllBtn.textContent = "Show selected columns' data";
-          if (_connHint) { _connHint.style.background = "#f0fdf4"; _connHint.style.borderColor = "#86efac"; _connHint.style.color = "#166534"; _connHint.innerHTML = "<b>✓ Connected!</b> Select columns above and click the button."; setTimeout(function () { if (_connHint) _connHint.remove(); _connHint = null; }, 3000); }
+          if (_connHint && _connHint.dcForceReady) _connHint.dcForceReady();
         }
       }, 300);
-      // Give up after 30s
+      // After 30s release the button anyway (it will explain itself if it fails); the guide keeps watching.
       setTimeout(function () {
         clearInterval(_connPoll);
         if (!_connectionReady) {
           _connectingInProgress = false;
-          viewAllBtn.disabled = false;
-          viewAllBtn.style.opacity = "1";
-          viewAllBtn.style.cursor = "pointer";
-          viewAllBtn.textContent = "Show selected columns' data";
-          if (_connHint) _connHint.innerHTML = "<b>Tip:</b> If data doesn't load, click a row checkbox on the SF table first, then try again.";
+          if (_connHint && _connHint.dcUnlock) _connHint.dcUnlock();
         }
       }, 30000);
     }
@@ -12390,7 +13726,7 @@
     const restoreBtn = mkFootBtn("Restore saved", false, null, "Re-apply the column set you previously saved for this object.");
     const clearBtn   = mkFootBtn("Clear saved", false, null, "Delete the saved column set for this object.");
     const exportBtn  = mkFootBtn("Export CSV", false, null, "Download the selected columns' data as a CSV file (runs a query / uses Data Cloud credits).");
-    const soqlEdBtn  = mkFootBtn("Edit SOQL", false, null, "Open a SQL editor to write/adjust the query for these columns (single-table SELECT).");
+    const soqlEdBtn  = mkFootBtn("Edit SQL", false, null, "Open the SQL editor, pre-filled with a SELECT for the columns you ticked. Edit it and press Run (⌘/Ctrl + Enter) — single table only; uses Data Cloud credits.");
 
     // Grey out restore if nothing saved
     if (!savedColObjs || !savedColObjs.length) {
@@ -12404,7 +13740,7 @@
     btnRow.style.cssText = "display:flex;";
     // Row 2: secondary buttons
     const btnRow2 = document.createElement("div");
-    btnRow2.style.cssText = "display:flex;gap:4px;";
+    btnRow2.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
 
     // Spinner overlay — shown during apply so user knows work is happening
     const spinnerEl = document.createElement("div");
@@ -12459,10 +13795,7 @@
       // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
       try {
         var _preDs = readPageDataSpace();
-        if (_preDs) {
-          if (_auraSniff) _auraSniff.dataSpace = _preDs;
-          if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs;
-        }
+        if (_preDs && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs); }
       } catch (e) {}
       viewAllBtn.disabled = true;
       var wantRows = (cachedRows && cachedRows.length > 0) ? cachedRows.length : 1000;
@@ -12541,8 +13874,7 @@
             // object likely isn't queryable from any detectable dataspace — give a clear,
             // action-oriented message instead of the raw SQL error.
             if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
-              msg = "Couldn't load this object — its Data Space couldn't be determined automatically.\n\n" +
-                    "Fix: in the Salesforce Data Explorer table (to the left / behind this picker — it stays open), click a column's ▾ menu and choose Sort. Once the table re-sorts, click \"Show selected columns' data\" again. That one sort tells the tool which Data Space this object uses.";
+              showSortHelp("Show selected columns' data", msg); return;
             }
             savedNote.textContent = msg;
           });
@@ -12580,9 +13912,9 @@
       // Restore = repopulate the picker AND open the full-columns table for the saved
       // set (via the one-shot query) — no blank writes to SF's native table.
       showSpinner("Restoring + loading " + fns.length + " saved columns…");
-      try { var _preDs2 = readPageDataSpace(); if (_preDs2) { if (_auraSniff) _auraSniff.dataSpace = _preDs2; if (typeof _dsByObject !== "undefined") _dsByObject[objectName] = _preDs2; } } catch (e) {}
+      try { var _preDs2 = readPageDataSpace(); if (_preDs2 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs2); } } catch (e) {}
       ensureQueryContext(function (ready) {
-        if (!ready) { hideSpinner(); savedNote.textContent = "Restored picker (" + fns.length + " fields). Sort a column once, then click \"Show selected columns' data\"."; return; }
+        if (!ready) { hideSpinner(); showSortHelp("Restore saved"); return; }
         // Same auto-dataspace step as "Show selected columns' data" so Restore works on
         // non-default-dataspace orgs too (consistency — was missing, causing a dataspace error).
         establishDataSpace(objectName, function () {
@@ -12594,7 +13926,7 @@
             hideSpinner();
             var rmsg = String(err && err.message || err);
             if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
-              rmsg = "Couldn't load the saved set — Data Space couldn't be determined automatically. In the Salesforce table (to the left / behind this picker), sort any column via its ▾ menu, then click Restore again.";
+              showSortHelp("Restore saved", rmsg); return;
             }
             savedNote.textContent = rmsg;
           });
@@ -12694,20 +14026,7 @@
       // shadow host — use composedPath() to see the real element chain and detect any CDP /
       // data-view / datatable / column-header node. This lets users sort WITHOUT losing the
       // open picker (previously any outside click closed it, forcing a reopen).
-      var inSfGrid = false;
-      try {
-        var path = (e.composedPath && e.composedPath()) || [];
-        for (var pi = 0; pi < path.length; pi++) {
-          var n = path[pi];
-          if (!n || n.nodeType !== 1) continue;
-          var t = (n.tagName || "").toLowerCase();
-          var role = (n.getAttribute && n.getAttribute("role")) || "";
-          var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
-          if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
-              role === "columnheader" || role === "grid" || role === "gridcell" ||
-              /slds-th__action|slds-table|slds-is-sortable/.test(cls)) { inSfGrid = true; break; }
-        }
-      } catch (ex) {}
+      var inSfGrid = dcIsSfGridOrGuideTarget(e);
       if (!inModal && !inSoql && !inAcDrop && !inBar && !inSfGrid) { closeExploreModal(); closeSoqlEditor(); document.removeEventListener("pointerdown", onOut, true); }
     };
     setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
@@ -12722,6 +14041,7 @@
   // so no background watcher is needed — object changes are handled on demand.
   function watchExploreObjectChange() { /* no-op: was a costly idle poll; removed for perf */ }
 
+  /* @strip:start dev */
   // ── Data Transform launcher (FAB) ─────────────────────────────────────────
   // The transform editor is a standalone Aura app; we add a minimal launcher with a
   // single "Understand this transform" action that reads the definition (extension
@@ -12885,10 +14205,10 @@
     var s = String(raw).trim();
     if (s.length < 2) return { isJson: false };
     var c = s.charAt(0);
-    if (c !== "{" && c !== "[") return { isJson: false };
-    var v; try { v = JSON.parse(s); } catch (e) { return { isJson: false }; }
-    if (v === null || typeof v !== "object") return { isJson: false };
-    return { isJson: true, kind: Array.isArray(v) ? "array" : "object", value: v };
+    if (c !== "{" && c !== "[" && c !== '"') return { isJson: false };   // '"' = a JSON-encoded string that may wrap JSON
+    var jl = dcParseJsonLoose(s);
+    if (!jl) return { isJson: false };
+    return { isJson: true, kind: Array.isArray(jl.value) ? "array" : "object", value: jl.value };
   }
   function qeJsonIsPlainObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
   function qeJsonCellStr(v) {
@@ -12913,7 +14233,20 @@
   function qeJsonPretty(value) { try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); } }
 
   // Open the QE JSON modal for a raw cell value (already known to be JSON).
+  // Tab-separated text for pasting straight into Google Sheets / Excel. Fields holding a tab,
+  // newline or quote are double-quoted (quotes doubled) so each value stays in ONE cell.
+  function qeToTsv(cols, rows) {
+    var cell = function (v) {
+      var t = v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
+      return /[\t\r\n"]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+    };
+    var out = [cols.map(cell).join("\t")];
+    for (var i = 0; i < rows.length; i++) out.push(cols.map(function (c) { return cell(rows[i][c]); }).join("\t"));
+    return out.join("\n");
+  }
   function openQeJsonModal(rawValue, colName) {
+    // Same readable viewer as the Data Explorer (Table / Tree / Raw, colour-coded, resizable, full screen).
+    try { if (typeof showCellValue === "function") { showCellValue(colName || "value", colName || "value", rawValue, null); return; } } catch (e0) {}
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
     var det = qeJsonDetect(rawValue);
     var value = det.isJson ? det.value : rawValue;
@@ -13176,7 +14509,71 @@
     });
     return { dups: dups, total: total, jsonish: jsonish, blanks: blanks };
   }
-  function qeDiffSnapshots(prev, curr, keyCols) {
+  // Auto-detect the best KEY column: a good key is UNIQUE within each run and the SAME VALUES appear in both runs.
+  // score = min(uniqueness in older, uniqueness in newer) x share of older values still present in newer.
+  function qeSuggestKeys(prev, curr, cols) {
+    var P = (prev && prev.rows) || [], C = (curr && curr.rows) || [], out = [];
+    if (!P.length || !C.length) return out;
+    (cols || []).forEach(function (c) {
+      var sp = new Set(), sc = new Set(), np = 0, nc = 0, len = 0, js = 0, i, v;
+      for (i = 0; i < P.length; i++) { v = P[i][c]; if (v == null || v === "") continue; v = String(v); np++; sp.add(v); len += v.length; var ch = v.charAt(0); if (ch === "{" || ch === "[") js++; }
+      for (i = 0; i < C.length; i++) { v = C[i][c]; if (v == null || v === "") continue; sc.add(String(v)); nc++; }
+      if (!np || !nc || len / np > 150 || js / np > 0.2) return;
+      var up = sp.size / P.length, uc = sc.size / C.length, inter = 0;
+      sp.forEach(function (x) { if (sc.has(x)) inter++; });
+      var ov = inter / sp.size;
+      var score = Math.min(1, Math.min(up, uc) * ov + (/(^|_)id(__c)?$/i.test(c) ? 0.01 : 0));
+      out.push({ col: c, uniqPrev: up, uniqCurr: uc, overlap: ov, score: score });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    // No good single column? Try PAIRS of the most-unique columns (e.g. Account + Month).
+    if ((!out[0] || out[0].score < 0.9) && P.length && C.length) {
+      var cand = out.concat([]).sort(function (x, y) { return Math.min(y.uniqPrev, y.uniqCurr) - Math.min(x.uniqPrev, x.uniqCurr); });
+      var cs = (cols || []).filter(function (c) { return !out.some(function (o) { return o.col === c; }); });   // columns skipped above (low-uniqueness are in `out`)
+      var pool = out.slice(0).sort(function (x, y) { return y.overlap - x.overlap; }).slice(0, 8).map(function (x) { return x.col; });
+      var pairs = [];
+      for (var i1 = 0; i1 < pool.length; i1++) for (var j1 = i1 + 1; j1 < pool.length; j1++) {
+        var A = pool[i1], B = pool[j1], sp2 = new Set(), sc2 = new Set(), k, v2;
+        for (k = 0; k < P.length; k++) sp2.add(String(P[k][A]) + "\u0001" + String(P[k][B]));
+        for (k = 0; k < C.length; k++) sc2.add(String(C[k][A]) + "\u0001" + String(C[k][B]));
+        var up2 = sp2.size / P.length, uc2 = sc2.size / C.length, in2 = 0;
+        sp2.forEach(function (x) { if (sc2.has(x)) in2++; });
+        var sco = Math.min(1, Math.min(up2, uc2) * (in2 / sp2.size));
+        pairs.push({ col: A + " + " + B, cols: [A, B], uniqPrev: up2, uniqCurr: uc2, overlap: in2 / sp2.size, score: sco });
+      }
+      pairs.sort(function (a, b) { return b.score - a.score; });
+      if (pairs[0] && (!out[0] || pairs[0].score > out[0].score + 0.15)) out = pairs.slice(0, 2).concat(out);
+    }
+    return out.slice(0, 6);
+  }
+  // JSON diff by PATH: only the paths whose value differs (matchKeys[0].EmailAddress: a -> b).
+  function qeJsonPathDiff(bv, av, cap) {
+    var pj = function (v) { var t = String(v == null ? "" : v).trim(); if (t.charAt(0) !== "{" && t.charAt(0) !== "[") return undefined; try { return JSON.parse(t); } catch (e) { return undefined; } };
+    var b = pj(bv), a = pj(av); if (b === undefined || a === undefined) return null;
+    var fb = {}, fa = {};
+    var flat = function (o, pth, out) {
+      if (o !== null && typeof o === "object") { var ks = Object.keys(o); if (!ks.length) out[pth || "$"] = Array.isArray(o) ? "[]" : "{}"; ks.forEach(function (k) { flat(o[k], pth ? pth + (Array.isArray(o) ? "[" + k + "]" : "." + k) : (Array.isArray(o) ? "[" + k + "]" : k), out); }); }
+      else out[pth || "$"] = o === null ? "null" : String(o);
+    };
+    flat(b, "", fb); flat(a, "", fa);
+    var seen = {}, rows = [];
+    Object.keys(fb).concat(Object.keys(fa)).forEach(function (k) {
+      if (seen[k]) return; seen[k] = 1;
+      var x = fb.hasOwnProperty(k) ? fb[k] : null, y = fa.hasOwnProperty(k) ? fa[k] : null;
+      if (x !== y) rows.push({ path: k, before: x, after: y });
+    });
+    return { rows: rows.slice(0, cap || 200), total: rows.length };
+  }
+  function qeDiffSnapshots(prev, curr, keyCols, opts) {
+    opts = opts || {};
+    var ign = {}; (opts.ignore || []).forEach(function (c) { ign[c] = 1; });
+    var nv = function (v) {
+      var x = v == null ? "" : String(v);
+      if (opts.trim) x = x.replace(/\s+/g, " ").trim();
+      if (opts.ci) x = x.toLowerCase();
+      if (opts.num && /^-?\d+(\.\d+)?$/.test(x.trim())) x = String(parseFloat(x));
+      return x;
+    };
     var warnings = [];
     var prevRows = (prev && prev.rows) || [], currRows = (curr && curr.rows) || [];
     if (!keyCols || !keyCols.length) { warnings.push("no key column selected"); return { added: [], removed: [], changed: [], unchanged: 0, warnings: warnings }; }
@@ -13186,63 +14583,376 @@
     if (addedCols.length) warnings.push("new columns: " + addedCols.join(", "));
     if (droppedCols.length) warnings.push("removed columns: " + droppedCols.join(", "));
     var prevMap = new Map(), currMap = new Map(), dupPrev = 0, dupCurr = 0;
-    prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) dupPrev++; else prevMap.set(k, r); });
-    currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) dupCurr++; else currMap.set(k, r); });
+    var dupRows = [];
+    // Keys honour the same normalisation as values (trim / case / number), so "A@X.com " and "a@x.com" match.
+    var qeRowKey = function (r, kc) { return kc.map(function (k) { return nv(r[k]); }).join(""); };
+    prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) { dupPrev++; dupRows.push({ __file: "previous (dropped)", __key: k, row: r }); } else prevMap.set(k, r); });
+    currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) { dupCurr++; dupRows.push({ __file: "current (dropped)", __key: k, row: r }); } else currMap.set(k, r); });
     if (dupPrev) warnings.push(dupPrev + " duplicate key(s) in previous (first kept)");
     if (dupCurr) warnings.push(dupCurr + " duplicate key(s) in current (first kept)");
-    var allCols = currCols.slice(); prevCols.forEach(function (c) { if (allCols.indexOf(c) < 0) allCols.push(c); });
+    // Only compare columns present in BOTH files; added/dropped columns are reported separately
+    // (otherwise one new column would mark every row as changed and bury the real edits).
+    var allCols = currCols.filter(function (c) { return prevCols.indexOf(c) >= 0; });
     var added = [], removed = [], changed = [], unchanged = 0;
     currMap.forEach(function (cr, k) {
       if (!prevMap.has(k)) { added.push(cr); return; }
       var pr = prevMap.get(k), diffFields = [];
-      allCols.forEach(function (c) { var a = pr[c] == null ? "" : String(pr[c]); var b = cr[c] == null ? "" : String(cr[c]); if (a !== b) diffFields.push(c); });
+      allCols.forEach(function (c) { if (ign[c]) return; var a = nv(pr[c]); var b = nv(cr[c]); if (a !== b) diffFields.push(c); });
       if (diffFields.length) changed.push({ key: k, before: pr, after: cr, fields: diffFields }); else unchanged++;
     });
     prevMap.forEach(function (pr, k) { if (!currMap.has(k)) removed.push(pr); });
-    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings };
+    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings, dupRows: dupRows, addedCols: addedCols, droppedCols: droppedCols };
   }
 
   // Render the diff (added/removed/changed) in a modal with sections.
-  function openQeDiffModal(diff, keyCols, prevSnap) {
-    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+  function openQeDiffModal(diff, keyCols, prevSnap, ctx) {
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
     var old = document.getElementById("dc-qe-diff-modal"); if (old) old.remove();
     var modal = document.createElement("div"); modal.id = "dc-qe-diff-modal";
-    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;font-family:-apple-system,'Segoe UI',sans-serif;";
     var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(900px,95vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
-    var when = prevSnap && prevSnap.ts ? new Date(prevSnap.ts).toLocaleString() : "previous snapshot";
+    box.style.cssText = "position:fixed;top:3vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(1500px,97vw);height:93vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.4);overflow:hidden;";
+    var when = prevSnap && prevSnap.ts ? new Date(prevSnap.ts).toLocaleString() : ((prevSnap && prevSnap.label) || "previous snapshot");
     var hdr = document.createElement("div");
-    hdr.style.cssText = "padding:12px 16px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-    hdr.innerHTML = "<div><div style='font:700 14px system-ui'>Compare vs " + esc(when) + "</div><div style='font:400 11px system-ui;opacity:.85'>key: " + esc(keyCols.join(" + ")) + " &bull; <span style='color:#86efac'>+" + diff.added.length + " added</span> &bull; <span style='color:#fca5a5'>-" + diff.removed.length + " removed</span> &bull; <span style='color:#fde68a'>~" + diff.changed.length + " changed</span> &bull; " + diff.unchanged + " unchanged</div></div>";
-    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
+    hdr.style.cssText = "padding:12px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div><div style='font:700 16px system-ui'>Compare: previous (" + esc(when) + ") &rarr; current</div><div style='font:400 12px system-ui;opacity:.9;margin-top:2px'>Rows matched by key: <b>" + esc(keyCols.join(" + ")) + "</b></div></div>";
+    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
     closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
-    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 16px;min-height:0;background:#f8fafc;"; box.appendChild(body);
 
-    var html = "";
-    if (diff.warnings.length) html += "<div style='background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;padding:7px 10px;margin-bottom:12px;font-size:11px;color:#92400e'>&#9888; " + diff.warnings.map(esc).join(" &bull; ") + "</div>";
-    function tbl(title, color, rows2, cols2) {
-      if (!rows2.length) return "<div style='margin:0 0 10px;font-size:12px;color:#94a3b8'>" + title + ": none</div>";
-      var h = "<div style='font:700 12px system-ui;color:" + color + ";margin:4px 0 6px'>" + title + " (" + rows2.length + ")</div>";
-      h += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden;margin-bottom:14px'><thead><tr style='background:#1e293b;color:#fff'>";
-      cols2.forEach(function (c) { h += "<th style='text-align:left;padding:5px 8px;white-space:nowrap'>" + esc(c) + "</th>"; });
-      h += "</tr></thead><tbody>";
-      rows2.slice(0, 500).forEach(function (r, i) { h += "<tr style='background:" + (i % 2 ? "#f9fafb" : "#fff") + "'>"; cols2.forEach(function (c) { h += "<td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(r[c]) + "'>" + esc(r[c] == null ? "" : r[c]) + "</td>"; }); h += "</tr>"; });
-      h += "</tbody></table>";
-      if (rows2.length > 500) h += "<div style='font-size:11px;color:#94a3b8;margin:-8px 0 12px'>showing first 500 of " + rows2.length + "</div>";
+    var warn = "";
+    if (diff.warnings.length) warn = "<div style='background:#fffbeb;border-bottom:1px solid #fcd34d;padding:6px 18px;font-size:12px;color:#92400e;flex-shrink:0'>&#9888; " + diff.warnings.map(esc).join(" &bull; ") + "</div>";
+    var warnEl = document.createElement("div"); warnEl.innerHTML = warn; if (warn) box.appendChild(warnEl.firstChild);
+
+    // tab bar: big clickable summary chips + search
+    var bar = document.createElement("div");
+    bar.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;";
+    var tabs = [
+      { id: "changed", label: "✎ Changed", n: diff.changed.length, c: "#b45309", bg: "#fef3c7" },
+      { id: "added", label: "+ Added", n: diff.added.length, c: "#047857", bg: "#d1fae5" },
+      { id: "removed", label: "− Removed", n: diff.removed.length, c: "#b91c1c", bg: "#fee2e2" }
+    ];
+    if (diff.dupRows && diff.dupRows.length) tabs.push({ id: "dups", label: "⧉ Duplicates", n: diff.dupRows.length, c: "#475569", bg: "#e2e8f0" });
+    var active = diff.changed.length ? "changed" : diff.added.length ? "added" : diff.removed.length ? "removed" : "changed";
+    var q = "";
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 18px;min-height:0;background:#f8fafc;";
+    var tabEls = {};
+    tabs.forEach(function (t) {
+      var b = document.createElement("button"); tabEls[t.id] = b;
+      b.onclick = function () { active = t.id; paint(); };
+      bar.appendChild(b);
+    });
+    var same = document.createElement("span"); same.style.cssText = "font-size:12px;color:#64748b;margin-left:4px;"; same.textContent = diff.unchanged + " unchanged"; bar.appendChild(same);
+    var search = document.createElement("input"); search.type = "search"; search.placeholder = "Filter (key, field or value)…";
+    search.style.cssText = "margin-left:auto;padding:7px 11px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px;outline:none;";
+    search.oninput = function () { q = search.value.trim().toLowerCase(); paint(); };
+    var grpSel = document.createElement("select"); grpSel.title = "Group the rows (accordion sections with counts)";
+    grpSel.style.cssText = "padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font:12px system-ui;max-width:230px;background:#fff;";
+    grpSel.onchange = function () { if (active === "changed") view = grpSel.value; else grp = grpSel.value; paint(); };
+    var wrapBtn2 = document.createElement("button"); wrapBtn2.textContent = "↵ Wrap: on"; wrapBtn2.title = "Wrap long values or cut them to one line";
+    wrapBtn2.style.cssText = "cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:8px;padding:8px 12px;font:600 12px system-ui;";
+    wrapBtn2.onclick = function () { wrapOn = !wrapOn; wrapBtn2.textContent = "↵ Wrap: " + (wrapOn ? "on" : "off"); paint(); };
+    var fsBtn2 = document.createElement("button"); fsBtn2.textContent = "⛶ Full screen"; fsBtn2.title = "Use the whole screen";
+    fsBtn2.style.cssText = wrapBtn2.style.cssText;
+    fsBtn2.onclick = function () {
+      fullOn = !fullOn;
+      box.style.width = fullOn ? "100vw" : "min(1500px,97vw)"; box.style.height = fullOn ? "100vh" : "93vh";
+      box.style.top = fullOn ? "0" : "3vh"; box.style.borderRadius = fullOn ? "0" : "12px";
+      fsBtn2.textContent = fullOn ? "⤓ Exit full screen" : "⛶ Full screen";
+    };
+    var optBtn = document.createElement("button"); optBtn.textContent = "⚙ Options"; optBtn.title = "Ignore columns (timestamps, audit fields) and normalize case / whitespace / numbers";
+    optBtn.style.cssText = wrapBtn2.style.cssText;
+    optBtn.onclick = function () {
+      var ex = modal.querySelector("#dc-cmp-opts"); if (ex) { ex.remove(); return; }
+      if (!ctx || typeof ctx.rerun !== "function") return;
+      var o = ctx.opts || {}, allc = []; ((ctx.curr && ctx.curr.columns) || []).concat((ctx.prev && ctx.prev.columns) || []).forEach(function (c) { if (allc.indexOf(c) < 0) allc.push(c); });
+      var pop = document.createElement("div"); pop.id = "dc-cmp-opts";
+      pop.style.cssText = "position:absolute;top:118px;right:18px;z-index:5;width:380px;max-height:70vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.3);padding:14px;font:13px system-ui;color:#0f172a";
+      var ch2 = function (id, lab, on) { return "<label style='display:block;margin:4px 0'><input type='checkbox' id='" + id + "' " + (on ? "checked" : "") + "> " + lab + "</label>"; };
+      pop.innerHTML = "<div style='font:700 14px system-ui;margin-bottom:6px'>Compare options</div>"
+        + ch2("dc-o-ci", "Ignore upper/lower case", o.ci) + ch2("dc-o-trim", "Ignore extra spaces / line breaks", o.trim) + ch2("dc-o-num", "Treat 1, 1.0 and 1.00 as the same", o.num)
+        + "<div style='font:700 12px system-ui;margin:10px 0 4px'>Ignore these columns <span style='font-weight:400;color:#64748b'>(not compared)</span></div>"
+        + "<input id='dc-o-find' title='Type to narrow the column list' placeholder='find a column…' style='width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;margin-bottom:6px'>"
+        + "<div id='dc-o-cols' style='max-height:240px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;padding:4px 8px'>" + allc.map(function (c) { return "<label data-c='" + esc(c).toLowerCase() + "' style='display:block;margin:2px 0;font-size:12px'><input type='checkbox' value=\"" + esc(c) + "\" " + ((o.ignore || []).indexOf(c) >= 0 ? "checked" : "") + "> " + esc(c) + "</label>"; }).join("") + "</div>"
+        + "<div style='display:flex;gap:8px;margin-top:10px'><button id='dc-o-apply' title='Re-run the comparison with these options' style='cursor:pointer;border:none;background:#4338ca;color:#fff;border-radius:8px;padding:8px 14px;font:700 12px system-ui'>Apply &amp; re-compare</button><button title='Clear all options and re-run' id='dc-o-reset' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:8px 14px;font:600 12px system-ui'>Reset</button></div>";
+      box.appendChild(pop);
+      pop.querySelector("#dc-o-find").oninput = function () { var qq = this.value.toLowerCase(); pop.querySelectorAll("#dc-o-cols label").forEach(function (l) { l.style.display = l.getAttribute("data-c").indexOf(qq) >= 0 ? "block" : "none"; }); };
+      pop.querySelector("#dc-o-apply").onclick = function () {
+        var ign2 = []; pop.querySelectorAll("#dc-o-cols input:checked").forEach(function (i) { ign2.push(i.value); });
+        var no = { ci: pop.querySelector("#dc-o-ci").checked, trim: pop.querySelector("#dc-o-trim").checked, num: pop.querySelector("#dc-o-num").checked, ignore: ign2 };
+        modal.remove(); ctx.rerun(keyCols, no);
+      };
+      pop.querySelector("#dc-o-reset").onclick = function () { modal.remove(); ctx.rerun(keyCols, {}); };
+    };
+    bar.appendChild(grpSel); bar.appendChild(wrapBtn2); bar.appendChild(fsBtn2); if (ctx) bar.appendChild(optBtn);
+    bar.appendChild(search);
+    var xl = document.createElement("button"); xl.id = "dc-diff-xl"; xl.innerHTML = "&#11015; Excel";
+    xl.title = "Download every difference as one Excel sheet (Type, Key, Field, Before, After)";
+    xl.style.cssText = "cursor:pointer;border:none;background:#059669;color:#fff;border-radius:8px;padding:8px 13px;font:600 12px system-ui;";
+    xl.onclick = function () { exportDiff(xl); }; bar.appendChild(xl);
+    var cp2 = document.createElement("button"); cp2.id = "dc-diff-cp"; cp2.textContent = "Copy summary";
+    cp2.style.cssText = "cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:8px;padding:8px 13px;font:600 12px system-ui;";
+    cp2.onclick = function () { try { navigator.clipboard.writeText(summaryText()); cp2.textContent = "Copied \u2713"; } catch (e) { cp2.textContent = "Copy blocked"; } }; bar.appendChild(cp2);
+    box.appendChild(bar); box.appendChild(body);
+
+    function hit(s) { return !q || String(s == null ? "" : s).toLowerCase().indexOf(q) >= 0; }
+    function pretty(v) {
+      var s = v == null ? "" : String(v), t = s.trim();
+      if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) {} }
+      return s;
+    }
+    var CELL = "white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;";
+    function empty(msg) { return "<div style='padding:40px;text-align:center;color:#94a3b8;font-size:14px'>" + msg + "</div>"; }
+    var wrapOn = true, grp = "", view = "row", fullOn = false;
+    function jsonOf(v) { var t = String(v == null ? "" : v).trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return null; }
+    function cellHtml(v, big) {
+      v = v == null ? "" : String(v);
+      if (v === "") return "<span style='color:#cbd5e1'>—</span>";
+      var j = jsonOf(v);
+      if (j !== null) {
+        var pr = esc(JSON.stringify(j, null, 2));
+        return "<details><summary style='cursor:pointer;color:#4338ca;font:600 11px system-ui'>{ } JSON &middot; " + v.length + " chars (click to expand)</summary><pre style='margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:11px/1.45 ui-monospace,Menlo,monospace;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;max-height:" + (big ? 420 : 260) + "px;overflow:auto'>" + pr + "</pre></details>";
+      }
+      return wrapOn ? esc(v) : "<span title='" + esc(v) + "' style='display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px'>" + esc(v) + "</span>";
+    }
+    function rowsTable(rows2, color) {
+      var shown = rows2.filter(function (r) { return !q || Object.keys(r).some(function (k) { return hit(r[k]); }); });
+      if (!shown.length) return empty(rows2.length ? "No rows match the filter." : "None.");
+      var cols2 = (shown[0] && Object.keys(shown[0])) || [];
+      keyCols.slice().reverse().forEach(function (k) { var i = cols2.indexOf(k); if (i > 0) { cols2.splice(i, 1); cols2.unshift(k); } });
+      var one = function (list) {
+        var h = "<div style='overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px'><table style='border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%'><thead><tr>";
+        cols2.forEach(function (c) { h += "<th style='position:sticky;top:0;z-index:1;text-align:left;padding:8px 10px;background:#1e293b;color:#fff;white-space:nowrap;border-bottom:3px solid " + color + "'>" + esc(c) + (keyCols.indexOf(c) >= 0 ? " 🔑" : "") + "</th>"; });
+        h += "</tr></thead><tbody>";
+        list.slice(0, 500).forEach(function (r, i) {
+          h += "<tr style='background:" + (i % 2 ? "#f8fafc" : "#fff") + "'>";
+          cols2.forEach(function (c) {
+            h += "<td style='padding:6px 10px;border-bottom:1px solid #eef2f6;vertical-align:top;min-width:90px;max-width:340px;" + CELL + (keyCols.indexOf(c) >= 0 ? "font-weight:700;word-break:break-all;" : "") + "'>" + cellHtml(r[c]) + "</td>";
+          });
+          h += "</tr>";
+        });
+        h += "</tbody></table></div>";
+        if (list.length > 500) h += "<div style='font-size:12px;color:#64748b;margin-top:6px'>Showing first 500 of " + list.length + " rows.</div>";
+        return h;
+      };
+      if (!grp || cols2.indexOf(grp) < 0) return one(shown);
+      var buckets = {}, order2 = [];
+      shown.forEach(function (r) { var k = r[grp] == null || String(r[grp]) === "" ? "(empty)" : String(r[grp]); if (!buckets[k]) { buckets[k] = []; order2.push(k); } buckets[k].push(r); });
+      order2.sort(function (x, y) { return buckets[y].length - buckets[x].length; });
+      var out = "<div style='font-size:12px;color:#64748b;margin-bottom:8px'>Grouped by <b>" + esc(grp) + "</b>: " + order2.length + " group" + (order2.length === 1 ? "" : "s") + ". Click a group to open or close it.</div>";
+      order2.slice(0, 200).forEach(function (k, i) {
+        out += "<details " + (i < 3 ? "open " : "") + "style='margin-bottom:8px'><summary style='cursor:pointer;background:#fff;border:1px solid #e2e8f0;border-left:4px solid " + color + ";border-radius:8px;padding:8px 12px;font:700 13px system-ui;color:#0f172a'>" + esc(k.length > 120 ? k.slice(0, 120) + "…" : k) + " <span style='float:right;font:600 11px system-ui;background:#e2e8f0;color:#334155;border-radius:10px;padding:2px 9px'>" + buckets[k].length + " row" + (buckets[k].length === 1 ? "" : "s") + "</span></summary><div style='margin-top:6px'>" + one(buckets[k]) + "</div></details>";
+      });
+      return out;
+    }
+    function changedByField() {
+      var by = {}, order2 = [];
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) {
+        if (q && !(hit(ch.key) || hit(f) || hit(ch.before[f]) || hit(ch.after[f]))) return;
+        if (!by[f]) { by[f] = []; order2.push(f); } by[f].push(ch);
+      }); });
+      if (!order2.length) return empty("No changes match the filter.");
+      order2.sort(function (x, y) { return by[y].length - by[x].length; });
+      var h = "<div style='font-size:12px;color:#64748b;margin-bottom:8px'>Grouped by <b>field</b>: each section lists every row where that field changed.</div>";
+      order2.forEach(function (f, i) {
+        h += "<details " + (i < 3 ? "open " : "") + "style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:10px;overflow:hidden'><summary style='cursor:pointer;padding:9px 12px;background:#fffbeb;font:700 13px system-ui;color:#0f172a'>" + esc(f) + " <span style='float:right;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>" + by[f].length + " row" + (by[f].length === 1 ? "" : "s") + "</span></summary>"
+          + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:260px'><col><col></colgroup><thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Key</th><th style='text-align:left;padding:6px 12px'>Before</th><th style='text-align:left;padding:6px 12px'>After</th></tr></thead><tbody>";
+        by[f].slice(0, 300).forEach(function (ch) {
+          h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:12px ui-monospace,Menlo,monospace;word-break:break-all'>" + esc(ch.key) + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'>" + pairCells(ch.before[f], ch.after[f])[0] + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'>" + pairCells(ch.before[f], ch.after[f])[1] + "</td></tr>";
+        });
+        h += "</tbody></table></details>";
+      });
       return h;
     }
-    var curCols = (prevSnap && prevSnap.columns) || (diff.added[0] ? Object.keys(diff.added[0]) : keyCols);
-    html += tbl("➕ Added rows", "#059669", diff.added, curCols);
-    html += tbl("➖ Removed rows", "#dc2626", diff.removed, curCols);
-    // changed: show key + which fields changed, before → after
-    if (diff.changed.length) {
-      html += "<div style='font:700 12px system-ui;color:#b45309;margin:4px 0 6px'>✎ Changed rows (" + diff.changed.length + ")</div>";
-      html += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden'><thead><tr style='background:#1e293b;color:#fff'><th style='text-align:left;padding:5px 8px'>Key</th><th style='text-align:left;padding:5px 8px'>Field</th><th style='text-align:left;padding:5px 8px'>Before</th><th style='text-align:left;padding:5px 8px'>After</th></tr></thead><tbody>";
-      var cnt = 0;
-      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { if (cnt++ > 1000) return; html += "<tr><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-family:SF Mono,monospace'>" + esc(ch.key) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-weight:600'>" + esc(f) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#fef2f2'>" + esc(ch.before[f] == null ? "" : ch.before[f]) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#f0fdf4'>" + esc(ch.after[f] == null ? "" : ch.after[f]) + "</td></tr>"; }); });
-      html += "</tbody></table>";
-    } else html += "<div style='font-size:12px;color:#94a3b8'>Changed: none</div>";
-    body.innerHTML = html;
+    function dupRowsFlat() {
+      return (diff.dupRows || []).map(function (d) { var o = { "Dropped from": d.__file, "Repeated key": d.__key }; Object.keys(d.row).forEach(function (k) { o[k] = d.row[k]; }); return o; });
+    }
+    // value cells for one changed field: JSON -> only the differing paths; otherwise plain pretty value
+    function pairCells(b0, a0) {
+      var jd2 = qeJsonPathDiff(b0, a0, 60);
+      if (jd2 && jd2.total > 0) {
+        var side = function (k) {
+          var h = "<div style='font:11px system-ui;color:#64748b;margin-bottom:4px'>" + jd2.total + " JSON path" + (jd2.total === 1 ? "" : "s") + " differ</div>";
+          jd2.rows.forEach(function (r) { var v = r[k]; h += "<div style='margin-bottom:3px'><span style='color:#4338ca;font-weight:700'>" + esc(r.path) + "</span>: " + (v === null ? "<i style='opacity:.6'>(absent)</i>" : esc(v)) + "</div>"; });
+          if (jd2.total > jd2.rows.length) h += "<div style='font-size:11px;opacity:.7'>…" + (jd2.total - jd2.rows.length) + " more</div>";
+          return h;
+        };
+        return [side("before"), side("after")];
+      }
+      var b = pretty(b0), a = pretty(a0);
+      return [b === "" ? "<i style='color:#fca5a5'>(empty)</i>" : esc(b), a === "" ? "<i style='color:#86efac'>(empty)</i>" : esc(a)];
+    }
+    function changedCards() {
+      var items = diff.changed.filter(function (ch) { return !q || hit(ch.key) || ch.fields.some(function (f) { return hit(f) || hit(ch.before[f]) || hit(ch.after[f]); }); });
+      if (!items.length) return empty(diff.changed.length ? "No changes match the filter." : (!diff.added.length && !diff.removed.length ? "\u2713 No differences: every row matches between the two files (" + diff.unchanged + " identical)." : "No matched rows were edited. See the Added / Removed tabs."));
+      var h = "<div style='font-size:12px;color:#64748b;margin-bottom:10px'>Each card is one row (matched by key). Only the fields that differ are shown.</div>";
+      items.slice(0, 300).forEach(function (ch, idx) {
+        h += "<details " + (idx < 15 ? "open " : "") + "style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:10px;overflow:hidden'>"
+          + "<summary style='cursor:pointer;padding:9px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fffbeb'>"
+          + "<span style='font:600 11px system-ui;color:#92400e;text-transform:uppercase;letter-spacing:.04em'>" + esc(keyCols.join(" + ")) + "</span>"
+          + "<span style='font:700 13px ui-monospace,Menlo,monospace;color:#0f172a;word-break:break-all'>" + esc(ch.key) + "</span>"
+          + "<span style='margin-left:auto;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>" + ch.fields.length + " field" + (ch.fields.length === 1 ? "" : "s") + " changed</span></summary>"
+          + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:200px'><col><col></colgroup>"
+          + "<thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Field</th><th style='text-align:left;padding:6px 12px'>Before (previous)</th><th style='text-align:left;padding:6px 12px'>After (current)</th></tr></thead><tbody>";
+        ch.fields.forEach(function (f) {
+          var pc = pairCells(ch.before[f], ch.after[f]);
+          h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:700 12px system-ui;color:#0f172a;word-break:break-word'>" + esc(f) + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'><div style='max-height:300px;overflow:auto'>" + pc[0] + "</div></td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'><div style='max-height:300px;overflow:auto'>" + pc[1] + "</div></td></tr>";
+        });
+        h += "</tbody></table></details>";
+      });
+      if (items.length > 300) h += "<div style='font-size:12px;color:#64748b'>Showing first 300 of " + items.length + " changed rows.</div>";
+      return h;
+    }
+    // Insight: an "added" + a "removed" row that agree on most other columns are almost certainly the SAME record whose key changed.
+    function findRekeyed() {
+      var A = diff.added.slice(0, 400), R = diff.removed.slice(0, 400), used = {}, out = [];
+      var kk = function (r) { return keyCols.map(function (k) { return r[k]; }).join(" + "); };
+      A.forEach(function (a) {
+        var cols = Object.keys(a).filter(function (c) { return keyCols.indexOf(c) < 0 && a[c] != null && String(a[c]) !== ""; });
+        if (cols.length < 2) return;
+        var best = -1, bs = 0;
+        R.forEach(function (r, i) {
+          if (used[i]) return; var m = 0;
+          cols.forEach(function (c) { if (String(r[c]) === String(a[c])) m++; });
+          if (m > bs) { bs = m; best = i; }
+        });
+        if (best >= 0 && bs >= 2 && bs / cols.length >= 0.5) { used[best] = 1; out.push({ from: kk(R[best]), to: kk(a), pct: Math.round(100 * bs / cols.length) }); }
+      });
+      return out;
+    }
+    function exportDiff(btn) {
+      var rows = [];
+      var flat = function (r) { return Object.keys(r).filter(function (c) { return r[c] != null && String(r[c]) !== ""; }).map(function (c) { return c + "=" + r[c]; }).join("; "); };
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { rows.push({ Type: "Changed", Key: ch.key, Field: f, Before: ch.before[f] == null ? "" : String(ch.before[f]), After: ch.after[f] == null ? "" : String(ch.after[f]) }); }); });
+      diff.added.forEach(function (r) { rows.push({ Type: "Added", Key: keyCols.map(function (k) { return r[k]; }).join(" + "), Field: "(whole row)", Before: "", After: flat(r) }); });
+      diff.removed.forEach(function (r) { rows.push({ Type: "Removed", Key: keyCols.map(function (k) { return r[k]; }).join(" + "), Field: "(whole row)", Before: flat(r), After: "" }); });
+      if (typeof downloadRowsXlsx === "function") downloadRowsXlsx("snapshot-compare", ["Type", "Key", "Field", "Before", "After"], rows, btn);
+    }
+    function summaryText() {
+      var t = "Compare: +" + diff.added.length + " new, -" + diff.removed.length + " gone, ~" + diff.changed.length + " edited, " + diff.unchanged + " identical (key: " + keyCols.join(" + ") + ")\n";
+      var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
+      Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; }).forEach(function (f) { t += "  " + f + ": " + cnt[f] + " row(s)\n"; });
+      var kv = function (r) { return keyCols.map(function (k) { return r[k]; }).join(" + "); };
+      var smp = function (lab, rows) { if (rows.length) t += lab + " (" + rows.length + "), e.g. " + rows.slice(0, 5).map(kv).join(", ") + (rows.length > 5 ? ", ..." : "") + "\n"; };
+      smp("Added keys", diff.added); smp("Removed keys", diff.removed);
+      if (diff.addedCols && diff.addedCols.length) t += "New columns: " + diff.addedCols.join(", ") + "\n";
+      if (diff.droppedCols && diff.droppedCols.length) t += "Dropped columns: " + diff.droppedCols.join(", ") + "\n";
+      var o = (ctx && ctx.opts) || {};
+      if (o.ignore && o.ignore.length) t += "Ignored columns: " + o.ignore.join(", ") + "\n";
+      var nm = []; if (o.trim) nm.push("spaces"); if (o.ci) nm.push("letter case"); if (o.num) nm.push("number format"); if (nm.length) t += "Normalised: " + nm.join(", ") + "\n";
+      if (diff.dupRows && diff.dupRows.length) t += "Warning: " + diff.dupRows.length + " duplicate-key row(s) dropped; key may not be unique.\n";
+      return t;
+    }
+    function noticesView() {
+      var h = "";
+      var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
+      if (ctx && ctx.prev && ctx.curr && keyCols.length >= 1) {
+        if (!ctx.sugg) ctx.sugg = qeSuggestKeys(ctx.prev, ctx.curr, (ctx.curr.columns || []).filter(function (c) { return (ctx.prev.columns || []).indexOf(c) >= 0; }));
+        var top = ctx.sugg[0], cur = ctx.sugg.filter(function (x) { return x.col === keyCols.join(" + "); })[0];
+        var curScore = cur ? cur.score : 0;
+        if (top && top.col !== keyCols.join(" + ") && top.score >= 0.4 && top.score > curScore + 0.15) {
+          h += "<div style='background:#ecfdf5;border:1px solid #6ee7b7;border-left:4px solid #10b981;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#065f46;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+            + "<div style='flex:1;min-width:260px'><b>&#10024; Better key found: " + esc(top.col) + "</b><br>It is unique in " + Math.round(Math.min(top.uniqPrev, top.uniqCurr) * 100) + "% of rows and " + Math.round(top.overlap * 100) + "% of its values appear in both runs. "
+            + "Your current key <b>" + esc(keyCols[0]) + "</b> scores " + Math.round(curScore * 100) + "/100 (" + Math.round(top.score * 100) + "/100 for the suggestion).</div>"
+            + "<button id='dc-use-key' style='cursor:pointer;border:none;background:#059669;color:#fff;border-radius:8px;padding:9px 15px;font:700 12px system-ui'>Re-compare using " + esc(top.col) + "</button></div>";
+        } else if (top && top.col === keyCols.join(" + ")) {
+          h += "<div style='font-size:12px;color:#047857;margin-bottom:10px'>&#10003; Key looks good: " + esc(top.col) + " is unique and shared between both runs.</div>";
+        }
+      }
+      if (ctx && ctx.sugg && ctx.sugg.length > 1) {
+        var ties = ctx.sugg.filter(function (x) { return x.score >= 0.9 && x.score >= ctx.sugg[0].score - 0.02 && x.col !== keyCols.join(" + "); });
+        if (ties.length) {
+          h += "<div style='font-size:12px;color:#475569;margin-bottom:10px'>Other equally good keys (click to re-compare): ";
+          ties.slice(0, 5).forEach(function (x, ti) { h += "<button data-tie='" + ctx.sugg.indexOf(x) + "' style='cursor:pointer;margin:2px 4px 2px 0;border:1px solid #6ee7b7;background:#ecfdf5;color:#065f46;border-radius:999px;padding:3px 10px;font:600 11px system-ui'>" + esc(x.col) + "</button>"; });
+          h += "</div>";
+        }
+      }
+      // noise: columns that change in nearly EVERY changed row (timestamps, generated values) -> one click to ignore
+      if (ctx && diff.changed.length >= 5) {
+        var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
+        // Only suggest ignoring columns that LOOK generated (timestamp/hash/id-ish name or values);
+        // a real business column (e.g. Qty) that happens to change on every row must not be flagged.
+        var looksGenerated = function (f) {
+          if (/(date|time|_at$|stamp|modified|updated|created|hash|uuid|guid|key|(^|_)id(__c)?$|checksum|version|etl|load)/i.test(f)) return true;
+          var smp = diff.changed.slice(0, 20).map(function (ch) { return String(ch.after[f] == null ? "" : ch.after[f]); });
+          return smp.every(function (v) { return /^\d{4}-\d{2}-\d{2}[T ]/.test(v) || /^[0-9a-f]{16,}$/i.test(v); });
+        };
+        var noisy = Object.keys(cnt).filter(function (f) { return cnt[f] >= diff.changed.length * 0.9 && looksGenerated(f); });
+        if (noisy.length) {
+          h += "<div style='background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #64748b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;color:#334155;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+            + "<div style='flex:1;min-width:260px'><b>" + noisy.length + " column" + (noisy.length === 1 ? "" : "s") + " change in almost every changed row</b> (" + noisy.slice(0, 6).map(esc).join(", ") + (noisy.length > 6 ? ", …" : "") + "). These are often timestamps or generated values. Ignore them to see only the real changes.</div>"
+            + "<button id='dc-ign-noise' style='cursor:pointer;border:none;background:#475569;color:#fff;border-radius:8px;padding:9px 15px;font:700 12px system-ui'>Ignore these " + noisy.length + "</button></div>";
+          ctx._noisy = noisy;
+        }
+      }
+      var rk = findRekeyed();
+      if (rk.length) {
+        h += "<div style='background:#eff6ff;border:1px solid #93c5fd;border-left:4px solid #3b82f6;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#1e3a8a'>"
+          + "<b>&#128161; Insight: " + sh(rk.length, "record") + " look like the same record with a NEW key</b>, not truly new or gone. The rows below were removed and added with almost identical values, so the key (<b>" + esc(keyCols.join(" + ")) + "</b>) was regenerated. If that is expected, treat them as unchanged.";
+        rk.slice(0, 8).forEach(function (x) { h += "<div style='font:12px ui-monospace,Menlo,monospace;margin-top:4px;word-break:break-all'>" + esc(x.from) + " &rarr; " + esc(x.to) + " <span style='color:#64748b'>(" + x.pct + "% same)</span></div>"; });
+        if (rk.length > 8) h += "<div style='font-size:12px;margin-top:4px'>…and " + (rk.length - 8) + " more</div>";
+        h += "</div>";
+      }
+      var dupWarn = diff.warnings.filter(function (w) { return /duplicate key/.test(w); });
+      var tot = diff.added.length + diff.removed.length + diff.changed.length + diff.unchanged;
+      if (dupWarn.length || (diff.unchanged === 0 && diff.changed.length + diff.added.length + diff.removed.length > 0 && tot > 0)) {
+        h += "<div style='background:#fff7ed;border:1px solid #fdba74;border-left:4px solid #f97316;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#7c2d12'>"
+          + "<b>&#9888; Check the Key column first.</b> "
+          + (dupWarn.length ? "The key <b>" + esc(keyCols.join(" + ")) + "</b> is not unique (" + esc(dupWarn.join("; ")) + "), so only the first row of each repeat is compared. " : "")
+          + (diff.unchanged === 0 ? "<b>0 rows are identical</b>, which usually means every run produces different IDs, so this looks like two different data loads rather than a before/after of the same records. " : "")
+          + "Pick a column that is unique <u>and</u> stays the same between runs (for example a source/business ID, not a generated hash), then Compare again.</div>";
+      }
+      return h;
+    }
+    function paint() {
+      tabs.forEach(function (t) {
+        var on = t.id === active, b = tabEls[t.id];
+        b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
+        b.textContent = t.n === "" ? t.label : t.label + "  " + t.n;
+      });
+      body.innerHTML = noticesView() + (active === "changed" ? (view === "field" ? changedByField() : changedCards()) : active === "added" ? rowsTable(diff.added, "#10b981") : active === "dups" ? rowsTable(dupRowsFlat(), "#64748b") : rowsTable(diff.removed, "#ef4444"));
+      body.scrollTop = 0;
+      // group-by control: changed tab -> By row / By field ; added/removed -> any column
+      var opts = "";
+      if (active === "changed") opts = "<option value='row'" + (view === "row" ? " selected" : "") + ">Group: by row</option><option value='field'" + (view === "field" ? " selected" : "") + ">Group: by field</option>";
+      else { var src2 = (active === "added" ? diff.added : diff.removed)[0] || {}; opts = "<option value=''>Group: none</option>" + Object.keys(src2).map(function (c) { return "<option value=\"" + esc(c) + "\"" + (grp === c ? " selected" : "") + ">Group by " + esc(c) + "</option>"; }).join(""); }
+      grpSel.innerHTML = opts;
+      var uk = body.querySelector("#dc-use-key");
+      if (uk && ctx && typeof ctx.rerun === "function") uk.onclick = function () { modal.remove(); ctx.rerun(ctx.sugg[0].cols || [ctx.sugg[0].col]); };
+      body.querySelectorAll("[data-tie]").forEach(function (tb) { tb.onclick = function () { var x = ctx.sugg[parseInt(tb.getAttribute("data-tie"), 10)]; modal.remove(); ctx.rerun(x.cols || [x.col]); }; });
+      var ig = body.querySelector("#dc-ign-noise");
+      if (ig && ctx) ig.onclick = function () { var o = Object.assign({}, ctx.opts || {}); o.ignore = (o.ignore || []).concat(ctx._noisy || []); modal.remove(); ctx.rerun(keyCols, o); };
+      applyTips();
+    }
+    // Hover help on every control (set after each repaint so re-rendered notices get it too).
+    function applyTips() {
+      var T = {
+        "dc-diff-xl": "Download every difference as an Excel sheet: Type (Added/Removed/Changed), Key, Field, Before, After.",
+        "dc-diff-cp": "Copy a plain-text summary (counts, key, which fields changed, sample keys) to paste into a ticket or chat.",
+        "dc-use-key": "Re-run the comparison matching rows on the suggested key instead.",
+        "dc-ign-noise": "Hide these columns from the comparison (timestamps / generated values that change on every row) and re-run. Nothing is deleted; use Options > Reset to undo."
+      };
+      var tabT = { changed: "Rows found in BOTH files (same key) where at least one field differs.", added: "Rows whose key is only in the CURRENT file (new records).", removed: "Rows whose key is only in the PREVIOUS file (gone records).", dups: "Rows dropped because their key repeats. Only the first row per key is compared; a repeated key usually means the key is not unique enough." };
+      Object.keys(tabEls).forEach(function (id) { tabEls[id].title = tabT[id] || ""; });
+      box.querySelectorAll("[id]").forEach(function (e) { if (T[e.id] && !e.title) e.title = T[e.id]; });
+      closeX.title = "Close (click outside the window also closes it)";
+      search.title = "Filter the current tab by key, field name or value";
+      box.querySelectorAll("[data-tie]").forEach(function (e) { e.title = "Equally good key candidate. Click to re-run the comparison matching rows on it."; });
+      box.querySelectorAll("button").forEach(function (e) {
+        if (e.title) return; var t = (e.textContent || "").replace(/\s+/g, " ").trim();
+        if (/Wrap/.test(t)) e.title = "Wrap long values onto several lines instead of cutting them off with …";
+        else if (/Full screen/.test(t)) e.title = "Toggle full screen for this window";
+        else if (/Options/.test(t)) e.title = "Comparison options: ignore case/spaces/number format, choose columns to ignore";
+        else if (/Apply/.test(t)) e.title = "Re-run the comparison with these options";
+        else if (/Reset/.test(t)) e.title = "Clear all options and re-run";
+      });
+      box.querySelectorAll("select").forEach(function (e) { if (!e.title) e.title = "Group the rows: by row (one card per record) or by field (which columns changed most); on Added/Removed, group by any column value."; });
+      box.querySelectorAll("input[type=checkbox]").forEach(function (e) { if (!e.title) e.title = (e.parentNode && e.parentNode.textContent || "").trim(); });
+    }
+    paint();
 
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
@@ -13250,7 +14960,39 @@
     try { makeDraggable(box, hdr); } catch (e) {}
   }
 
-  // ── Snapshot/Compare in-tool help ("?") ───────────────────────────────────
+  // Snapshot HISTORY: every saved run of this query with row count + what changed vs the run before it (trend at a glance).
+  function openQeSnapHistory(snaps, current, keyCols) {
+    var esc = function (x) { return String(x == null ? "" : x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+    var old = document.getElementById("dc-qe-hist"); if (old) old.remove();
+    var seq = [{ label: "Current result (on screen)", ts: Date.now(), columns: current.columns, rows: current.rows, cur: true }].concat(snaps);   // newest first
+    var data = seq.map(function (sn, i) {
+      var prev = seq[i + 1], d = prev && keyCols.length ? qeDiffSnapshots(prev, sn, keyCols) : null;
+      return { sn: sn, n: (sn.rows || []).length, d: d, delta: prev ? (sn.rows || []).length - (prev.rows || []).length : null };
+    });
+    var mx = Math.max.apply(null, data.map(function (x) { return x.n; }).concat([1]));
+    var modal = document.createElement("div"); modal.id = "dc-qe-hist";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;font-family:-apple-system,'Segoe UI',sans-serif;";
+    var box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:12px;width:min(980px,96vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4)";
+    var h = "<div style='padding:14px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;justify-content:space-between;align-items:center'><div><div style='font:700 16px system-ui'>Snapshot history</div><div style='font:12px system-ui;opacity:.9'>Each run vs the run before it &middot; key: " + esc(keyCols.join(" + ") || "(none chosen)") + "</div></div><button id='dc-hist-x' title='Close' style='border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer'>&times;</button></div>";
+    h += "<div style='overflow:auto;padding:14px 18px'><table style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr style='text-align:left;color:#475569;font:700 11px system-ui;text-transform:uppercase'><th style='padding:6px 8px'>Run</th><th style='padding:6px 8px'>Rows</th><th style='padding:6px 8px;min-width:160px'>Size</th><th style='padding:6px 8px'>vs previous run</th></tr></thead><tbody>";
+    data.forEach(function (x, i) {
+      var when = x.sn.cur ? "" : (x.sn.ts ? new Date(x.sn.ts).toLocaleString() : "");
+      var chg = x.d ? "<span style='color:#047857;font-weight:700'>+" + x.d.added.length + " new</span> &nbsp; <span style='color:#b91c1c;font-weight:700'>&minus;" + x.d.removed.length + " gone</span> &nbsp; <span style='color:#b45309;font-weight:700'>~" + x.d.changed.length + " edited</span> &nbsp; <span style='color:#64748b'>" + x.d.unchanged + " same</span>" : "<span style='color:#94a3b8'>" + (keyCols.length ? "first run" : "pick a key to compare") + "</span>";
+      var dl = x.delta == null ? "" : " <span style='color:" + (x.delta > 0 ? "#047857" : x.delta < 0 ? "#b91c1c" : "#64748b") + ";font:600 11px system-ui'>" + (x.delta > 0 ? "+" : "") + x.delta + "</span>";
+      h += "<tr style='border-top:1px solid #eef2f6;background:" + (x.sn.cur ? "#f5f3ff" : "#fff") + "'><td style='padding:8px'><b>" + esc(x.sn.label || (x.sn.cur ? "" : "(unnamed)")) + "</b><div style='font-size:11px;color:#64748b'>" + esc(when) + "</div></td>"
+        + "<td style='padding:8px;font-weight:700'>" + x.n.toLocaleString() + dl + "</td>"
+        + "<td style='padding:8px'><div style='height:9px;border-radius:5px;background:#e2e8f0'><div style='height:9px;border-radius:5px;background:#6366f1;width:" + Math.max(2, Math.round(100 * x.n / mx)) + "%'></div></div></td>"
+        + "<td style='padding:8px'>" + chg + "</td></tr>";
+    });
+    h += "</tbody></table><div style='font-size:12px;color:#64748b;margin-top:10px'>Save a snapshot after each run to build this history. Use <b>Compare</b> on any two runs for the row-level detail.</div></div>";
+    box.innerHTML = h; modal.appendChild(box);
+    modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    box.querySelector("#dc-hist-x").onclick = function () { modal.remove(); };
+  }
+
+  // ── Snapshot/Compare in-tool help ("i") ───────────────────────────────────
   // A self-contained guide so a new user can understand + TEST the activation-history
   // compare without any external doc: what Compare diffs, how to choose the Key (incl.
   // the JSON/hash trap), what a "bucket" is, step-by-step day-1/2/3 test steps, and the
@@ -13260,64 +15002,58 @@
     var modal = document.createElement("div"); modal.id = "dc-qe-snap-help";
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
     var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(560px,94vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
+    box.style.cssText = "position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(640px,94vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
     var hdr = document.createElement("div");
     hdr.style.cssText = "padding:13px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
     hdr.innerHTML = "<div style='font:700 15px system-ui'>Snapshots &amp; Compare</div>";
     var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
     closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
-    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    closeX.title = "Close"; closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.55;";
     var code = function (t) { return "<code style='background:#eef2ff;color:#4338ca;border-radius:4px;padding:1px 5px;font:600 12px SF Mono,monospace'>" + t + "</code>"; };
     var det = "margin:10px 0 0;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;background:#f8fafc;";
     var sum = "cursor:pointer;font:700 12px system-ui;color:#4338ca;outline:none;";
+    var sec = function (t) { return "<div style='font:700 12px system-ui;margin:14px 0 5px'>" + t + "</div>"; };
     body.innerHTML =
-      // ── the crisp part: 3 lines everyone reads ──
-      // ── WHY this exists: the problem it solves, in plain words ──
-      "<div style='font-size:13px'><b>Why use this?</b> A query only shows you <b>today's</b> result. If you run the same query again later, there's no built-in way to see <b>what changed</b>. This lets you save a result and compare a later run against it, so you can spot exactly what was added, removed, or changed — without eyeballing two exports.</div>"
+      "<div><b>What is this?</b> It shows you <b>what changed</b> between two versions of the same data: which rows are <span style='color:#059669'><b>new</b></span>, which are <span style='color:#dc2626'><b>gone</b></span>, and which were <span style='color:#b45309'><b>edited</b></span> (and exactly which fields). Use it for segment membership, records before/after a job, data-quality checks, or any query result that changes over time.</div>"
 
-      + "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin:10px 0'>"
-      + "Works for <b>any query</b> — any object or table. Handy whenever a result changes over time: audience/segment membership, records before vs after a job, data-quality checks, row counts, config, and so on. If you only ever need the latest result, you can ignore these buttons.</div>"
+      + sec("Two ways to use it")
+      + "<div style='display:flex;gap:10px;flex-wrap:wrap'>"
+      + "<div style='flex:1;min-width:210px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:8px;padding:9px 12px'><b>&#8644; Compare CSVs</b> <span style='color:#4338ca;font-size:11px'>(recommended)</span><br>Pick any two CSV files, older and newer. No row limit. Works for files from teammates or other orgs. Also in the Data Explorer menu.</div>"
+      + "<div style='flex:1;min-width:210px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:8px;padding:9px 12px'><b>Snapshots</b><br>Save a query result, run the same query later, then Compare the screen against the saved copy. Handy for small results (first 2,000 rows).</div></div>"
 
-      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>How it works</div>"
-      + "<div style='font-size:13px'><b>Compare</b> diffs the rows <b>on screen now</b> against a <b>saved snapshot</b> → "
-      + "<span style='color:#059669'>+added</span> / <span style='color:#dc2626'>−removed</span> / <span style='color:#b45309'>~changed</span>. "
-      + "The current result doesn't need saving — just run the query. Save only to keep a run for later.</div>"
+      + sec("In 3 steps (Compare CSVs)")
+      + "<ol style='margin:0;padding-left:20px'>"
+      + "<li>Download the CSV of each run (<b>Fetch &amp; Export</b> or <b>Download CSV</b>).</li>"
+      + "<li>Click <b>Compare CSVs</b> and choose the <b>older</b> file, then the <b>newer</b> one.</li>"
+      + "<li>Click <b>Compare</b>. The key is picked for you; change it only if the result looks wrong.</li></ol>"
 
       + "<div style='background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:9px 12px;margin:12px 0;color:#166534'>"
-      + "<b>Key = how rows are matched between runs.</b> Pick a column with a <b>unique value for each row that stays the same over time</b> — usually an <b>ID</b> or <b>primary-key</b> column.<br>"
-      + "<span style='color:#92400e'>✗ Avoid columns that repeat across rows (like a status or type) or that change when the record changes (like a JSON or hash value) — the tool warns you if your choice looks risky.</span></div>"
+      + "<b>The Key matches a row in the old file to the same row in the new file.</b> It is auto-detected: the best column is one whose value is <b>unique per row and does not change between runs</b> (an ID). If one column is not unique, the tool tries a <b>combination</b> (like OrderId + LineNo).<br>"
+      + "<span style='color:#92400e'>&#10007; Avoid generated values that differ on every run (hashes, new random IDs) and columns that repeat (status, type). If the key changes when a row is edited, that row looks like it was removed and then added instead of changed. The tool warns you and suggests a better key with one click.</span></div>"
 
-      + "<div style='font:700 12px system-ui;margin:14px 0 5px'>Test in 3 steps</div>"
-      + "<ol style='margin:0;padding-left:20px'>"
-      + "<li>Run a query → <b>Save snapshot</b> (name it <code>day1</code>).</li>"
-      + "<li>Later / next run: run the <b>same</b> query again.</li>"
-      + "<li>Pick <code>day1</code> → <b>Compare</b>. Done.</li></ol>"
-      + "<div style='font-size:11px;color:#64748b;margin-top:5px'>Want to see it work right away? Save a snapshot, change one value in your data, run the same query again, then Compare — that row shows up under ~changed.</div>"
+      + sec("Reading the result")
+      + "<ul style='margin:0;padding-left:18px'>"
+      + "<li><b>Changed</b>: same key in both files, but a field differs. Shows only the fields that differ, before and after.</li>"
+      + "<li><b>Added</b>: key only in the newer file. <b>Removed</b>: key only in the older file.</li>"
+      + "<li><b>Duplicates</b> (only if present): rows dropped because their key repeats. This means the key is not unique enough.</li>"
+      + "<li>Use <b>Group</b> to cluster rows (by row, by field, or by any column), <b>Filter</b> to search, <b>Wrap</b> for long text, and <b>Full screen</b> for more room.</li>"
+      + "<li><b>Excel</b> downloads every difference. <b>Copy summary</b> gives a short text you can paste into a ticket or chat.</li></ul>"
 
-      // ── everything else: collapsed, read only if curious ──
-      + "<details style='" + det + "'><summary style='" + sum + "'>Why don't I see my saved snapshot?</summary>"
-      + "<div style='margin-top:7px'>Each snapshot is tied to the <b>query you ran when you saved it</b>. If you change the query in any way — different columns, a different filter, a different row limit, or a different table — it counts as a <b>new query</b>, and only snapshots from that same query appear.<br><br>"
-      + "<b>To compare over time, run the same query each time</b> (same text) and save a snapshot on each run.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Too many changes? Use Options</summary>"
+      + "<div style='margin-top:7px'>Some columns change on every row (a last-modified time, a load timestamp). The tool spots them and offers <b>Ignore these</b> in one click. In <b>Options</b> you can also ignore columns yourself and treat these as equal: <b>upper/lower case</b>, <b>extra spaces</b>, and <b>1 vs 1.0</b>. Nothing is deleted; <b>Reset</b> undoes it. Columns that exist in only one file are listed as new or dropped and do not mark every row as changed.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>How to choose a good Key</summary>"
-      + "<div style='margin-top:7px'>A good key uniquely identifies a row <b>and</b> doesn't change over time.<br><br>"
-      + "If you pick a column whose value changes when the record is edited (such as a JSON or hash value), an edited row will look like it was <b>removed and then added</b>, instead of <b>changed</b>. Keep those as normal columns — then their change shows up correctly under ~changed.<br><br>"
-      + "If two rows share the same key value, the tool keeps the first and warns you (“duplicate key — first kept”), so pick a column that's truly unique.</div></details>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Snapshots: save, compare, history</summary>"
+      + "<div style='margin-top:7px'>Run a query, click <b>Save snapshot</b> and name it (for example <code>day1</code>). Next time, run the <b>same</b> query, pick <code>day1</code> and click <b>Compare</b>. Up to 5 snapshots are kept per query, newest first. <b>History</b> lists them with row counts and how many rows were added, removed or edited since the previous run.<br><br>"
+      + "<b>Don't see your snapshot?</b> A snapshot belongs to the exact query it was saved from. Change the columns, filter, limit or table and it counts as a new query. Run the same query text each time. Snapshots live in <b>this browser</b> only and are limited to about 5MB; for bigger results use Compare CSVs.</div></details>"
 
-      + "<details style='" + det + "'><summary style='" + sum + "'>Keeping several snapshots &amp; comparing</summary>"
-      + "<div style='margin-top:7px'>You can save a snapshot on each run and give each a name (up to 5 are kept per query, newest first). Compare looks at <b>two at a time</b>: the result on screen now vs the <b>one</b> snapshot you pick — so you can compare today against yesterday, or against any earlier saved run.</div></details>"
-
-      + "<details style='" + det + "'><summary style='" + sum + "'>Comparing large results — use Compare CSVs</summary>"
-      + "<div style='margin-top:7px'>Snapshots and on-screen results hold up to the first <b>2,000 rows</b>, and browser storage caps a snapshot at about 5MB. For bigger results, click <b>Download CSV</b> on each run (it saves <b>all</b> rows), then use <b>Compare CSVs</b> to diff any two files with the same added/removed/changed logic — no row limit, and the files work across machines or teammates.</div></details>"
-
-      + "<details style='" + det + "'><summary style='" + sum + "'>Edge cases &amp; limits</summary>"
+      + "<details style='" + det + "'><summary style='" + sum + "'>Limits &amp; warnings</summary>"
       + "<ul style='margin:7px 0 0;padding-left:18px'>"
-      + "<li>No key → warns, no diff. Duplicate keys → warns “first kept”.</li>"
-      + "<li>Columns differ between runs → warns which were added/removed.</li>"
-      + "<li>Too big (&gt;~5MB) → tells you the size, doesn't half-save; use Download CSV.</li>"
-      + "<li>No LIMIT → saves all fetched rows (≤49,999); check the “saved N rows” count.</li>"
-      + "<li>Stored in <b>this browser</b> only; clearing browser data removes them.</li></ul></details>";
+      + "<li>Files must have a header row and share at least one column name.</li>"
+      + "<li>If the key repeats, only the first row per key is compared and you are warned.</li>"
+      + "<li>A 150,000-row pair opened in under a second in testing; the screen shows the first 300 to 500 rows per tab, while Excel has all of them.</li>"
+      + "<li>JSON columns show only the paths that differ, not the whole value.</li>"
+      + "<li>Nothing is uploaded: files are read in your browser only.</li></ul></details>";
     box.appendChild(body);
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
@@ -13326,7 +15062,7 @@
   }
 
   // ── Compare two CSV files ─────────────────────────────────────────────────
-  // Diff ANY two CSVs (e.g. two "Download CSV" exports from different runs) with the
+  // Diff ANY two CSVs with the
   // same key + added/removed/changed engine the snapshot compare uses. No row cap and
   // no browser-storage limit — this is the complete-data path for big results, and it
   // works for files from any query/machine/teammate. Reuses qeDiffSnapshots +
@@ -13342,7 +15078,7 @@
     hdr.innerHTML = "<div style='font:700 15px system-ui'>Compare two CSV files</div>";
     var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
     closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
-    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    closeX.title = "Close"; closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.5;";
     box.appendChild(body);
 
@@ -13352,18 +15088,18 @@
     };
     body.innerHTML =
       "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin-bottom:12px'>"
-      + "Pick two CSV files (for example, two <b>Download CSV</b> exports of the same query from different runs). This shows what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span>, and <span style='color:#b45309'>changed</span>. No row limit — good for large results.</div>"
-      + mkFileRow("Older file", "(the earlier run)")
-      + "<input type='file' id='dc-csv-old' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + "Choose an <b>older</b> and a <b>newer</b> CSV (for example, two exports of the same query). You will see what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span> and <span style='color:#b45309'>changed</span>. The key is picked for you. Files stay in your browser; nothing is uploaded.</div>"
+      + mkFileRow("1. Older file", "(the earlier run)")
+      + "<input type='file' id='dc-csv-old' title='Choose the OLDER export (the baseline, before)' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-old-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
-      + mkFileRow("Newer file", "(the later run)")
-      + "<input type='file' id='dc-csv-new' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + mkFileRow("2. Newer file", "(the later run)")
+      + "<input type='file' id='dc-csv-new' title='Choose the NEWER export (after) to compare against the older one' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-new-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
       + "<div style='display:flex;align-items:center;gap:6px;margin:4px 0 2px'><span style='font:700 12px system-ui'>Key column:</span>"
-      + "<select id='dc-csv-key' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
-      + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>The column that uniquely identifies a row (usually an ID). Rows are matched by this between the two files.</div>"
+      + "<select id='dc-csv-key' title='Column used to match a row in the old file with the same row in the new file. Must be unique and unchanged between runs. Auto-picked when possible.' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
+      + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>Matches each row in the old file to the same row in the new file. Best: a unique ID that does not change between runs. Auto-picked when possible; you can change it.</div>"
       + "<div id='dc-csv-msg' style='font-size:11px;color:#b45309;min-height:14px;margin-bottom:8px'></div>"
-      + "<button id='dc-csv-go' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
+      + "<button id='dc-csv-go' title='Compare the two files: shows Changed / Added / Removed rows' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
 
     var keySel = body.querySelector("#dc-csv-key");
     var goBtn = body.querySelector("#dc-csv-go");
@@ -13378,6 +15114,11 @@
       keySel.disabled = false;
       keySel.innerHTML = common.map(function (c) { return "<option value='" + String(c).replace(/'/g, "") + "'>" + String(c).replace(/</g, "") + "</option>"; }).join("");
       var def = common.find(function (c) { return /(^|_)id(__c)?$/i.test(c) || /primary/i.test(c); }); if (def) keySel.value = def;
+      try {
+        var sg = qeSuggestKeys(snapOld, snapNew, common);
+        if (sg[0] && sg[0].score >= 0.4) { keySel.value = sg[0].col; msg.style.color = "#047857"; msg.textContent = "\u2728 Auto-detected key: " + sg[0].col + " (unique " + Math.round(Math.min(sg[0].uniqPrev, sg[0].uniqCurr) * 100) + "%, " + Math.round(sg[0].overlap * 100) + "% shared between files). Change it if you know better."; }
+        else { msg.style.color = "#b45309"; msg.textContent = "\u26A0 No column is both unique and shared between the two files, so no reliable key was found. Pick the closest ID column or expect noisy results."; }
+      } catch (e) {}
       goBtn.disabled = false; goBtn.style.opacity = "1";
     }
     function loadFile(input, infoEl, assign) {
@@ -13404,7 +15145,9 @@
       // reuse the SAME diff engine + results modal as snapshot compare
       var d = qeDiffSnapshots(snapOld, snapNew, keyCols);
       // label the diff header as the older file (prevSnap carries .label/.ts; use filename)
-      openQeDiffModal(d, keyCols, { label: "older CSV", columns: snapOld.columns });
+      var pSnap = { label: "older CSV", columns: snapOld.columns };
+      var cx = { prev: snapOld, curr: snapNew }; cx.rerun = function (col, o) { var ks = Array.isArray(col) ? col : [col]; cx.opts = o || cx.opts; var d2 = qeDiffSnapshots(snapOld, snapNew, ks, cx.opts); openQeDiffModal(d2, ks, pSnap, cx); };
+      openQeDiffModal(d, keyCols, pSnap, cx);
     };
 
     modal.appendChild(box);
@@ -13604,7 +15347,7 @@
     templatesBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 2px 8px rgba(217,119,6,.3);transition:transform .1s;";
     templatesBtn.onmouseenter = () => { templatesBtn.style.transform = "scale(1.03)"; templatesBtn.style.boxShadow = "0 4px 16px rgba(217,119,6,.4)"; };
     templatesBtn.onmouseleave = () => { templatesBtn.style.transform = "scale(1)"; templatesBtn.style.boxShadow = "0 3px 12px rgba(217,119,6,.3)"; };
-    templatesBtn.onclick = function () { openTemplatesPanel(); };
+    templatesBtn.onclick = function () { openGuidedChecks(); };
 
     // Streaming full-table export (no 500K cap) — only offered when the browser supports
     // File System Access streaming (Chromium) so we can write to disk without buffering the
@@ -13621,7 +15364,24 @@
     btnRow.appendChild(runBtn);
     btnRow.appendChild(streamBtn);
     btnRow.appendChild(templatesBtn);
-    btnRow.appendChild(downloadBtn);
+    const cmpCsvBtn = document.createElement("button");
+    cmpCsvBtn.textContent = "\u21C4 Compare CSVs";
+    cmpCsvBtn.title = "Compare two downloaded CSV files (older vs newer): see added / removed / changed rows. No query needed.";
+    cmpCsvBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    cmpCsvBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
+    btnRow.appendChild(cmpCsvBtn);
+    const xlsxMainBtn = document.createElement("button");
+    xlsxMainBtn.textContent = "⬇ Download Excel";
+    xlsxMainBtn.title = "Formatted Excel: bold coloured header, auto-sized columns, JSON blobs split into separate columns, numbers as numbers.";
+    xlsxMainBtn.style.cssText = downloadBtn.style.cssText.replace(/background:[^;]+;?/, "background:linear-gradient(135deg,#16a34a,#15803d);") + "display:none;margin-left:6px;";
+    xlsxMainBtn.onclick = () => {
+      if (!_lastResult || !_lastResult.data || !_lastResult.data.length) return;
+      var fnI = document.getElementById("dc-qe-filename");
+      var nm = ((fnI && fnI.value.trim()) || _lastResult.filename || "results").replace(/\.(csv|xlsx)$/i, "");
+      downloadRowsXlsx(nm, _lastResult.columns || [], _lastResult.data, xlsxMainBtn);
+    };
+    btnRow.appendChild(downloadBtn); btnRow.appendChild(xlsxMainBtn);
+    new MutationObserver(function () { var d = downloadBtn.style.display === "none" ? "none" : "inline-block"; if (xlsxMainBtn.style.display !== d) xlsxMainBtn.style.display = d; }).observe(downloadBtn, { attributes: true, attributeFilter: ["style"] });
     btnRow.appendChild(viewBtn);
     btnRow.appendChild(infoBtn);
 
@@ -13719,6 +15479,12 @@
     // stream's progress callback repaints every batch → the two cards flicker and clobber each
     // other, and the Count/Fetch result is unreadable until the stream ends. Dim them too so
     // it's visually clear they're paused. Re-enabled on every terminal path (done/cancel/error).
+    // Count, Fetch & Export and Export ALL each own their engine and state but share ONE result card, so only
+    // one of them may run at a time: while Count or Fetch runs, Export ALL is locked (setExportBusy does the
+    // reverse). Pure UI lock — no data or flags are shared.
+    function lockExportAll(on) {
+      try { if (streamBtn) { streamBtn.disabled = !!on; streamBtn.style.opacity = on ? "0.45" : "1"; streamBtn.style.pointerEvents = on ? "none" : ""; } } catch (e) {}
+    }
     function setExportBusy(on) {
       try {
         [countBtn, runBtn].forEach(function (b) {
@@ -13750,7 +15516,7 @@
         cardBody.innerHTML = ""
           + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Exporting to your file…</span></div>"
           + "<div style='margin:8px 0;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;'><div style='height:100%;background:linear-gradient(90deg,#0ea5e9,#0369a1);width:100%;animation:dc-indeterminate 1.5s infinite;'></div></div>"
-          + "<div style='color:#64748b;font-size:11px;'><b>" + (s.rows || 0).toLocaleString() + "</b> rows written so far… <span style='color:#94a3b8;'>(keeps running if you close this)</span></div>"
+          + "<div style='color:#64748b;font-size:11px;'><b>" + (s.rows || 0).toLocaleString() + "</b> rows written so far" + (s.files ? " (file " + s.files + ")" : "") + "… <span style='color:#94a3b8;'>(keeps running if you close this)</span></div>"
           + "<style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes dc-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}</style>";
         if (!streamCancelBtn) streamCancelBtn = makeStreamCancelBtn();
         cardBody.appendChild(streamCancelBtn);
@@ -13801,16 +15567,8 @@
     function extractTableName(sql) {
       var m = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
       if (!m) return "query-results";
-      var raw = m[1].replace(/"/g, "");
-      // TDI_Quote__dlm → Quote, TDI_TDI_GI_Unified__dlm → GI_Unified, RH_Profile__dll → Profile
-      var cleaned = raw
-        .replace(/__dlm$|__dll$/i, "")
-        .replace(/^[A-Z0-9]{2,6}_/, "");
-      // If doubled prefix (TDI_TDI_...), strip the second one too
-      if (/^[A-Z0-9]{2,6}_/.test(cleaned) && raw.indexOf(cleaned) > 0) {
-        cleaned = cleaned.replace(/^[A-Z0-9]{2,6}_/, "");
-      }
-      return cleaned || raw;
+      // The real table name exactly as written in the query - never trimmed by assumed prefixes.
+      return m[1].replace(/"/g, "");
     }
 
     function todayStr() {
@@ -13927,6 +15685,17 @@
     // AND it reliably reads the count whether the row comes back as an array [n] or an
     // object {col:n}. Resolves { count, ok }; ok=false = value genuinely not in response.
     // Reuses the read-only session (_auraSniff) + dataspace candidates, same as fetch.
+    // A plain "SELECT * FROM <table> [WHERE ...]" is counted directly as SELECT COUNT(*) FROM <table> [WHERE ...]
+    // (what Salesforce's own editor does, a few seconds on millions of rows). Wrapping it in a subquery
+    // forces Data Cloud to build the whole result first and does not finish in time on big tables.
+    // Anything with JOIN / GROUP BY / ORDER BY / LIMIT / subquery / UNION keeps the safe wrapper.
+    function qeDirectCountSql(inner) {
+      var m = /^\s*SELECT\s+\*\s+FROM\s+("[^"]+"|[A-Za-z0-9_]+)(\s+WHERE\s+[\s\S]+)?$/i.exec(String(inner || ""));
+      if (!m) return null;
+      var w = m[2] || "";
+      if (/\b(JOIN|GROUP\s+BY|ORDER\s+BY|LIMIT|OFFSET|UNION|HAVING|INTERSECT|EXCEPT|SELECT)\b|[;()]/i.test(w)) return null;
+      return "SELECT COUNT(*) AS TotalRows FROM " + m[1] + w;
+    }
     function runQeCount(countSql, ds) {
       return new Promise(function (resolve, reject) {
         // Extension path: the documented endpoint returns clean array rows, so the shared
@@ -13946,8 +15715,7 @@
           var fm = countSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
-        if (cands.indexOf("default") < 0) cands.push("default");
-        var MAX_POLL = 1;   // one quick retry; if the COUNT(*) wrapper still isn't ready,
+        var MAX_POLL = 4;   // a few retries (~6s total) — a big table's COUNT can take several seconds; if the COUNT(*) wrapper still isn't ready,
                             // the caller falls back to Fetch-style row counting (which works).
         function tryDs(i, attempt) {
           attempt = attempt || 0;
@@ -13961,7 +15729,7 @@
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
             .then(function (r) { return r.text(); }).then(function (txt) {
               if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
-              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("Unexpected non-JSON reply from Salesforce (data space \"" + (space || "default") + "\"): " + String(txt || "").replace(/\s+/g, " ").slice(0, 140) + " — if this keeps happening, click SF's Run Query button once, then retry.")); return; }
               var a = j && j.actions && j.actions[0];
               if (!a || a.state !== "SUCCESS") {
                 var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
@@ -13970,7 +15738,7 @@
                 if (/denied authorization|not authorized/i.test(cleanErr) && i + 1 < cands.length) { tryDs(i + 1, 0); return; }
                 reject(new Error(cleanErr || "Count query failed")); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, countSql);
               var rv = a.returnValue || {};
               var cnt = null;
               // The count value lives INSIDE the single result row. Do NOT read a
@@ -14030,7 +15798,123 @@
     // rowsProcessed }. In EXTENSION mode the documented endpoint doesn't expose
     // rowsProcessed, so it defers to the shared exportPaginatedCsv (rowsProcessed=null),
     // exactly like the Count path does.
+    // Make the editor text safe to send: drop -- and /* */ comments (string-aware) and trailing semicolons.
+    // Without this a trailing ";" defeated the "strip trailing LIMIT" step, so the batch SQL became
+    // "... LIMIT 10; LIMIT 10" and a leading comment line was sent along with the query.
+    // Query Editor data space: prefer the space Salesforce's OWN Run Query just used (queryDCSql param) — that run is the
+    // proof the user sees rows; fall back to the picker, then candidates. Fixes "SF shows rows, our tool shows 0" when the
+    // picker read is empty/stale (the workspace header is plain text, not a combobox).
+    function qeResolveDs(sql) {
+      var sniffed = (typeof _auraSniff !== "undefined" && _auraSniff && _auraSniff.dsLastObj == null && _auraSniff.dataSpace) ? String(_auraSniff.dataSpace) : "";
+      if (sniffed) return sniffed;
+      var ds = ""; try { ds = qeWorkspaceSpaceExact(); } catch (e) { ds = ""; }   // exact API name of THIS workspace (DataQueryWorkspace.DataSpace), never derived from its label
+      if (!ds) ds = readPageDataSpace();
+      if (!ds) {
+        var fm = String(sql || "").match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
+        var t = fm ? fm[1].replace(/"/g, "") : "";
+        var c = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(t) : [""];
+        ds = c[0] || "";
+      }
+      return ds;
+    }
+    // Data space for a SQL statement, preferring the space Salesforce ITSELF used for the first table
+    // named in the query (_dsByObject, learned from the page's own queries), then the page-wide
+    // space. DLOs often live in the default space while DMOs live in a named one, so one
+    // page-wide value ("TD Insurance") can make a valid table look like it "does not exist".
+    function qeDsForSql(sql) {
+      try {
+        var fm = String(sql || "").match(/\bFROM\s+\(?\s*"?([A-Za-z0-9_]+)"?/i), t = fm ? fm[1] : "";
+        if (t && typeof _dsByObject !== "undefined" && _dsByObject[t] != null && !_dsGuess[t]) return _dsByObject[t];
+      } catch (e) {}
+      return qeResolveDs(sql);
+    }
+    // Every data space this page session has actually seen (never invented), best guess first.
+    // The Query Editor workspace header shows "Data Space" + its LABEL (e.g. "TD Insurance") as plain text. The API name
+    // isn't shown, so these are only CANDIDATES to try: a name is used only if the table is really found with it.
+    function qeWorkspaceSpaceLabel() {
+      var lab = "";
+      try {
+        eachElement(document, function (el) {
+          if (lab || el.children.length) return;
+          if (!/^\s*Data\s*Space\s*:?\s*$/i.test(el.textContent || "")) return;
+          var par = el.parentElement, tx = "";
+          for (var d = 0; d < 3 && par && !tx; d++, par = par.parentElement) {
+            tx = String(par.innerText || par.textContent || "").replace(/Data\s*Space\s*:?/i, "").replace(/\s+/g, " ").trim();
+            if (tx.length > 60) tx = "";
+          }
+          if (tx && /^[\w .&'-]+$/.test(tx)) lab = tx;
+        });
+      } catch (e) {}
+      return lab;
+    }
+    // EXACT API name of the workspace's data space (no guessing): (1) read it off the header's own components - walk up from the
+    // "Data Space" label through shadow hosts and look for a { label:"TD Insurance", name|apiName|value:"<api>" } pair or a
+    // dataSpace*-named string property; (2) the label->name pair Salesforce itself sent in a response. "" if neither exists.
+    var _dsDiag = { label: "", hosts: [] };
+    function qeWorkspaceSpaceExact() {
+      var label = qeWorkspaceSpaceLabel(), found = "";
+      _dsDiag = { label: label, hosts: [], rid: "", ridErr: _wsSpaceErr };
+      try { _dsDiag.rid = qeWorkspaceRecordId(); found = qeCachedWorkspaceSpace(); } catch (e) {}
+      if (found) return found;
+      if (!label) return "";
+      function scan(v, depth, seen) {
+        if (found || !v || typeof v !== "object" || depth > 3 || seen.indexOf(v) >= 0) return; seen.push(v);
+        if (Array.isArray(v)) { for (var i = 0; i < v.length && i < 80; i++) scan(v[i], depth + 1, seen); return; }
+        var lab = v.label || v.displayName || v.title, nm = v.name || v.apiName || v.developerName || v.dataSpaceName || v.value;
+        if (lab === label && typeof nm === "string" && /^[A-Za-z0-9_]{1,80}$/.test(nm) && nm !== label) { found = nm; return; }
+        var ks = []; try { ks = Object.keys(v); } catch (e) {}
+        for (var k = 0; k < ks.length && k < 60 && !found; k++) { var x; try { x = v[ks[k]]; } catch (e) { continue; } if (x && typeof x === "object") scan(x, depth + 1, seen); }
+      }
+      try {
+        eachElement(document, function (el) {
+          if (found || el.children.length || !/^\s*Data\s*Space\s*:?\s*$/i.test(el.textContent || "")) return;
+          var cur = el;
+          for (var up = 0; up < 40 && cur && !found; up++) {
+            var names = ["dataSpace", "dataspace", "selectedDataSpace", "dataSpaceName", "dataSpaceApiName", "selectedDataSpaceName", "workspace", "workspaceData", "record", "value", "data"];
+            // LWC public (@api) properties are accessors on the element's PROTOTYPE chain, not own keys: list those too.
+            var own = [], pr = cur, hops = 0;
+            try { while (pr && pr !== HTMLElement.prototype && pr !== Element.prototype && pr !== Object.prototype && hops++ < 6) { own = own.concat(Object.getOwnPropertyNames(pr)); pr = Object.getPrototypeOf(pr); } } catch (e) {}
+            _dsDiag.hosts.push(String(cur.tagName || "").toLowerCase() + "(" + own.filter(function (n) { return /space|workspace|label|name/i.test(n); }).slice(0, 6).join(",") + ")");
+            names.concat(own).forEach(function (pn) {
+              if (found) return; var pv; try { pv = cur[pn]; } catch (e) { return; }
+              if (typeof pv === "string") { if (/data.?space/i.test(pn) && /^[A-Za-z0-9_]{1,80}$/.test(pv) && pv !== label && !_badDsNames.test(pv)) found = pv; }
+              else if (pv && typeof pv === "object") scan(pv, 0, []);
+            });
+            var nx = cur.parentElement; if (!nx) { try { var rn = cur.getRootNode && cur.getRootNode(); nx = rn && rn.host ? rn.host : null; } catch (e) { nx = null; } }
+            cur = nx;
+          }
+        });
+      } catch (e) {}
+      if (!found && _dsLabelToName[label]) found = _dsLabelToName[label];
+      return found;
+    }
+    function qeKnownSpaces(first) {
+      var seen = {}, out = [];
+      function add(x) { if (x == null) return; x = String(x); if (!seen[x]) { seen[x] = 1; out.push(x); } }
+      add(first);
+      try { var wx = qeWorkspaceSpaceExact(); if (wx) { seen = {}; out = []; add(wx); add(first); } } catch (e) {}
+      try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
+      try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
+      try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}
+      add(""); add("default");
+      return out;
+    }
+    function qeCleanForRun(sql) {
+      var s0 = String(sql || ""), out = "", i = 0, n = s0.length, inStr = false;
+      while (i < n) {
+        var ch = s0[i], nx = s0[i + 1];
+        if (inStr) { out += ch; if (ch === "'") { if (nx === "'") { out += nx; i += 2; continue; } inStr = false; } i++; continue; }
+        if (ch === "'") { inStr = true; out += ch; i++; continue; }
+        if (ch === "-" && nx === "-") { while (i < n && s0[i] !== "\n") i++; continue; }
+        if (ch === "/" && nx === "*") { i += 2; while (i < n && !(s0[i] === "*" && s0[i + 1] === "/")) i++; i += 2; continue; }
+        if (/[\u200B-\u200D\uFEFF\u2060]/.test(ch)) { i++; continue; }   // zero-width / BOM chars pasted from docs/chat: invisible, but break the parser
+        if (/\s/.test(ch)) { if (out && !/\s$/.test(out)) out += " "; i++; continue; }   // collapse tabs/newlines/nbsp/runs of spaces (outside strings only)
+        out += ch; i++;
+      }
+      return out.replace(/[\s;]+$/, "").replace(/^\s+/, "");
+    }
     function qeFetchExport(sql, ds, onProgress, isCancelled) {
+      sql = qeCleanForRun(sql);
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       // ── Extension path: QE-PRIVATE cursor paging (fully independent of Data Explorer) ──
       // Previously this reused the SHARED exportPaginatedCsv, coupling Query Editor to Data
@@ -14045,7 +15929,7 @@
           var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
           var cap = ul > 0 ? Math.min(ul, QE_HARD) : QE_HARD;
           var parts = [], cols = [], colTypes = {}, preview = [], got = 0;
-          var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+          var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
           function append(data, metadata) {
             if (!cols.length && metadata && metadata.length) {
               cols = metadata.map(function (m) { return m && m.name; });
@@ -14090,7 +15974,7 @@
         // Query Editor and Data Explorer are kept fully independent (user requirement): this
         // path owns its own page size + default cap so changing one feature can't affect the
         // other. The /aura endpoint caps each RESPONSE by payload (~100k cells), so a page of
-        // "49999" actually returns ~rows=100000/columns (e.g. 3k at 35 cols) — paging via
+        // "49999" actually returns ~rows=100000/columns — paging via
         // OFFSET is what gets the rest (proven working: __dcProbeOffset showed 5,993 distinct
         // rows over 3 offset batches). We ASK for a big LIMIT but let the server decide the
         // real page size, and keep paging on the ACTUAL rows returned.
@@ -14100,7 +15984,7 @@
                                          // so we stop at a sane cap + warn, rather than grinding
                                          // through 1.7M rows and a surprise credit bill.
         var QE_HARD_MAX = (typeof DC_MAX_TOTAL_EXPORT === "number") ? DC_MAX_TOTAL_EXPORT : 500000;
-        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var csvOut = [], cols2 = [], colTypes2 = {}, totalFetched = 0, rowData = [], rowsProcessed = 0, sawRp = false;
         var cappedAtDefault = false;     // did we stop at QE_DEFAULT_CAP with more available?
 
@@ -14117,7 +16001,6 @@
           var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
           dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); });
         }
-        if (cands.indexOf("default") < 0) cands.push("default");
         var dsi = 0;
         // Async-materialization poll. Data Cloud returns state:"SUCCESS" with an EMPTY
         // dataRows while the query is still running (completionStatus Running/Unspecified/
@@ -14133,7 +16016,7 @@
           var blob = new Blob(csvOut, { type: "text/csv" });
           var url = URL.createObjectURL(blob);
           // MEMORY: the Blob is an independent snapshot of the CSV, so the big line array is
-          // now redundant — drop it immediately so a large export (e.g. 285k rows) doesn't hold
+          // now redundant — drop it immediately so a large export doesn't hold
           // the same data TWICE in RAM. This is the main thing that kept the tab (esp. on VDI,
           // which is RAM/render-constrained) smooth during/after a big Fetch & Export. The
           // 2,000-row `rowData` preview is intentionally kept (View Results needs it; it's tiny).
@@ -14158,7 +16041,7 @@
           fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
             .then(function (r) { return r.text(); }).then(function (txt) {
               if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first, then retry.")); return; }
-              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — click SF's Run Query button first, then retry.")); return; }
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("Unexpected non-JSON reply from Salesforce (data space \"" + (space || "default") + "\"): " + String(txt || "").replace(/\s+/g, " ").slice(0, 140) + " — if this keeps happening, click SF's Run Query button once, then retry.")); return; }
               var a = j && j.actions && j.actions[0];
               if (!a || a.state !== "SUCCESS") {
                 var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
@@ -14172,7 +16055,7 @@
                 else if (/syntax error|42601/i.test(cleanErr)) hint = " — check your SQL syntax.";
                 reject(new Error(cleanErr + hint)); return;
               }
-              if (space) _auraSniff.dataSpace = space;
+              dcLearnSpace(space, batchSql);
               var rv = a.returnValue || {};
               var dr = rv.dataRows || rv.rows || rv.data || [];
               var meta = rv.metadata || [];
@@ -14220,7 +16103,7 @@
                 return;
               }
               // Header from metadata (first batch that has columns). Also remember each
-              // column's SQL type (e.g. "date", "timestamp", "text") so callers can filter
+              // column's SQL type so callers can filter
               // a column dropdown to only date/timestamp fields — avoids "cannot compare
               // 'text' and 'timestamp'" from picking a non-date column as a date filter.
               if (!cols2.length && meta && meta.length) {
@@ -14244,7 +16127,7 @@
               if (!isNaN(rpNum)) { if (rpNum > rowsProcessed) rowsProcessed = rpNum; sawRp = true; }
               if (onProgress) onProgress(totalFetched, userLimit || totalFetched);
               // TERMINATION (fixed): the /aura endpoint caps each response by PAYLOAD, so a
-              // batch is almost ALWAYS "short" (e.g. 3k rows for a 35-col table) even when
+              // batch is almost ALWAYS "short" even when
               // millions remain. The old code stopped on any short batch → quit after the
               // first ~3k of a 1.7M table (the reported bug). Correct rule: keep paging via
               // OFFSET as long as the batch returned ANY rows (proven to advance — see
@@ -14278,36 +16161,95 @@
     // onProgress(fetched). isCancelled() lets the user stop. Resolves { totalRows, cancelled }.
     // Requires showSaveFilePicker (Chromium). Caller checks qeCanStream() first.
     function qeCanStream() { try { return typeof window.showSaveFilePicker === "function"; } catch (e) { return false; } }
-    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled) {
+    // `split` (optional, bookmarklet-safe): { dirHandle, partRows, baseName } → ONE continuous scan that is
+    // written as several CSV files (part001, part002 …) of at most `partRows` data rows each, every part with
+    // its own header row. Parts open lazily (no empty trailing file) and each finished part is closed, so
+    // a cancel / failure / disk-full leaves every completed part intact and readable.
+    // `expected` (optional) = row count from the pre-count. When given, an EMPTY page before that many rows
+    // have been written is NOT treated as end-of-data (Data Cloud can return an empty page while a later
+    // page is still being prepared): the same page is retried a few times, and if it stays empty the
+    // result is flagged `incomplete` with the shortfall instead of reporting a clean success.
+    function qeStreamFullExport(sql, ds, fileHandle, onProgress, isCancelled, split, expected, xl) {
+      sql = qeCleanForRun(sql);
       var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
       return new Promise(function (resolve, reject) {
-        var writer = null, cols = null, got = 0, closed = false;
-        var esc = function (v) { var s = v == null ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var writer = null, cols = null, got = 0, closed = false, xw = null;   // xw: streaming .xlsx writer when xl = { sheetRows }
+        var headerLine = "", partIdx = 0, inPart = 0, partFiles = [];
+        var partRows = split ? Math.max(1, split.partRows | 0) : 0;
+        var lastEmpty = null;   // what Data Cloud reported on the last empty page (shown if the export ends early)
+        function prog() { if (onProgress) onProgress(got, split ? { part: partIdx, files: partFiles.length } : null); }
+        var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
         var HARD = 100000000;   // 100M absolute backstop (still bounded — never truly infinite)
         var ulm = sql.match(/\bLIMIT\s+(\d+)/i); var ul = ulm ? parseInt(ulm[1], 10) : 0;
         var cap = ul > 0 ? ul : HARD;
-        function fail(err) { try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {} reject(err instanceof Error ? err : new Error(String(err))); }
+        function fail(err) {
+          try { if (writer && !closed) { closed = true; writer.close(); } } catch (e) {}
+          var er = err instanceof Error ? err : new Error(String(err));
+          if (split) { try { er.partsDone = partFiles.slice(); er.rowsWritten = got; } catch (e) {} }
+          reject(er);
+        }
         // Report the REAL cancel state. finishOk() is called on BOTH normal end-of-data AND on
         // user cancel, so this must read the live cancel flag — hardcoding false made a cancelled
         // partial export look "complete" and get memoized as if the whole table was exported
         // (then wrongly warned "already exported, don't re-run"). cancelled() is still true here.
-        function result() { return { totalRows: got, cancelled: cancelled(), columns: cols || [] }; }
+        function result() { var le = lastEmpty; var shN = xw ? xw.sheets() : 0; var exp = (expected > 0 && !cancelled() && cap === HARD) ? expected : 0; return { totalRows: got, cancelled: cancelled(), expected: exp, incomplete: !!(exp && got < exp), lastEmpty: (exp && got < exp) ? le : null, columns: cols || [], parts: partFiles.slice(), partRows: partRows, folderName: split ? split.folderName : "", sheets: shN }; }
         function finishOk() { try { if (writer && !closed) { closed = true; writer.close().then(function () { resolve(result()); }, function () { resolve(result()); }); } else resolve(result()); } catch (e) { resolve(result()); } }
         function writeHeader(metadata) {
           if (cols) return;
           cols = (metadata || []).map(function (m) { return m && m.name; });
-          if (cols.length) return writer.write(cols.map(esc).join(",") + "\n");
+          if (cols.length) {
+            if (xl) { xw.setCols(cols); return; }
+            headerLine = cols.map(esc).join(",") + "\n";
+            if (split) return;                    // split mode: each part writes its own header when it opens
+            return writer.write(headerLine);
+          }
+        }
+        function pad3(n) { n = String(n); while (n.length < 3) n = "0" + n; return n; }
+        // Close the finished part, then open the next one lazily (only when a row actually needs it).
+        function closePart() { var w = writer; writer = null; closed = true; return w ? w.close() : Promise.resolve(); }
+        function openNextPart() {
+          partIdx++; inPart = 0;
+          var name = split.baseName + "_part" + pad3(partIdx) + ".csv";
+          return Promise.resolve().then(function () { return split.dirHandle.getFileHandle(name, { create: true }); })
+            .then(function (h) { return h.createWritable(); })
+            .then(function (w) { writer = w; closed = false; partFiles.push(name); return headerLine ? w.write(headerLine) : undefined; });
         }
         function writeRows(data) {
-          // Build ONE string for the whole batch, write once (fewer awaits), then release it.
-          var buf = "";
-          for (var i = 0; i < data.length; i++) {
-            var row = data[i]; if (!Array.isArray(row)) continue;
-            if (got >= cap) break;
-            buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
-            got++;
+          if (xl) {   // Excel workbook: positional rows go to the streaming writer (it rotates sheets)
+            var batchRows = [];
+            for (var q = 0; q < data.length; q++) { var rw = data[q]; if (!Array.isArray(rw)) continue; if (got >= cap) break; batchRows.push(rw); got++; }
+            return batchRows.length ? xw.addRows(batchRows) : Promise.resolve();
           }
-          return buf ? writer.write(buf) : Promise.resolve();
+          if (!split) {
+            // Build ONE string for the whole batch, write once (fewer awaits), then release it.
+            var buf = "";
+            for (var i = 0; i < data.length; i++) {
+              var row = data[i]; if (!Array.isArray(row)) continue;
+              if (got >= cap) break;
+              buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
+              got++;
+            }
+            return buf ? writer.write(buf) : Promise.resolve();
+          }
+          // Split mode: same batching, but rotate to a new file whenever the current part is full.
+          var idx = 0;
+          function step() {
+            var buf = "";
+            while (idx < data.length) {
+              var row = data[idx];
+              if (!Array.isArray(row)) { idx++; continue; }
+              if (got >= cap) { idx = data.length; break; }
+              if (!writer || inPart >= partRows) {
+                var pending = buf; buf = "";
+                var flush = (pending && writer) ? writer.write(pending) : Promise.resolve();
+                return flush.then(function () { return writer ? closePart() : undefined; }).then(openNextPart).then(step);
+              }
+              buf += cols.map(function (c, k) { return esc(row[k]); }).join(",") + "\n";
+              got++; inPart++; idx++;
+            }
+            return buf ? writer.write(buf) : Promise.resolve();
+          }
+          return step();
         }
 
         // open the file stream (user already picked the file → fileHandle).
@@ -14328,8 +16270,8 @@
               throw err;
             });
         }
-        openWritable(0).then(function (w) {
-          writer = w;
+        (split ? Promise.resolve(null) : openWritable(0)).then(function (w) {
+          if (xl) { xw = dcXlsxStream(w, Math.max(1000, Math.min(1048575, xl.sheetRows | 0 || 1000000))); writer = xw; } else writer = w;   // xw.close() finalises a valid workbook even on cancel/failure
           // ── EXTENSION cursor path (efficient — no re-scan) ──
           if (typeof extBridgePresent === "function" && extBridgePresent()) {
             runDcSqlViaBridge(sql, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (first) {
@@ -14337,7 +16279,7 @@
               Promise.resolve(writeHeader(first.metadata)).then(function () {
                 return writeRows(first.data || []);
               }).then(function () {
-                if (onProgress) onProgress(got);
+                prog();
                 var total = first.rowCount || got;
                 if (!first.queryId || !first.data || first.data.length === 0 || got >= cap || got >= total) { finishOk(); return; }
                 var queryId = first.queryId;
@@ -14345,7 +16287,7 @@
                   if (cancelled() || got >= cap) { finishOk(); return; }
                   fetchPageViaBridge(queryId, got, (typeof DC_PAGE_SIZE === "number" ? DC_PAGE_SIZE : 49999), ds).then(function (pg) {
                     if (!pg.data || pg.data.length === 0) { finishOk(); return; }
-                    writeRows(pg.data).then(function () { if (onProgress) onProgress(got); setTimeout(page, 0); }, fail);
+                    writeRows(pg.data).then(function () { prog(); setTimeout(page, 0); }, fail);
                   }).catch(fail);
                 }
                 setTimeout(page, 0);
@@ -14357,7 +16299,8 @@
           if (!_auraSniff.context || !_auraSniff.token) { fail(new Error("No active session — run any query using SF's Run Query button first.")); return; }
           var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
           var ASK = 49999;
-          var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); } if (cands.indexOf("default") < 0) cands.push("default");
+          var cands = [ds]; if (typeof dataSpaceCandidates === "function") { var fm = baseSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
+          var SHORT_RETRIES = (split && split.shortRetries != null) ? split.shortRetries : 5, SHORT_WAIT_MS = (split && split.shortWaitMs != null) ? split.shortWaitMs : 2000, LONG_RETRIES = (split && split.longRetries != null) ? split.longRetries : 30;
           var dsi = 0, POLL_MS = 1500, MAX_POLL = 6;   // ~9s cold-start ceiling (was 30s) — fail fast on empty
           function batch(offset, pollAttempt) {
             pollAttempt = pollAttempt || 0;
@@ -14378,7 +16321,7 @@
                   if (/denied authorization|not authorized/i.test(String(em)) && offset === 0 && dsi + 1 < cands.length) { dsi++; batch(0); return; }
                   fail(new Error(String(em))); return;
                 }
-                if (space) _auraSniff.dataSpace = space;
+                dcLearnSpace(space, bsql);
                 var rv = a.returnValue || {};
                 var dr = rv.dataRows || rv.rows || rv.data || []; var meta = rv.metadata || [];
                 var arr = dr.map(function (d) { return d && d.row ? d.row : d; });
@@ -14393,8 +16336,15 @@
                 // batch is the true end of data → finish now. (Same regression as the Fetch path:
                 // without the got===0 gate, a small result polled ~30s at the end.)
                 if (arr.length === 0 && got === 0 && !scanDone && (running || (!haveSchema && noTerminal)) && pollAttempt < MAX_POLL) { setTimeout(function () { batch(offset, pollAttempt + 1); }, POLL_MS); return; }
+                // Empty page BEFORE the expected total: not the end of the table. Retry the same page.
+                if (arr.length === 0 && got > 0 && expected > 0 && cap === HARD && got < expected) {
+                  lastEmpty = { offset: offset, status: cs == null ? "" : String(cs), progress: (typeof st.progress === "number" ? st.progress : null), rowsProcessed: isNaN(rpS) ? null : rpS };
+                  // Data Cloud says it is still working on this page → keep waiting much longer; otherwise a short retry.
+                  var maxTries = running ? LONG_RETRIES : SHORT_RETRIES;
+                  if (!cancelled() && pollAttempt < maxTries) { setTimeout(function () { batch(offset, pollAttempt + 1); }, SHORT_WAIT_MS); return; }
+                }
                 Promise.resolve(writeHeader(meta)).then(function () { return writeRows(arr); }).then(function () {
-                  if (onProgress) onProgress(got);
+                  prog();
                   if (arr.length === 0 || got >= cap) { finishOk(); }
                   else { setTimeout(function () { batch(offset + arr.length); }, 0); }
                 }, fail);
@@ -14560,8 +16510,630 @@
         example: function (obj) { return "Example: counts how many rows of " + obj + " fall into each day/week/month/quarter/year you pick — \"how many were created each month?\""; } },
     ];
 
+    // @@GUIDED-START
+    // ── Guided Checks: pure catalog (SQL builders + plain-English verdicts) ──────────
+    // No DOM, no network — tested in test/qe-guided-checks.test.js (sliced by the markers).
+    // Every SQL function used (COUNT DISTINCT, CASE, TRIM, UPPER, LOWER, LIKE, TRY_CAST,
+    // DATE_TRUNC, CURRENT_DATE, INTERVAL, LEFT JOIN, GROUP BY/HAVING) is already used by the
+    // documented qeTemplates above. Verdict thresholds are guidelines, labelled as such.
+    var QG = (function () {
+      var Q = function (n) { return '"' + String(n).replace(/"/g, '""') + '"'; };
+      var num = function (x) { var v = Number(x); return isFinite(v) ? v : 0; };
+      var fmt = function (x) { return num(x).toLocaleString("en-US"); };
+      var pct = function (a, b) { return b > 0 ? Math.round((a / b) * 1000) / 10 : 0; };
+      var isText = function (t) { return !t || /char|text|string/i.test(String(t)); };
+      var isDateT = function (t) { return /date|timestamp/i.test(String(t || "")); };
+      var isTsT = function (t) { return /timestamp/i.test(String(t || "")); };
+      var dateLit = function (raw) {
+        var v = String(raw || "").trim().replace("T", " ");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return "DATE '" + v + "'";
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) return "TIMESTAMP '" + v + "'";
+        return null;
+      };
+      // Build one bound of a range from a date + optional time. Timestamp columns: a blank
+      // start time = 00:00:00, a blank END time = 23:59:59 (so "to 5 Nov" includes all of 5 Nov).
+      function bound(date, time, colType, isEnd) {
+        if (!date) return null;
+        if (!isTsT(colType) && !time) return dateLit(date);
+        var t = time || (isEnd ? "23:59:59" : "00:00:00");
+        if (/^\d{2}:\d{2}$/.test(t)) t += ":00";
+        return dateLit(date + " " + t);
+      }
+      var cond = function (p, kind) {
+        var c = Q(p.c);
+        if (kind === "blank") return isText(p.cType) ? c + " IS NULL OR TRIM(" + c + ") = ''" : c + " IS NULL";
+        return "1=1";
+      };
+      var T = function (p) { return Q(p.t); };
+      var rng = function (p) { return Q(p.c) + " BETWEEN " + p.from + " AND " + p.to; };
+      var idLike = /(^|_)(id|key)(__c)?$|recordid$/i;
+      var lastN = function (p) { return Number(p.n) > 0 ? Math.floor(Number(p.n)) : 1; };
+
+      function dupCheck(id, norm) {
+        var expr = function (p) { return norm ? "UPPER(TRIM(" + Q(p.c) + "))" : Q(p.c); };
+        return {
+          id: id, title: norm ? "Duplicates after cleaning case/spaces" : "Duplicate values",
+          plain: norm ? "Finds values that look different but are the same once spaces and upper/lower case are ignored (e.g. 'A@x.com ' vs 'a@x.com')." : "Finds values that appear more than once in a column. Use it on an ID or key that should be unique.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS dup_values, COALESCE(SUM(n), 0) AS dup_rows FROM (SELECT " + expr(p) + " AS v, COUNT(*) AS n FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + expr(p) + " HAVING COUNT(*) > 1) x"; },
+          rows: function (p) { return "SELECT " + expr(p) + " AS " + (norm ? "normalized_value" : "value") + ", COUNT(*) AS times_seen FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + expr(p) + " HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC"; },
+          verdict: function (r) {
+            var d = num(r.dup_values);
+            if (!d) return { level: "ok", text: "No duplicates" + (norm ? " (even after ignoring case and spaces)." : ". Every value is unique.") };
+            return { level: "warn", text: fmt(d) + " value" + (d === 1 ? "" : "s") + " repeat, covering " + fmt(r.dup_rows) + " rows." + (norm ? " These are the same value written differently." : " If this column should be unique (an ID), this is a problem.") };
+          },
+          next: "Click 'See the rows' to list which values repeat and how many times, then search for one of them in the table."
+        };
+      }
+      function missingIn(id, goals, title, plain, defs, words) {
+        return {
+          id: id, goals: goals, title: title, plain: plain,
+          fields: [{ k: "t", kind: "table", label: words.a, def: defs.t, role: words.ra }, { k: "c", kind: "col", label: words.ac, def: defs.c, pick: "id" }, { k: "t2", kind: "table", label: words.b, def: defs.t2, role: words.rb }, { k: "c2", kind: "col2", label: words.bc, def: defs.c2, pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN b." + Q(p.c2) + " IS NULL THEN 1 ELSE 0 END), 0) AS missing FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL"; },
+          rows: function (p) { return "SELECT a.* FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL AND b." + Q(p.c2) + " IS NULL"; },
+          verdict: function (r) {
+            var m = num(r.missing), t = num(r.total);
+            if (!t) return { level: "warn", text: "The first table has no rows with a value in that column, so nothing could be compared." };
+            if (!m) return { level: "ok", text: "All " + fmt(t) + " rows were found in the second table." };
+            return { level: "bad", text: fmt(m) + " of " + fmt(t) + " rows (" + pct(m, t) + "%) have no match in the second table." };
+          },
+          next: words.next
+        };
+      }
+      function badRows(id, title, plain, where, okText, badText, goals) {
+        return {
+          id: id, goals: goals, title: title, plain: plain,
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + where(p) + " THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + where(p); },
+          verdict: function (r) { var b = num(r.bad), t = num(r.total); return b ? { level: "warn", text: fmt(b) + " of " + fmt(t) + " rows (" + pct(b, t) + "%) " + badText } : { level: "ok", text: okText }; },
+          next: "Click 'See the rows' to open the offending records, then fix them at the source or in a transform."
+        };
+      }
+
+      function cpJoins(p, pairs) {   // pairs: [alias, tableKey, outName]; optional tables are skipped when blank
+        return pairs.filter(function (x) { return p[x[1]]; });
+      }
+      function overCore(p) {
+        var cps = cpJoins(p, [["e", "te", "unique_emails"], ["ph", "tp", "unique_phones"], ["ad", "ta", "unique_addresses"]]);
+        return "SELECT l." + Q(p.c) + " AS unified_id, COUNT(DISTINCT l." + Q(p.c2) + ") AS source_records"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " l" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = l." + Q(p.c); }).join("")
+          + " GROUP BY l." + Q(p.c) + " HAVING COUNT(DISTINCT l." + Q(p.c2) + ") > " + lastN(p);
+      }
+      var CP4 = [["e", "te", "email_cps"], ["ph", "tp", "phone_cps"], ["ad", "ta", "address_cps"], ["pi", "tpi", "party_identifiers"]];
+      function cpFields() {
+        return [{ k: "te", kind: "table", optional: true, role: "cp-email", label: "Contact Point Email table (optional)", def: "ssot__ContactPointEmail__dlm" }, { k: "tp", kind: "table", optional: true, role: "cp-phone", label: "Contact Point Phone table (optional)", def: "ssot__ContactPointPhone__dlm" }, { k: "ta", kind: "table", optional: true, role: "cp-address", label: "Contact Point Address table (optional)", def: "ssot__ContactPointAddress__dlm" }, { k: "tpi", kind: "table", optional: true, role: "cp-party", label: "Party Identification table (optional)", def: "ssot__PartyIdentification__dlm" }];
+      }
+      function srcCore(p) {
+        var cps = cpJoins(p, CP4);
+        return "SELECT i." + Q(p.s1) + " AS data_source, i." + Q(p.s2) + " AS source_object, COUNT(DISTINCT i." + Q(p.c) + ") AS individuals"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " i" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = i." + Q(p.c); }).join("")
+          + " GROUP BY i." + Q(p.s1) + ", i." + Q(p.s2);
+      }
+      function perIndCore(p) {
+        var cps = cpJoins(p, CP4);
+        return "SELECT i." + Q(p.c) + " AS individual_id"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " i" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = i." + Q(p.c); }).join("")
+          + " GROUP BY i." + Q(p.c);
+      }
+
+      var checks = [
+        { id: "health", goals: ["loaded", "explore"], title: "Table health scan (all columns, one query)",
+          plain: "The quickest overall check. For EVERY column: how many rows have a value, how many different values there are, and the earliest/latest date. Flags empty columns and IDs that repeat.",
+          fields: [{ k: "t", kind: "table" }], needsCols: true,
+          summary: function (p) {
+            var cols = (p.cols || []).slice(0, 60), parts = ["COUNT(*) AS total_rows"];
+            cols.forEach(function (c, i) {
+              parts.push("COUNT(" + Q(c.name) + ") AS nn_" + i, "COUNT(DISTINCT " + Q(c.name) + ") AS dd_" + i);
+              if (isDateT(c.type)) parts.push("MIN(" + Q(c.name) + ") AS mn_" + i, "MAX(" + Q(c.name) + ") AS mx_" + i);
+            });
+            return "SELECT " + parts.join(", ") + " FROM " + T(p);
+          },
+          verdict: function (r, p) {
+            var cols = (p.cols || []).slice(0, 60), total = num(r.total_rows);
+            if (!total) return { level: "bad", text: "The table is empty (0 rows). Check that the data stream ran and the data space is right." };
+            var empty = [], dups = [], tr = [];
+            cols.forEach(function (c, i) {
+              var nn = num(r["nn_" + i]), dd = num(r["dd_" + i]);
+              if (nn === 0) empty.push(c.name);
+              if (idLike.test(c.name) && nn > 0 && dd < nn) dups.push(c.name);
+              var row = { Column: c.name, Type: c.type || "", "Has a value": pct(nn, total) + "%", "Different values": fmt(dd), "Earliest": "", "Latest": "" };
+              if (isDateT(c.type)) { row.Earliest = r["mn_" + i] == null ? "" : String(r["mn_" + i]); row.Latest = r["mx_" + i] == null ? "" : String(r["mx_" + i]); }
+              tr.push(row);
+            });
+            var msg = [fmt(total) + " rows, " + cols.length + " columns."];
+            if (empty.length) msg.push("Completely empty: " + empty.slice(0, 8).join(", ") + (empty.length > 8 ? "…" : "") + ".");
+            if (dups.length) msg.push("ID-like columns with repeated values: " + dups.slice(0, 8).join(", ") + ". If one is meant to be the primary key, run 'Duplicate values' on it.");
+            if (!empty.length && !dups.length) msg.push("No empty columns and no repeated IDs.");
+            return { level: (empty.length || dups.length) ? "warn" : "ok", text: msg.join(" "), table: tr, cap: (p.cols || []).length > 60 ? "Only the first 60 columns were scanned." : "" };
+          },
+          next: "Look at the table below: a column with a low 'Has a value' % is mostly empty; 'Different values' = 1 means it never varies." },
+        { id: "fresh", goals: ["loaded", "dates"], title: "Is the data fresh?", plain: "Finds the newest date in a column and tells you how old it is.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "n", kind: "num", label: "Should be newer than (days)", def: "2" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, MAX(" + Q(p.c) + ") AS latest FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " ORDER BY " + Q(p.c) + " DESC"; },
+          verdict: function (r, p, now) {
+            if (!num(r.total)) return { level: "bad", text: "The table is empty." };
+            if (r.latest == null || r.latest === "") return { level: "bad", text: "Every value in this date column is empty." };
+            var d = new Date(String(r.latest).replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(r.latest)) || String(r.latest).length <= 10 ? "" : "Z"));
+            if (isNaN(d.getTime())) return { level: "warn", text: "Newest value is " + r.latest + " (could not read it as a date)." };
+            var age = ((now || Date.now()) - d.getTime()) / 864e5, lim = Number(p.n) > 0 ? Number(p.n) : 2, a = Math.max(0, Math.round(age * 10) / 10);
+            var txt = "Newest record: " + r.latest + " (" + a + " days ago).";
+            if (age <= lim) return { level: "ok", text: txt + " Within your " + lim + "-day limit." };
+            return { level: age <= lim * 3 ? "warn" : "bad", text: txt + " Older than your " + lim + "-day limit." };
+          },
+          next: "If it is stale, check the data stream's refresh schedule and last run." },
+        { id: "between", goals: ["dates", "explore"], title: "Rows between two dates / times", plain: "Counts, and lets you open, the rows whose date falls between a start and an end. Time is optional.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "range", kind: "range" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + rng(p) + " THEN 1 ELSE 0 END), 0) AS inside FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + rng(p) + " ORDER BY " + Q(p.c); },
+          verdict: function (r) { var i = num(r.inside), t = num(r.total); return i ? { level: "info", text: fmt(i) + " of " + fmt(t) + " rows (" + pct(i, t) + "%) are in that window." } : { level: "warn", text: "No rows fall in that window (the table has " + fmt(t) + " rows in total)." }; },
+          next: "Click 'See the rows' to open them or download as CSV." },
+        { id: "trend", goals: ["dates"], title: "Rows per day / week / month", plain: "Shows how many rows arrived in each period, and lists days with zero rows (gaps) when you pick 'day'.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "period", kind: "period", def: "day" }, { k: "range", kind: "range", optional: true }],
+          inline: true,
+          summary: function (p) { return "SELECT COUNT(*) AS total, MIN(" + Q(p.c) + ") AS first_seen, MAX(" + Q(p.c) + ") AS last_seen FROM " + T(p) + (p.from && p.to ? " WHERE " + rng(p) : ""); },
+          rows: function (p) { var e = "DATE_TRUNC('" + (/^(hour|day|week|month|year)$/.test(p.period) ? p.period : "day") + "', " + Q(p.c) + ")"; return "SELECT " + e + " AS period, COUNT(*) AS record_count FROM " + T(p) + (p.from && p.to ? " WHERE " + rng(p) : "") + " GROUP BY " + e + " ORDER BY period"; },
+          verdict: function (r) { return num(r.total) ? { level: "info", text: fmt(r.total) + " rows from " + r.first_seen + " to " + r.last_seen + "." } : { level: "warn", text: "No rows." }; },
+          post: function (rows, p) {
+            if (p.period !== "day" || !rows || rows.length < 2) return null;
+            var have = {}, first = null, last = null;
+            rows.forEach(function (o) { var k = String(o.period).slice(0, 10); have[k] = 1; if (first === null || k < first) first = k; if (last === null || k > last) last = k; });
+            var miss = [], d = new Date(first + "T00:00:00Z"), end = new Date(last + "T00:00:00Z"), guard = 0;
+            while (d <= end && guard++ < 3700) { var k2 = d.toISOString().slice(0, 10); if (!have[k2]) miss.push(k2); d = new Date(d.getTime() + 864e5); }
+            return miss.length ? { level: "warn", text: miss.length + " day" + (miss.length === 1 ? "" : "s") + " with zero rows between " + first + " and " + last + ": " + miss.slice(0, 12).join(", ") + (miss.length > 12 ? "…" : "") } : { level: "ok", text: "No gaps: every day from " + first + " to " + last + " has rows." };
+          },
+          next: "Spikes or gaps show loading problems. Narrow with a date range to look closer." },
+        { id: "datesanity", goals: ["dates"], title: "Impossible dates (future or before 1990)", plain: "Finds dates in the future or suspiciously old (like 1900-01-01 placeholders).",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }],
+          summary: function (p) { var old = isTsT(p.cType) ? "TIMESTAMP '1990-01-01 00:00:00'" : "DATE '1990-01-01'"; return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " >= CURRENT_DATE + INTERVAL '1 days' THEN 1 ELSE 0 END), 0) AS future, COALESCE(SUM(CASE WHEN " + Q(p.c) + " < " + old + " THEN 1 ELSE 0 END), 0) AS ancient FROM " + T(p); },
+          rows: function (p) { var old = isTsT(p.cType) ? "TIMESTAMP '1990-01-01 00:00:00'" : "DATE '1990-01-01'"; return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " >= CURRENT_DATE + INTERVAL '1 days' OR " + Q(p.c) + " < " + old; },
+          verdict: function (r) { var f = num(r.future), a = num(r.ancient); return (f || a) ? { level: "warn", text: fmt(f) + " in the future, " + fmt(a) + " before 1990." } : { level: "ok", text: "No future or pre-1990 dates." }; },
+          next: "Often a wrong time zone, a default placeholder, or a swapped day/month." },
+        { id: "blank", goals: ["loaded", "contact"], title: "Empty / blank values in a column", plain: "How many rows are NULL or blank in a column.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + cond(p, "blank") + " THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + cond(p, "blank"); },
+          verdict: function (r) { var b = num(r.bad), t = num(r.total); if (!b) return { level: "ok", text: "No empty values in " + fmt(t) + " rows." }; return { level: b === t ? "bad" : "warn", text: fmt(b) + " of " + fmt(t) + " rows (" + pct(b, t) + "%) are empty." }; },
+          next: "Required fields (IDs, emails) should be 0%." },
+        dupCheck("dupes", false), dupCheck("normdupes", true),
+        { id: "distinct", goals: ["explore", "mapping"], title: "Distinct values in a field", plain: "Lists every different value in a column with how often it appears, so you can eyeball typos, unexpected codes and blanks.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "any", label: "Field" }], inline: true,
+          summary: function (p) { return "SELECT COUNT(*) AS total, COUNT(" + Q(p.c) + ") AS non_null, COUNT(DISTINCT " + Q(p.c) + ") AS distinct_values FROM " + T(p); },
+          rows: function (p) { return "SELECT " + Q(p.c) + " AS value, COUNT(*) AS value_count FROM " + T(p) + " GROUP BY " + Q(p.c) + " ORDER BY COUNT(*) DESC"; },
+          verdict: function (r) { var t = num(r.total), n = num(r.non_null); return { level: "info", text: fmt(r.distinct_values) + " different values across " + fmt(t) + " rows" + (t > n ? " (" + fmt(t - n) + " rows are empty)." : ".") }; },
+          next: "Most common values are first. Download the CSV for the full list." },
+        missingIn("mapMissing", ["mapping"], "Rows in table A with no match in table B", "Checks that every value in A's column exists in B's column (e.g. DLO key vs the DMO it maps to, or a foreign key vs its parent).", {}, { a: "Table A (the one to check)", ac: "Column in A", b: "Table B (should contain them)", bc: "Column in B", next: "Missing values are usually an unmapped field, a filter on one side, or a key in a different format." }),
+        { id: "typecheck", goals: ["mapping"], title: "Values that do not fit a type", plain: "Finds text values that cannot be converted to a number or date (a common cause of mapping/ingest problems).",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text" }, { k: "type", kind: "typesel" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS " + p.type + ") IS NULL THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS " + p.type + ") IS NULL"; },
+          verdict: function (r, p) { var b = num(r.bad); return b ? { level: "bad", text: fmt(b) + " of " + fmt(r.total) + " values cannot be read as " + p.type + "." } : { level: "ok", text: "All values convert to " + p.type + "." }; },
+          next: "See the rows to find the bad values." },
+        { id: "idrHealth", goals: ["idr"], title: "Did identity resolution merge anything?", plain: "On an identity LINK table (e.g. IndividualIdentityLink__dlm): how many source records collapsed into how many unified profiles.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }],
+          summary: function (p) { return "SELECT COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p); },
+          verdict: function (r) {
+            var s = num(r.source_records), u = num(r.unified_profiles);
+            if (!s) return { level: "bad", text: "The link table is empty: identity resolution has not produced results yet (or it has not run)." };
+            var rate = pct(s - u, s), txt = fmt(s) + " source records became " + fmt(u) + " unified profiles. Consolidation rate " + rate + "%.";
+            if (rate === 0) return { level: "warn", text: txt + " Nothing merged. Rules may be too strict, or there are genuinely no duplicates." };
+            if (rate >= 90) return { level: "warn", text: txt + " Very high. Rules may be too loose (over-merging). Run 'Unified profiles with too many records'." };
+            return { level: "ok", text: txt };
+          },
+          next: "Next: 'Merge rate per source' to see which source merges how much." },
+        { id: "idrBySource", title: "Consolidation rate per source", plain: "Salesforce's documented check: for each data source, how many source records were merged into how many unified profiles. Data sources with duplicates should consolidate more; an unexpectedly HIGH rate can point to a data-quality problem in that source.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm", role: "link" }, { k: "c", kind: "col", label: "Unified profile ID column", def: "UnifiedRecordId__c", pick: "id" }, { k: "c2", kind: "col", label: "Source record ID column", def: "SourceRecordId__c", pick: "id" }, { k: "s1", kind: "col", label: "Data source column", def: "ssot__DataSourceId__c", pick: "id" }, { k: "s2", kind: "col", label: "Data source object column", def: "ssot__DataSourceObjectId__c", pick: "id" }], inline: true,
+          summary: function (p) { return "SELECT COUNT(DISTINCT " + Q(p.c) + ") AS unified_profiles, COUNT(" + Q(p.c2) + ") AS source_records FROM " + T(p); },
+          rows: function (p) { return "SELECT " + Q(p.s1) + " AS data_source, " + Q(p.s2) + " AS source_object, COUNT(" + Q(p.c2) + ") AS source_records, COUNT(DISTINCT " + Q(p.c) + ") AS unified_profiles, ROUND((1 - COUNT(DISTINCT " + Q(p.c) + ") * 1.0 / COUNT(" + Q(p.c2) + ")) * 100, 2) AS consolidation_pct FROM " + T(p) + " GROUP BY " + Q(p.s1) + ", " + Q(p.s2) + " ORDER BY COUNT(" + Q(p.c2) + ") DESC"; },
+          verdict: function (r) { var s = num(r.source_records), u = num(r.unified_profiles); if (!s) return { level: "warn", text: "The link table has no rows." }; return { level: "info", text: fmt(s) + " source records became " + fmt(u) + " unified profiles overall (" + (Math.round((1 - u / s) * 1000) / 10) + "% consolidation). The table shows the rate per source." }; },
+          next: "A source near 0% is barely merging (check its match fields). A very high rate can mean repeated or placeholder values in that source." },
+        { id: "idrOverMerge", title: "Outlier unified profiles (too many source records)", plain: "Salesforce's documented outlier check: unified profiles built from an unusually large number of source records, with optional counts of their unique emails, phones and addresses. Hundreds of records on one profile usually means a shared value.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm", role: "link" }, { k: "c", kind: "col", label: "Unified profile ID column", def: "UnifiedRecordId__c", pick: "id" }, { k: "c2", kind: "col", label: "Source record ID column", def: "SourceRecordId__c", pick: "id" }, { k: "n", kind: "num", label: "Show profiles with more than N source records", def: "10" },
+            { k: "te", kind: "table", optional: true, role: "ucp-email", label: "Unified email table (optional)", def: "UnifiedContactPointEmail__dlm" }, { k: "tp", kind: "table", optional: true, role: "ucp-phone", label: "Unified phone table (optional)", def: "UnifiedContactPointPhone__dlm" }, { k: "ta", kind: "table", optional: true, role: "ucp-address", label: "Unified address table (optional)", def: "UnifiedContactPointAddress__dlm" }],
+          summary: function (p) { return "SELECT COUNT(*) AS big_profiles, COALESCE(MAX(source_records), 0) AS largest FROM (" + overCore(p) + ") x"; },
+          rows: function (p) { return overCore(p) + " ORDER BY source_records DESC"; },
+          verdict: function (r, p) { var b = num(r.big_profiles); return b ? { level: "bad", text: fmt(b) + " unified profile" + (b === 1 ? " has" : "s have") + " more than " + lastN(p) + " source records (largest: " + fmt(r.largest) + "). Suspect over-merging." } : { level: "ok", text: "No unified profile has more than " + lastN(p) + " source records." }; },
+          next: "Open the biggest profile's source records and look for a shared placeholder value (test@test.com, 0000000000). Filter such values out in the data stream." },
+        missingIn("idrSourceMissing", ["idr"], "Source records missing from identity resolution", "Every source record you expect to be resolved should appear in the link table. Finds the ones that did not.", { t2: "IndividualIdentityLink__dlm", c2: "SourceRecordId__c" }, { ra: "source", rb: "link", a: "Source table (DLO/DMO)", ac: "Its record ID column", b: "Identity link table", bc: "Link column", next: "Missing records often fail a ruleset filter or have no match-rule fields filled in." }),
+        missingIn("idrUnifiedNoSource", ["idr"], "Unified profiles with no source records", "Unified profiles that have no row in the link table. Should be none.", { t: "UnifiedIndividual__dlm", c: "ssot__Id__c", t2: "IndividualIdentityLink__dlm", c2: "UnifiedRecordId__c" }, { ra: "unified", rb: "link", a: "Unified table", ac: "Its ID column", b: "Identity link table", bc: "Link column", next: "A mismatch can mean a stale unified table or a different ruleset's link table; pick the matching pair." }),
+        { id: "dqBySource", title: "Source data summary (before identity resolution)", plain: "Salesforce's documented data-quality check: per data source, how many individuals and how many unique emails, phones, addresses and IDs they bring. A contact-point column at 0 usually means that source is not mapped to that object.",
+          fields: [{ k: "t", kind: "table", label: "Individual table", def: "ssot__Individual__dlm", role: "individual" }, { k: "c", kind: "col", label: "Individual ID column", def: "ssot__Id__c", pick: "id" }, { k: "s1", kind: "col", label: "Data source column", def: "ssot__DataSourceId__c", pick: "id" }, { k: "s2", kind: "col", label: "Data source object column", def: "ssot__DataSourceObjectId__c", pick: "id" }].concat(cpFields()), inline: true,
+          summary: function (p) { var cps = cpJoins(p, CP4); return "SELECT COUNT(*) AS sources, COALESCE(SUM(individuals), 0) AS individuals" + cps.map(function (x) { return ", COALESCE(SUM(" + x[2] + "), 0) AS " + x[2]; }).join("") + " FROM (" + srcCore(p) + ") x"; },
+          rows: function (p) { return srcCore(p) + " ORDER BY individuals DESC"; },
+          verdict: function (r, p) {
+            var cps = cpJoins(p, CP4), zero = cps.filter(function (x) { return num(r[x[2]]) === 0; }).map(function (x) { return x[2]; });
+            if (!num(r.individuals)) return { level: "bad", text: "No individuals found. Check the table name and data space." };
+            return zero.length ? { level: "warn", text: fmt(r.individuals) + " individuals from " + fmt(r.sources) + " source(s), but " + zero.join(", ") + " is 0 overall. Review the mappings of your sources to those objects." } : { level: "info", text: fmt(r.individuals) + " individuals from " + fmt(r.sources) + " source(s). The table shows each source's unique contact points." };
+          },
+          next: "A source with 0 in a contact-point column is not mapped to that object, so identity resolution cannot match on it." },
+        { id: "dqPerIndividual", title: "Individuals with the most contact points", plain: "Salesforce's documented outlier check before identity resolution: individuals that own an unusual number of emails, phones, addresses or IDs. These point at source-data or mapping problems.",
+          fields: [{ k: "t", kind: "table", label: "Individual table", def: "ssot__Individual__dlm", role: "individual" }, { k: "c", kind: "col", label: "Individual ID column", def: "ssot__Id__c", pick: "id" }].concat(cpFields().slice(0, 4)),
+          summary: function (p) { var cps = cpJoins(p, CP4); if (!cps.length) return "SELECT COUNT(*) AS individuals, 0 AS most FROM " + T(p); return "SELECT COUNT(*) AS individuals, COALESCE(MAX(" + cps.map(function (x) { return x[2]; }).join(" + ") + "), 0) AS most FROM (" + perIndCore(p) + ") x"; },
+          rows: function (p) { var cps = cpJoins(p, CP4); return perIndCore(p) + (cps.length ? " ORDER BY " + cps.map(function (x) { return x[2]; }).join(" + ") + " DESC" : ""); },
+          verdict: function (r, p) { if (!cpJoins(p, CP4).length) return { level: "warn", text: "Pick at least one contact-point table to count." }; return { level: "info", text: fmt(r.individuals) + " individuals. The busiest one has " + fmt(r.most) + " contact points in total. Open the rows to see who is at the top." }; },
+          next: "Look at the individuals at the top: an unusually high count is often a shared value or a bad mapping." },
+        { id: "splitValue", goals: ["idr", "contact"], title: "Value shared by several IDs (over-grouping / not merged)", plain: "Salesforce's documented repeat-value check. Pick a contact-point table, its value column (email, phone…) and its owner column (Party ID). Lists each value used by more than one ID, with how many IDs and rows. Before identity resolution this finds values that will over-group; on a link table it finds values that did not merge.",
+          fields: [{ k: "t", kind: "table", label: "Table with both columns" }, { k: "c", kind: "col", label: "Value column (email, phone…)", pick: "text" }, { k: "c2", kind: "col2same", label: "Owner ID column (Party ID or unified ID)", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS split_values FROM (SELECT " + Q(p.c) + " AS v FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1) x"; },
+          rows: function (p) { return "SELECT " + Q(p.c) + " AS value, COUNT(DISTINCT " + Q(p.c2) + ") AS different_ids, COUNT(*) AS records FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1 ORDER BY COUNT(DISTINCT " + Q(p.c2) + ") DESC"; },
+          verdict: function (r) { var s = num(r.split_values); return s ? { level: "warn", text: fmt(s) + " value" + (s === 1 ? " is" : "s are") + " spread across more than one unified profile." } : { level: "ok", text: "Every value belongs to exactly one profile." }; },
+          next: "If the match rule uses this field, these should have merged. Check the rule's fuzzy/exact setting." },
+        badRows("email", "Invalid email addresses", "Finds emails with no @ or domain dot, or with spaces inside.",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND TRIM(" + c + ") <> '' AND (" + c + " NOT LIKE '%_@_%._%' OR " + c + " LIKE '% %')"; },
+          "All filled-in emails look valid.", "do not look like an email address.", ["contact"]),
+        badRows("whitespace", "Leading / trailing spaces", "Finds values with spaces at the start or end. Invisible, and they break matching and joins.",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND " + c + " <> TRIM(" + c + ")"; },
+          "No values with stray spaces.", "have spaces at the start or end.", ["contact", "loaded", "mapping"]),
+        badRows("casemix", "Mixed upper / lower case", "Finds values not already lower-case (e.g. emails written 'Bob@X.com').",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND " + c + " <> LOWER(" + c + ")"; },
+          "Everything is lower-case.", "are not lower-case.", ["contact"])
+      ];
+      // Goal cards for the home screen (order = display order).
+      var goals = [
+        { id: "loaded", icon: "📥", title: "Check a table", sub: "health scan, freshness, empty values, duplicate IDs, distinct values" },
+        { id: "mapping", icon: "🧩", title: "Is my mapping right?", sub: "keys match, values fit their type" },
+        { id: "idrready", icon: "🧪", title: "Ready for identity resolution?", sub: "Salesforce data-quality checks before you run it" },
+        { id: "idr", icon: "🧬", title: "Did identity resolution work?", sub: "consolidation, outliers, missing records" },
+        { id: "contact", icon: "📇", title: "Are contact points clean?", sub: "invalid emails, stray spaces, case, near-duplicates" },
+        { id: "dates", icon: "📅", title: "Dates and times", sub: "between two dates or times, trend and gaps, impossible dates" }
+      ];
+      // One home goal per check, so the same feature never appears under several goals.
+      var HOME = { health: "loaded", fresh: "loaded", blank: "loaded", dupes: "loaded", distinct: "loaded", typecheck: "mapping", mapMissing: "mapping", dqBySource: "idrready", dqPerIndividual: "idrready", splitValue: "idrready", idrHealth: "idr", idrBySource: "idr", idrOverMerge: "idr", idrSourceMissing: "idr", idrUnifiedNoSource: "idr", email: "contact", whitespace: "contact", casemix: "contact", normdupes: "contact", between: "dates", trend: "dates", datesanity: "dates" };
+      checks.forEach(function (c) { c.goals = [HOME[c.id] || "loaded"]; });
+      // Pre-select a likely column. pick: id | date | text | any. Returns "" if nothing fits.
+      function pickDefault(cols, pick, only) {
+        var list = (cols || []).filter(function (c) { return only === "date" ? isDateT(c.type) : true; });
+        if (!list.length) return "";
+        var f;
+        if (pick === "id") f = list.filter(function (c) { return idLike.test(c.name); })[0];
+        else if (pick === "date") f = list.filter(function (c) { return /(modif|updat|creat|date|time|_at$)/i.test(c.name); })[0];
+        else if (pick === "text") { var tx = list.filter(function (c) { return isText(c.type); }); f = tx.filter(function (c) { return /(email|mail)/i.test(c.name); })[0] || tx.filter(function (c) { return /(phone|addr|name)/i.test(c.name); })[0] || tx[0]; }
+        return (f || list[0]).name;
+      }
+      function build(id, kind, p) {
+        var c = checks.filter(function (x) { return x.id === id; })[0];
+        if (!c) throw new Error("Unknown check " + id);
+        return c[kind](p);
+      }
+      return { checks: checks, goals: goals, pickDefault: pickDefault, bound: bound, build: build, isDateT: isDateT, isText: isText, isTsT: isTsT, fmt: fmt };
+    })();
+    // @@GUIDED-END
+
     var templatesPanelEl = null;
     function closeTemplatesPanel() { if (templatesPanelEl) { templatesPanelEl.remove(); templatesPanelEl = null; } }
+
+    // ── Guided Checks panel (dev-only; sits on top of the classic Helpful Queries) ──
+    var guidedPanelEl = null;
+    function closeGuidedPanel() { if (guidedPanelEl) { guidedPanelEl.remove(); guidedPanelEl = null; } }
+    function openGuidedChecks() {
+      closeGuidedPanel();
+      var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); };
+      var panel = document.createElement("div");
+      guidedPanelEl = panel; panel.id = "dc-qe-guided-panel";
+      panel.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);width:min(660px,94vw);max-height:88vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,sans-serif;color:#0f172a;";
+      var hdr = document.createElement("div");
+      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;cursor:move;position:sticky;top:0;z-index:2;";
+      hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries <span style='font-weight:500;font-size:11px;color:#a16207;'>guided checks, no SQL needed</span></div>";
+      var hm = document.createElement("button"); hm.textContent = "⤢"; hm.title = "Make this window bigger / smaller";
+      hm.style.cssText = "border:none;background:none;font-size:17px;color:#92400e;cursor:pointer;padding:4px 8px;margin-left:auto;";
+      var big = false;
+      hm.onclick = function () { big = !big; panel.style.width = big ? "96vw" : "min(660px,94vw)"; panel.style.maxHeight = big ? "94vh" : "88vh"; panel.style.top = big ? "3vh" : "6vh"; panel.style.left = "50%"; panel.querySelectorAll("[data-dc-tbl]").forEach(function (t) { t.style.maxHeight = big ? "62vh" : "260px"; }); panel.setAttribute("data-big", big ? "1" : ""); };
+      var hx = document.createElement("button"); hx.textContent = "✕"; hx.title = "Close";
+      hx.style.cssText = "border:none;background:none;font-size:16px;color:#92400e;cursor:pointer;padding:4px 8px;"; hx.onclick = closeGuidedPanel;
+      hdr.appendChild(hm); hdr.appendChild(hx); panel.appendChild(hdr);
+      var body = document.createElement("div"); body.style.cssText = "padding:14px 16px;"; panel.appendChild(body);
+
+      var colsCache = {};            // table -> [{name,type}] | "loading" | "fail"
+      var st = { goal: null, check: null, vals: {}, tables: null };
+      var RECENT = "dcGuidedRecentTables";
+      function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
+      function remember(t) { try { if (!t) return; var r = recent().filter(function (x) { return x !== t; }); r.unshift(t); localStorage.setItem(RECENT, JSON.stringify(r.slice(0, 15))); } catch (e) {} }
+      // Returns [{n: name, ds: data space or ""}] — current data space first. Sources, best first:
+      // (1) objects Salesforce itself queried (confirmed data space), (2) object names seen in Salesforce's own
+      // responses while browsing, (3) names visible on this page / in the editor, (4) recent, (5) standard IDR tables.
+      // Read the object list Salesforce shows on the left of the Query Editor (Data Model Objects / Data
+      // Lake Objects / Calculated Insights tabs). Rows are draggable; they show LABELS, not API names, so:
+      // (a) any row whose attributes/children carry a real API name (…__dll/__dlm/__cio) is taken as-is;
+      // (b) otherwise the API name is DERIVED from the label + the active tab (hyphen/space -> underscore, tab
+      //     decides the suffix) and tried at pick time, with alternates (a standard DMO is ssot__<name>__dlm).
+      function deepAll(sel, root, acc, guard) {
+        acc = acc || []; guard = guard || { n: 0 };
+        try {
+          (root || document).querySelectorAll(sel).forEach(function (e) { acc.push(e); });
+          var all = (root || document).querySelectorAll("*");
+          for (var i = 0; i < all.length && guard.n < 30000; i++) { guard.n++; if (all[i].shadowRoot) deepAll(sel, all[i].shadowRoot, acc, guard); }
+        } catch (e) {}
+        return acc;
+      }
+      function activeTabKind() {
+        var names = { "data model objects": "dmo", "data lake objects": "dlo", "calculated insights": "ci", "data graphs": "dg" }, found = "";
+        deepAll("a,button,li,div,span,lightning-button-icon,lightning-vertical-navigation-item").forEach(function (el) {
+          if (found || (guidedPanelEl && guidedPanelEl.contains(el))) return;
+          var tx = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+          if (!names[tx]) return;
+          var n = el;
+          for (var d = 0; d < 5 && n; d++, n = n.parentElement || (n.getRootNode && n.getRootNode().host)) {
+            var cls = String(n.className && n.className.baseVal != null ? n.className.baseVal : n.className || "");
+            if ((n.getAttribute && (n.getAttribute("aria-selected") === "true" || n.getAttribute("aria-current") === "true" || n.getAttribute("aria-current") === "page")) || /(^|[\s_-])(is-active|active|selected|is-selected)(\s|$)/.test(cls)) { found = names[tx]; return; }
+          }
+        });
+        return found;
+      }
+      function scanTree() {
+        var res = [], kind = activeTabKind(), sfx = { dlo: "__dll", dmo: "__dlm", ci: "__cio" }, re = /\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/;
+        deepAll('[draggable="true"]').forEach(function (el) {
+          if (guidedPanelEl && guidedPanelEl.contains(el)) return;
+          var label = ((el.innerText || el.textContent || "").split("\n")[0] || "").replace(/\s+/g, " ").trim();
+          if (!label || label.length > 140) return;
+          var blob = label + " " + Array.prototype.map.call(el.attributes || [], function (a) { return a.value; }).join(" ");
+          el.querySelectorAll("[title],[data-name],[data-id],[data-api-name],[data-key],[data-value]").forEach(function (c) { blob += " " + Array.prototype.map.call(c.attributes, function (a) { return a.value; }).join(" "); });
+          var m = blob.match(re);
+          if (m) { res.push({ n: m[0], ds: "", tree: "api" }); return; }
+          if (!sfx[kind]) return;
+          var base = label.replace(/[\s\-.]+/g, "_").replace(/[^A-Za-z0-9_]/g, "");
+          if (!/^[A-Za-z]/.test(base)) return;
+          var alts = kind === "dmo" ? [base + "__dlm", "ssot__" + base + "__dlm"] : [base + sfx[kind]];
+          res.push({ n: alts[0], alts: alts, ds: "", tree: kind, label: label });
+        });
+        return res;
+      }
+      function altsAfter(t) {
+        var e = tableNames().filter(function (o) { return o.n === t || (o.alts && o.alts.indexOf(t) >= 0); })[0];
+        if (!e || !e.alts) return [];
+        var i = e.alts.indexOf(t); return i >= 0 ? e.alts.slice(i + 1) : [];
+      }
+      function curDs() { try { return String(qeResolveDs("") || ""); } catch (e) { return ""; } }
+      function tableNames() {
+        if (st.tables) return st.tables;
+        var seen = {}, out = [], cur = curDs();
+        function add(n, ds) { if (!n) return; if (seen[n]) { if (ds && !seen[n].ds) seen[n].ds = ds; return; } seen[n] = { n: n, ds: ds || "" }; out.push(seen[n]); }
+        try { for (var dk in _dsByObject) if (!_dsGuess[dk]) add(dk, _dsByObject[dk]); } catch (e) {}   // suggestions only: never used to pick a space for another object
+        try { Object.keys(_dcObjSeen).forEach(function (k) { add(k, (_dsByObject[k] != null && !_dsGuess[k]) ? _dsByObject[k] : ""); }); } catch (e) {}
+        try { scanTree().forEach(function (o) { add(o.n, o.ds); if (o.alts) seen[o.n].alts = o.alts; if (o.label) seen[o.n].label = o.label; seen[o.n].tree = o.tree; }); } catch (e) {}
+        try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(function (n) { add(n, ""); }); } catch (e) {}
+        recent().forEach(function (n) { add(n, ""); });
+        ["IndividualIdentityLink__dlm", "UnifiedIndividual__dlm", "ContactPointEmailIdentityLink__dlm", "ContactPointAddressIdentityLink__dlm", "ContactPointPhoneIdentityLink__dlm", "PartyIdentificationIdentityLink__dlm", "UnifiedLinkssotAccount__dlm"].forEach(function (n) { add(n, ""); });
+        out.sort(function (a, b) { var ra = (a.ds === cur && cur) ? 0 : (a.ds ? 1 : 2), rb = (b.ds === cur && cur) ? 0 : (b.ds ? 1 : 2); return ra - rb || (a.n < b.n ? -1 : 1); });
+        return (st.tables = out.slice(0, 600));
+      }
+      function roleOf(fd) { return fd.role || (/IdentityLink/.test(fd.def || "") ? "link" : (/^Unified/.test(fd.def || "") ? "unified" : "")); }
+      var ROLE_RX = {
+        link: function (n) { return /Link/i.test(n); },
+        unified: function (n) { return /^Unified/i.test(n) && !/Link/i.test(n); },
+        source: function (n) { return !/Link/i.test(n) && !/^Unified/i.test(n); },
+        individual: function (n) { return /(^|__)Individual__dlm$|^(ssot__)?Individual/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-email": function (n) { return /ContactPointEmail/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-phone": function (n) { return /ContactPointPhone/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-address": function (n) { return /ContactPointAddress/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-party": function (n) { return /PartyIdentification/i.test(n) && !/Link|^Unified/i.test(n); },
+        "ucp-email": function (n) { return /^UnifiedContactPointEmail/i.test(n); },
+        "ucp-phone": function (n) { return /^UnifiedContactPointPhone/i.test(n); },
+        "ucp-address": function (n) { return /^UnifiedContactPointAddress/i.test(n); }
+      };
+      function forRole(role) {
+        var cur = curDs(), all = tableNames().filter(function (o) { return !(o.ds && cur && o.ds !== cur); });   // hide objects confirmed in a different data space
+        var rx = ROLE_RX[role];
+        if (!rx) return { list: all, total: all.length, filtered: false };
+        var f = all.filter(function (o) { return rx(o.n); });
+        return { list: f, total: all.length, filtered: true };
+      }
+      // Run a query; if the table "does not exist" in the guessed data space, retry in every other space this page session
+      // has actually seen (never invented names), remember the one that works for that table and report it (r._space).
+      function qeFetchAnySpace(sql, onProg, cancel) {
+        var cands = qeKnownSpaces(qeDsForSql(sql));
+        var fm = String(sql || "").match(/\bFROM\s+\(?\s*"?([A-Za-z0-9_]+)"?/i), tbl = fm ? fm[1] : "", lastErr = null;
+        function go(i) {
+          return qeFetchExport(sql, cands[i], onProg || function () {}, cancel || function () { return false; }).then(function (r) {
+            r._space = cands[i];
+            if (tbl && i > 0) { _dsByObject[tbl] = cands[i]; delete _dsGuess[tbl]; }
+            return r;
+          }, function (e) {
+            lastErr = lastErr || e;
+            if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid|non-JSON/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
+            throw (i > 0 && lastErr) ? lastErr : e;
+          });
+        }
+        return go(0);
+      }
+      function ensureCols() {
+        if (!st.check) return;
+        st.check.fields.forEach(function (fd) {
+          if (fd.kind !== "table" || fd.optional) return;
+          var t = st.vals[fd.k];
+          if (t && qeValidIdent(t) && colsCache[t] === undefined) loadCols(t, function (m) { renderForm(); if (m) msg(m, true); });
+        });
+      }
+      function loadCols(t, cb) {
+        if (!qeValidIdent(t)) { cb(); return; }
+        var c = colsCache[t];
+        if (Array.isArray(c) || c === "fail") { cb(); return; }
+        if (c === "loading") { return; }
+        colsCache[t] = "loading";
+        ensureQueryContext(function (ready) {
+          if (!ready) { colsCache[t] = "fail"; cb("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then try again."); return; }
+          qeFetchAnySpace(qeTemplates.fieldsProbe(t)).then(function (r) {
+            colsCache[t] = (r.columns || []).map(function (n) { return { name: n, type: (r.columnTypes || {})[n] || "" }; });
+            if (!colsCache[t].length) colsCache[t] = "fail";
+            cb();
+          }).catch(function (e) {
+            colsCache[t] = "fail";
+            var m = String(e && e.message || e), nx = /does not exist|not found/i.test(m) ? altsAfter(t) : [];
+            if (nx.length) { st.vals.t = nx[0]; loadCols(nx[0], cb); return; }   // derived-from-label name was wrong: try the next likely API name
+            cb(/does not exist|not found/i.test(m) ? "Table not found in this data space. Check the name and the data space you are in." : m);
+          });
+        });
+      }
+      function colsOf(t) { var c = colsCache[t]; return Array.isArray(c) ? c : null; }
+
+      // ── screens ──
+      function home() {
+        st.goal = null; st.check = null;
+        var h = "<button id='dc-g-quick' style='display:block;width:100%;text-align:left;border:1px solid #d97706;background:#fffbeb;border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;color:#92400e;'>⚡ Not sure where to start? Scan a table</div><div style='font-size:11px;color:#78350f;margin-top:2px;'>One query reports every column: how full it is, how many different values, earliest/latest dates, and any repeated IDs.</div></button><div style='font-size:12px;color:#475569;margin-bottom:10px;'>Or pick what you want to find out. You choose the table and column from lists; the tool writes and runs the query and tells you in plain words if it looks OK.</div><div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>";
+        QG.goals.forEach(function (g) { h += "<button data-goal='" + g.id + "' style='text-align:left;border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;'>" + g.icon + " " + esc(g.title) + "</div><div style='font-size:11px;color:#64748b;margin-top:2px;'>" + esc(g.sub) + "</div></button>"; });
+        h += "</div><div style='margin-top:12px;font-size:11px;color:#64748b;'>Prefer to write SQL yourself? <a href='#' id='dc-g-classic' style='color:#b45309;'>Open the classic SQL templates</a>. Each check runs a Data Query (billed by rows scanned).</div>";
+        body.innerHTML = h;
+        body.querySelectorAll("[data-goal]").forEach(function (b) { b.onclick = function () { goalScreen(b.getAttribute("data-goal")); }; });
+        body.querySelector("#dc-g-quick").onclick = function () { st.goal = "loaded"; formScreen("health"); };
+        body.querySelector("#dc-g-classic").onclick = function (e) { e.preventDefault(); closeGuidedPanel(); openTemplatesPanel(); };
+      }
+      function goalScreen(gid) {
+        st.goal = gid;
+        var g = QG.goals.filter(function (x) { return x.id === gid; })[0];
+        var h = "<div style='margin-bottom:8px;'><a href='#' id='dc-g-back' style='color:#b45309;'>← All goals</a></div><div style='font:700 14px -apple-system,sans-serif;margin-bottom:8px;'>" + g.icon + " " + esc(g.title) + "</div>";
+        QG.checks.filter(function (c) { return c.goals.indexOf(gid) >= 0; }).forEach(function (c) {
+          h += "<button data-chk='" + c.id + "' style='display:block;width:100%;text-align:left;border:1px solid #e2e8f0;background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:6px;cursor:pointer;'><div style='font:600 12px -apple-system,sans-serif;'>" + esc(c.title) + "</div><div style='font-size:11px;color:#64748b;margin-top:2px;line-height:1.4;'>" + esc(c.plain) + "</div></button>";
+        });
+        body.innerHTML = h;
+        body.querySelector("#dc-g-back").onclick = function (e) { e.preventDefault(); home(); };
+        body.querySelectorAll("[data-chk]").forEach(function (b) { b.onclick = function () { formScreen(b.getAttribute("data-chk")); }; });
+      }
+      function formScreen(cid) {
+        var chk = QG.checks.filter(function (c) { return c.id === cid; })[0];
+        st.check = chk; st.vals = st.vals || {};
+        var carry = { t: st.vals.t };           // keep the last chosen table between checks
+        st.vals = carry;
+        var known = {}; try { tableNames().forEach(function (o) { known[o.n] = 1; }); } catch (e) {}
+        chk.fields.forEach(function (f) { if (!f.def) return; if (f.optional) { st.vals[f.k] = known[f.def] ? f.def : ""; return; } if (f.kind === "table" || f.kind === "col2" || !st.vals[f.k]) st.vals[f.k] = f.def; });
+        body.innerHTML = "<div style='margin-bottom:6px;'><a href='#' id='dc-g-back2' style='color:#b45309;'>← " + esc(QG.goals.filter(function (x) { return x.id === st.goal; })[0].title) + "</a></div>"
+          + "<div style='font:700 14px -apple-system,sans-serif;'>" + esc(chk.title) + "</div><div style='font-size:11px;color:#64748b;margin:3px 0 10px;line-height:1.45;'>" + esc(chk.plain) + "</div>"
+          + "<div id='dc-g-form'></div><div id='dc-g-msg' style='font-size:11px;color:#64748b;min-height:14px;margin:6px 0;'></div>"
+          + "<div><button id='dc-g-run' style='border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:#d97706;'>▶ Run check</button> <span id='dc-g-cost' style='font-size:10px;color:#92400e;'>Runs 1 Data Query, billed by rows scanned.</span></div><div id='dc-g-out' style='margin-top:12px;'></div>";
+        body.querySelector("#dc-g-back2").onclick = function (e) { e.preventDefault(); goalScreen(st.goal); };
+        body.querySelector("#dc-g-run").onclick = run;
+        renderForm();
+        ensureCols();
+        if (st.vals.t) loadCols(st.vals.t, function (m) { renderForm(); msg(m); });
+      }
+      function msg(m, bad) { var e = body.querySelector("#dc-g-msg"); if (e) { e.textContent = m || ""; e.style.color = bad ? "#dc2626" : "#64748b"; } }
+      var INP = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px;font:12px -apple-system,sans-serif;background:#fff;";
+      function renderForm() {
+        var f = body.querySelector("#dc-g-form"); if (!f || !st.check) return;
+        var v = st.vals, h = "";
+        var dlOf = function (role) { return "<datalist id='dc-g-tables-" + (role || "all") + "'>" + forRole(role).list.map(function (o) { return "<option value='" + esc(o.n) + "'" + (o.ds ? " label='" + esc(o.n + "  ·  data space: " + o.ds) + "'" : (o.label ? " label='" + esc(o.n + "  ·  from the object list: " + o.label) + "'" : "")) + ">"; }).join("") + "</datalist>"; }, dl = "", dlSeen = {};
+        st.check.fields.forEach(function (fd) {
+          var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
+          if (fd.kind === "range") {
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Between" + (fd.optional ? " (optional)" : "") + "</label><div style='margin-bottom:4px;font-size:11px;'>" + [["today", "Today"], ["yesterday", "Yesterday"], ["7", "Last 7 days"], ["30", "Last 30 days"]].map(function (x) { return "<a href='#' data-dc-preset='" + x[0] + "' style='color:#b45309;margin-right:10px;'>" + x[1] + "</a>"; }).join("") + "</div><div style='display:grid;grid-template-columns:1fr 100px;gap:4px 6px;align-items:center;'><div style='font-size:10px;color:#64748b;'>From (date)</div><div style='font-size:10px;color:#64748b;'>time</div>"
+              + "<input type='date' id='dc-g-d1' title='Start date' style='" + INP + "' value='" + esc(v.d1 || "") + "'><input type='time' id='dc-g-t1' title='Start time (optional)' style='" + INP + "' value='" + esc(v.t1 || "") + "'>"
+              + "<div style='font-size:10px;color:#64748b;margin-top:4px;'>To (date)</div><div style='font-size:10px;color:#64748b;margin-top:4px;'>time</div><input type='date' id='dc-g-d2' title='End date' style='" + INP + "' value='" + esc(v.d2 || "") + "'><input type='time' id='dc-g-t2' title='End time (optional; blank = end of day)' style='" + INP + "' value='" + esc(v.t2 || "") + "'></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>Time is optional. If you leave the end time blank, the whole end day is included.</div></div>"; return;
+          }
+          if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
+          if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
+          if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
+          if (fd.kind === "table") { var role = roleOf(fd); if (!dlSeen[role || "all"]) { dlSeen[role || "all"] = 1; dl += dlOf(role); } var fr = forRole(role), nt = fr.list, ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables-" + (role || "all") + "' id='" + id + "' placeholder='" + (role === "link" ? "pick the identity link table" : role === "unified" ? "pick the unified table" : "click, then pick from the list or type the API name") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + (fr.filtered ? " matching tables (of " + fr.total + " objects" : " objects found") + " (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
+          // column kinds
+          var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
+          if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
+          if (cl) {
+            if (!v[fd.k] || !cl.some(function (c) { return c.name === v[fd.k]; })) { var pd = (fd.def && cl.some(function (c) { return c.name === fd.def; })) ? fd.def : QG.pickDefault(cl, fd.pick, fd.only); v[fd.k] = pd; }
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + " <span style='font-weight:400;color:#94a3b8;'>(" + cl.length + " in the list)</span></label><select id='" + id + "' style='" + INP + "'>" + cl.map(function (c) { return "<option value='" + esc(c.name) + "'" + (v[fd.k] === c.name ? " selected" : "") + ">" + esc(c.name) + (c.type ? "  (" + esc(c.type.toLowerCase()) + ")" : "") + "</option>"; }).join("") + "</select></div>";
+          } else {
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='text' id='" + id + "' placeholder='" + (tbl ? "loading columns… or type the API name" : "pick a table first") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>";
+          }
+        });
+        f.innerHTML = dl + h;
+        f.querySelectorAll("input[type=text],input[type=number],select").forEach(function (el) {
+          el.onchange = function () {
+            var k = el.id.replace("dc-g-f-", ""); st.vals[k] = el.value.trim();
+            if (k === "t" || k === "t2") { msg("Reading columns…"); loadCols(st.vals[k], function (m) { renderForm(); msg(m, !!m); }); }
+          };
+        });
+        f.querySelectorAll("[data-dc-preset]").forEach(function (a) {
+          a.onclick = function (ev) {
+            ev.preventDefault();
+            var pr = a.getAttribute("data-dc-preset"), iso = function (d) { return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }, now = new Date(), d1 = new Date(now), d2 = new Date(now);
+            if (pr === "yesterday") { d1.setDate(d1.getDate() - 1); d2 = new Date(d1); } else if (pr !== "today") d1.setDate(d1.getDate() - (Number(pr) - 1));
+            st.vals.d1 = iso(d1); st.vals.d2 = iso(d2); st.vals.t1 = ""; st.vals.t2 = "";
+            ["d1", "d2", "t1", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.value = st.vals[k]; });
+          };
+        });
+        setTimeout(ensureCols, 0);
+        f.querySelectorAll(".dc-g-refresh").forEach(function (b) { b.onclick = function () { st.tables = null; renderForm(); }; });
+        ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.onchange = function () { st.vals[k] = el.value; }; });
+      }
+      function collect() {
+        var f = body.querySelector("#dc-g-form"), v = st.vals, chk = st.check, p = { cols: [] };
+        chk.fields.forEach(function (fd) { var el = f.querySelector("#dc-g-f-" + fd.k); if (el) v[fd.k] = el.value.trim(); });
+        ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) v[k] = el.value; });
+        for (var k in v) if (typeof v[k] === "string") p[k] = v[k];
+        p.cols = colsOf(v.t) || [];
+        var cc = (colsOf(v.t) || []).filter(function (c) { return c.name === v.c; })[0]; p.cType = cc ? cc.type : "";
+        p.period = v.period || (chk.fields.filter(function (x) { return x.k === "period"; })[0] || {}).def;
+        var hasRange = chk.fields.some(function (x) { return x.kind === "range"; });
+        if (hasRange) { p.from = QG.bound(v.d1, v.t1, p.cType, false); p.to = QG.bound(v.d2, v.t2, p.cType, true); }
+        return p;
+      }
+      function validate(p) {
+        var chk = st.check;
+        for (var i = 0; i < chk.fields.length; i++) {
+          var fd = chk.fields[i];
+          if (fd.kind === "range") { if (!fd.optional && (!p.from || !p.to)) return "Choose a start date and an end date."; if (fd.optional && ((p.from && !p.to) || (!p.from && p.to))) return "Fill in both dates, or leave both empty."; continue; }
+          if (fd.kind === "num") { if (!(Number(p[fd.k]) > 0)) return "Enter a number greater than 0."; continue; }
+          if (fd.kind === "period" || fd.kind === "typesel") continue;
+          if (fd.optional && !p[fd.k]) continue;
+          if (!qeValidIdent(p[fd.k])) return "Fill in: " + (fd.label || fd.kind === "table" ? (fd.label || "Table") : "Column") + " (letters, numbers and underscores only).";
+        }
+        if (chk.needsCols && !p.cols.length) return "Could not read this table's columns yet. Check the name and try again.";
+        return "";
+      }
+      var LEVEL = { ok: ["#f0fdf4", "#16a34a", "✅"], warn: ["#fffbeb", "#d97706", "⚠️"], bad: ["#fef2f2", "#dc2626", "❌"], info: ["#eff6ff", "#2563eb", "ℹ️"] };
+      function tableHtml(cols, rows, max) {
+        var h = "<div data-dc-tbl='1' style='overflow:auto;max-height:" + (guidedPanelEl && guidedPanelEl.getAttribute("data-big") ? "62vh" : "260px") + ";border:1px solid #e2e8f0;border-radius:6px;margin-top:8px;'><table style='border-collapse:collapse;width:100%;font-size:11px;'><thead><tr>" + cols.map(function (c) { return "<th style='position:sticky;top:0;background:#f8fafc;text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        rows.slice(0, max || 200).forEach(function (r) { h += "<tr>" + cols.map(function (c) { return "<td style='padding:3px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; }).join("") + "</tr>"; });
+        return h + "</tbody></table></div>" + (rows.length > (max || 200) ? "<div style='font-size:10px;color:#94a3b8;margin-top:3px;'>Showing the first " + (max || 200) + " rows.</div>" : "");
+      }
+      function run() {
+        var chk = st.check, p = collect(), err = validate(p), out = body.querySelector("#dc-g-out"), btn = body.querySelector("#dc-g-run");
+        if (err) { msg(err, true); return; }
+        msg(""); remember(p.t); if (p.t2) remember(p.t2);
+        var sumSql = chk.summary(p), ds = qeDsForSql(sumSql), t0 = Date.now();
+        btn.disabled = true; btn.textContent = "Running…"; out.innerHTML = "";
+        function fail(e) { btn.disabled = false; btn.textContent = "▶ Run check"; var m = String(e && e.message || e); if (/does not exist|not found/i.test(m)) m += " (Check the table name and that you are in the right data space.)"; out.innerHTML = "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#b91c1c;'>" + esc(m) + "</div>"; }
+        ensureQueryContext(function (ready) {
+          if (!ready) { fail(new Error("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then press Run again.")); return; }
+          qeFetchAnySpace(sumSql).then(function (r) {
+            if (r._space != null) ds = r._space;
+            var row = (r.rowData && r.rowData[0]) || {}, vd = chk.verdict(row, p), c = LEVEL[vd.level] || LEVEL.info;
+            btn.disabled = false; btn.textContent = "▶ Run check";
+            var h = "<div id='dc-g-verdict' style='background:" + c[0] + ";border:1px solid " + c[1] + ";border-left:5px solid " + c[1] + ";border-radius:10px;padding:12px 14px;'><div style='font:700 13px/1.45 -apple-system,sans-serif;color:#0f172a;'><span style='font-size:16px;vertical-align:-1px;'>" + c[2] + "</span> " + esc(vd.text) + "</div>"
+              + (vd.cap ? "<div style='font-size:10px;color:#64748b;margin-top:3px;'>" + esc(vd.cap) + "</div>" : "")
+              + (chk.next ? "<div style='font-size:11px;color:#475569;margin-top:6px;'>👉 " + esc(chk.next) + "</div>" : "") + "</div>";
+            if (vd.table && vd.table.length) h += tableHtml(Object.keys(vd.table[0]), vd.table, 80);
+            h += "<div id='dc-g-rows'></div><div style='margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;'>";
+            if (chk.rows) h += "<button id='dc-g-see' style='border:1px solid #d97706;background:#fff;color:#92400e;border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;'>👁 " + (chk.inline ? "Show full list" : "See the rows") + " (up to 2,000)</button>";
+            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + (r._space != null ? " · data space: " + esc(r._space || "default") : "") + "</span></div>";
+            out.innerHTML = h;
+            try { out.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) {}
+            var cp = out.querySelector("#dc-g-copy");
+            cp.onclick = function () { var sql = (chk.rows ? chk.rows(p) : sumSql); try { navigator.clipboard.writeText(sql); cp.textContent = "✓ Copied"; } catch (e) { window.prompt("Copy the SQL:", sql); } };
+            var see = out.querySelector("#dc-g-see");
+            function showRows(limit) {
+              var box = out.querySelector("#dc-g-rows"); box.innerHTML = "<div style='margin-top:8px;color:#64748b;'>Fetching…</div>";
+              var rsql = chk.rows(p) + " LIMIT " + limit;
+              return qeFetchExport(rsql, ds, function (n) { box.innerHTML = "<div style='margin-top:8px;color:#64748b;'>Fetching " + Number(n).toLocaleString() + "…</div>"; }, function () { return false; }).then(function (rr) {
+                setLastResult({ blobUrl: rr.blobUrl, filename: "guided_" + chk.id + "_" + todayStr() + ".csv", rowCount: rr.totalRows, cols: rr.columns.length, columns: rr.columns, tableName: p.t, data: rr.rowData || [], sql: rsql });
+                var extra = "";
+                if (chk.post) { var px = chk.post(rr.rowData || [], p); if (px) { var pc = LEVEL[px.level]; extra = "<div style='margin-top:8px;background:" + pc[0] + ";border:1px solid " + pc[1] + ";border-left:5px solid " + pc[1] + ";border-radius:8px;padding:8px 10px;color:#0f172a;font-weight:600;'>" + pc[2] + " " + esc(px.text) + "</div>"; } }
+                box.innerHTML = extra + "<div style='margin-top:8px;'><b>" + Number(rr.totalRows).toLocaleString() + "</b> row" + (rr.totalRows === 1 ? "" : "s") + (rr.totalRows >= limit ? " (capped at " + limit.toLocaleString() + ")" : "") + " · <a href='" + rr.blobUrl + "' download='guided_" + chk.id + "_" + todayStr() + ".csv' style='color:#b45309;'>⬇ Download CSV</a> · <a href='#' id='dc-g-full' title='Open all fetched rows in the full-screen results viewer (sort, copy cells, bigger table)' style='color:#b45309;font-weight:600;'>⛶ Open in full-screen viewer</a></div>" + tableHtml(rr.columns, rr.rowData || [], 200);
+                var fl = box.querySelector("#dc-g-full");
+                if (fl) fl.onclick = function (ev) { ev.preventDefault(); try { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; viewBtn.onclick(); } catch (e) { fl.textContent = "Use the 👁 View Results button in the toolbar"; } };
+              }).catch(function (e) { box.innerHTML = "<div style='color:#b91c1c;margin-top:8px;'>" + esc(String(e && e.message || e)) + "</div>"; });
+            }
+            if (see) see.onclick = function () { showRows(2000); };
+            if (chk.inline) showRows(chk.id === "trend" ? 1000 : 100);
+          }).catch(fail);
+        });
+      }
+      document.body.appendChild(panel);
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      try { addResizeHandle(panel, 380, 300); } catch (e) {}
+      home();
+    }
 
     function openTemplatesPanel() {
       closeTemplatesPanel();
@@ -14628,7 +17200,7 @@
           templateArea.style.display = "none";
           return;
         }
-        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " +
+        objStatus.innerHTML = "<span style='color:#059669;'>✓ " + res.count.toLocaleString() + " rows.</span> " + (res.space != null ? "<span style='color:#64748b;'>data space: " + String(res.space || "default").replace(/[&<>]/g, "") + ". </span>" : "") +
           "<span style='color:#92400e;'>Templates below scan the whole table (billed on rows processed) — cost is roughly the same whether you Count or Fetch a sample.</span>";
         templateArea.style.display = "block";
         populateTemplateSel(); // refresh field inputs now that display is visible
@@ -14641,7 +17213,7 @@
       // returns column metadata even when the table has ZERO rows.
       function fetchFieldsFor(name) {
         if (fieldsCache[name]) { renderFields(); return; } // already have it (success OR failure noted)
-        var ds = readPageDataSpace();
+        var ds = qeDsForSql(qeTemplates.fieldsProbe(name));
         qeFetchExport(qeTemplates.fieldsProbe(name), ds, function () {}, function () { return false; }).then(function (r) {
           fieldsCache[name] = { columns: (r.columns || []).slice(), types: r.columnTypes || {} };
           if (objInput.value.trim() === name) renderFields();
@@ -14658,15 +17230,26 @@
       function runProbe(name) {
         ensureQueryContext(function (ready) {
           if (!ready) { objStatus.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
-          var ds = readPageDataSpace();
           var sql = qeTemplates.existsProbe(name);
-          runQeCount(sql, ds).then(function (r) {
-            var result = { count: r.count || 0 };
+          var ds = qeDsForSql(sql);
+          var spaces = qeKnownSpaces(ds), firstErr = null;
+          function tryAt(i) {
+            return runQeCount(sql, spaces[i]).then(function (r) {
+              if (i > 0) { _dsByObject[name] = spaces[i]; delete _dsGuess[name]; }
+              return { r: r, space: spaces[i] };
+            }, function (e) {
+              firstErr = firstErr || e;
+              if (/does not exist|not found|doesn.t exist|data ?space|denied|not authorized|invalid|non-JSON/i.test(String(e && e.message || e)) && i + 1 < spaces.length) return tryAt(i + 1);
+              throw firstErr;
+            });
+          }
+          tryAt(0).then(function (o) {
+            var r = o.r, result = { count: r.count || 0, space: o.space };
             probeCache[name] = result;
             if (objInput.value.trim() === name) showProbeResult(result);
           }).catch(function (err) {
             var msg = String(err && err.message || err);
-            var result = { error: /does not exist/i.test(msg) ? "Object not found — check the name and Data Space." : msg };
+            var result = { error: /does not exist/i.test(msg) ? "Object not found in any data space this page has used (" + spaces.map(function (x) { return x || "default"; }).join(", ") + "). Workspace header label: " + (_dsDiag.label ? "'" + _dsDiag.label + "'" : "not found") + "; API name read from page: none. Checked: " + _dsDiag.hosts.slice(0, 8).join(" > ") + ". Run one query with Salesforce's own Run Query to teach the tool the space." : msg };
             probeCache[name] = result;
             if (objInput.value.trim() === name) showProbeResult(result);
           });
@@ -14914,7 +17497,7 @@
       function runTemplate(mode) {
         var res = buildCurrentSql();
         if (res.error) { resultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
-        var ds = readPageDataSpace();
+        var ds = qeDsForSql(res.sql);
         var btn = mode === "count" ? checkBtn : sampleBtn;
         var origText = btn.textContent;
         btn.disabled = true; btn.textContent = "Running…";
@@ -15022,13 +17605,7 @@
       }
       if (!sql || sql.length < 6) { showGuide(); return; }
       var tableName = extractTableName(sql);
-      var ds = readPageDataSpace();
-      if (!ds) {
-        var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
-        var tableInSql = fromMatch ? fromMatch[1].replace(/"/g, "") : "";
-        var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
-        ds = dsCandidates[0] || "";
-      }
+      var ds = qeResolveDs(sql);
       // Strip SQL comments BEFORE building the count. A leading "-- ..." block (or /* */)
       // is common in shared queries; left in, it produces fragile wrapped SQL like
       // "SELECT COUNT(*) FROM (-- comment\n...)" where a line comment can swallow structure.
@@ -15055,7 +17632,7 @@
       // touch ORDER BY — leaving it inside the subquery is valid and avoids fragile regex
       // that broke on ORDER BY expressions containing parentheses (e.g. ORDER BY COUNT(x)).
       var innerSql = cleanSql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
-      var countSql = isAlreadyCount ? cleanSql : "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper";
+      var countSql = isAlreadyCount ? cleanSql : (qeDirectCountSql(innerSql) || "SELECT COUNT(*) AS TotalRows FROM (" + innerSql + ") AS countWrapper");
       // CACHE HIT: same query already counted → show stored result, no API/credits.
       // Keyed on the CLEANED sql (comments/whitespace-insensitive) so cosmetic edits match.
       var _cntKey = normSqlKey(cleanSql);
@@ -15064,13 +17641,13 @@
         cardBody.innerHTML = countResultHtml(_lastCount.count, _lastCount.rowsProcessed, _lastCount.tableName || tableName, _lastCount.ds || ds, true);
         return;
       }
-      countBtn.disabled = true; countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
+      countBtn.disabled = true; lockExportAll(true); countBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:4px;'></span>Counting…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       card.style.display = "block";
       cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
       ensureQueryContext(function (ready) {
         if (!ready) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
+          countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
           cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>One-time setup needed</span></div>"
             + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>To connect, run any query using Salesforce\\'s <b>Run Query</b> button once. This establishes a session that our tool uses.</div>"
             + "<div style='font-size:11px;color:#64748b;background:#fffbeb;border-radius:6px;padding:8px;line-height:1.5;'><b>Steps:</b><br>1. Write or select a query in the editor<br>2. Click SF\\'s <b>Run Query</b> button<br>3. Once results appear, use our Count / Fetch buttons</div>";
@@ -15088,7 +17665,7 @@
             // to get the number is to run the FULL query and tally rows (same work — and
             // same Data Cloud credits — as Fetch & Export). Make the user OPT IN so Count
             // never silently burns fetch-level credits when they expected a cheap count.
-            countBtn.disabled = false; countBtn.textContent = "# Count";
+            countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
             cardBody.innerHTML = ""
               + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:10px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Fast count not possible</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:12px;'>This query aggregates a large joined result, so a quick count won't complete. We can still get the exact number by running the full query and counting the rows — but that uses <b>the same Data Cloud credits as Fetch &amp; Export</b> (it does the same work).</div>"
@@ -15102,7 +17679,7 @@
             };
             var runBtnEl = document.getElementById("dc-cnt-run");
             if (runBtnEl) runBtnEl.onclick = function () {
-              countBtn.disabled = true;
+              countBtn.disabled = true; lockExportAll(true);
               cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Counting rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
               // Use QE's OWN fetch path (not the shared Data Explorer exportPaginatedCsv) so
               // Query Editor stays fully independent. We only need the row count here, so we
@@ -15119,7 +17696,7 @@
           showCount(0, err);
         });
         function showCount(cnt, err, couldntParse, rowsProcessed) {
-          countBtn.disabled = false; countBtn.textContent = "# Count";
+          countBtn.disabled = false; lockExportAll(false); countBtn.textContent = "# Count";
           card.style.display = "block"; infoBtn.style.display = "flex";
           // Distinguish "genuinely 0 rows" from "we couldn't read the count value" — the
           // latter should NOT masquerade as 0. Surface it so the user retries rather than
@@ -15215,15 +17792,9 @@
       var tableName = extractTableName(sql);
       var preview = sql.length > 120 ? sql.substring(0, 120) + "…" : sql;
 
-      var ds = readPageDataSpace();
-      if (!ds) {
-        var fromMatch = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
-        var tableInSql = fromMatch ? fromMatch[1].replace(/"/g, "") : "";
-        var dsCandidates = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tableInSql) : [""];
-        ds = dsCandidates[0] || "";
-      }
+      var ds = qeResolveDs(sql);
 
-      runBtn.disabled = true; runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
+      runBtn.disabled = true; lockExportAll(true); runBtn.innerHTML = "<span style='display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:dc-spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;'></span>Running…";
       if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
       downloadBtn.style.display = "none"; viewBtn.style.display = "none"; setLastResult(null);
       // Cancel button for long-running exports
@@ -15232,7 +17803,7 @@
       cancelBtn.textContent = "Cancel";
       cancelBtn.title = "Stop the fetch/export in progress";
       cancelBtn.style.cssText = "border:1px solid #dc2626;background:#fff;color:#dc2626;border-radius:6px;padding:6px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;margin-left:8px;";
-      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; window.__dcStreamCancel = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
+      cancelBtn.onclick = function () { window.__dcQueryExportCancelled = true; cancelBtn.textContent = "Cancelling…"; cancelBtn.disabled = true; };
       card.style.display = "block";
       cardBody.innerHTML = ""
         + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
@@ -15244,7 +17815,7 @@
 
       ensureQueryContext(function (ready) {
         if (!ready) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           cardBody.innerHTML = ""
             + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'>"
             + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
@@ -15276,7 +17847,7 @@
           cardBody.appendChild(cancelBtn);
         }, function () { return window.__dcQueryExportCancelled === true; }).then(function (res) {
           var elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           if (res.totalRows === 0) {
             setLastResult(null);
@@ -15285,7 +17856,8 @@
               + "<div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div>"
               + "<span style='font:600 14px -apple-system,sans-serif;color:#92400e;'>No results</span></div>"
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Query returned <b>0 rows</b>. Nothing to export.<br>"
-              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span></div>";
+              + "<span style='color:#64748b;font-size:11px;'>Table: " + tableName + " | Space: " + (_pageDataSpaceLabel || ds || "default") + " | Time: " + elapsed + "s</span>"
+              + "<div style='margin-top:6px;color:#64748b;font-size:10.5px;font-family:monospace;word-break:break-word;max-height:220px;overflow:auto;background:#f8fafc;border-radius:4px;padding:4px 6px;user-select:text;' title='The exact SQL that was sent (full text)'>Data space sent (API name): <b>" + (ds || "(none)") + "</b><br>Sent: " + qeCleanForRun(sql).replace(/\s+/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;") + (res.rowsProcessed != null ? "<br>Rows processed: " + res.rowsProcessed + (res.rowsProcessed > 0 ? " — the query RAN but matched no rows in this data space. If Salesforce shows rows, check the Data Space selected on the tab matches the one above (the same table can hold different rows per space)." : "") : "") + (function () { try { var d = dcAllDsFromComponents(), seen = {}, o = []; d.forEach(function (x) { var k = x.name + (x.visible ? "" : " (hidden)"); if (!seen[k]) { seen[k] = 1; o.push(k); } }); return o.length > 1 ? "<br>Data Space pickers on page: " + o.join(", ") : ""; } catch (e) { return ""; } })() + "</div></div>";
             downloadBtn.style.display = "none";
             return;
           }
@@ -15320,7 +17892,7 @@
           viewBtn.style.display = "inline-block";
           infoBtn.style.display = "flex";
         }).catch(function (err) {
-          runBtn.disabled = false; runBtn.textContent = "▶ Fetch & Export";
+          runBtn.disabled = false; lockExportAll(false); runBtn.textContent = "▶ Fetch & Export";
           card.style.display = "block";
           var errMsg = String(err && err.message || err);
           // Handle cancel gracefully
@@ -15374,8 +17946,7 @@
         return;
       }
       var tableName = extractTableName(sql);
-      var ds = readPageDataSpace();
-      if (!ds) { var fmm = sql.match(/\bFROM\s+([A-Za-z0-9_"]+)/i); var tn = fmm ? fmm[1].replace(/"/g, "") : ""; var dc = (typeof dataSpaceCandidates === "function") ? dataSpaceCandidates(tn) : [""]; ds = dc[0] || ""; }
+      var ds = qeResolveDs(sql);
       var hasLimit = /\bLIMIT\s+\d+/i.test(sql);
       card.style.display = "block";
       // ── Already-exported guard (save credits) ──────────────────────────────────────
@@ -15426,7 +17997,7 @@
         // query; cheap vs. a wasted full export + file prompt.
         cardBody.innerHTML = "<div style='display:flex;align-items:center;gap:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#0ea5e9;animation:dcpulse 1s infinite;'></div><span style='font:600 13px -apple-system,sans-serif;'>Checking for rows…</span></div><style>@keyframes dcpulse{0%,100%{opacity:1}50%{opacity:.3}}</style>";
         var _innerForCount = sql.replace(/\s+OFFSET\s+\d+\s*$/i, "").replace(/\s+LIMIT\s+\d+\s*$/i, "").trim();
-        var _preCountSql = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(_innerForCount) ? _innerForCount : "SELECT COUNT(*) AS TotalRows FROM (" + _innerForCount + ") AS countWrapper";
+        var _preCountSql = /^\s*SELECT\s+COUNT\s*\([^)]*\)\s*(AS\s+[A-Za-z_]\w*\s*)?\s+FROM\b/i.test(_innerForCount) ? _innerForCount : (qeDirectCountSql(_innerForCount) || "SELECT COUNT(*) AS TotalRows FROM (" + _innerForCount + ") AS countWrapper");
         var _precount = (typeof runQeCount === "function")
           ? runQeCount(_preCountSql, ds).then(function (r) { return r; }, function () { return { ok: false, count: -1 }; })
           : Promise.resolve({ ok: false, count: -1 });
@@ -15437,16 +18008,70 @@
               + "<div style='font-size:12px;color:#475569;line-height:1.6;'>This query returns <b>0 rows</b>, so there&rsquo;s nothing to save — no file was created and no credits were used for an export.</div>";
             return;   // never open the save dialog for an empty result
           }
-          // >0 rows (or count unavailable) → proceed to the save picker + stream.
+          // Over Excel's per-sheet row limit AND the browser can write into a folder → let the user
+          // choose one big CSV or several Excel-sized parts. Count unknown / smaller / no folder
+          // picker → unchanged single-file flow.
+          var EXCEL_ROWS = 1048576;
+          var canSplit = false; try { canSplit = typeof window.showDirectoryPicker === "function"; } catch (e) {}
+          _expectedRows = (pc && pc.ok && pc.count > 0) ? pc.count : 0;
+          if ((canSplit || qeCanXlsx()) && pc && pc.ok && pc.count > EXCEL_ROWS) { showSplitChoice(pc.count, canSplit); return; }
+          // The browser only opens the save dialog shortly after a click. If the count took longer than
+          // that, opening it now would fail ("Must be handling a user gesture"), so ask for one more click.
+          var gestureLive = true; try { if (navigator.userActivation) gestureLive = !!navigator.userActivation.isActive; } catch (e) {}
+          if (!gestureLive) { showReadyToSave(pc && pc.ok ? pc.count : 0); return; }
           startExportStream();
         });
       };
       // The actual save-picker + stream, factored out so the count-first gate can call it.
-      function startExportStream() {
-        var handle;
+      function showReadyToSave(total) {
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 13px -apple-system,sans-serif;'>Ready to export" + (total ? ": " + total.toLocaleString() + " rows" : "") + "</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:10px;'>The row count took a moment, so your browser needs one more click before it will let you choose where to save the file. Nothing has been exported yet and no export credits have been used.</div>"
+          + "<button id='dc-ready-save' style='width:100%;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Save CSV…</button>";
+        var rb = document.getElementById("dc-ready-save");
+        if (rb) rb.onclick = function () { startExportStream(); };
+      }
+      function showSplitChoice(total, canFolder) {
+        var DEF = 1000000, MAXP = 1048575;   // 1,048,576 sheet rows minus the header row
+        var parts0 = Math.ceil(total / DEF);
+        cardBody.innerHTML = ""
+          + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#f59e0b;'></div><span style='font:600 13px -apple-system,sans-serif;color:#92400e;'>Large result: " + total.toLocaleString() + " rows</span></div>"
+          + "<div style='font-size:12px;color:#475569;line-height:1.6;margin-bottom:8px;'>Excel shows at most <b>1,048,576</b> rows per sheet, so one file this big would be cut off when opened in Excel. Save it as <b>one Excel workbook with several sheets</b> (the data simply continues sheet after sheet), as several CSV files, or as one big CSV.</div>"
+          + "<div style='font-size:11px;color:#475569;background:#f8fafc;border-radius:6px;padding:8px 9px;margin-bottom:10px;line-height:1.6;'>Rows per sheet / file: <input id='dc-split-rows' type='number' min='1000' max='" + MAXP + "' value='" + DEF + "' style='width:100px;border:1px solid #cbd5e1;border-radius:4px;padding:2px 4px;font:600 11px -apple-system,sans-serif;'> <span id='dc-split-info' style='color:#0369a1;font-weight:600;'></span><br><span style='color:#64748b;'>It is still one pass over the table (no extra credits for splitting). Each sheet / file has its own header row. The workbook keeps the header frozen and adds filters; CSV parts are saved inside a new sub-folder of the folder you pick, so nothing is overwritten. For very large exports (millions of rows) CSV files open faster than one huge workbook.</span></div>"
+          + "<div style='display:flex;gap:8px;'>"
+          + (qeCanXlsx() ? "<button id='dc-split-xlsx' title='One .xlsx file; every sheet holds up to the rows-per-sheet number. Written straight to disk, so memory stays flat.' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#10b981,#047857);'>Excel workbook…</button>" : "")
+          + (canFolder ? "<button id='dc-split-go' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#0ea5e9,#0369a1);'>Split into CSV files…</button>" : "")
+          + "<button id='dc-split-one' style='flex:1;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;'>One file</button>"
+          + "</div>";
+        var inp = document.getElementById("dc-split-rows"), info = document.getElementById("dc-split-info");
+        function readN() { var n = parseInt(inp.value, 10); if (!(n > 0)) n = DEF; return Math.max(1000, Math.min(MAXP, n)); }
+        function upd() { var n = readN(); info.textContent = "→ " + Math.ceil(total / n).toLocaleString() + " files"; }
+        inp.oninput = upd; upd();
+        document.getElementById("dc-split-one").onclick = function () { startExportStream(); };
+        var goB = document.getElementById("dc-split-go"); if (goB) goB.onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ partRows: n }); };
+        var xlB = document.getElementById("dc-split-xlsx"); if (xlB) xlB.onclick = function () { var n = readN(); inp.value = String(n); startExportStream({ xlsx: true, sheetRows: n }); };
+      }
+      var _expectedRows = 0;
+      function startExportStream(splitOpt) {
+        var handle, splitCfg = null;
+        var xl = (splitOpt && splitOpt.xlsx) ? { sheetRows: splitOpt.sheetRows } : null;
         var startT = Date.now();
-        var opts = { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
-        Promise.resolve().then(function () { return window.showSaveFilePicker(opts); }).then(function (h) {
+        var opts = xl ? { suggestedName: tableName + "_" + todayStr() + "_full.xlsx", types: [{ description: "Excel workbook", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] }
+                      : { suggestedName: tableName + "_" + todayStr() + "_full.csv", types: [{ description: "CSV", accept: { "text/csv": [".csv"] } }] };
+        var pick = (splitOpt && !xl)
+          ? function () {
+              return window.showDirectoryPicker({ mode: "readwrite" }).then(function (dir) {
+                var d = new Date(), z = function (n) { return (n < 10 ? "0" : "") + n; };
+                var base = tableName.replace(/[^a-zA-Z0-9_]/g, "") + "_" + todayStr();
+                var folder = base + "_split_" + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds());
+                return dir.getDirectoryHandle(folder, { create: true }).then(function (sub) {
+                  splitCfg = { dirHandle: sub, partRows: splitOpt.partRows, baseName: base, folderName: folder };
+                  return null;
+                });
+              });
+            }
+          : function () { return window.showSaveFilePicker(opts); };
+        Promise.resolve().then(pick).then(function (h) {
           handle = h;
           window.__dcStreamCancel = false;
           startT = Date.now();   // reset to the moment the user actually picked the file
@@ -15458,14 +18083,14 @@
           // Mark the export as running so closing the card (×) / panel and re-opening — or
           // re-clicking Export ALL — re-shows this progress instead of a blank/stale card.
           _streamState = { status: "running", rows: 0, finalHtml: "" };
-          function renderProgress(n) {
-            if (_streamState) { _streamState.rows = n; }
+          function renderProgress(n, info) {
+            if (_streamState) { _streamState.rows = n; if (info) _streamState.files = info.files; }
             // Only repaint if the card is actually visible — if the user closed it, we keep
             // the state updated silently and re-render on demand (renderStreamCard).
             if (card.style.display !== "none") renderStreamCard();
           }
           renderStreamCard();
-          return qeStreamFullExport(sql, ds, handle, function (n) { renderProgress(n); }, function () { return window.__dcStreamCancel === true; });
+          return qeStreamFullExport(sql, ds, handle, function (n, info) { renderProgress(n, info); }, function () { return window.__dcStreamCancel === true; }, splitCfg, _expectedRows, xl);
         }).then(function (res) {
           streamBtn.disabled = false;
           setExportBusy(false);
@@ -15483,7 +18108,21 @@
           var overExcel = res.totalRows > EXCEL_MAX;
           var overSheets = nCols > 0 && res.totalRows > sheetsMax;
           var viewerNote = "";
-          if (!res.cancelled && (overExcel || overSheets)) {
+          var nParts = (res.parts && res.parts.length) || 0;
+          if (xl && res.sheets) {
+            viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
+              + "\ud83d\udcd7 Saved as one Excel workbook with <b>" + res.sheets + "</b> sheet" + (res.sheets === 1 ? "" : "s") + " of up to <b>" + xl.sheetRows.toLocaleString() + "</b> rows each (sheet names show the row range). The header is repeated, frozen and filterable on every sheet."
+              + (res.cancelled ? "<br><b>Stopped early:</b> the workbook holds the rows written so far." : "")
+              + (nCols > 0 && xl.sheetRows * nCols > SHEETS_CELLS ? "<br>Google Sheets holds ~10M cells per file - use CSV parts or a smaller rows-per-sheet for Sheets." : "")
+              + "</div>";
+          } else if (nParts) {
+            var cellsPerPart = res.partRows * nCols;
+            viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
+              + "📁 Saved in folder <b>" + String(res.folderName).replace(/</g, "&lt;") + "</b>: <b>" + nParts + "</b> file" + (nParts === 1 ? "" : "s") + " (<b>" + res.parts[0] + "</b>" + (nParts > 1 ? " … <b>" + res.parts[nParts - 1] + "</b>" : "") + "), up to " + res.partRows.toLocaleString() + " rows each, in order, each with its own header row."
+              + "<br>Every file opens fully in Excel." + (nCols > 0 && cellsPerPart > SHEETS_CELLS ? "<br>Google Sheets holds ~10M cells per file, so use a smaller rows-per-file for Sheets." : "")
+              + (res.cancelled ? "<br><b>Stopped early:</b> the last file is partial; the files before it are complete." : "")
+              + "</div>";
+          } else if (!xl && !res.cancelled && (overExcel || overSheets)) {
             viewerNote = "<div style='margin-top:8px;font-size:10px;color:#1e3a5f;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:6px 8px;line-height:1.5;'>"
               + "📄 The CSV has <b>all " + res.totalRows.toLocaleString() + "</b> rows, but viewers truncate:"
               + "<br>• <b>Excel</b> shows max " + EXCEL_MAX.toLocaleString() + " rows" + (overExcel ? " — <b>this file is larger</b>" : "")
@@ -15491,10 +18130,11 @@
               + "<br>For the full data use <b>Power Query</b>, a database, or split/filter the query."
               + "</div>";
           }
+          var incompleteNote = res.incomplete ? "<div style='margin-top:8px;font-size:11px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:6px 8px;line-height:1.5;'><b>Incomplete:</b> the table has about <b>" + res.expected.toLocaleString() + "</b> rows but Data Cloud stopped returning rows after <b>" + res.totalRows.toLocaleString() + "</b>." + (res.lastEmpty ? " Data Cloud's last reply: status <b>" + (res.lastEmpty.status || "none") + "</b>" + (res.lastEmpty.progress != null ? ", progress " + res.lastEmpty.progress + "%" : "") + " at row " + res.lastEmpty.offset.toLocaleString() + "." : "") + " The file(s) hold what was received. Click <b>Export ALL</b> again to retry, or export in slices with a <b>WHERE</b> filter.</div>" : "";
           var finalHtml = ""
-            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:#10b981;'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : "Export complete") + "</span></div>"
-            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to your chosen file in " + secs + "s.</div>"
-            + viewerNote
+            + "<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px;'><div style='width:8px;height:8px;border-radius:50%;background:" + (res.incomplete ? "#ef4444" : "#10b981") + ";'></div><span style='font:600 14px -apple-system,sans-serif;'>" + (res.cancelled ? "Stopped" : (res.incomplete ? "Export incomplete" : "Export complete")) + "</span></div>"
+            + "<div style='font-size:12px;color:#475569;line-height:1.6;'>Wrote <b>" + res.totalRows.toLocaleString() + "</b> rows to " + (nParts ? "your chosen folder" : "your chosen file") + " in " + secs + "s.</div>"
+            + incompleteNote + viewerNote
             + "<div style='margin-top:8px;font-size:10px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.45;'>💳 Billed on rows <b>processed</b> (scanned). Track in Digital Wallet.</div>";
           // Persist the final result so re-opening the panel / ℹ shows it (not a stale card).
           _streamState = { status: res.cancelled ? "cancelled" : "done", rows: res.totalRows, finalHtml: finalHtml };
@@ -15504,7 +18144,9 @@
           setExportBusy(false);
           var m = String(err && err.message || err);
           var finalHtml;
-          if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
+          if (/user gesture|user activation/i.test(m)) {
+            finalHtml = "<div style='color:#92400e;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>One more click needed</div><div style='font-size:12px;color:#475569;line-height:1.6;'>Your browser only lets a page open the save dialog right after a click, and that moment passed. Click <b>Export ALL</b> again, then <b>Save CSV…</b>. No credits were used.</div>";
+          } else if (/aborted|abort|The user aborted a request|dismiss/i.test(m)) {
             finalHtml = "<div style='font-size:12px;color:#475569;'>No file chosen — export cancelled.</div>";
           } else if ((err && err.fileLocked) || /create or truncate|truncate file|NoModificationAllowed/i.test(m)) {
             // The chosen file couldn't be overwritten — almost always because it's still OPEN
@@ -15515,6 +18157,9 @@
               + "<b>Fix:</b> close the file in Excel (or pick a <b>new file name</b>), then click <b>Export ALL</b> again. No credits were used.</div>";
           } else {
             finalHtml = "<div style='color:#dc2626;font:600 13px -apple-system,sans-serif;margin-bottom:6px;'>Stream export failed</div><div style='color:#64748b;font-size:11px;background:#fef2f2;border-radius:6px;padding:8px;word-break:break-all;line-height:1.5;'>" + m.replace(/</g, "&lt;") + "</div>";
+          }
+          if (err && err.partsDone && err.partsDone.length) {
+            finalHtml += "<div style='margin-top:8px;font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;line-height:1.5;'>" + err.rowsWritten.toLocaleString() + " rows were already saved in " + err.partsDone.length + " file" + (err.partsDone.length === 1 ? "" : "s") + " (" + err.partsDone[0] + (err.partsDone.length > 1 ? " … " + err.partsDone[err.partsDone.length - 1] : "") + "). The last one may be incomplete; the rest are intact.</div>";
           }
           _streamState = { status: "error", rows: (_streamState && _streamState.rows) || 0, finalHtml: finalHtml };
           if (card.style.display !== "none") renderStreamCard();
@@ -15555,10 +18200,20 @@
       // (data-json index into rows via r/c) so the user can open the JSON modal; the
       // text still copies on click like every other cell. Shared by all 3 render paths.
       var _jsonCellStore = []; // holds raw JSON strings; button carries its index
+      var wrapOn = false;   // 'Wrap text' checkbox: JSON cells render as indented, colour-coded blocks
       function qeCellHtml(val) {
         var raw = val == null ? "" : String(val);
         var copyAttr = raw.replace(/'/g, "&#39;").replace(/</g, "&lt;");
         var base = "padding:6px 10px;border-bottom:1px solid #f1f5f9;border-right:1px solid #f1f5f9;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis;cursor:pointer;";
+        if (wrapOn && qeJsonDetect(val).isJson) {
+          var pj = ""; try { pj = JSON.stringify(qeJsonDetect(val).value, null, 2); } catch (e) { pj = raw; }
+          var cut = pj.length > 30000; if (cut) pj = pj.slice(0, 30000);
+          var colored = pj.split("\n").map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") + (cut ? "\n… (truncated — use the { } button for the full JSON)" : "");
+          var ji2 = _jsonCellStore.push(raw) - 1;
+          return "<td style='" + base + "' title='Click to copy the compact JSON' data-copy='" + copyAttr + "'>" +
+            "<button class='dc-qe-json-btn' data-json='" + ji2 + "' title='View JSON (table / raw)' style='border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:4px;font:700 10px system-ui;padding:0 5px;margin-bottom:3px;cursor:pointer;'>{ } open viewer</button>" +
+            "<pre class='dc-pj'>" + colored + "</pre></td>";
+        }
         if (qeJsonDetect(val).isJson) {
           var ji = _jsonCellStore.push(raw) - 1;
           return "<td style='" + base + "' title='Click to copy · use the { } button to view JSON' data-copy='" + copyAttr + "'>" +
@@ -15600,7 +18255,16 @@
       closeX.title = "Close the results table";
       closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
       closeX.onclick = function () { modal.remove(); };
-      hdr.appendChild(closeX);
+      var fsBtn = document.createElement("button"), _fsOn = false, _boxCss = "";
+      fsBtn.innerHTML = "&#x26F6;"; fsBtn.title = "Full screen / back";
+      fsBtn.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:16px;width:32px;height:32px;border-radius:50%;cursor:pointer;margin-right:8px;";
+      fsBtn.onclick = function () {
+        _fsOn = !_fsOn;
+        if (_fsOn) { _boxCss = box.style.cssText; box.style.cssText = "position:fixed;top:0;left:0;transform:none;width:100vw;max-width:none;height:100vh;max-height:100vh;border-radius:0;background:#fff;display:flex;flex-direction:column;overflow:hidden;"; }
+        else box.style.cssText = _boxCss;
+      };
+      var hdrBtns = document.createElement("div"); hdrBtns.style.cssText = "display:flex;align-items:center;flex-shrink:0;";
+      hdrBtns.appendChild(fsBtn); hdrBtns.appendChild(closeX); hdr.appendChild(hdrBtns);
 
       var note = document.createElement("div");
       note.style.cssText = "padding:8px 20px;background:#fffbeb;border-bottom:1px solid #fcd34d;font-size:11px;color:#92400e;flex-shrink:0;";
@@ -15622,6 +18286,7 @@
         cols.forEach(function (c) { thHtml += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'></span></th>"; });
         thHtml += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
         tableWrap.innerHTML = thHtml;
+        dcMakeColsResizable(tableWrap);
         fillTbodyChunked(rows);   // fill rows in non-blocking chunks (VDI-safe), not all at once
         tableWrap.querySelectorAll("th[data-col]").forEach(function (th) {
           th.onclick = function () { sortRows(th.getAttribute("data-col")); };
@@ -15703,6 +18368,7 @@
       cols.forEach(function (c) { table += "<th data-col='" + esc(c).replace(/'/g,"") + "' style='padding:8px 10px;text-align:left;font-size:11px;font-weight:600;white-space:nowrap;border-right:1px solid #334155;cursor:pointer;user-select:none;'>" + esc(c) + "<span class='dc-sort-arrow' style='opacity:0.3;font-size:9px;'> ▲</span></th>"; });
       table += "</tr></thead><tbody id='dc-qe-tbody'></tbody></table>";
       tableWrap.innerHTML = table;
+      dcMakeColsResizable(tableWrap);
 
       var footer = document.createElement("div");
       footer.style.cssText = "padding:10px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;";
@@ -15716,7 +18382,52 @@
       dlBtn2.title = "Download these results as CSV (uses the data already fetched — no extra query).";
       dlBtn2.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);";
       dlBtn2.onclick = function () { downloadBtn.click(); };
-      footer.appendChild(dlBtn2);
+      var expLbl = document.createElement("label"); expLbl.style.cssText = "font:600 11px system-ui;color:#334155;margin-right:12px;cursor:pointer;display:flex;align-items:center;gap:5px;";
+      var expChk = document.createElement("input"); expChk.type = "checkbox"; expChk.checked = true;
+      expLbl.title = "JSON columns (like an activation record) become one column per field, so you can filter and read them. Applies to Copy for Sheets and the Excel download.";
+      expLbl.appendChild(expChk); expLbl.appendChild(document.createTextNode("Expand JSON into columns"));
+      var xlBtn = document.createElement("button");
+      xlBtn.textContent = "\ud83d\udcd7 Download Excel (.xlsx)";
+      xlBtn.title = "A formatted Excel workbook: bold frozen header, filters, sized columns, real numbers" + (typeof CompressionStream === "function" ? "" : " (needs a newer browser)");
+      xlBtn.style.cssText = "border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#fff;background:linear-gradient(135deg,#10b981,#047857);margin-right:8px;";
+      if (typeof CompressionStream !== "function") xlBtn.style.display = "none";
+      xlBtn.onclick = function () {
+        var old = xlBtn.textContent; xlBtn.disabled = true; xlBtn.textContent = "Building…";
+        var pp = qePrepResults(allCols, rows, expChk.checked), chunks = [];
+        var x = dcXlsxStream({ write: function (b) { chunks.push(b); return Promise.resolve(); }, close: function () { return Promise.resolve(); } }, 1000000);
+        x.setCols(pp.cols, pp.widths);
+        x.addRows(pp.rows.map(function (r) { return pp.cols.map(function (c) { return r[c]; }); })).then(function () { return x.close(); }).then(function () {
+          var fnI = document.getElementById("dc-qe-filename"), nm = ((fnI && fnI.value.trim()) || (_lastResult && _lastResult.filename) || "results").replace(/\.csv$/i, "") + ".xlsx";
+          var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); a.download = nm; document.body.appendChild(a); a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          xlBtn.textContent = "\u2713 Saved " + nm;
+        }).catch(function (e) { xlBtn.textContent = "Excel build failed"; xlBtn.title = String(e && e.message || e); }).then(function () { xlBtn.disabled = false; setTimeout(function () { xlBtn.textContent = old; }, 2500); });
+      };
+      var shBtn = document.createElement("button");
+      shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)";
+      shBtn.title = "Copy the rows shown here as tab-separated text (all columns), ready to paste into Google Sheets or Excel.";
+      shBtn.style.cssText = "border:1px solid #cbd5e1;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px system-ui;color:#334155;background:#fff;margin-right:8px;";
+      shBtn.onclick = function () {
+        var pp = qePrepResults(allCols, rows.slice(0, showing), expChk.checked), tsv = qeToTsv(pp.cols, pp.rows), done = function () { shBtn.textContent = "\u2713 Copied - paste into Sheets"; setTimeout(function () { shBtn.textContent = "\u2398 Copy for Sheets (" + showing.toLocaleString() + " rows)"; }, 1800); };
+        try {
+          if (typeof ClipboardItem === "function" && navigator.clipboard && navigator.clipboard.write) {
+            var htm = qeToHtmlTable(pp.cols, pp.rows, pp.widths);
+            navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([htm], { type: "text/html" }), "text/plain": new Blob([tsv], { type: "text/plain" }) })]).then(done, function () { return navigator.clipboard.writeText(tsv).then(done); });
+          } else navigator.clipboard.writeText(tsv).then(done, function () { throw 0; });
+        }
+        catch (ex) { var ta = document.createElement("textarea"); ta.value = tsv; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); done(); } catch (e2) { shBtn.textContent = "Copy blocked by the browser"; } ta.remove(); }
+      };
+      var ftBtns = document.createElement("div"); ftBtns.style.cssText = "display:flex;align-items:center;";
+      // Wrap text: long cell values break onto several lines instead of "…". Pure CSS on the table wrapper
+      // (rules are !important to beat the cells' inline nowrap/ellipsis), so sort/fill/resizing are untouched.
+      if (!document.getElementById("dc-wrap-css")) { var wst = document.createElement("style"); wst.id = "dc-wrap-css"; wst.textContent = ".dc-wrap td{white-space:normal!important;max-width:none!important;overflow:visible!important;text-overflow:clip!important;word-break:break-word;vertical-align:top;}.dc-wrap .dc-pj{white-space:pre-wrap!important;word-break:break-word;margin:0;min-width:340px;max-height:320px;overflow:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#334155;}.dc-pj .k{color:#0b5cad;font-weight:600}.dc-pj .s{color:#15803d}.dc-pj .n{color:#c2410c}.dc-pj .b{color:#7c3aed;font-weight:600}.dc-pj .z{color:#94a3b8;font-style:italic}.dc-pj .p{color:#64748b}"; document.head.appendChild(wst); }
+      var wrapLbl = document.createElement("label"); wrapLbl.style.cssText = "font:600 11px system-ui;color:#334155;margin-right:12px;cursor:pointer;display:flex;align-items:center;gap:5px;";
+      var wrapChk = document.createElement("input"); wrapChk.type = "checkbox";
+      wrapChk.onchange = function () { wrapOn = wrapChk.checked; tableWrap.classList.toggle("dc-wrap", wrapOn); fillTbodyChunked(rows); };
+      wrapLbl.title = "Wrap long values onto several lines instead of cutting them off with “…”.";
+      wrapLbl.appendChild(wrapChk); wrapLbl.appendChild(document.createTextNode("Wrap text"));
+      ftBtns.appendChild(wrapLbl);
+      ftBtns.appendChild(expLbl); ftBtns.appendChild(shBtn); ftBtns.appendChild(xlBtn); ftBtns.appendChild(dlBtn2); footer.appendChild(ftBtns);
 
       // ── Snapshot / compare toolbar (activation-history retain + day-over-day diff) ──
       var snapSql = (_lastResult && _lastResult.sql) || (_lastResult && _lastResult.tableName) || "qe";
@@ -15753,10 +18464,14 @@
       csvCmpBtn.title = "Compare two CSV files (e.g. two Download CSV exports from different runs). No row limit — good for large results.";
       csvCmpBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#4338ca;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 11px system-ui;";
       csvCmpBtn.onclick = function () { try { openQeCsvCompare(); } catch (e) {} };
+      var histBtn = document.createElement("button");
+      histBtn.textContent = "History"; histBtn.title = "See every saved run of this query: row counts and what changed between runs";
+      histBtn.style.cssText = csvCmpBtn.style.cssText;
+      histBtn.onclick = function () { try { openQeSnapHistory(qeSnapList(snapSql), { columns: allCols, rows: rows }, [keySel.value].filter(Boolean)); } catch (e) {} };
       // "?" help — opens the full how-it-works + testing-steps guide (no org calls).
       var helpBtn = document.createElement("button");
-      helpBtn.textContent = "?"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
-      helpBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:50%;width:24px;height:24px;cursor:pointer;font:700 13px system-ui;flex:none;";
+      helpBtn.textContent = "i"; helpBtn.title = "How snapshots & Compare work — with step-by-step testing";
+      helpBtn.style.cssText = "border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;border-radius:50%;width:24px;height:24px;cursor:pointer;font:italic 700 13px Georgia,serif;flex:none;";
       helpBtn.onclick = function () { try { openQeSnapHelp(); } catch (e) {} };
       // Inline hint line (other-bucket notice + key-quality warning). Lives under the bar.
       var snapHint = document.createElement("div");
@@ -15766,13 +18481,13 @@
         var list = qeSnapList(snapSql);
         if (!list.length) {
           var others = qeSnapOtherBucketCount(snapSql);
-          if (others > 0) bits.push("No snapshots saved for the query you just ran. You do have snapshots from " + others + " other quer" + (others === 1 ? "y" : "ies") + " — a snapshot only shows up when you run the <b>same query</b> it was saved with. Click <b>?</b> for details.");
+          if (others > 0) bits.push("No snapshots saved for the query you just ran. You do have snapshots from " + others + " other quer" + (others === 1 ? "y" : "ies") + " — a snapshot only shows up when you run the <b>same query</b> it was saved with. Click <b>i</b> for details.");
         }
         // key quality on the CURRENT rows
         var kq = qeKeyQuality(rows, keySel.value);
         if (kq.total) {
-          if (kq.dups > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> — " + kq.dups + " of " + kq.total + " rows share the same value, so the comparison won't be reliable. Pick a column with a unique value per row (usually an ID). Click <b>?</b>.");
-          else if (kq.jsonish > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like a JSON or hash value, which usually changes when the record changes. If that happens, edited rows show up as <b>removed + added</b> instead of <b>changed</b>. Prefer an ID column instead. Click <b>?</b>.");
+          if (kq.dups > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> is <b>not unique</b> — " + kq.dups + " of " + kq.total + " rows share the same value, so the comparison won't be reliable. Pick a column with a unique value per row (usually an ID). Click <b>i</b>.");
+          else if (kq.jsonish > 0) bits.push("⚠ The key <b>" + String(keySel.value).replace(/</g, "") + "</b> looks like a JSON or hash value, which usually changes when the record changes. If that happens, edited rows show up as <b>removed + added</b> instead of <b>changed</b>. Prefer an ID column instead. Click <b>i</b>.");
         }
         snapHint.innerHTML = bits.join("<br>");
         snapHint.style.display = bits.length ? "block" : "none";
@@ -15801,8 +18516,10 @@
         var list = qeSnapList(snapSql); var idx = parseInt(cmpSel.value, 10);
         if (isNaN(idx) || !list[idx]) return;
         var keyCols = [keySel.value].filter(Boolean);
-        var d = qeDiffSnapshots(list[idx], { columns: allCols, rows: rows }, keyCols);
-        openQeDiffModal(d, keyCols, list[idx]);
+        var curSnap = { columns: allCols, rows: rows }, oldSnap = list[idx];
+        var d = qeDiffSnapshots(oldSnap, curSnap, keyCols);
+        var cx = { prev: oldSnap, curr: curSnap }; cx.rerun = function (col, o) { var ks = Array.isArray(col) ? col : [col]; cx.opts = o || cx.opts; var d2 = qeDiffSnapshots(oldSnap, curSnap, ks, cx.opts); openQeDiffModal(d2, ks, oldSnap, cx); };
+        openQeDiffModal(d, keyCols, oldSnap, cx);
       };
       delBtn.onclick = function () {
         var idx = parseInt(cmpSel.value, 10); if (isNaN(idx)) return;
@@ -15815,7 +18532,7 @@
         setTimeout(function () { snapMsg.textContent = ""; }, 2000);
       };
       snapBar.appendChild(saveSnapBtn); snapBar.appendChild(keyWrap);
-      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(csvCmpBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
+      snapBar.appendChild(document.createTextNode(" · compare to:")); snapBar.appendChild(cmpSel); snapBar.appendChild(cmpBtn); snapBar.appendChild(delBtn); snapBar.appendChild(clearBtn); snapBar.appendChild(csvCmpBtn); snapBar.appendChild(histBtn); snapBar.appendChild(helpBtn); snapBar.appendChild(snapMsg); snapBar.appendChild(snapHint);
       refreshSnapList();
 
       box.appendChild(hdr);
@@ -15905,6 +18622,7 @@
     wrap.appendChild(fab); wrap.appendChild(btnRow); wrap.appendChild(card);
     document.body.appendChild(wrap);
   }
+  /* @strip:end */
 
   // ── Data Explore launcher (FAB) ───────────────────────────────────────────
   function ensureExploreLauncher() {
@@ -15965,7 +18683,11 @@
     menu.appendChild(menuCloseX);
     menu.appendChild(colBtn);
     menu.appendChild(exportBtn);
+    const cmpIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 5h10M9 2l3 3-3 3M14 11H4m3 3l-3-3 3-3'/></svg>";
+    const cmpRow = mkBtn("dc-explore-cmp-btn", "Compare CSVs", "Compare two downloaded CSV files (older vs newer): added / removed / changed rows", "linear-gradient(135deg,#6366f1,#4338ca)", cmpIconSvg, "Diff two CSV exports");
+    cmpRow.onclick = (e) => { e.stopPropagation(); closeMenu(); try { openQeCsvCompare(); } catch (err) { dcExploreToast("Compare CSVs is unavailable here."); } };
     menu.appendChild(reopenBtn);
+    menu.appendChild(cmpRow);
 
     const fab = document.createElement("button");
     fab.id = "dc-fab";
@@ -16012,7 +18734,7 @@
 
     watchExploreObjectChange();
   }
-  /* @strip:end */
+  // (end of Data Explorer / Segment export region)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // Activation Export feature (extension-only)
@@ -16115,6 +18837,9 @@
     return result;
   }
 
+  // Declared here (hoisted, unassigned) so reads are safe in the PUBLIC build, where the dev block that
+  // assigns them is stripped. Previously an unguarded read threw ReferenceError there.
+  var _auraSniff, _dcBridgeSeq;
   function fetchActivationViaAura(activationId) {
     return new Promise(function(resolve, reject) {
       // Capture Aura token by intercepting XHR (same approach as our successful probes)
@@ -17298,7 +20023,7 @@ processJSON();
       menu.appendChild(exportRow);
     }
 
-    /* @strip:start dev
+    /* (released to public) 
      * Dev-only "Document Activation" row — DOM-only (bookmarklet-safe, no bridge/API).
      * Reads the activation straight from the page and opens a Salesforce-styled export
      * modal with API names inline + CSV/Excel. Gated on the exporter fn (dev build only).
@@ -17317,16 +20042,17 @@ processJSON();
     if (typeof window.__dcToggleSegApi === "function" && isActivationWizardPage()) {
       var apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
       var onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
       var apiSub = apiRow.querySelector("span:last-child");
       apiRow.onclick = function (e) {
         e.stopPropagation();
         var on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
         if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+        window.__dcPaintOn(apiRow, on);
       };
+      window.__dcPaintOn(apiRow, onNow);
       menu.appendChild(apiRow);
     }
-    /* @strip:end */
 
     // Nothing to show (no bridge AND no dev toggle) → don't render an empty FAB.
     if (!menu.childElementCount) return;
@@ -18142,7 +20868,7 @@ processJSON();
     // Dataspace priority: the LIVE dropdown selection wins (what the user currently has
     // chosen), THEN the value captured at XHR time, THEN cached data. Previously the
     // captured value won — so after the first load the label stayed stuck on that
-    // dataspace (e.g. "TDI") even after switching the dropdown to "default".
+    // dataspace even after switching the dropdown to "default".
     var dsName = "";
     (function findDs(root, depth) {
       if (depth > 8 || dsName) return;
@@ -18851,7 +21577,7 @@ processJSON();
     watchNavigation();
   }
 
-  /* @strip:start dev
+  /*
    * ── "Open in new tab" for Data Cloud LIST rows (generic engine) ──────────────────
    * Problem: DC list rows (DMO, DLO, CI, Segments, Data Streams, …) aren't real links —
    * the clickable label is a custom-event cell (href="javascript:void(0)"), so right-click
@@ -19400,7 +22126,6 @@ processJSON();
       }, 1000);
     }
   } catch (e) {}
-  /* @strip:end */
 
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
   // Lightning SPA: when the tool injects, the URL/route may not be final yet, so the
@@ -19421,7 +22146,7 @@ processJSON();
     }, 1000);
   }
 
-  /* @strip:start dev
+  /* (released to public) 
    * SEGMENT + ACTIVATION API-NAME DECORATOR (dev-only until approved for public).
    * Shows the real API name of each attribute on the Segment builder AND the Activation
    * wizard — left palette (runtime_cdp-attribute-row / -attribute-group-row), used rules
@@ -19762,7 +22487,7 @@ processJSON();
         for (var j = 0; j < path.length && j < 6; j++) {
           var le = path[j];
           if (!le || !le.getAttribute) continue;
-          var t = ""; try { t = (le.textContent || "").trim(); } catch (e2) {}
+          var t = ""; try { t = dcCleanUiText((le.textContent || "").trim()); } catch (e2) {}
           if (!t || t.length > 60) continue;
           var hit = segLabelLookup(t);
           if (hit && (hit.fieldApi || hit.objectApi)) return hit;
@@ -19989,7 +22714,7 @@ processJSON();
         var path = docActCpPath(v);
         var value = label || fieldApi || "";
         var dump = (value || path || entityApi) ? "" : docActCpDump(v);   // only dump when we got nothing useful
-        // A channel the user never configured (e.g. Push/WhatsApp/Address left unset) carries
+        // A channel the user never configured carries
         // only UI-state plumbing and nothing meaningful — treat it as NOT present, not as noise.
         if (!value && !path && !entityApi && !dump) return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
         return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
@@ -20103,7 +22828,7 @@ processJSON();
       function docActOwnerHeader(limitEl) {
         var p = limitEl && limitEl.parentNode, kids = (p && p.children) || [];
         for (var i = 0; i < kids.length; i++) {
-          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(kids[i].textContent);
+          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(dcCleanUiText(kids[i].textContent));
         }
         return "";
       }
@@ -20144,7 +22869,7 @@ processJSON();
           } else if (tag === "lightning-combobox" && /^Path\b/i.test(String(segSafeGet(el, "label") || ""))) {
             var txt = docActOptionLabel(segSafeGet(el, "options"), segSafeGet(el, "value"));
             if (!txt) {
-              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? String(c.textContent || "").replace(/\s+/g, " ").trim() : ""; } catch (e) {}
+              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? dcCleanUiText(String(c.textContent || "")) : ""; } catch (e) {}
             }
             var po = docActPathOwner(txt);
             if (txt && po) paths.push({ owner: po, text: txt });
@@ -20240,10 +22965,23 @@ processJSON();
         var flat = dialogText.replace(/\s+/g, " ").trim();
         var titleM = /Filter "([^"]+)" Attributes/.exec(flat);
         var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(flat);
-        var spanM = /Drag and drop\s+(.+?)\s+Add another Attribute here/.exec(flat);
+        // Condition span = text between the start marker and "...another Attribute here".
+        // Start marker: "Drag and drop" (older layout) OR the "<Entity Label>:" sub-heading
+        // (layout seen when the editor is a full page). End marker accepts Add/Drag/Drop wording.
+        var END = "(?:Add |Drag |Drop )?another Attribute here";
+        var spanM = new RegExp("Drag and drop\\s+(.+?)\\s+" + END).exec(flat);
+        if (!spanM && titleM) {
+          var ent = titleM[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          spanM = new RegExp(ent + ":\\s+(.+?)\\s+" + END).exec(flat);
+        }
         var conditions = [];
         if (spanM && spanM[1]) {
           var span = spanM[1].trim();
+          // Salesforce puts an instruction sentence before the first condition, e.g.
+          // "Drag and drop … then use the Up and Down arrow keys to move it. <Field> <Operator>".
+          // Drop everything up to and including that sentence so it never ends up in a field name.
+          var mv = span.lastIndexOf("to move it.");
+          if (mv >= 0) span = span.slice(mv + "to move it.".length).trim();
           var opAlt = DOCACT_FILTER_OPS.map(function (o) { return o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|");
           var condRe = new RegExp("([A-Za-z0-9 _.]+?)\\s+(" + opAlt + ")(?=\\s+[A-Z]|$)", "g");
           var cm;
@@ -20263,6 +23001,7 @@ processJSON();
 
         var summaryEl = null, attrTables = [], channelEl = null, wizardEl = null, staticTables = [];
         var attrWizardEl = null, filterDialogEl = null;
+        var filterFallbackEls = [];
         raw.forEach(function (el) {
           var tag = (el.tagName || "").toLowerCase();
           if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
@@ -20271,12 +23010,21 @@ processJSON();
           else if (tag === "runtime_cdp-market-segment-activation-wizard") wizardEl = wizardEl || el;
           else if (tag === "runtime_cdp-activation-attribute-wizard") attrWizardEl = attrWizardEl || el;
           else if (tag === "runtime_cdp-activation-related-attributes-filter-dialog") filterDialogEl = filterDialogEl || el;
+          else if (!filterDialogEl && /^runtime_cdp-/.test(tag) && /filter/.test(tag) && /activation|attribute/.test(tag) && !/badge|condition-row/.test(tag)) filterFallbackEls.push(el);
         });
+        // Fallback: if the exact dialog tag isn't present (Salesforce renamed/relocated it, or the editor opens as a
+        // full page), accept any activation filter component whose text is the "Filter "<x>" Attributes" editor.
+        if (!filterDialogEl) {
+          for (var fi = 0; fi < filterFallbackEls.length; fi++) {
+            var ft = ""; try { ft = filterFallbackEls[fi].innerText || filterFallbackEls[fi].textContent || ""; } catch (e) {}
+            if (/Filter\s+"[^"]+"\s+Attributes/.test(ft)) { filterDialogEl = filterFallbackEls[fi]; break; }
+          }
+        }
 
         // Filter-exists badges (Edit Filters vs Add Filters, read closed) — accumulate like
         // output names/paths since this step tears down on navigation.
         if (attrWizardEl) {
-          var wizText = ""; try { wizText = attrWizardEl.innerText || attrWizardEl.textContent || ""; } catch (e) {}
+          var wizText = ""; try { wizText = dcCleanUiText(attrWizardEl.innerText || attrWizardEl.textContent || ""); } catch (e) {}
           var badges = docActParseFilterBadges(wizText);
           Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
           var mem = docActParseMembership(wizText);
@@ -20927,16 +23675,31 @@ processJSON();
 
           // What's captured vs not (honest status banner).
           var caps = data.captured;
-          function pill(ok, label) {
-            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : "#8a6d00") + ";background:" + (ok ? "#e3f6ec" : "#fef6dd") + ";border:1px solid " + (ok ? "#b6e6cd" : "#f1dca0") + ";border-radius:12px;padding:3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + "</span>";
+          // Every pill explains itself: green = found on the page; otherwise WHY it is not green.
+          // `optional` items (an activation may simply not use them) show neutral grey, not a warning.
+          function pill(ok, label, tipOk, tipNo, optional) {
+            var bad = optional ? { c: "#475569", bg: "#f1f5f9", bd: "#dbe3ec" } : { c: "#8a6d00", bg: "#fef6dd", bd: "#f1dca0" };
+            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : bad.c) + ";background:" + (ok ? "#e3f6ec" : bad.bg) + ";border:1px solid " + (ok ? "#b6e6cd" : bad.bd) + ";border-radius:12px;padding:3px 6px 3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + docActInfoIcon(ok ? tipOk : tipNo) + "</span>";
           }
           var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>"
-            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")")
-            + pill(caps.outputNames, "Output names")
-            + pill(caps.contactPoints, "Contact points")
-            + pill(caps.staticValues, "Campaign Data")
-            + pill(caps.limits, "Related-object limits")
-            + pill(caps.paths, "Show Paths")
+            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")",
+                "Green: the attributes included in this activation were read from the page.",
+                "Not green: no included attributes were found on the page yet. Open the activation (wizard or review step) so its attribute list is visible, then reopen this panel.")
+            + pill(caps.outputNames, "Output names",
+                "Green: the output (column) names were read. They appear on the Attributes step.",
+                "Not green: output names are shown only on the Attributes step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.contactPoints, "Contact points",
+                "Green: the contact point (channel, e.g. email or phone) configuration was read. It appears on the Contact Point step.",
+                "Not green: contact points are shown only on the Contact Point step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.staticValues, "Campaign Data",
+                "Green: the fixed Campaign Data values configured on this activation were read.",
+                "Not green does not mean an error. Either no Campaign Data is configured on this activation (so there is nothing to show), or the Attributes step where it is listed has not been on screen yet. If you expect values, open the Attributes step once and reopen this panel.", true)
+            + pill(caps.limits, "Related-object limits",
+                "Green: Max # of Attribute Values and Sort By were read for the related objects.",
+                "Not green does not mean an error. Activations that use only attributes of the main object have no related-object limits. If this one uses related attributes, scroll to them on the Attributes step once so they are on screen, then reopen this panel.", true)
+            + pill(caps.paths, "Show Paths",
+                "Green: the join path for each related object was read.",
+                "Not green does not mean an error. Paths exist only for related objects. If this activation uses them, click Add Attributes on the Attributes step and turn on Show Paths once, then reopen this panel.", true)
             + "</div>";
           // How to capture the two Attributes-step extras (read only while visible, then remembered).
           if (!caps.limits || !caps.paths) {
@@ -21326,7 +24089,6 @@ processJSON();
       }
     })();
   }
-  /* @strip:end */
 
   /* @strip:start dev
    * ── DATA GRAPH builder: inline API names (dev-only) ─────────────────────────────────
@@ -21597,7 +24359,7 @@ processJSON();
       var lbl = ""; try { lbl = String(el.label || ""); } catch (e) {}
       return /^(sort field|field)$/i.test(lbl.trim());
     }
-    // The label text a combobox currently displays (e.g. "Individual Id") — from its inner button
+    // The label text a combobox currently displays — from its inner button
     // text. Used only for the cache fallback when .value is somehow empty.
     function dgComboShownText(el) {
       try { var b = (el.shadowRoot || el).querySelector('[role="combobox"],button,input'); if (b) return (b.value || b.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
@@ -22011,7 +24773,7 @@ processJSON();
   })();
   /* @strip:end */
 
-  /* @strip:start dev
+  /* (released to public) 
    * ── DATA STREAM / DLO: hover the Formula-column checkmark to see & copy its formula (dev-only) ─
    * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never on
    * the page (you must open our export modal). This shows it in a hover popover with a Copy button.
@@ -22097,7 +24859,7 @@ processJSON();
     }
 
     // ── one shared popover (built once, only when first needed) ───────────────────────
-    var _fmPop = null, _fmPopFor = null, _fmHideT = null;
+    var _fmPop = null, _fmPopFor = null, _fmHideT = null, _fmRaw = "", _fmSelecting = false, _fmBridge = null;
     function fmBuildPopover() {
       if (_fmPop) return _fmPop;
       var p = document.createElement("div");
@@ -22111,13 +24873,20 @@ processJSON();
       head.appendChild(ttl); head.appendChild(copy);
       var body = document.createElement("pre"); body.id = "dc-fm-body";
       body.style.cssText = "margin:0;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:11px/1.5 'SF Mono',Menlo,Consolas,monospace;color:#e5edff;";
+      // Invisible hover BRIDGE spanning the gap between the cell and the popover, so moving the
+      // pointer from the cell onto the popover never crosses dead space (that gap used to close it).
+      var br = document.createElement("div"); br.id = "dc-fm-bridge";
+      br.style.cssText = "position:absolute;left:0;right:0;height:10px;background:transparent;";
+      p.appendChild(br); _fmBridge = br;
       p.appendChild(head); p.appendChild(body);
       // keep open while the pointer is over the popover (so you can click Copy / select text)
       p.addEventListener("pointerenter", function () { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
       p.addEventListener("pointerleave", function () { fmScheduleHide(); });
+      // A press inside the popover = the user is selecting/copying: never auto-hide until release.
+      p.addEventListener("pointerdown", function () { _fmSelecting = true; if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
       copy.addEventListener("click", function (e) {
         e.stopPropagation();
-        var txt = body.textContent || "";
+        var txt = _fmRaw || body.textContent || "";   // the exact stored formula, not re-read from the DOM
         function flash() { copy.textContent = "✓ Copied"; setTimeout(function () { copy.textContent = "Copy"; }, 900); }
         try { navigator.clipboard.writeText(txt).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
         catch (e3) { flash(); }
@@ -22126,7 +24895,16 @@ processJSON();
       _fmPop = p;
       return p;
     }
-    function fmScheduleHide() { if (_fmHideT) clearTimeout(_fmHideT); _fmHideT = setTimeout(function () { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; }, 180); }
+    function fmHideNow() { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; _fmSelecting = false; }
+    function fmScheduleHide() {
+      if (_fmHideT) clearTimeout(_fmHideT);
+      _fmHideT = setTimeout(function () {
+        _fmHideT = null;
+        if (_fmSelecting) return;                       // mid-selection / mid-click: stay open
+        if (_fmPop && _fmPop.matches && _fmPop.matches(":hover")) return;   // pointer is on the popover
+        fmHideNow();
+      }, 300);
+    }
     function fmShowPopover(anchorRect, label, formula) {
       var p = fmBuildPopover();
       p.querySelector("#dc-fm-ttl").textContent = "ƒ " + (label || "Formula");
@@ -22138,6 +24916,9 @@ processJSON();
       var ph = p.offsetHeight || 120;
       if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 6);
       p.style.left = left + "px"; p.style.top = top + "px";
+      _fmRaw = String(formula);
+      // bridge sits on whichever edge faces the cell
+      if (_fmBridge) { var above = top < anchorRect.top; _fmBridge.style.top = above ? "" : "-10px"; _fmBridge.style.bottom = above ? "-10px" : ""; }
     }
 
     // Build {label,formula} from a data record IF it's a formula field with a formula, else null.
@@ -22214,10 +24995,20 @@ processJSON();
       _fmWired = true;
       try { document.addEventListener("pointerover", fmOnOver, true); } catch (e) {}
       try { document.addEventListener("pointerout", fmOnOut, true); } catch (e) {}
+      // selection ends on release anywhere; Esc and a click outside close the popover
+      try { document.addEventListener("pointerup", function () { if (_fmSelecting) { _fmSelecting = false; if (_fmPop && _fmPop.style.display !== "none" && !(_fmPop.matches && _fmPop.matches(":hover"))) fmScheduleHide(); } }, true); } catch (e) {}
+      try { document.addEventListener("keydown", function (e) { if (e.key === "Escape" && _fmPop && _fmPop.style.display !== "none") fmHideNow(); }, true); } catch (e) {}
+      try { document.addEventListener("pointerdown", function (e) {
+        if (!_fmPop || _fmPop.style.display === "none") return;
+        var path = (e.composedPath && e.composedPath()) || [];
+        if (path.indexOf(_fmPop) >= 0) return;
+        var c = fmClimb(path[0] || e.target); if (c && c.cell && c.cell === _fmPopFor) return;
+        fmHideNow();
+      }, true); } catch (e) {}
     }
 
     try {
-      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; } return FM_ON; };
+      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { fmHideNow(); } return FM_ON; };
       window.__dcDsFormulaIsOn = function () { return FM_ON; };
       // how many formula fields exist (so the launcher only OFFERS the toggle when there are any).
       // Read on demand (menu open) — not polled.
@@ -22228,9 +25019,8 @@ processJSON();
       };
     } catch (e) {}
   })();
-  /* @strip:end */
 
-  /* @strip:start dev
+  /* (released to public) 
    * ── DMO detail: badge each field as Standard / Custom / System (dev-only) ───────────────────
    * The Fields tab never tells you whether a field is product-given or hand-created. SF's own
    * component data carries it per field as `creationType` — exactly the value our export already
@@ -22403,7 +25193,6 @@ processJSON();
     // them once so a re-toggle/reload never shows two badges per field (not a per-pass crawl).
     try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-do-badge")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
   })();
-  /* @strip:end */
 
   /* @strip:start dev
    * ── VDI PERF HARNESS (dev-only) — measure, don't guess ──────────────────────────────────────
@@ -22557,7 +25346,7 @@ processJSON();
       try {
         var outer = [];
         eachElement(document, function (el) {
-          var t = ""; try { t = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+          var t = ""; try { t = dcCleanUiText(el.textContent || ""); } catch (e) {}
           if (!/^(AND|OR)$/i.test(t)) return;
           var kids = 0; try { kids = el.children ? el.children.length : 0; } catch (e) {}
           if (kids > 1) return;                               // leaf-ish only
@@ -23206,12 +25995,13 @@ processJSON();
       if (isSegment && typeof window.__dcToggleSegApi === "function") {
         const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
         const onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
         const segSub = segApiRow.querySelector("span:last-child");
         segApiRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
           if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+          window.__dcPaintOn(segApiRow, on);
           // leave the menu open so the user sees the state flip; closes on outside click
         };
       }
@@ -23225,13 +26015,15 @@ processJSON();
           typeof window.__dcDsFormulaCount === "function" && window.__dcDsFormulaCount() > 0) {
         const fxIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><text x='3' y='12' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='13'>ƒ</text></svg>";
         const fxOnNow = (typeof window.__dcDsFormulaIsOn === "function") && window.__dcDsFormulaIsOn();
-        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Toggle formula hints: hover a formula field to see its formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover a formula field" : "Off — click to enable hover");
+        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Turn on, then hover the ✓ checkmark in the Formula column to see that field's formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓");
         const fxSub = fmRow.querySelector("span:last-child");
         fmRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleDsFormula(); } catch (err) {}
-          if (fxSub) fxSub.textContent = on ? "On — hover a formula field" : "Off — click to enable hover";
+          if (fxSub) fxSub.textContent = on ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓";
+          window.__dcPaintOn(fmRow, on);
         };
+        window.__dcPaintOn(fmRow, fxOnNow);
       }
 
       // DMO-only "Field origin" entry — TOGGLES the Standard/Custom/System badges (no panel).
@@ -23396,8 +26188,7 @@ processJSON();
    * hostname, no PII, no page data), the tool version, the page TYPE bucket (e.g. "DMO"/"Segment")
    * and the build tag — never a record id or URL. Throttled to ONCE PER DAY per browser via
    * localStorage. Uses sendBeacon/no-cors so it can't read any response. Fully fire-and-forget.
-   * USER CONTROL: a one-time disclosure notice + opt-out (__dcUsageOptOut()); opted-out browsers
-   * never ping. Disclosed on the install page too.
+   * DISCLOSURE: described on the install page's Privacy section. No in-tool opt-out (product decision).
    */
   (function dcUsagePingModule() {
     // SILENT AUTO-CAPTURE via FIRESTORE (the breakthrough, proven 2026-10-30):
@@ -23415,9 +26206,8 @@ processJSON();
     // tab to this worker's /beacon (top-level navigation crosses where a background fetch can't); the
     // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
-    var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.719"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.720"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -23427,17 +26217,7 @@ processJSON();
     var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
     var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle) — set ONLY after a confirmed HTTP success
     var _inFlight = {};              // per-feature in-flight guard (prevents duplicate concurrent sends)
-    var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
-    var LS_NOTICE = "dc_usage_noticed"; // "1" = the one-time disclosure notice has been shown
 
-    // GATE 3 — the user's choice always wins, even when the tool is fully live.
-    function optedOut() { try { return localStorage.getItem(LS_OPTOUT) === "1"; } catch (e) { return false; } }
-    // public controls so a user (or the install page) can opt out / back in and check state.
-    try {
-      window.__dcUsageOptOut = function () { try { localStorage.setItem(LS_OPTOUT, "1"); } catch (e) {} return true; };
-      window.__dcUsageOptIn  = function () { try { localStorage.removeItem(LS_OPTOUT); } catch (e) {} return false; };
-      window.__dcUsageIsOptedOut = function () { return optedOut(); };
-    } catch (e) {}
 
     // Coarse feature/page bucket — NEVER a record id or full URL. Covers EVERY surface the tool
     // supports so the ping always reports which feature was used (Query Editor, Activation, Mapping
@@ -23503,100 +26283,18 @@ processJSON();
       try { localStorage.setItem(k, "1"); } catch (e) { _memSent[k] = true; }
     }
 
-    // ── Per-ORG "silent write is blocked here" memory (the learn-then-adapt core) ─────────────────
-    // We only open a tab (beacon) in orgs we KNOW block the silent fetch — so permissive orgs never
-    // flash a tab. The flag is namespaced per org host so moving between orgs re-learns correctly.
-    var _memBlocked = {}, _memBeaconDead = {}, _beaconConfirmed = {};
+    // Per-org memory that the silent write is blocked (kept only so we stop retrying every click).
+    // There is NO fallback window/tab: tracking is silent-only. Orgs that block it are simply not measured.
+    var _memBlocked = {};
     function orgHost() { try { return String(location.hostname || "").slice(0, 80); } catch (e) { return ""; } }
     function blockedKey() { return "dc_usage_blocked::" + orgHost(); }
-    function beaconDeadKey() { return "dc_usage_beacon_dead::" + orgHost(); }
     function orgKnownBlocked() {
       try { return localStorage.getItem(blockedKey()) === "1"; } catch (e) { return _memBlocked[blockedKey()] === true; }
     }
     function markOrgBlocked() {
       try { localStorage.setItem(blockedKey(), "1"); } catch (e) { _memBlocked[blockedKey()] = true; }
     }
-    // Beacon "dead" for this org — set when a beacon tab was opened but NEVER confirmed back (i.e. the
-    // destination is blocked by a corporate web filter / shows a block page). Once dead, we stop opening
-    // tabs here entirely, so a user sees the filter's "Unauthorized Access" flash AT MOST ONCE per org.
-    function beaconDead() {
-      try { return localStorage.getItem(beaconDeadKey()) === "1"; } catch (e) { return _memBeaconDead[beaconDeadKey()] === true; }
-    }
-    function markBeaconDead() {
-      try { localStorage.setItem(beaconDeadKey(), "1"); } catch (e) { _memBeaconDead[beaconDeadKey()] = true; }
-    }
-    // Listen ONCE for the /beacon page's confirmation. If it arrives, the beacon truly reached our worker
-    // → clear any "dead" flag and remember it works. (Bound once per page via a window flag.)
-    try {
-      if (!window.__dcBeaconMsgBound) {
-        window.__dcBeaconMsgBound = true;
-        window.addEventListener("message", function (ev) {
-          try {
-            if (ev && ev.data && ev.data.__dcBeacon === "ok") {
-              _beaconConfirmed[orgHost()] = true;
-              try { localStorage.removeItem(beaconDeadKey()); } catch (e) {}
-            }
-          } catch (e) {}
-        }, false);
-      }
-    } catch (e) {}
-    // Build the beacon URL carrying the same anonymous fields as the direct ping.
-    function beaconUrl(feature) {
-      var qs = "?iid=" + encodeURIComponent(installId()) +
-               "&v=" + encodeURIComponent(String(PING_VERSION)) +
-               "&page=" + encodeURIComponent(feature) +
-               "&day=" + encodeURIComponent(todayStamp()) +
-               "&build=" + encodeURIComponent(String(PING_BUILD)) +
-               "&org=" + encodeURIComponent(orgHost().replace(/\.lightning\.force\.com$|\.my\.salesforce\.com$/i, ""));
-      return BEACON_BASE + qs;
-    }
-    // Open the beacon tab SYNCHRONOUSLY (must be inside the click gesture or the popup blocker kills it).
-    // The worker writes the doc server-side and the page auto-closes (~400ms). Returns true if a window
-    // handle came back (best-effort — we can't read the cross-origin result, so we mark-sent optimistically).
-    function beaconOpen(feature) {
-      try {
-        _beaconConfirmed[orgHost()] = false;   // reset; the /beacon page will flip this via postMessage
-        var w = window.open(beaconUrl(feature), "dc_usage_beacon", "width=360,height=140,left=" + (screen.width - 380) + ",top=" + (screen.height - 220));
-        if (w) {
-          // If the worker's /beacon page doesn't confirm within 4s, the destination was blocked (corporate
-          // web filter / block page) → mark the beacon dead for this org so we NEVER flash a tab here again.
-          try {
-            setTimeout(function () {
-              if (!_beaconConfirmed[orgHost()]) markBeaconDead();
-            }, 4000);
-          } catch (e) {}
-          return true;
-        }
-      } catch (e) {}
-      return false;
-    }
 
-
-    // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
-    // (no point disclosing something that's off), only once (LS_NOTICE), and never if already
-    // opted out. A small dismissible banner with a one-click "Turn off" (opt-out). Zero cost today
-    // because PING_ENABLED is false → this never renders in the shipped build.
-    function showDisclosureOnce() {
-      try {
-        if (!FS_URL) return;                                // no receiver → nothing to disclose
-        if (optedOut()) return;                             // respect an existing opt-out
-        if (localStorage.getItem(LS_NOTICE) === "1") return; // already shown
-        if (!document.body) { return; }
-        var bar = document.createElement("div");
-        bar.id = "dc-usage-notice";
-        bar.style.cssText = "position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483647;max-width:480px;background:#111827;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.5);padding:12px 14px;font:12px/1.5 -apple-system,sans-serif;";
-        bar.innerHTML = "<div style='display:flex;gap:10px;align-items:flex-start;'>" +
-          "<span style='font-size:15px;'>&#9432;</span><div>" +
-          "<b>Data 360 Inspector</b> records an <b>anonymous</b> usage count about once a day (a random id + tool version + page type only — no record, field, personal, or org data) so the team can measure adoption. It's silent — nothing opens. " +
-          "<a href='#' id='dc-usage-off' style='color:#5eead4;'>Turn off</a> &middot; " +
-          "<a href='#' id='dc-usage-ok' style='color:#94a3b8;'>OK</a></div></div>";
-        document.body.appendChild(bar);
-        var done = function () { try { localStorage.setItem(LS_NOTICE, "1"); } catch (e) {} try { bar.remove(); } catch (e) {} };
-        var off = bar.querySelector("#dc-usage-off"), okb = bar.querySelector("#dc-usage-ok");
-        if (off) off.onclick = function (e) { e.preventDefault(); try { window.__dcUsageOptOut(); } catch (er) {} done(); };
-        if (okb) okb.onclick = function (e) { e.preventDefault(); done(); };
-      } catch (e) {}
-    }
 
     // ── SILENT usage capture — NO tab, NO navigation, fully automatic ─────────────────────────
     // Our own domain is CSP-blocked on every transport, and window.open always opens a visible tab.
@@ -23605,13 +26303,12 @@ processJSON();
     // don't read the response. Respects opt-out + per-feature/day throttle.
     // Fire one usage ping. Returns a Promise<bool> that resolves TRUE only on a confirmed HTTP success.
     // CRITICAL: the day/feature throttle (markSent) is set ONLY after the write actually succeeds — so a
-    // request that fails (e.g. CSP-blocked on a strict page) does NOT burn the throttle, and the user can
+    // request that fails does NOT burn the throttle, and the user can
     // still be captured later the same day on a page where the write is allowed. (Previously markSent ran
     // unconditionally right after firing the fetch, so one CSP-blocked attempt silently locked the user
     // out for the rest of the day — the "new user never captured" bug.)
     function reportUsage() {
       if (!PING_ENABLED) return Promise.resolve(false);   // master kill-switch (documented gate — now ENFORCED)
-      if (optedOut()) return Promise.resolve(false);
       if (!FS_URL) return Promise.resolve(false);
       var feature;
       try {
@@ -23650,33 +26347,14 @@ processJSON();
       } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
     }
 
-    // Auto-capture on FAB open — at most ONCE PER FEATURE PER DAY. LEARN-THEN-ADAPT:
-    //   • Org NOT known-blocked → try the SILENT Firestore write (no tab). Most users, permissive orgs.
-    //   • Org KNOWN-blocked (we learned the silent write fails here) → open the BEACON TAB synchronously
-    //     on THIS click gesture (the only way to capture in a CSP/CASB-locked org). Brief flash, once/day.
-    // The very FIRST click in a locked org loses its capture to the silent attempt (which then learns the
-    // block) — every subsequent click that day uses the beacon. Net: permissive orgs never flash a tab;
-    // locked orgs flash ~once/feature/day and ARE captured.
+    // Auto-capture on FAB open — at most ONCE PER FEATURE PER DAY, SILENT only (background fetch; no tab,
+    // no window, no navigation). If the org blocks the silent write we remember that and stop trying.
     function maybeReportOnFabOpen() {
       try {
-        if (optedOut()) return false;              // user choice wins
         var feature = pingPageType();
-        if (sentToday(feature)) {                  // THIS feature already captured today
-          return false;
-        }
-        if (orgKnownBlocked()) {
-          // locked org. If the beacon was already proven DEAD here (corporate filter blocks the
-          // destination), do NOT open a tab — the user would just get a scary "Unauthorized Access"
-          // flash with no capture. Give up silently (this org simply can't be measured externally).
-          if (beaconDead()) {
-            return false;
-          }
-          // beacon not yet known-dead → try it ONCE (synchronous, inside the click gesture). If it turns
-          // out blocked (no confirmation in 4s), beaconOpen marks it dead so this is the last flash here.
-          if (beaconOpen(feature)) { try { markSent(feature); } catch (e) {} return true; }
-          return false;                            // popup blocked → not marked, retry next click
-        }
-        return reportUsage();                      // silent write (may learn-and-block for next time)
+        if (sentToday(feature)) return false;      // THIS feature already captured today
+        if (orgKnownBlocked()) return false;       // this org blocks it — never open any window as a fallback
+        return reportUsage();
       } catch (e) { return false; }
     }
 
@@ -23726,9 +26404,8 @@ processJSON();
     } catch (e) {}
 
     // On load: NO in-tool disclosure popup (per decision — silent in-tool). Disclosure instead lives
-    // on the install page's Privacy section, and __dcUsageOptOut() remains available as the opt-out.
+    // on the install page's Privacy section.
     // The capture fires on the first FAB-open per feature per day (silent Firestore write).
-    // (showDisclosureOnce is retained but intentionally NOT called here.)
   })();
 
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which

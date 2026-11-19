@@ -49,7 +49,7 @@
       try {
         var _offT = document.createElement("div");
         _offT.id = "dc-off-toast";
-        _offT.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
+        _offT.style.cssText = "position:fixed;bottom:24px;left:24px;z-index:2147483647;background:#111827;color:#fff;font:600 13px/1.4 -apple-system,sans-serif;padding:11px 15px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);opacity:0;transition:opacity .25s;display:flex;align-items:center;gap:8px;";
         _offT.innerHTML = "<span style='color:#f87171;font-size:15px;line-height:1'>&#9711;</span>Data 360 Inspector turned off";
         document.body.appendChild(_offT);
         requestAnimationFrame(function () { _offT.style.opacity = "1"; });
@@ -63,6 +63,27 @@
   // clear any prior toggle-OFF flag so the persistent ⧉ overlays resume.
   try { window.__dcOff = false; } catch (e) {}
 
+  // Shared ON indicator for FAB toggle rows: green "● ON" on the title + soft green tint (same look as
+  // API Tooltip / Field origin). Idempotent; OFF removes it. Pure cosmetics, never throws.
+  window.__dcPaintOn = function (row, on) {
+    try {
+      if (!row) return;
+      var t = row.querySelector("span:first-child"); if (!t) return;
+      var old = t.querySelector(".dc-on-badge"); if (old) old.remove();
+      if (on) {
+        var b = document.createElement("span"); b.className = "dc-on-badge";
+        b.style.cssText = "color:#34d399;font-size:11px;font-weight:700;margin-left:6px;";
+        b.textContent = "● ON"; t.appendChild(b);
+      }
+      // OFF must restore the launcher's dark row colour — an empty string would delete the inline
+      // background and let the browser's default (white) button colour show on first load.
+      var base = on ? "rgba(52,211,153,.12)" : "#111827";
+      row.style.background = base;
+      // Hover handlers elsewhere reset to plain dark on leave, which would drop the green ON tint
+      // after one hover. Re-assert the correct resting colour for the current state instead.
+      row.onmouseleave = function () { row.style.background = base; };
+    } catch (e) {}
+  };
   // ── "Open in new tab" ⧉ enable flag — PERSISTED so a user can silence just the ⧉ (not the
   // whole tool) from the FAB menu on a page that has one, and it carries to nav pages that
   // don't. localStorage so it survives reloads. Default ON. Exposed as window.__dcNewTabEnabled
@@ -1313,7 +1334,7 @@
     ["targetLabel", "Target Field (label)"], ["targetApi", "Target Field API"], ["targetType", "Target Type"],
   ];
   function rowsToTable(rows, sep) {
-    const esc = sep === "," ? (s) => (/[",\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
+    const esc = sep === "," ? (s) => (/[",\r\n]/.test(s) ? '"' + String(s).replace(/"/g, '""') + '"' : s) : (s) => String(s).replace(/\t/g, " ");
     const head = EXPORT_COLS.map((c) => c[1]).join(sep);
     const body = rows.map((r) => EXPORT_COLS.map((c) => esc(r[c[0]] == null ? "" : r[c[0]])).join(sep)).join("\n");
     return head + "\n" + body;
@@ -1321,13 +1342,10 @@
 
   // Make an element draggable by a handle (pointer-based; sets left/top).
   function makeDraggable(el, handle) {
-    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
-    const down = (e) => {
-      // ignore drags that start on interactive controls or selectable text
-      const tg = e.target;
-      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,[style*='user-select:text'],.dc-ac-sub")) return;
-      if (tg && window.getComputedStyle(tg).userSelect === "text") return;
-      dragging = true;
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, armed = false, pid = null;
+    const THRESH = 4;   // px of movement before a press on selectable text becomes a drag
+    const begin = () => {
+      dragging = true; armed = false;
       const r = el.getBoundingClientRect();
       // pin to left/top and drop any centering transform
       el.style.setProperty("left", r.left + "px", "important");
@@ -1335,13 +1353,31 @@
       el.style.setProperty("right", "auto", "important");
       el.style.setProperty("bottom", "auto", "important");
       el.style.setProperty("transform", "none", "important");
-      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
-      e.preventDefault();
+      ox = r.left; oy = r.top;
+      try { window.getSelection().removeAllRanges(); } catch (e) {}
+      try { handle.setPointerCapture(pid); } catch (e) {}
+      document.documentElement.style.setProperty("user-select", "none", "important");
+    };
+    const down = (e) => {
+      if (e.button != null && e.button !== 0) return;
+      const tg = e.target;
+      // never hijack real controls
+      if (tg && tg.closest && tg.closest("button,select,input,textarea,a,label")) return;
+      sx = e.clientX; sy = e.clientY; pid = e.pointerId;
+      // Title / info text stays selectable on a plain click or double-click, but dragging
+      // from it moves the panel (after a few px) — so the WHOLE header is a drag handle.
+      armed = true;
       window.addEventListener("pointermove", move, true);
       window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", up, true);
     };
     const move = (e) => {
-      if (!dragging) return;
+      if (!dragging) {
+        if (!armed) return;
+        if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < THRESH) return;
+        begin();
+      }
+      e.preventDefault();
       let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
       // keep on-screen
       const w = el.offsetWidth || 200, h = 40;
@@ -1350,8 +1386,15 @@
       el.style.setProperty("left", nx + "px", "important");
       el.style.setProperty("top", ny + "px", "important");
     };
-    const up = () => { dragging = false; window.removeEventListener("pointermove", move, true); window.removeEventListener("pointerup", up, true); };
+    const up = () => {
+      if (dragging) { try { handle.releasePointerCapture(pid); } catch (e) {} document.documentElement.style.removeProperty("user-select"); }
+      dragging = false; armed = false;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+    };
     handle.style.cursor = "move";
+    handle.style.touchAction = "none";
     handle.addEventListener("pointerdown", down, true);
   }
 
@@ -1506,7 +1549,310 @@
     render();
   }
 
-  /* [in-development features removed from public build] */
+  /* (released to public) */
+  // ===== FOCUS DMO ===== (IN-DEV — stripped from the public build until tested)
+  // Verify ONE DMO's mappings without fighting SF's wire spaghetti. We DON'T touch
+  // SF's canvas (proven dead end: its wires are anonymous + can't be removed, and
+  // hiding a row just re-routes its wire to 0,0 → strays persist). Instead we draw
+  // OUR OWN clean 2-column diagram for the chosen DMO: source fields on the left,
+  // target fields on the right, straight connector lines between — all pairs, correct
+  // & complete, zero spaghetti. Data from buildMappingRows() (authoritative, = Export).
+  function groupRowsByDmo(rows) {
+    const m = new Map();
+    for (const r of rows) {
+      if (!r || !r.dmo) continue;
+      if (!m.has(r.dmo)) m.set(r.dmo, []);
+      m.get(r.dmo).push(r);
+    }
+    return m;
+  }
+
+  var focusPanelEl = null;
+  function closeFocusPanel() { if (focusPanelEl) { try { focusPanelEl.remove(); } catch (e) {} focusPanelEl = null; } }
+
+  function openFocusPanel() {
+    closeFocusPanel();
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const rows = (function () { try { return buildMappingRows() || []; } catch (e) { return []; } })();
+    const g = groupRowsByDmo(rows);
+    const opts = [];
+    for (const [dmo, pairs] of g) opts.push({ dmo: dmo, label: (pairs[0] && pairs[0].dmoLabel) || dmo, count: pairs.length });
+    opts.sort((a, b) => String(a.label).toLowerCase().localeCompare(String(b.label).toLowerCase()));
+
+    const panel = document.createElement("div");
+    focusPanelEl = panel;
+    panel.id = "dc-focus-panel";
+    panel.style.cssText = "position:fixed;top:7vh;left:50%;transform:translateX(-50%);width:min(760px,96vw);max-height:86vh;display:flex;flex-direction:column;z-index:2147483646;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.4);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;";
+
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 16px;border-bottom:1px solid #e2e8f0;background:linear-gradient(135deg,#1e3a5f,#0369a1);cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div style='font:700 14px -apple-system,sans-serif;color:#fff;display:flex;align-items:center;gap:7px;'><span style='font-size:15px'>&#128269;</span> Focus DMO <span style='opacity:.7;font-weight:500'>&mdash; mapping diagram</span></div>";
+    const closeX = document.createElement("button");
+    closeX.innerHTML = "&times;"; closeX.title = "Close";
+    closeX.style.cssText = "border:none;background:rgba(255,255,255,.15);border-radius:6px;font-size:18px;line-height:1;color:#fff;cursor:pointer;padding:2px 8px;";
+    closeX.onclick = closeFocusPanel;
+    hdr.appendChild(closeX);
+    panel.appendChild(hdr);
+
+    const controls = document.createElement("div");
+    controls.style.cssText = "padding:12px 16px 8px;flex-shrink:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;";
+    panel.appendChild(controls);
+
+    if (!opts.length) {
+      controls.innerHTML = "<div style='color:#64748b;font-size:12px;line-height:1.5'>No mappings found on this canvas yet. If the page is still loading, wait a moment and reopen.</div>";
+      document.body.appendChild(panel);
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      return;
+    }
+
+    const sel = document.createElement("select");
+    sel.style.cssText = "flex:1;min-width:200px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:13px -apple-system,sans-serif;";
+    sel.innerHTML = "<option value=''>&mdash; pick a DMO (" + opts.length + " mapped) &mdash;</option>" +
+      "<option value='__ALL__'>All DMOs (" + opts.reduce((a, o) => a + o.count, 0) + " mappings)</option>" +
+      opts.map((o) => "<option value='" + esc(o.dmo) + "'>" + esc(o.label) + " (" + o.count + ")</option>").join("");
+    controls.appendChild(sel);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy mappings";
+    copyBtn.title = "Copy the shown mappings (labels, API names, types, PK) as tab-separated — paste into Sheets/Excel.";
+    copyBtn.style.cssText = "display:none;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:7px 11px;cursor:pointer;font:600 12px -apple-system,sans-serif;white-space:nowrap;";
+    controls.appendChild(copyBtn);
+
+    const search = document.createElement("input");
+    search.type = "text"; search.placeholder = "Type to find a field (e.g. birth, phone, Id__c)…";
+    search.title = "Type to narrow the diagram to matching fields — searches source/target label and API name. Clear to see all.";
+    search.style.cssText = "flex:1;min-width:160px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:7px;padding:7px 9px;font:12px -apple-system,sans-serif;display:none;";
+    controls.appendChild(search);
+
+    const countLine = document.createElement("div");
+    countLine.style.cssText = "font-size:11px;color:#64748b;flex-basis:100%;";
+    controls.appendChild(countLine);
+
+    // Diagram area: our own 2-column drawing (SVG lines + two field columns).
+    const diagram = document.createElement("div");
+    diagram.style.cssText = "position:relative;overflow:auto;flex:1;padding:4px 0;";
+    panel.appendChild(diagram);
+
+    const foot = document.createElement("div");
+    foot.style.cssText = "padding:8px 16px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#f8fafc;flex-shrink:0;";
+    foot.innerHTML = "Complete mapping (same as Export). <span style='background:#7c3aed;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>PK</span> primary key · <span style='background:#64748b;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>SYS</span> system/key field SF auto-adds (hidden in its “Is Mapped” count) · <span style='background:#f59e0b;color:#fff;font:700 9px system-ui;padding:1px 4px;border-radius:3px'>type</span> mismatch. Click a field to copy.";
+    panel.appendChild(foot);
+
+    let currentPairs = [];
+    const COL_W = 300, ROW_H = 42, PAD_Y = 8, GAP = 110, HEAD_H = 24; // layout constants
+
+    // Our count is the COMPLETE authoritative mapping; SF's "Is Mapped (n)" hides the
+    // auto-added system/key fields (Data Source, Data Source Object, Internal
+    // Organization, Key Qualifiers). Classify a target field as system/key so we can
+    // tell the user why our number is higher than SF's. Match by target API name.
+    const SYS_TARGETS = { "datasourceid__c": 1, "datasourceobjectid__c": 1, "internalorganizationid__c": 1, "datasource__c": 1, "datasourceobject__c": 1, "internalorganization__c": 1, "ssot__datasourceid__c": 1, "ssot__datasourceobjectid__c": 1, "ssot__internalorganizationid__c": 1, "cdp_sys_sourceversion__c": 1 };
+    function isSystemPair(p) {
+      const t = String(p.targetApi || "").toLowerCase();
+      if (SYS_TARGETS[t]) return true;
+      if (/^kq_/i.test(String(p.targetApi || "")) || /^kq_/i.test(String(p.sourceApi || ""))) return true; // key qualifiers
+      return false;
+    }
+    const sysCount = (pairs) => pairs.filter(isSystemPair).length;
+    const sysNote = (pairs) => { const n = sysCount(pairs); return n ? " <span title='Data Source, Data Source Object, Internal Organization, Key Qualifiers — auto-added by Salesforce and hidden in its “Is Mapped” count' style='color:#64748b'>(incl. " + n + " system/key field" + (n === 1 ? "" : "s") + " SF hides)</span>" : ""; };
+
+    // Small self-contained toast (lives inside the panel so it rides drag/resize).
+    let toastEl = null, toastT = null;
+    function toast(msg) {
+      if (!toastEl) {
+        toastEl = document.createElement("div");
+        toastEl.style.cssText = "position:absolute;left:50%;bottom:44px;transform:translateX(-50%);z-index:5;background:#0f172a;color:#fff;font:600 12px -apple-system,sans-serif;padding:7px 14px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);opacity:0;transition:opacity .15s;pointer-events:none;white-space:nowrap;max-width:92%;overflow:hidden;text-overflow:ellipsis;";
+        panel.appendChild(toastEl);
+      }
+      toastEl.textContent = msg;
+      toastEl.style.opacity = "1";
+      if (toastT) clearTimeout(toastT);
+      toastT = setTimeout(() => { if (toastEl) toastEl.style.opacity = "0"; }, 1400);
+    }
+    function copyFlash(el, text) {
+      try { navigator.clipboard.writeText(text); } catch (e) {}
+      const prev = el.style.boxShadow; el.style.boxShadow = "0 0 0 2px #22c55e inset";
+      const prevBg = el.style.background; el.style.background = "#dcfce7";
+      setTimeout(() => { el.style.boxShadow = prev || ""; el.style.background = prevBg || ""; }, 550);
+      toast("✓ Copied  " + text);
+    }
+
+    const isMismatch = (p) => { const a = String(p.sourceType || "").trim().toLowerCase(), b = String(p.targetType || "").trim().toLowerCase(); return !!(a && b && a !== b); };
+    const sortPairs = (arr) => arr.slice().sort((a, b) => String(a.targetLabel || a.targetApi || "").toLowerCase().localeCompare(String(b.targetLabel || b.targetApi || "").toLowerCase()));
+
+    // TSV for clipboard — labels, API names, types, PK on both sides (for Sheets/Excel).
+    function pairsToTSV(pairs) {
+      const head = ["Source Field", "Source API", "Source Type", "Source PK", "Target Field", "Target API", "Target Type", "Target PK", "Type Mismatch"];
+      const lines = [head.join("\t")];
+      pairs.forEach((p) => lines.push([
+        p.sourceLabel || "", p.sourceApi || "", p.sourceType || "", p.sourceIsPrimaryKey ? "PK" : "",
+        p.targetLabel || "", p.targetApi || "", p.targetType || "", p.targetIsPrimaryKey ? "PK" : "",
+        isMismatch(p) ? "YES" : "",
+      ].map((v) => String(v).replace(/\t/g, " ")).join("\t")));
+      return lines.join("\n");
+    }
+
+    // Object context bar: shows the source DLO(s) and target DMO as object label +
+    // API name, so the diagram has full context (not just field names). A DMO can
+    // receive from multiple DLOs, so we list all distinct source objects.
+    function buildObjectBar(pairs) {
+      const srcs = []; const seen = {};
+      pairs.forEach((p) => { const api = p.srcObj || "", lbl = p.srcObjLabel || p.srcObj || ""; const key = api + "|" + lbl; if ((api || lbl) && !seen[key]) { seen[key] = 1; srcs.push({ api: api, label: lbl, cat: p.srcCategory || "" }); } });
+      const dmoApi = (pairs[0] && pairs[0].dmo) || "", dmoLabel = (pairs[0] && pairs[0].dmoLabel) || dmoApi;
+      const catChip = (cat) => cat ? "<span title='Data Lake Object category' style='float:right;font:700 9px -apple-system,sans-serif;background:#e0e7ff;color:#4338ca;padding:1px 6px;border-radius:4px;margin-left:6px'>" + esc(cat) + "</span>" : "";
+      const box = (role, color, label, api, cat) =>
+        "<div style='flex:1;min-width:0;background:#fff;border:1px solid #e2e8f0;border-left:3px solid " + color + ";border-radius:8px;padding:6px 11px;overflow:hidden'>" +
+          "<div style='font:700 9px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8'>" + role + catChip(cat) + "</div>" +
+          "<div style='font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+          "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "—") + "</div>" +
+        "</div>";
+      const srcBoxes = srcs.length ? srcs.map((s) => box(srcs.length > 1 ? "Source DLO" : "Source · DLO", "#c7d2e5", s.label, s.api, s.cat)).join("") : box("Source · DLO", "#c7d2e5", "(system)", "", "");
+      const bar = document.createElement("div");
+      bar.style.cssText = "display:flex;align-items:stretch;gap:10px;max-width:" + (COL_W * 2 + GAP) + "px;margin:2px auto 12px;";
+      bar.innerHTML = "<div style='flex:1;min-width:0;display:flex;flex-direction:column;gap:6px'>" + srcBoxes + "</div>" +
+        "<div style='display:flex;align-items:center;color:#94a3b8;font-size:16px'>&rarr;</div>" +
+        box("Target · DMO", "#93c5fd", dmoLabel, dmoApi);
+      return bar;
+    }
+
+    // Build ONE 2-column diagram element for a set of pairs (reused by single + grouped).
+    function buildDiagram(pairs) {
+      const n = pairs.length;
+      const H = HEAD_H + PAD_Y * 2 + n * ROW_H;
+      const totalW = COL_W * 2 + GAP;
+      const svgNS = "http://www.w3.org/2000/svg";
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:relative;width:" + totalW + "px;height:" + H + "px;margin:4px auto 10px;";
+      const mkHead = (left, txt, align) => { const h = document.createElement("div"); h.textContent = txt; h.style.cssText = "position:absolute;top:0;left:" + left + "px;width:" + COL_W + "px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;text-align:" + align + ";"; return h; };
+      wrap.appendChild(mkHead(0, "Source · DLO", "right"));
+      wrap.appendChild(mkHead(COL_W + GAP, "Target · DMO", "left"));
+      const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("width", totalW); svg.setAttribute("height", H);
+      svg.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:visible;";
+      wrap.appendChild(svg);
+      const colL = document.createElement("div"); colL.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:0;width:" + COL_W + "px;";
+      const colR = document.createElement("div"); colR.style.cssText = "position:absolute;top:" + HEAD_H + "px;left:" + (COL_W + GAP) + "px;width:" + COL_W + "px;";
+      wrap.appendChild(colL); wrap.appendChild(colR);
+      function setActive(idx, on) {
+        const ln = svg.querySelector('path[data-i="' + idx + '"]'); if (ln) { ln.setAttribute("stroke", on ? "#2563eb" : "#b6c2d6"); ln.setAttribute("stroke-width", on ? "2.5" : "1.5"); }
+        svg.querySelectorAll('circle[data-i="' + idx + '"]').forEach((c) => c.setAttribute("fill", on ? "#2563eb" : "#b6c2d6"));
+        const baseBg = isSystemPair(pairs[idx]) ? "#f8fafc" : "#fff";
+        [colL, colR].forEach((col) => { const cel = col.querySelector('[data-i="' + idx + '"]'); if (cel) { cel.style.background = on ? "#eff6ff" : baseBg; cel.style.borderColor = on ? "#93c5fd" : "#e2e8f0"; } });
+      }
+      function cell(side, p, idx) {
+        const y = PAD_Y + idx * ROW_H;
+        const d = document.createElement("div");
+        const isSrc = side === "L";
+        const label = isSrc ? (p.sourceLabel || p.sourceApi || "(system field)") : (p.targetLabel || p.targetApi);
+        const api = isSrc ? (p.sourceApi || "") : (p.targetApi || "");
+        const type = isSrc ? (p.sourceType || "") : (p.targetType || "");
+        const isPK = isSrc ? !!p.sourceIsPrimaryKey : !!p.targetIsPrimaryKey;
+        const isSys = isSystemPair(p);
+        const mism = isMismatch(p);
+        d.setAttribute("data-i", idx);
+        d.title = (label || "") + (api ? "  —  " + api : "") + (type ? "  (" + type + ")" : "") + (isPK ? "  · Primary Key" : "") + (isSys ? "  · system/key field (SF auto-adds; hidden in its “Is Mapped” count)" : "") + (mism ? "  · type mismatch: " + p.sourceType + " → " + p.targetType : "");
+        d.style.cssText = "position:absolute;top:" + y + "px;left:0;right:0;height:" + (ROW_H - 8) + "px;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:4px 10px;overflow:hidden;cursor:pointer;transition:background .1s,border-color .1s;" + (isSys ? "background:#f8fafc;opacity:.82;" : "background:#fff;") + (isSrc ? "text-align:right;border-right:3px solid #c7d2e5;" : "border-left:3px solid #93c5fd;");
+        const pill = (txt, kind) => "<span style='flex:none;display:inline-block;font:700 9px -apple-system,sans-serif;padding:1px 5px;border-radius:4px;vertical-align:middle;" +
+          (kind === "pk" ? "background:#7c3aed;color:#fff;letter-spacing:.03em;" : kind === "mism" ? "background:#f59e0b;color:#fff;" : kind === "sys" ? "background:#64748b;color:#fff;letter-spacing:.03em;" : "background:#eef2f7;color:#64748b;font-weight:600;") + "'>" + esc(txt) + "</span>";
+        const badges = (type ? pill(type, mism ? "mism" : "type") : "") + (isPK ? pill("PK", "pk") : "") + (isSys ? pill("SYS", "sys") : "");
+        // Flex row: badges are flex:none (never clipped); ONLY the label text truncates.
+        // Source side = badges on the right (reversed); target side = badges on the left.
+        const nameTxt = "<span style='flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;font-weight:600;color:#0f172a'>" + esc(label) + "</span>";
+        const nameLine = "<div style='display:flex;align-items:center;gap:5px;" + (isSrc ? "flex-direction:row-reverse;" : "") + "'>" + nameTxt + badges + "</div>";
+        d.innerHTML = nameLine + "<div style='font:10px/1.3 SF Mono,Consolas,monospace;color:#7c8aa5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(api || "(system)") + "</div>";
+        d.onmouseenter = () => setActive(idx, true);
+        d.onmouseleave = () => setActive(idx, false);
+        d.onclick = () => copyFlash(d, api || label);
+        return d;
+      }
+      pairs.forEach((p, idx) => {
+        colL.appendChild(cell("L", p, idx));
+        colR.appendChild(cell("R", p, idx));
+        const y = HEAD_H + PAD_Y + idx * ROW_H + (ROW_H - 8) / 2;
+        const x1 = COL_W, x2 = COL_W + GAP, mx = (x1 + x2) / 2;
+        const path = document.createElementNS(svgNS, "path");
+        path.setAttribute("d", "M" + x1 + " " + y + " C " + mx + " " + y + " " + mx + " " + y + " " + (x2 - 4) + " " + y);
+        path.setAttribute("fill", "none"); path.setAttribute("stroke", "#b6c2d6"); path.setAttribute("stroke-width", "1.5"); path.setAttribute("data-i", idx);
+        svg.appendChild(path);
+        [x1, x2].forEach((x) => { const c = document.createElementNS(svgNS, "circle"); c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", "3"); c.setAttribute("fill", "#b6c2d6"); c.setAttribute("data-i", idx); svg.appendChild(c); });
+        const ar = document.createElementNS(svgNS, "path");
+        ar.setAttribute("d", "M" + (x2 - 7) + " " + (y - 3.5) + " L" + x2 + " " + y + " L" + (x2 - 7) + " " + (y + 3.5));
+        ar.setAttribute("fill", "none"); ar.setAttribute("stroke", "#93c5fd"); ar.setAttribute("stroke-width", "1.5"); ar.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(ar);
+      });
+      return wrap;
+    }
+
+    let mode = "none"; // none | one | all
+    function paint(filter) {
+      const q = String(filter || "").trim().toLowerCase();
+      const match = (p) => !q || [p.sourceLabel, p.sourceApi, p.targetLabel, p.targetApi].some((v) => String(v || "").toLowerCase().indexOf(q) >= 0);
+      diagram.innerHTML = "";
+      if (mode === "none") { copyBtn.style.display = "none"; countLine.textContent = ""; diagram.innerHTML = "<div style='color:#94a3b8;font-size:12.5px;padding:28px 16px;text-align:center'>&#128073; Pick a DMO (or All DMOs) above to see its mapping diagram.</div>"; return; }
+
+      if (mode === "one") {
+        const shown = currentPairs.filter(match);
+        const mism = shown.filter(isMismatch).length;
+        countLine.innerHTML = currentPairs.length + " mapped field" + (currentPairs.length === 1 ? "" : "s") + sysNote(currentPairs) + (q ? "  ·  " + shown.length + " shown" : "") + (mism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + mism + " type mismatch" + (mism === 1 ? "" : "es") + "</span>" : "");
+        copyBtn.style.display = shown.length ? "" : "none";
+        if (!shown.length) { diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>"; return; }
+        diagram.appendChild(buildObjectBar(currentPairs));
+        diagram.appendChild(buildDiagram(shown));
+        return;
+      }
+
+      // mode === "all": collapsible section per DMO
+      let total = 0, totalMism = 0, groupsShown = 0;
+      opts.forEach((o) => {
+        const pairs = sortPairs((g.get(o.dmo) || []).filter(match));
+        if (!pairs.length) return;
+        groupsShown++; total += pairs.length;
+        const mism = pairs.filter(isMismatch).length; totalMism += mism;
+        const det = document.createElement("details");
+        det.style.cssText = "border:1px solid #e2e8f0;border-radius:9px;margin:0 14px 8px;overflow:hidden;";
+        const sum = document.createElement("summary");
+        sum.style.cssText = "cursor:pointer;padding:9px 12px;font:600 13px -apple-system,sans-serif;color:#0f172a;background:#f8fafc;list-style:none;display:flex;align-items:center;gap:8px;";
+        const sysN = sysCount(pairs);
+        sum.innerHTML = "<span style='color:#0369a1'>" + esc(o.label) + "</span><span style='font-weight:500;color:#64748b'>(" + pairs.length + ")</span>" +
+          (sysN ? "<span title='system/key fields SF auto-adds &amp; hides in its “Is Mapped” count' style='font-weight:500;color:#94a3b8;font-size:11px'>" + sysN + " sys</span>" : "") +
+          (mism ? "<span style='margin-left:auto;color:#b45309;font-weight:600;font-size:11px'>&#9888; " + mism + "</span>" : "");
+        det.appendChild(sum);
+        const body = document.createElement("div"); body.style.cssText = "padding:2px 0 6px;overflow:auto;";
+        let built = false;
+        det.addEventListener("toggle", () => { if (det.open && !built) { body.appendChild(buildObjectBar(pairs)); body.appendChild(buildDiagram(pairs)); built = true; } });
+        det.appendChild(body);
+        diagram.appendChild(det);
+      });
+      const allPairs = []; opts.forEach((o) => { (g.get(o.dmo) || []).forEach((p) => { if (match(p)) allPairs.push(p); }); });
+      countLine.innerHTML = total + " mapping" + (total === 1 ? "" : "s") + " across " + groupsShown + " DMO" + (groupsShown === 1 ? "" : "s") + sysNote(allPairs) + (totalMism ? "  ·  <span style='color:#b45309;font-weight:600'>&#9888; " + totalMism + " mismatch" + (totalMism === 1 ? "" : "es") + "</span>" : "");
+      copyBtn.style.display = total ? "" : "none";
+      if (!total) diagram.innerHTML = "<div style='color:#94a3b8;font-size:12px;padding:16px'>No fields match “" + esc(q) + "”.</div>";
+    }
+
+    function selectDmo(val) {
+      if (!val) { mode = "none"; currentPairs = []; search.style.display = "none"; copyBtn.style.display = "none"; search.value = ""; paint(""); return; }
+      if (val === "__ALL__") { mode = "all"; currentPairs = []; search.style.display = "block"; search.value = ""; paint(""); return; }
+      mode = "one";
+      currentPairs = sortPairs(g.get(val) || []);
+      search.style.display = currentPairs.length > 4 ? "block" : "none";
+      search.value = "";
+      paint("");
+    }
+    copyBtn.onclick = () => {
+      let pairs = [];
+      if (mode === "one") pairs = currentPairs;
+      else if (mode === "all") opts.forEach((o) => { pairs = pairs.concat(sortPairs(g.get(o.dmo) || [])); });
+      if (!pairs.length) return;
+      try { navigator.clipboard.writeText(pairsToTSV(pairs)); } catch (e) {}
+      toast("✓ Copied " + pairs.length + " mapping" + (pairs.length === 1 ? "" : "s") + " for Sheets");
+    };
+    sel.onchange = () => selectDmo(sel.value);
+    search.oninput = () => paint(search.value);
+    paint(""); // initial hint
+
+    document.body.appendChild(panel);
+    try { makeDraggable(panel, hdr); } catch (e) {}
+    try { addResizeHandle(panel, 420, 320); } catch (e) {} // drag the bottom-right grip to resize
+  }
 
   // Fully remove the tool from the page: inline names off, tooltip + tags gone,
   // export modal closed, control bar removed, timers stopped. Re-running the
@@ -1518,6 +1864,8 @@
     // Close in-dev Data Explorer surfaces too (guarded — stripped from public build).
     try { if (typeof closeExploreModal === "function") closeExploreModal(); } catch (e) {}
     try { if (typeof closeAllColumnsTable === "function") closeAllColumnsTable(); } catch (e) {}
+    try { if (typeof closeCellView === "function") closeCellView(); } catch (e) {}
+    try { if (typeof dcSweepOverlays === "function") dcSweepOverlays(); } catch (e) {}
     try { if (typeof closeSoqlEditor === "function") closeSoqlEditor(); } catch (e) {}
     // Backstop: remove any of our modal roots by id, in case a close handle went stale.
     try {
@@ -1722,7 +2070,9 @@
       return b;
     };
 
-    /* [in-development features removed from public build] */
+    /* (released to public) */
+    const focusIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><circle cx='7' cy='7' r='4.2'/><path d='M10.2 10.2L14 14' stroke-linecap='round'/></svg>";
+    const foc = mkBtn("dc-focus-btn",  "Focus DMO",     "Isolate one DMO's mappings — dim the rest, list its field pairs", "linear-gradient(135deg,#14b8a6,#0d9488)", focusIconSvg, "Verify one DMO at a time");
     const tog = mkBtn("dc-toggle-btn", "API Tooltip",  "Show API name on hover",  "linear-gradient(135deg,#3b82f6,#2563eb)", tooltipIconSvg, "Hover to see API names");
     const inl = mkBtn("dc-inline-btn", "Pin API names","Pin API names on canvas",  "linear-gradient(135deg,#ec4899,#db2777)", pinIconSvg,     "Pin all on canvas");
     const exp = mkBtn("dc-export-btn", "Export",       "Export mappings",          "linear-gradient(135deg,#f59e0b,#d97706)", exportIconSvg,  "All fields with types");
@@ -1734,13 +2084,15 @@
 
     tog.onclick = (e) => { e.stopPropagation(); toggle(); };
     inl.onclick = (e) => { e.stopPropagation(); toggleInline(); };
-    /* [in-development features removed from public build] */
+    /* (released to public) */
+    foc.onclick = (e) => { e.stopPropagation(); openFocusPanel(); };
     exp.onclick = (e) => { e.stopPropagation(); openExport(); };
 
     menu.appendChild(closeX);
     menu.appendChild(tog);
     menu.appendChild(inl);
-    /* [in-development features removed from public build] */
+    /* (released to public) */
+    menu.appendChild(foc);
     menu.appendChild(exp);
 
     // --- FAB circle button ---
@@ -1824,7 +2176,20 @@
       if (/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DataStream";
       if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
       if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
-      /* [in-development features removed from public build] */
+      // (Segment page detection — public: needed for the Segment export launcher.)
+      // Segment by URL always wins. The component-DOM fallback (for wizard routes that don't
+      // name Segment in the URL) is only trusted when BOTH: (a) the URL isn't clearly ANOTHER
+      // detail page, AND (b) the URL is a plausible builder route — a /cmp/ lightning-component
+      // or /r/Segment route — NOT a known app/landing page like Home (/lightning/page/home) or
+      // an /o/<Entity>/home list. Without (b), a stale runtime_cdp-segment-wizard component
+      // left mounted after in-tab nav (SF doesn't unmount it) would misclassify Home as Segment
+      // and show the segment launcher there (reported bug). SPA stale-DOM trap — same class as
+      // the isQueryEditorPage/Explorer fixes.
+      if (/standard-Segment|\/r\/Segment\/[a-zA-Z0-9]{15,18}|segmentWizard/i.test(h)) return "Segment";
+      var looksLikeBuilderRoute = /\/lightning\/cmp\//i.test(h) && !/\/lightning\/page\/|\/lightning\/o\/[A-Za-z]+\/home|\/lightning\/n\/standard-/i.test(h);
+      if (looksLikeBuilderRoute
+          && !(typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "Segment"))
+          && (findByTag("runtime_cdp-segment-wizard").length > 0 || findByTag("runtime_cdp-segment-wizard-landing").length > 0)) return "Segment";
     } catch (e) {}
     return null;
   }
@@ -2910,7 +3275,9547 @@
   // On detail pages, show a single "Download fields CSV" button instead.
   // ── Segment rules readers ─────────────────────────────────────────────────
 
+  /* Segment export + Data Explorer (public). The SQL-export helpers, the transform viewer and the Query Editor tooling
+   * inside this region are wrapped in their own strip blocks below and stay dev-only. */
+  // Salesforce's drag handles carry a screen-reader instruction ("Press Spacebar to start reordering this
+  // filter, then use the Up and Down arrow keys to move it.") inside the rule's DOM. It is UI help text,
+  // never data, so every text reader drops it — otherwise it leaks into labels (container titles, rule rows).
+  var DC_A11Y_NOISE = /Press\s+(?:the\s+)?(?:Space(?:bar)?|Enter)\s+to\s+(?:start|begin)\s+(?:reordering|moving|dragging)[^.]*?\bmove\s+it\.?|(?:then\s+)?use\s+the\s+Up\s+and\s+Down\s+arrow\s+keys?[^.]*?\./gi;
+  function dcCleanUiText(t) { return t ? String(t).replace(DC_A11Y_NOISE, " ").replace(/\s+/g, " ").trim() : ""; }
+  function shadowEls(el) {
+    try { const sr = el.shadowRoot; if (!sr) return []; return Array.from(sr.querySelectorAll("*")); } catch (e) { return []; }
+  }
+  function shadowTexts(el) {
+    return shadowEls(el).map(e => dcCleanUiText((e.textContent || "").trim().replace(/\s+/g, " "))).filter(Boolean);
+  }
+  // Leaf-only shadow text tokens (childless elements), shadow-piercing, de-duped
+  // in DOM order. Avoids the concatenated container blobs shadowTexts() returns.
+  function leafShadowTexts(el) {
+    const out = [];
+    const sr = el.shadowRoot; if (!sr) return out;
+    eachElement(sr, ch => {
+      try {
+        if (ch.shadowRoot) return;
+        if ((ch.childElementCount || 0) > 0) return;
+        const t = dcCleanUiText((ch.textContent || "").trim().replace(/\s+/g, " "));
+        if (t && t.length < 160 && out[out.length - 1] !== t) out.push(t);
+      } catch (e) {}
+    });
+    return out;
+  }
+  // Deep rendered text of an element, piercing shadow roots and INCLUDING text
+  // nodes (which leafShadowTexts skips). Walks in DOM order so "Label: value"
+  // stays contiguous. Used to recover bare-text-node values (e.g. the schedule
+  // text after a bold "Publish Schedule:" label).
+  function deepText(el) {
+    let out = "";
+    (function walk(node) {
+      const kids = [];
+      let sr = null; try { sr = node.shadowRoot; } catch (e) {}
+      if (sr) for (const c of sr.childNodes) kids.push(c);
+      for (const c of node.childNodes || []) kids.push(c);
+      for (const c of kids) {
+        if (c.nodeType === 3) { const t = c.textContent; if (t && t.trim()) out += t.replace(/\s+/g, " "); }
+        else if (c.nodeType === 1) { out += " "; walk(c); }
+      }
+    })(el);
+    return dcCleanUiText(out);
+  }
+
+  // ── Container Path capture cache (for the EXPORT) ───────────────────────────────────
+  // SF renders a container's "Container Path" breadcrumb ONLY while that container is OPEN
+  // in edit mode (proven DOM Probe v11: the open runtime_cdp-canvas-item.innerText carries
+  // "…\n*Container Path\n<path>\nMeasurement\n…", builderState.inFilterEditMode === true).
+  // Only one container is open at a time, so a single export snapshot can't see them all.
+  // Instead we CACHE each path (keyed by container object api) the moment it's visible —
+  // so as the user opens each multi-path container, we remember its exact string, and the
+  // export can later stamp every container it has seen. We only ever store the LITERAL
+  // rendered string (read, never reconstructed); collapsed/single-path containers add
+  // nothing. The cache lives on window so hover + export share one source of truth.
+  var _dcPathCache = (function () { try { if (!window.__dcContainerPathCache) window.__dcContainerPathCache = {}; return window.__dcContainerPathCache; } catch (e) { return {}; } })();
+  // Pull the literal path line out of an open container's rendered text (same rule as hover).
+  function dcExtractContainerPath(innerText) {
+    if (!innerText || innerText.indexOf("Container Path") < 0) return "";
+    var lines = String(innerText).split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length; });
+    for (var i = 0; i < lines.length - 1; i++) {
+      if (/^\*?\s*Container Path$/i.test(lines[i])) {
+        var val = lines[i + 1];
+        if (val && val.indexOf(" > ") >= 0 && val.indexOf(".") >= 0) return val;
+        if (val && /\S\.\S/.test(val) && !/^(Measurement|Operator|Object|Attribute|Value|Lower Bound|Upper Bound)$/i.test(val)) return val;
+        return "";
+      }
+    }
+    return "";
+  }
+  // Scan any container currently open in edit mode and record its path into the cache.
+  // Called opportunistically (on hover-move and at export time). Returns the cache.
+  function dcCaptureOpenContainerPaths() {
+    try {
+      var items = document.querySelectorAll("runtime_cdp-canvas-item");
+      // querySelectorAll won't pierce shadow DOM; walk deep instead.
+      var all = []; (function walk(root, d) { if (d > 14) return; var q; try { q = root.querySelectorAll("*"); } catch (e) { return; } for (var i = 0; i < q.length; i++) { var el = q[i]; if ((el.tagName || "").toLowerCase() === "runtime_cdp-canvas-item") all.push(el); if (el.shadowRoot) walk(el.shadowRoot, d + 1); } })(document, 0);
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i], bs = null; try { bs = el.builderState; } catch (e) {}
+        if (!bs || bs.inFilterEditMode !== true) continue;
+        var obj = bs.inFilterEditModeContainerObjectApiName || "";
+        var txt = ""; try { txt = el.innerText || el.textContent || ""; } catch (e) {}
+        var path = dcExtractContainerPath(txt);
+        if (obj && path) _dcPathCache[obj] = path;   // remember the literal string for this object
+      }
+    } catch (e) {}
+    return _dcPathCache;
+  }
+  // Keep the cache warm while the user works (opening a container fires mousemoves).
+  try { document.addEventListener("mousemove", function () { dcCaptureOpenContainerPaths(); }, true); } catch (e) {}
+
+  // Parse a runtime_cdp-segment-builder-base-segment-item (a nested segment, and
+  // the tier content of a waterfall). Confirmed via probe10 across 4 real segments:
+  //   tokens: [..., "base-segment-chart-icon", <SEGMENT NAME>, "base-segment-link", ...,
+  //            "Nested Publish Behavior:", <PUBLISH BEHAVIOR>, ...]
+  // Name = token between the chart-icon and the link. Publish = token after the
+  // "Nested Publish Behavior:" label (absent on waterfall tiers → "").
+  function readBaseSegmentItem(el) {
+    const toks = leafShadowTexts(el);
+    const NOISE = /^(drag and drop|base-segment-chart-icon|base-segment-link|population:?|pending|remove filter|edit filter|publish schedule:?|nested publish behavior:?|info)$/i;
+    let name = "";
+    const iIcon = toks.findIndex(t => /base-segment-chart-icon/i.test(t));
+    const iLink = toks.findIndex(t => /^base-segment-link$/i.test(t));
+    if (iIcon >= 0 && toks[iIcon + 1] && !/^base-segment-link$/i.test(toks[iIcon + 1])) name = toks[iIcon + 1];
+    else if (iLink > 0 && !NOISE.test(toks[iLink - 1])) name = toks[iLink - 1];
+    if (!name) name = toks.find(t => !NOISE.test(t)) || "";
+
+    // SF renders values as bare TEXT NODES next to a bold label
+    // (<b>Publish Schedule:</b> Do not refresh), which leafShadowTexts (elements
+    // only) misses. So read the element's deep rendered text and regex the value
+    // between each label and the next known marker. Robust to how SF splits nodes.
+    const full = deepText(el);
+    const STOPS = ["Publish Schedule", "Nested Publish Behavior", "Edit Filter", "Remove Filter", "Calculate Population", "Add another"];
+    function between(startRe) {
+      const m = full.match(startRe);
+      if (!m) return "";
+      let rest = full.slice(m.index + m[0].length).replace(/^[:\s]+/, "");
+      let cut = rest.length;
+      STOPS.forEach(function (w) { const i = rest.indexOf(w); if (i >= 0 && i < cut) cut = i; });
+      return rest.slice(0, cut).trim();
+    }
+    let schedule = between(/Publish Schedule:?/i);
+    let pub = between(/Nested Publish Behavior:?/i);
+    if (!pub) pub = (toks.find(t => /use (segment criteria|last published)|independent/i.test(t)) || "");
+    return { name: name, publishBehavior: pub, publishSchedule: schedule };
+  }
+
+  function readSegmentName() {
+    // PRIMARY (evidence-based, probe10): the segment name lives in the segment
+    // wizard page header, as the leaf token right after "Segment"/"Waterfall
+    // Segment" and before "Segment On". This is unambiguous — unlike scanning all
+    // <h1>s, which can pick up a list-view picker overlay ("…Select a List View").
+    const HEADER_TAGS = ["runtime_cdp-segment-wizard-page-header", "runtime_cdp-segment-wizard"];
+    for (const tag of HEADER_TAGS) {
+      let hit = null;
+      eachElement(document, (el) => { if (!hit && (el.tagName || "").toLowerCase() === tag && isVisible(el)) hit = el; });
+      if (!hit) continue;
+      const toks = leafShadowTexts(hit);
+      const iLabel = toks.findIndex(t => /^(waterfall segment|segment)$/i.test(t));
+      if (iLabel >= 0 && toks[iLabel + 1] && !/^segment on$/i.test(toks[iLabel + 1])) {
+        return toks[iLabel + 1].trim();
+      }
+      // fallback: token just before "Segment On"
+      const iOn = toks.findIndex(t => /^segment on:?$/i.test(t));
+      if (iOn > 0 && toks[iOn - 1] && !/^(waterfall segment|segment)$/i.test(toks[iOn - 1])) return toks[iOn - 1].trim();
+    }
+
+    // FALLBACK: scan <h1>s but reject list-view / picker noise, and prefer the
+    // one inside a segment wizard host.
+    const SKIP = new Set(["Data Cloud","Segments","SegmentsRecently Viewed",
+      "Status","Active","Inactive","Draft","Include","Exclude","Rules","Filter","Criteria",
+      "Segment On","Publish Schedule","Population"]);
+    const NOISE = /(recently viewed|select a list view|list view)/i;
+    const candidates = [];
+    eachElement(document, (el) => {
+      try {
+        if ((el.tagName || "").toLowerCase() !== "h1") return;
+        const txt = (el.textContent || "").trim().replace(/\s+/g, " ");
+        if (!txt || txt.length > 200 || SKIP.has(txt) || NOISE.test(txt)) return;
+        if (/^(Status|Active|Inactive|Draft|Include|Exclude|Rules|Population|Filter)$/i.test(txt)) return;
+        if (txt.startsWith("Segment")) candidates.push(txt.replace(/^Segment\s*/,"").trim());
+        else candidates.push(txt);
+      } catch (e) {}
+    });
+    candidates.sort((a, b) => b.length - a.length);
+    return candidates[0] || "";
+  }
+
+  // Determine the KIND of segment from real DOM signals only (no guessing):
+  //   • "Waterfall Segment" — the wizard header shows the "Waterfall Segment" label
+  //     token, OR the canvas contains a runtime_cdp-segment-builder-waterfall-container.
+  //   • Otherwise use the labeled "Segment Type" form value if SF exposes one
+  //     (e.g. "Dynamic"); else the header's own label token ("Segment").
+  // Returns "" only if nothing is detectable — never fabricated.
+  function readSegmentType() {
+    // 1) structural: a waterfall container is unambiguous.
+    let hasWaterfall = false;
+    eachElement(document, (el) => {
+      if (hasWaterfall) return;
+      const t = (el.tagName || "").toLowerCase();
+      if (t === "runtime_cdp-segment-builder-waterfall-container" && isVisible(el)) hasWaterfall = true;
+    });
+    // 2) header label token: "Waterfall Segment" or "Segment".
+    let headerLabel = "";
+    const HEADER_TAGS = ["runtime_cdp-segment-wizard-page-header", "runtime_cdp-segment-wizard"];
+    for (const tag of HEADER_TAGS) {
+      let hit = null;
+      eachElement(document, (el) => { if (!hit && (el.tagName || "").toLowerCase() === tag && isVisible(el)) hit = el; });
+      if (!hit) continue;
+      const toks = leafShadowTexts(hit);
+      const m = toks.find(t => /^(waterfall segment|dynamic segment|segment)$/i.test(t));
+      if (m) { headerLabel = m.replace(/\b\w/g, c => c.toUpperCase()); break; }
+    }
+    // Only return "Waterfall" if the waterfall container element actually exists in DOM
+    if (hasWaterfall) return "Waterfall Segment";
+    // 3) a labeled "Segment Type" value, if SF renders one (e.g. Dynamic).
+    const pairs = readAllFormPairs();
+    const typed = (pairs.get("Segment Type") || pairs.get("Membership Type") || "").trim();
+    // Validate: only use if it looks like a real segment type (not random UI text)
+    if (typed && /^(standard|waterfall|dynamic|real.?time|batch)/i.test(typed)) return typed + (/(segment)$/i.test(typed) ? "" : " Segment");
+    // Default: just "Segment" — don't guess
+    return headerLabel || "Segment";
+  }
+
+  function readSegmentMeta() {
+    const result = { segmentOn: "", segmentType: "", publishSchedule: "", publishType: "", refreshMode: "", status: "", population: "", dataSpace: "", description: "" };
+    result.segmentType = readSegmentType();
+    // Read ONLY from real SF label->value form structures (slds-form-element /
+    // test-id__field-label). We deliberately do NOT do fuzzy CSS-class substring
+    // matching — that used to grab the Chatter
+    // publisher's "Share an update…Share this" as the Publish Schedule. Every value
+    // below is keyed by the literal on-screen label, so it's what SF actually shows.
+    const pairs = readAllFormPairs();
+    // A labeled value is only trustworthy if it isn't itself another known label and
+    // isn't obvious publisher/chatter noise — guards against a mislabeled pairing.
+    const NOISE = /share an update|share this|write something|post|poll|question|announcement/i;
+    const val = (...keys) => {
+      for (const k of keys) {
+        const v = (pairs.get(k) || "").trim();
+        if (v && !NOISE.test(v)) return v;
+      }
+      return "";
+    };
+    result.segmentOn       = val("Segment On", "Segmented On", "Segment on");
+    result.publishSchedule = val("Publish Schedule", "Publishing Schedule", "Refresh Schedule");
+    result.publishType     = val("Publish Type", "Segment Type", "Type");
+    result.refreshMode     = val("Refresh Mode", "Refresh");
+    result.status          = val("Segment Status", "Status");
+    result.dataSpace       = val("Data Space", "Dataspace", "Data space");
+    result.description     = val("Description");
+
+    // Population: SF renders it as a big number + "N% of M total population" in the
+    // population summary. Read the whole summary text and extract the count phrase.
+    // (Confirmed present via probe: "89% of 96353 total population".)
+    try {
+      let popText = "";
+      eachElement(document, (el) => {
+        if (popText) return;
+        const tag = (el.tagName || "").toLowerCase();
+        if (tag === "runtime_cdp-population-count-summary" || tag === "runtime_cdp-segment-population-with-segment-status") {
+          const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+          if (/population/i.test(t)) popText = t;
+        }
+      });
+      if (popText) {
+        // pull the leading count and the "N% of M total population" if present
+        const pct = popText.match(/(\d[\d,]*)\s*%\s*of\s*([\d,]+)\s*total population/i);
+        const lead = popText.match(/([\d,]{2,})/);
+        if (pct) result.population = (lead ? lead[1] + " — " : "") + pct[1] + "% of " + pct[2] + " total population";
+        else if (lead) result.population = lead[1];
+      }
+    } catch (e) {}
+    return result;
+  }
+
+  // SF segment tab names we know about
+  const SEG_TAB_NAMES = ["Include", "Exclude", "Rank and Limit"];
+  // SF may render the tab as "Rank and Limit" or "Rank and Limit" depending on version
+  function normaliseTabName(t) {
+    if (/rank/i.test(t)) return "Rank and Limit";
+    return t;
+  }
+
+  // Returns all SF segment tab elements (role=tab with known names)
+  function findSegmentTabEls() {
+    const found = {};
+    eachElement(document, (el) => {
+      try {
+        if ((el.getAttribute("role") || "") !== "tab") return;
+        const raw = (el.textContent || "").trim().replace(/\s+/g, " ");
+        const t = normaliseTabName(raw);
+        for (const name of SEG_TAB_NAMES) {
+          if (t === name || raw === name || raw.startsWith(name)) found[name] = el;
+        }
+      } catch (e) {}
+    });
+    return found;
+  }
+
+  // Which tab is currently selected
+  function readActiveSegmentTab() {
+    let active = "Include";
+    eachElement(document, (el) => {
+      try {
+        if ((el.getAttribute("role") || "") !== "tab") return;
+        const raw = (el.textContent || "").trim().replace(/\s+/g, " ");
+        const t = normaliseTabName(raw);
+        for (const name of SEG_TAB_NAMES) {
+          if ((t === name || raw === name || raw.startsWith(name)) && el.getAttribute("aria-selected") === "true") active = name;
+        }
+      } catch (e) {}
+    });
+    return active;
+  }
+
+  // Click a SF tab by name and wait for SF to re-render the canvas.
+  // Guards against tabs that change the URL (navigation tabs vs. panel-swap tabs).
+  function switchToSegmentTab(tabName) {
+    return new Promise((resolve) => {
+      const tabs = findSegmentTabEls();
+      const el = tabs[tabName];
+      if (!el) { resolve(false); return; }
+      // Already selected — no click needed
+      if (el.getAttribute("aria-selected") === "true") { resolve(true); return; }
+      const urlBefore = location.href;
+      try { el.click(); } catch(e) { resolve(false); return; }
+      // Wait for LWC re-render. 700ms is more reliable than 350ms for slow orgs.
+      setTimeout(() => {
+        if (location.href !== urlBefore) {
+          history.back();
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      }, 700);
+    });
+  }
+
+  // Read conditions for a specific tab: switch SF to that tab, read DOM, return {tree, flat}.
+  // After reading, switches back to originalTab so the user's view is restored.
+  // Returns empty tree if the tab doesn't exist or switching failed.
+  async function readConditionsForTab(tabName, originalTab) {
+    const switched = await switchToSegmentTab(tabName);
+    if (!switched) return { tree: { type: "set", join: "AND", items: [] }, flat: [] };
+    let result;
+    if (tabName === "Rank and Limit") {
+      // Rank/Limit panel takes longer to render than condition-sets — extra wait
+      await new Promise(r => setTimeout(r, 600));
+      result = readRankLimitFromDOM();
+    } else {
+      result = readConditionsFromDOM();
+    }
+    if (originalTab && originalTab !== tabName) await switchToSegmentTab(originalTab);
+    return result;
+  }
+
+  function readRankLimitFromDOM() {
+    // SF renders each rank/limit block as runtime_cdp-segment-builder-group-rank-limit-condition.
+    // Each block contains: object label, Group By / Sort By field, Limit + count.
+    const rows = [];
+    const condEls = [];
+    eachElement(document, el => {
+      if (tagOf(el) === "runtime_cdp-segment-builder-group-rank-limit-condition" && isVisible(el))
+        condEls.push(el);
+    });
+
+    condEls.forEach((condEl, ci) => {
+      // Collect only LEAF text nodes from this condition's shadow tree.
+      // condEl is a custom element — its content is in its shadowRoot.
+      // We skip container elements (childElementCount > 0) so we never pick up
+      // the entire card's concatenated textContent as a single token.
+      // We also skip the inter-ruleset connector badge ("Where X is in the results of").
+      const CONNECTOR_RE = /^where .+ is in the results of$/i;
+      const NOISE_RE = /^(edit|delete|add|add ruleset|remove|to add a new|group your audience)$/i;
+      const texts = [];
+      const sr = condEl.shadowRoot;
+      if (sr) {
+        eachElement(sr, el => {
+          try {
+            if (el.shadowRoot) return;                    // has own shadow — eachElement recurses into it
+            if ((el.childElementCount || 0) > 0) return; // container — skip, collect its leaf children instead
+            const txt = (el.textContent || "").trim().replace(/\s+/g, " ");
+            if (!txt || txt.length < 2 || txt.length >= 120) return;
+            if (CONNECTOR_RE.test(txt)) return;           // inter-ruleset connector badge
+            if (NOISE_RE.test(txt)) return;               // UI chrome
+            if (!isVisible(el)) return;
+            texts.push(txt);
+          } catch(e) {}
+        });
+      }
+      // Deduplicate while preserving order
+      const seen = new Set();
+      const uniq = texts.filter(t => { if (seen.has(t)) return false; seen.add(t); return true; });
+
+      // Token structure emitted by SF for each rank/limit block:
+      //   <ObjectLabel>
+      //   "Group By" | "Sort By"
+      //   "<Object>.<Field>"           ← the ranked/sorted field
+      //   "in Ascending order" | "in Descending order"   ← only for Sort By
+      //   "Limit"
+      //   "<N> <ObjectLabel> records [per group]"
+      let objectLabel = "", rankType = "", rankField = "", limitVal = "";
+
+      for (let i = 0; i < uniq.length; i++) {
+        const t = uniq[i];
+        if (/^(group by|sort by)$/i.test(t)) {
+          rankType = t;
+          // next token is the field
+          if (uniq[i + 1] && !/^(limit)$/i.test(uniq[i + 1])) {
+            rankField = uniq[i + 1]; i++;
+            // for Sort By, stitch on optional direction token if present
+            if (rankType.toLowerCase() === "sort by" && uniq[i + 1] && /^in (ascending|descending) order$/i.test(uniq[i + 1])) {
+              rankField += " " + uniq[i + 1]; i++;
+            }
+          }
+          continue;
+        }
+        if (/^limit$/i.test(t)) {
+          if (uniq[i + 1]) { limitVal = uniq[i + 1]; i++; }
+          continue;
+        }
+        // First remaining token is the object/DMO label
+        if (!objectLabel) objectLabel = t;
+      }
+
+      // AUTHORITATIVE api names from the element prop (proven via DOM Probe v10): the
+      // group-rank-limit-condition exposes .groupRankLimitCondition.conditions[] — each a
+      // SingleFilterCondition with .subject.{fieldApiName,objectApiName} + .comparison._ruleType
+      // ("groupBy"/"sortBy"). The text scrape above gives labels; this gives the real APIs.
+      var rankObjApi = "", rankFieldApi = "";
+      try {
+        var grc = safeGet(condEl, "groupRankLimitCondition");
+        var conds = grc && (grc.conditions || grc._conditions);
+        if (conds && conds.length) {
+          var sc = conds[0];
+          var subj = (sc && sc.subject) || {};
+          rankFieldApi = subj.fieldApiName || sc.attributeName || "";
+          rankObjApi = subj.objectApiName || grc.selectedObjectApiName || "";
+        } else if (grc) { rankObjApi = grc.selectedObjectApiName || ""; }
+      } catch (e) {}
+
+      // Emit one structured row per block:
+      //   objectLabel = DMO name, fieldLabel = rank type, operator = rank field, values = "Limit: N ..."
+      if (rankType || rankField || limitVal || objectLabel) {
+        rows.push({
+          objectLabel: objectLabel,
+          fieldLabel:  rankType  || "",
+          operator:    rankField || "",
+          values:      limitVal  ? "Limit: " + limitVal : "",
+          objApi:      rankObjApi,
+          fieldApi:    rankFieldApi,
+        });
+      } else if (uniq.length) {
+        // Fallback: emit a single row with whatever text we found
+        rows.push({ objectLabel: uniq[0] || "", fieldLabel: uniq.slice(1).join(" · "), operator: "", values: "" });
+      }
+    });
+
+    const items = rows.map(r => ({ type: "simple", ...r, subFilters: [] }));
+    const flat  = items.map((item, i) => ({
+      num: i + 1,
+      objectLabel: item.objectLabel,
+      fieldLabel:  item.fieldLabel,
+      operator:    item.operator,
+      values:      item.values,
+    }));
+    // Multiple rulesets in Rank & Limit are SEQUENTIAL — each outer ruleset
+    // operates on the results of the previous one. SF shows "Where X is in
+    // the results of" between them. We store the entity name so renderers
+    // can reproduce the exact SF connector text.
+    var join = items.length > 1 ? "SEQ" : "";
+    var seqEntity = items.length > 0 ? (items[0].objectLabel || "") : "";
+    return { tree: { type: "set", join: join, seqEntity: seqEntity, items }, flat };
+  }
+
+  // Returns a tree mirroring the SF canvas DOM structure.
+  // Each node is one of:
+  //   { type:"simple"|"aggregation"|"ci", objectLabel, fieldLabel, operator, values, subFilters:[] }
+  //   { type:"set", join:"AND"|"OR", items:[] }   ← condition-set container
+  function readConditionsFromDOM() {
+
+    function getCompSummary(condEl) {
+      try {
+        if (condEl.shadowRoot) {
+          const cs = condEl.shadowRoot.querySelector("runtime_cdp-segment-builder-comparison-summary");
+          if (cs) return cs;
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    const OP_RE = /^(is equal to|is not equal to|contains|does not contain|starts with|begins with|ends with|does not begin with|does not end with|is between|is not between|has value|has no value|is true|is false|is null|is not null|at least|at most|exactly|greater than|less than|is greater than|is less than|is in|is not in)$/i;
+    const NO_VAL_RE = /^(has value|has no value|is true|is false|is null|is not null)$/i;
+    // Noise tokens that appear in shadow text but are not labels/operators/values
+    const NOISE_RE = /^(and|or|drag and drop|edit|delete|add|remove|filter|condition)$/i;
+
+    function parseComparison(cs) {
+      if (!cs) return { operator: "", values: "" };
+      const ct = shadowTexts(cs);
+      const opIdx = ct.findIndex(t => OP_RE.test(t));
+      const operator = opIdx >= 0 ? ct[opIdx] : (ct[1] || ct[0] || "");
+      if (NO_VAL_RE.test(operator)) return { operator, values: "" };
+      const valStart = opIdx >= 0 ? opIdx + 1 : 2;
+      const valParts = ct.slice(valStart).filter(t => !NOISE_RE.test(t) && t.trim());
+      return { operator, values: valParts.join(", ") };
+    }
+
+    // Extract object + field labels from a condition element's shadow texts.
+    // allTexts[0] is always the concatenated "ObjectField" string (confirmed by probe5).
+    // Find the two separate tokens in allTexts whose concatenation equals allTexts[0].
+    // That pair is guaranteed to be the object and field labels regardless of position.
+    // Best-effort API names from the LWC props on/near the condition element.
+    // DEFENSIVE: if `.entity.fields[]` isn't exposed, returns blanks — never
+    // fabricates. Reuses the same shape entityFieldMap reads elsewhere.
+    function apiNamesFor(condEl, objectLabel, fieldLabel) {
+      const out = { objApi: "", fieldApi: "" };
+      try {
+        // walk up a few shadow hosts looking for an element exposing `.entity`
+        let node = condEl;
+        for (let i = 0; i < 6 && node; i++) {
+          const entity = safeGet(node, "entity");
+          if (entity) {
+            const en = safeGet(entity, "name");
+            if (typeof en === "string" && en) out.objApi = en;
+            const fields = safeGet(entity, "fields");
+            if (fields && typeof fields.length === "number") {
+              for (let j = 0; j < fields.length; j++) {
+                const f = safeGet(fields, j); if (!f) continue;
+                if (safeGet(f, "label") === fieldLabel) { const nm = safeGet(f, "name"); if (typeof nm === "string") out.fieldApi = nm; break; }
+              }
+            }
+            if (out.objApi || out.fieldApi) break;
+          }
+          try { const rn = node.getRootNode(); node = (rn && rn.host) ? rn.host : node.parentElement; } catch (e) { node = null; }
+        }
+      } catch (e) {}
+      return out;
+    }
+    // AUTHORITATIVE API names straight off the element's condition prop (same source
+    // hover uses — proven via DOM Probe). Far more reliable than label-matching
+    // `.entity.fields[]`. Returns {objApi, fieldApi} ("" when absent — never faked).
+    // NOTE: no path here — .path/.joinPath is the internal identity join, NOT SF's
+    // "Container Path"; pending a probe for the real container-path property.
+    function condApiAndPath(condEl) {
+      const out = { objApi: "", fieldApi: "" };
+      try {
+        const CP = ["simpleCondition", "aggregationCondition", "calculatedInsightCondition", "condition"];
+        let c = null;
+        for (let i = 0; i < CP.length; i++) { const v = safeGet(condEl, CP[i]); if (v && typeof v === "object") { c = v; break; } }
+        if (!c) { const d = safeGet(condEl, "details"); if (d && typeof d === "object") c = d; }
+        if (!c) return out;
+        const subj = c.subject || (c.filter && c.filter.subject) || {};
+        out.fieldApi = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
+        out.objApi = subj.objectApiName || c.objectApiName || c.containerObjectApiName || "";
+      } catch (e) {}
+      return out;
+    }
+    function extractLabels(condEl) {
+      const allTexts = shadowTexts(condEl);
+      if (!allTexts.length) return { objectLabel: "", fieldLabel: "" };
+      const concat = allTexts[0]; // e.g. "Unified Individual TDIRAccount Multiline"
+      // Look for pair (a, b) where a + b === concat and neither is concat itself
+      for (let i = 1; i < allTexts.length; i++) {
+        const a = allTexts[i];
+        if (a === concat) continue;
+        if (!concat.startsWith(a)) continue;
+        const b = concat.slice(a.length);
+        if (b && allTexts.includes(b)) {
+          const objectLabel = a.replace(/:$/, "").trim(), fieldLabel = b.trim();
+          // Prefer the authoritative prop (reliable API names); fall back to the old
+          // entity label-match only for anything it couldn't supply.
+          const auth = condApiAndPath(condEl);
+          const api = (auth.objApi || auth.fieldApi) ? auth : apiNamesFor(condEl, objectLabel, fieldLabel);
+          return { objectLabel, fieldLabel, objApi: api.objApi || "", fieldApi: api.fieldApi || "" };
+        }
+      }
+      // Fallback: return empty (condition will be skipped)
+      return { objectLabel: "", fieldLabel: "" };
+    }
+
+    // Get direct child condition elements of a condition-set (one level only).
+    // Uses data-tid="condition-set-filter" li items in the set's shadowRoot —
+    // this selector cannot cross into child custom-element shadow roots, so it's
+    // guaranteed to return only direct items.
+    const COND_TAGS = new Set([
+      "runtime_cdp-segment-builder-simple-condition",
+      "runtime_cdp-segment-builder-aggregation-condition",
+      "runtime_cdp-segment-builder-calculated-insight-condition",
+      "runtime_cdp-segment-builder-base-segment-item",
+      "runtime_cdp-segment-builder-condition-set",
+    ]);
+
+    // Wrapper tags that may contain the real condition inside their shadowRoot
+    const WRAPPER_TAGS = new Set([
+      "runtime_cdp-canvas-item",
+      "runtime_cdp-drag-item",
+      "runtime_cdp-segment-builder-target-shim",
+    ]);
+
+    // Shadow-piercing parent (light DOM, else shadow host).
+    function deepParentEl(node) {
+      let p = node.parentElement;
+      if (!p) { try { const rn = node.getRootNode(); if (rn && rn.host) p = rn.host; } catch (e) {} }
+      return p;
+    }
+    // True if `el` has a COND_TAGS ancestor at or above it, but still within `li`.
+    // Used to keep only the OUTERMOST condition element of each filter item.
+    function hasCondAncestorWithin(el, li) {
+      let node = deepParentEl(el);
+      for (let i = 0; i < 40 && node && node !== li; i++) {
+        if (COND_TAGS.has((node.tagName || "").toLowerCase())) return true;
+        node = deepParentEl(node);
+      }
+      return false;
+    }
+    function getDirectChildren(setEl) {
+      const out = [];
+      const sr = setEl.shadowRoot;
+      if (!sr) return out;
+      let lis;
+      try { lis = sr.querySelectorAll("[data-tid='condition-set-filter']"); } catch(e) { return out; }
+      for (const li of lis) {
+        // Collect EVERY condition element in this filter item, then keep only the
+        // OUTERMOST one(s) — those with no condition ancestor inside the same li.
+        // This is the fix for nested condition-sets: previously the code returned
+        // the first tag in COND_TAGS order (a deep simple-condition), which threw
+        // away the wrapping set and everything else in it (agg / CI / OR group).
+        const all = [];
+        eachElement(li, (el) => { if (COND_TAGS.has((el.tagName || "").toLowerCase())) all.push(el); });
+        const outer = all.filter((el) => !hasCondAncestorWithin(el, li));
+        let found = outer[0] || null;
+        // Last resort: target-shim may use a slot; check its light-DOM children directly
+        if (!found) {
+          for (const child of li.children) {
+            for (const inner of child.children) {
+              if (COND_TAGS.has((inner.tagName || "").toLowerCase())) { found = inner; break; }
+            }
+            if (found) break;
+          }
+        }
+        if (found) out.push(found);
+      }
+      return out;
+    }
+
+    // Get sub-filter conditions inside an aggregation-condition.
+    // SF wraps multiple sub-filters in a condition-set, but a single sub-filter
+    // may live directly in the agg's shadow without a condition-set wrapper.
+    function getSubFilters(aggEl) {
+      // Case 1: sub-filters wrapped in a nested condition-set (multiple filters)
+      let nestedSet = null;
+      eachElement(aggEl.shadowRoot || aggEl, (el) => {
+        if (!nestedSet && (el.tagName || "").toLowerCase() === "runtime_cdp-segment-builder-condition-set") nestedSet = el;
+      });
+      if (nestedSet) {
+        const joinTexts = shadowTexts(nestedSet);
+        const join = (joinTexts.find(t => /^(and|or)$/i.test(t)) || "AND").toUpperCase();
+        const items = [];
+        for (const el of getDirectChildren(nestedSet)) {
+          if ((el.tagName || "").toLowerCase() !== "runtime_cdp-segment-builder-simple-condition") continue;
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
+          if (!objectLabel && !fieldLabel) continue;
+          const { operator, values } = parseComparison(getCompSummary(el));
+          items.push({ objectLabel, fieldLabel, operator, values, objApi, fieldApi });
+        }
+        return { items, join };
+      }
+      // Case 2: single sub-filter lives directly in the agg shadow (no wrapping condition-set)
+      // Detect by: agg's allTexts[0] ends with the object name but the shadow also contains
+      // a second "ObjectField" concatenated token that is different from the agg header.
+      const aggTexts = shadowTexts(aggEl);
+      // aggTexts[0] = "Object:AggFunc" (the agg header concat)
+      // Look for any simple-condition elements directly inside the agg's shadow
+      const items = [];
+      eachElement(aggEl.shadowRoot || aggEl, (el) => {
+        if ((el.tagName || "").toLowerCase() !== "runtime_cdp-segment-builder-simple-condition") return;
+        const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
+        if (!objectLabel && !fieldLabel) return;
+        const { operator, values } = parseComparison(getCompSummary(el));
+        items.push({ objectLabel, fieldLabel, operator, values, objApi, fieldApi });
+      });
+      return { items, join: "AND" };
+    }
+
+    // Recursively build a tree node for a condition-set element
+    function buildSetNode(setEl) {
+      const joinTexts = shadowTexts(setEl);
+      const join = (joinTexts.find(t => /^(and|or)$/i.test(t)) || "AND").toUpperCase();
+      const items = [];
+      for (const el of getDirectChildren(setEl)) {
+        const tag = (el.tagName || "").toLowerCase();
+        if (tag === "runtime_cdp-segment-builder-condition-set") {
+          items.push(buildSetNode(el));
+        } else if (tag === "runtime_cdp-segment-builder-simple-condition") {
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
+          if (!objectLabel && !fieldLabel) continue;
+          const { operator, values } = parseComparison(getCompSummary(el));
+          items.push({ type: "simple", objectLabel, fieldLabel, operator, values, objApi, fieldApi });
+        } else if (tag === "runtime_cdp-segment-builder-aggregation-condition") {
+          const { objectLabel, fieldLabel: aggFunc, objApi } = extractLabels(el);
+          const { operator, values } = parseComparison(getCompSummary(el));
+          const sf = getSubFilters(el);
+          items.push({ type: "aggregation", objectLabel, fieldLabel: aggFunc, operator, values, subFilters: sf.items, subJoin: sf.join, objApi });
+        } else if (tag === "runtime_cdp-segment-builder-calculated-insight-condition") {
+          const { objectLabel, fieldLabel, objApi, fieldApi } = extractLabels(el);
+          const { operator, values } = parseComparison(getCompSummary(el));
+          items.push({ type: "ci", objectLabel, fieldLabel, operator, values, objApi, fieldApi });
+        } else if (tag === "runtime_cdp-segment-builder-base-segment-item") {
+          const bs = readBaseSegmentItem(el);
+          if (bs.name) items.push({ type: "nested-segment", objectLabel: bs.name, fieldLabel: bs.publishBehavior, operator: "", values: "", publishSchedule: bs.publishSchedule });
+        }
+      }
+      return { type: "set", join, items };
+    }
+
+    // Find the root condition-set (direct child of runtime_cdp-canvas)
+    // Find the root condition-set: the one that is not contained inside any other condition-set.
+    // Walk up the shadow-host chain from each set; if we hit another condition-set before
+    // hitting the canvas/builder root, this set is nested — skip it.
+    function isNestedInsideOtherSet(setEl) {
+      let node = setEl;
+      for (let i = 0; i < 30 && node; i++) {
+        try {
+          const rn = node.getRootNode();
+          if (rn && rn !== document && rn.host) {
+            node = rn.host;
+            const t = (node.tagName || "").toLowerCase();
+            if (t === "runtime_cdp-segment-builder-condition-set") return true;
+            if (t === "runtime_cdp-segment-builder" || t === "runtime_cdp-canvas") return false;
+            continue;
+          }
+        } catch(e) {}
+        if (!node.parentElement) return false;
+        node = node.parentElement;
+      }
+      return false;
+    }
+    // Scan full document (shadow-piercing) for condition-sets, then keep only
+    // visible ones. SF keeps hidden tab panels in the DOM — elements inside a
+    // display:none ancestor return getBoundingClientRect() of {width:0,height:0}.
+    const allSets = findByTag("runtime_cdp-segment-builder-condition-set").filter(isVisible);
+
+    // Root set = visible + not nested inside any other condition-set
+    const rootCandidates = allSets.filter(s => !isNestedInsideOtherSet(s));
+    const canvasSet = rootCandidates.reduce((best, s) => {
+      const sr = s.shadowRoot;
+      if (!sr) return best;
+      let count = 0;
+      try { count = sr.querySelectorAll("[data-tid='condition-set-filter']").length; } catch(e) {}
+      const bestCount = best ? (() => { const bsr = best.shadowRoot; if (!bsr) return 0; try { return bsr.querySelectorAll("[data-tid='condition-set-filter']").length; } catch(e) { return 0; } })() : -1;
+      return count >= bestCount ? s : best;
+    }, null);
+
+    // Fallback for segments with no condition-set (waterfall, flat nested-segment).
+    // Scans full document but filters to visible elements only so hidden tab
+    // canvases (Include panel when Exclude is active, etc.) are excluded.
+    function buildFlatCanvasTree() {
+      const FLAT_COND_TAGS = new Set([
+        "runtime_cdp-segment-builder-simple-condition",
+        "runtime_cdp-segment-builder-aggregation-condition",
+        "runtime_cdp-segment-builder-calculated-insight-condition",
+        "runtime_cdp-segment-builder-base-segment-item",
+      ]);
+
+      const allConds = [];
+      eachElement(document, el => {
+        if (FLAT_COND_TAGS.has((el.tagName || "").toLowerCase()) && isVisible(el)) allConds.push(el);
+      });
+
+      // Sub-filters inside an aggregation-condition are NOT top-level items — skip them
+      function isInsideAgg(el) {
+        let node = el;
+        for (let i = 0; i < 25 && node; i++) {
+          try {
+            const rn = node.getRootNode();
+            if (rn && rn !== document && rn.host) {
+              node = rn.host;
+              if ((node.tagName || "").toLowerCase() === "runtime_cdp-segment-builder-aggregation-condition") return true;
+              continue;
+            }
+          } catch(e) {}
+          node = node.parentElement;
+        }
+        return false;
+      }
+
+      // Waterfall? The canvas holds runtime_cdp-segment-builder-waterfall-container(s).
+      // Each base-segment-item inside is one ranked tier, in DOM order = hierarchy.
+      let isWaterfall = false;
+      eachElement(document, el => {
+        if ((el.tagName || "").toLowerCase() === "runtime_cdp-segment-builder-waterfall-container" && isVisible(el)) isWaterfall = true;
+      });
+
+      const items = [];
+      let tierNum = 0;
+      for (const found of allConds) {
+        if (isInsideAgg(found)) continue;
+        const tag = (found.tagName || "").toLowerCase();
+        if (tag === "runtime_cdp-segment-builder-base-segment-item") {
+          const bs = readBaseSegmentItem(found);
+          if (!bs.name) continue;
+          if (isWaterfall) {
+            // Per SF docs (Create a Waterfall Segment): waterfall members are
+            // SEGMENTS processed in PRIORITY order — NOT "nested segments" (docs
+            // state nested segments can't be in a waterfall). Mark them as
+            // priority segments so the renderer labels them SF's way.
+            tierNum++;
+            items.push({ type: "nested-segment", waterfallPriority: true, objectLabel: bs.name,
+              fieldLabel: bs.publishBehavior, operator: "Priority " + tierNum, values: "", publishSchedule: bs.publishSchedule });
+          } else {
+            // A segment reused as a condition inside criteria = a true nested segment.
+            items.push({ type: "nested-segment", objectLabel: bs.name, fieldLabel: bs.publishBehavior, operator: "", values: "", publishSchedule: bs.publishSchedule });
+          }
+        } else if (tag === "runtime_cdp-segment-builder-simple-condition") {
+          const { objectLabel, fieldLabel } = extractLabels(found);
+          if (!objectLabel && !fieldLabel) continue;
+          const { operator, values } = parseComparison(getCompSummary(found));
+          items.push({ type: "simple", objectLabel, fieldLabel, operator, values });
+        } else if (tag === "runtime_cdp-segment-builder-aggregation-condition") {
+          const { objectLabel, fieldLabel: aggFunc } = extractLabels(found);
+          const { operator, values } = parseComparison(getCompSummary(found));
+          const sf = getSubFilters(found);
+          items.push({ type: "aggregation", objectLabel, fieldLabel: aggFunc, operator, values, subFilters: sf.items, subJoin: sf.join });
+        } else if (tag === "runtime_cdp-segment-builder-calculated-insight-condition") {
+          const { objectLabel, fieldLabel } = extractLabels(found);
+          const { operator, values } = parseComparison(getCompSummary(found));
+          items.push({ type: "ci", objectLabel, fieldLabel, operator, values });
+        }
+      }
+
+      // Get join from the visible canvas. Waterfall tiers are prioritised in order
+      // (not AND/OR'd) — label the set THEN so the view reads as a ranked hierarchy.
+      let canvas = null;
+      eachElement(document, el => { if (!canvas && (el.tagName || "").toLowerCase() === "runtime_cdp-canvas" && isVisible(el)) canvas = el; });
+      const canvasTexts = canvas ? shadowTexts(canvas) : [];
+      const join = isWaterfall ? "THEN" : (canvasTexts.find(t => /^(and|or)$/i.test(t)) || "AND").toUpperCase();
+      return { type: "set", join, items, waterfall: isWaterfall };
+    }
+
+    let tree = canvasSet ? buildSetNode(canvasSet) : buildFlatCanvasTree();
+
+    // ── AUTOMATIC completeness self-heal (invisible to the user) ──────────────
+    // The end user trusts this blindly, so correctness is OUR job, not theirs.
+    // We count the leaf conditions VISIBLE in the live canvas and compare to what
+    // the structured walk captured. If the structured tree missed any (e.g. an
+    // unusual nesting the set-walker didn't traverse), we silently fall back to
+    // the flat full-DOM sweep, which physically cannot skip a visible element —
+    // guaranteeing every condition shown in SF is in the export. No prompts, no
+    // buttons, no "go check it yourself".
+    function countCaptured(node, acc) {
+      if (!node) return acc;
+      if (node.type === "set") { (node.items || []).forEach(n => countCaptured(n, acc)); return acc; }
+      if (node.type === "aggregation") { acc.n++; (node.subFilters || []).forEach(() => acc.n++); return acc; }
+      acc.n++; return acc;
+    }
+    function countVisibleLeaves() {
+      const LEAF = {
+        "runtime_cdp-segment-builder-simple-condition": 1,
+        "runtime_cdp-segment-builder-aggregation-condition": 1,
+        "runtime_cdp-segment-builder-calculated-insight-condition": 1,
+        "runtime_cdp-segment-builder-base-segment-item": 1,
+      };
+      let n = 0;
+      eachElement(document, el => { if (LEAF[(el.tagName || "").toLowerCase()] && isVisible(el)) n++; });
+      return n;
+    }
+    try {
+      const captured = countCaptured(tree, { n: 0 }).n;
+      const visible = countVisibleLeaves();
+      // Only heal when the structured walk under-captured (never when it's equal
+      // or when SF shows hidden dupes that inflate `visible` beyond real content).
+      if (captured < visible) {
+        const flatTree = buildFlatCanvasTree();
+        const flatCount = countCaptured(flatTree, { n: 0 }).n;
+        if (flatCount > captured) { tree = flatTree; }   // adopt the more complete result
+      }
+    } catch (e) { /* never let the safety net break the export */ }
+
+    // Also produce flat rows for TSV copy (for Sheets)
+    function flattenTree(node, rows, groupNum) {
+      if (node.type === "set") {
+        node.items.forEach((item, i) => {
+          const isLast = i === node.items.length - 1;
+          if (item.type === "set") {
+            flattenTree(item, rows, groupNum);
+          } else {
+            const joinWithNext = isLast ? "" : node.join;
+            rows.push({ objectLabel: item.objectLabel, fieldLabel: item.fieldLabel, operator: item.operator, values: item.values, joinWithNext });
+            if (item.type === "aggregation" && item.subFilters.length) {
+              item.subFilters.forEach((sf, si) => {
+                rows.push({ objectLabel: "  └ " + sf.objectLabel, fieldLabel: sf.fieldLabel, operator: sf.operator, values: sf.values, joinWithNext: si < item.subFilters.length - 1 ? "AND" : "" });
+              });
+            }
+          }
+        });
+      }
+    }
+    const flat = [];
+    flattenTree(tree, flat, 1);
+    return { tree, flat };
+  }
+
+  function readSegmentRules() {
+    const activeTab = readActiveSegmentTab();
+    const sfTabs = Object.keys(findSegmentTabEls()); // e.g. ["Include","Exclude","Rank and Limit"]
+    // Waterfall / nested-segment types have no Include/Exclude tabs — default to single "Include" pane
+    const availableTabs = sfTabs.length ? sfTabs : ["Include"];
+    const { tree, flat } = activeTab === "Rank and Limit" ? readRankLimitFromDOM() : readConditionsFromDOM();
+    return { activeTab, availableTabs, tree, flat };
+  }
+
+  // ── Segment blueprint export (MiniXLSX + kit renderer + adapter) ──────────
+  // Self-contained: no CDN, no deps (Salesforce CSP blocks external scripts).
+  // Produces the multi-sheet .xlsx blueprint (container bars + AND/OR rails).
+  var SEGX = (function () {
+    var SEGX_NS = {};
+    // Classify a related object as a DLO / DMO / Calculated-Insight object PURELY
+    // from the scraped API-name suffix Salesforce assigns — no guessing:
+    //   __dlm = Data Model Object (DMO)   __dll/__dls = Data Lake Object (DLO)
+    //   __cio = Calculated Insight object   __c/__e/(none) = leave unclassified.
+    // Returns "" when the API name wasn't exposed or the suffix is unknown, so we
+    // never mislabel. `label` is shown only for CI where the caller already knows.
+    function objectKindFromApi(objApi) {
+      var a = String(objApi || "").toLowerCase();
+      if (/__dlm$/.test(a)) return "DMO";
+      if (/__(dll|dls)$/.test(a)) return "DLO";
+      if (/__cio$/.test(a)) return "CI";
+      return "";
+    }
+    /* ==== mini-xlsx (dependency-free .xlsx writer) ==== */
+  /* mini-xlsx.js — a tiny, dependency-free .xlsx writer that mimics the slice of
+   * the ExcelJS API our blueprint renderer (renderSheet / buildSegmentWorkbookMulti)
+   * actually uses. Produces a valid multi-sheet workbook via a hand-rolled
+   * store-only (uncompressed) ZIP + Office Open XML. Works under Salesforce CSP
+   * (no CDN, no eval, no deps) in a bookmarklet, extension, or Node.
+   *
+   * Supported cell surface (matches renderSheet's usage):
+   *   ws.getColumn(i).width           ws.getRow(i).height
+   *   ws.getCell(r,c).value           (string | number)
+   *   ws.getCell(r,c).numFmt          ("0", "0.####", …)
+   *   ws.getCell(r,c).font            ({bold,italic,size,color:{argb}})
+   *   ws.getCell(r,c).fill            ({type:"pattern",pattern:"solid",fgColor:{argb}})
+   *   ws.getCell(r,c).alignment       ({horizontal,vertical,wrapText})
+   *   ws.getCell(r,c).border          ({top,bottom,left,right}: {style,color:{argb}})
+   *   ws.mergeCells(r0,c0,r1,c1)
+   *   wb.addWorksheet(name, {views:[…]})   (views ignored except showGridLines)
+   *   await wb.xlsx.writeBuffer()      -> Uint8Array (a complete .xlsx)
+   *
+   * ExcelJS argb is 8-hex "AARRGGBB"; OOXML wants the same, so we pass through.
+   */
+  (function (root) {
+    "use strict";
+
+    // ── CRC32 (for ZIP entries) ───────────────────────────────────────────────
+    var CRC_TABLE = (function () {
+      var t = new Uint32Array(256);
+      for (var n = 0; n < 256; n++) {
+        var c = n;
+        for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+      }
+      return t;
+    })();
+    function crc32(bytes) {
+      var c = 0xFFFFFFFF;
+      for (var i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+      return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // UTF-8 encode to a Uint8Array (TextEncoder when available; manual fallback)
+    function utf8(str) {
+      if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(str);
+      var out = [], i, c;
+      for (i = 0; i < str.length; i++) {
+        c = str.charCodeAt(i);
+        if (c < 0x80) out.push(c);
+        else if (c < 0x800) { out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F)); }
+        else if (c >= 0xD800 && c <= 0xDBFF) { // surrogate pair
+          var c2 = str.charCodeAt(++i);
+          var u = 0x10000 + (((c & 0x3FF) << 10) | (c2 & 0x3FF));
+          out.push(0xF0 | (u >> 18), 0x80 | ((u >> 12) & 0x3F), 0x80 | ((u >> 6) & 0x3F), 0x80 | (u & 0x3F));
+        } else { out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F)); }
+      }
+      return new Uint8Array(out);
+    }
+
+    function xmlEsc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+        // strip control chars XML forbids
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
+    }
+
+    // ── store-only ZIP ──────────────────────────────────────────────────────────
+    function zipStore(files) {
+      // files: [{name, data:Uint8Array}]
+      var chunks = [], central = [], offset = 0;
+      function u16(n) { return [n & 0xFF, (n >> 8) & 0xFF]; }
+      function u32(n) { return [n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >>> 24) & 0xFF]; }
+      files.forEach(function (f) {
+        var nameBytes = utf8(f.name);
+        var crc = crc32(f.data), sz = f.data.length;
+        var local = [].concat(
+          u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+          u32(crc), u32(sz), u32(sz), u16(nameBytes.length), u16(0));
+        chunks.push(new Uint8Array(local)); chunks.push(nameBytes); chunks.push(f.data);
+        var central1 = [].concat(
+          u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+          u32(crc), u32(sz), u32(sz), u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+          u32(0), u32(offset));
+        central.push(new Uint8Array(central1)); central.push(nameBytes);
+        offset += local.length + nameBytes.length + sz;
+      });
+      var centralStart = offset, centralSize = 0;
+      central.forEach(function (c) { centralSize += c.length; });
+      var eocd = new Uint8Array([].concat(
+        u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+        u32(centralSize), u32(centralStart), u16(0)));
+      var total = 0, all = chunks.concat(central, [eocd]);
+      all.forEach(function (c) { total += c.length; });
+      var out = new Uint8Array(total), p = 0;
+      all.forEach(function (c) { out.set(c, p); p += c.length; });
+      return out;
+    }
+
+    // ── styles registry (dedup fonts / fills / borders / numFmts / xfs) ──────────
+    function StyleBook() {
+      this.fonts = ['<font><sz val="11"/><name val="Calibri"/></font>'];
+      this.fills = ['<fill><patternFill patternType="none"/></fill>',
+                    '<fill><patternFill patternType="gray125"/></fill>'];
+      this.borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
+      this.numFmts = {};           // code -> id (custom start at 164)
+      this.nextNumFmtId = 164;
+      this.xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'];
+      this._xfKey = { '0': 0 };
+    }
+    function idxOf(arr, xml) { var i = arr.indexOf(xml); if (i < 0) { i = arr.length; arr.push(xml); } return i; }
+
+    StyleBook.prototype.fontId = function (f) {
+      if (!f) return 0;
+      var s = "";
+      if (f.bold) s += "<b/>";
+      if (f.italic) s += "<i/>";
+      s += '<sz val="' + (f.size || 11) + '"/>';
+      if (f.color && f.color.argb) s += '<color rgb="' + f.color.argb + '"/>';
+      s += '<name val="Calibri"/>';
+      return idxOf(this.fonts, "<font>" + s + "</font>");
+    };
+    StyleBook.prototype.fillId = function (f) {
+      if (!f || !f.fgColor || !f.fgColor.argb) return 0;
+      return idxOf(this.fills,
+        '<fill><patternFill patternType="solid"><fgColor rgb="' + f.fgColor.argb +
+        '"/><bgColor indexed="64"/></patternFill></fill>');
+    };
+    StyleBook.prototype.borderId = function (b) {
+      if (!b) return 0;
+      var STY = { thin: "thin", medium: "medium", thick: "thick", hair: "hair", dotted: "dotted" };
+      function side(tag, s) {
+        if (!s || !s.style) return "<" + tag + "/>";
+        var st = STY[s.style] || "thin";
+        var col = (s.color && s.color.argb) ? '<color rgb="' + s.color.argb + '"/>' : "";
+        return "<" + tag + ' style="' + st + '">' + col + "</" + tag + ">";
+      }
+      var xml = "<border>" + side("left", b.left) + side("right", b.right) +
+        side("top", b.top) + side("bottom", b.bottom) + "<diagonal/></border>";
+      return idxOf(this.borders, xml);
+    };
+    StyleBook.prototype.numFmtId = function (code) {
+      if (!code) return 0;
+      // built-in "0" is id 1 in the reserved range but 0 general is fine; treat "0" as builtin 1
+      if (code === "0") return 1;
+      if (this.numFmts[code] != null) return this.numFmts[code];
+      var id = this.nextNumFmtId++;
+      this.numFmts[code] = id;
+      return id;
+    };
+    StyleBook.prototype.cellXf = function (cell) {
+      var fontId = this.fontId(cell.font);
+      var fillId = this.fillId(cell.fill);
+      var borderId = this.borderId(cell.border);
+      var numFmtId = this.numFmtId(cell.numFmt);
+      var a = cell.alignment;
+      var alignXml = "";
+      if (a) {
+        // ExcelJS accepts "middle" for vertical center; OOXML only allows "center".
+        var VMAP = { middle: "center", centre: "center" };
+        var HMAP = { centre: "center" };
+        var attrs = "";
+        if (a.horizontal) attrs += ' horizontal="' + (HMAP[a.horizontal] || a.horizontal) + '"';
+        if (a.vertical) attrs += ' vertical="' + (VMAP[a.vertical] || a.vertical) + '"';
+        if (a.wrapText) attrs += ' wrapText="1"';
+        if (attrs) alignXml = "<alignment" + attrs + "/>";
+      }
+      var applyAlign = alignXml ? ' applyAlignment="1"' : "";
+      var xf = '<xf numFmtId="' + numFmtId + '" fontId="' + fontId + '" fillId="' + fillId +
+        '" borderId="' + borderId + '" xfId="0" applyFont="1" applyFill="1" applyBorder="1"' +
+        applyAlign + (alignXml ? ">" + alignXml + "</xf>" : "/>");
+      var key = xf;
+      if (this._xfKey[key] != null) return this._xfKey[key];
+      var i = this.xfs.length; this.xfs.push(xf); this._xfKey[key] = i; return i;
+    };
+    StyleBook.prototype.xml = function () {
+      var self = this;
+      var numFmtXml = "";
+      var codes = Object.keys(this.numFmts);
+      if (codes.length) {
+        numFmtXml = '<numFmts count="' + codes.length + '">' +
+          codes.map(function (c) { return '<numFmt numFmtId="' + self.numFmts[c] + '" formatCode="' + xmlEsc(c) + '"/>'; }).join("") +
+          "</numFmts>";
+      }
+      return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        numFmtXml +
+        '<fonts count="' + this.fonts.length + '">' + this.fonts.join("") + '</fonts>' +
+        '<fills count="' + this.fills.length + '">' + this.fills.join("") + '</fills>' +
+        '<borders count="' + this.borders.length + '">' + this.borders.join("") + '</borders>' +
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+        '<cellXfs count="' + this.xfs.length + '">' + this.xfs.join("") + '</cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+        '</styleSheet>';
+    };
+
+    // ── column-letter helper (1 -> A, 27 -> AA) ──────────────────────────────────
+    function colLetter(n) {
+      var s = "";
+      while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = ((n - m) / 26) | 0; }
+      return s;
+    }
+
+    // ── Cell / Row / Column / Worksheet / Workbook ───────────────────────────────
+    function Cell() {
+      this.value = null; this.numFmt = null;
+      this.font = null; this.fill = null; this.alignment = null; this.border = null;
+    }
+    function Worksheet(name, opts) {
+      this.name = name; this.opts = opts || {};
+      this._cells = {};      // "r,c" -> Cell
+      this._cols = {};       // c -> {width}
+      this._rows = {};       // r -> {height}
+      this._merges = [];     // [r0,c0,r1,c1]
+      this._maxR = 0; this._maxC = 0;
+    }
+    Worksheet.prototype.getCell = function (r, c) {
+      var k = r + "," + c, cell = this._cells[k];
+      if (!cell) { cell = new Cell(); this._cells[k] = cell; }
+      if (r > this._maxR) this._maxR = r;
+      if (c > this._maxC) this._maxC = c;
+      return cell;
+    };
+    Worksheet.prototype.getColumn = function (c) {
+      var col = this._cols[c]; if (!col) { col = {}; this._cols[c] = col; } return col;
+    };
+    Worksheet.prototype.getRow = function (r) {
+      var row = this._rows[r]; if (!row) { row = {}; this._rows[r] = row; } return row;
+    };
+    Worksheet.prototype.mergeCells = function (r0, c0, r1, c1) {
+      this._merges.push([r0, c0, r1, c1]);
+      if (r1 > this._maxR) this._maxR = r1;
+      if (c1 > this._maxC) this._maxC = c1;
+    };
+
+    // Auto-fit so nothing is clipped on open (Excel does NOT auto-fit generated
+    // files, and merged cells never grow row height on their own). Computes:
+    //  • column widths from the longest SINGLE-column cell (horizontally-merged
+    //    cells are excluded so a long title/note can't blow out one column),
+    //    clamped to [min,max];
+    //  • row heights for wrapped cells from text length ÷ the (possibly merged)
+    //    width, honouring bold (~10% wider glyphs) and explicit newlines.
+    // opts: { min:[], max:[] } — per-column width clamps by 1-based index.
+    Worksheet.prototype.autoSize = function (opts) {
+      opts = opts || {};
+      var mins = opts.min || [], maxs = opts.max || [];
+      // merge maps: horizontal span (for width) + vertical span (for height).
+      var hSpan = {}, hCovered = {}, vSpan = {}, vCovered = {};
+      this._merges.forEach(function (m) {
+        var r0 = m[0], c0 = m[1], r1 = m[2], c1 = m[3];
+        if (c1 > c0) { hSpan[r0 + "," + c0] = c1 - c0 + 1; for (var c = c0 + 1; c <= c1; c++) hCovered[r0 + "," + c] = 1; }
+        if (r1 > r0) { vSpan[r0 + "," + c0] = r1 - r0 + 1; for (var r = r0 + 1; r <= r1; r++) vCovered[r + "," + c0] = 1; }
+      });
+      function textLen(v) { return v == null ? 0 : String(v).replace(/\s+/g, " ").length; }
+      function isBold(cell) { return !!(cell && cell.font && cell.font.bold); }
+
+      // ── column widths: measure only cells that occupy a SINGLE column ─────────
+      for (var c = 1; c <= this._maxC; c++) {
+        var w = 0;
+        for (var r = 1; r <= this._maxR; r++) {
+          var key = r + "," + c;
+          if (hCovered[key] || hSpan[key]) continue;   // spans multiple columns → don't size one col to it
+          var cell = this._cells[key]; if (!cell) continue;
+          var len = textLen(cell.value); if (isBold(cell)) len = Math.ceil(len * 1.08);
+          if (len > w) w = len;
+        }
+        if (w) {
+          var col = this.getColumn(c);
+          var lo = mins[c - 1] != null ? mins[c - 1] : 6;
+          var hi = maxs[c - 1] != null ? maxs[c - 1] : 48;
+          var want = Math.min(hi, Math.max(lo, w + 2));
+          if (!col.width || col.width < want) col.width = want;
+        }
+      }
+
+      // ── row heights: wrap-aware, honouring BOTH merge directions ──────────────
+      // A vertically-merged wrapped cell is satisfied by
+      // the SUM of its spanned rows, so distribute its needed height across them
+      // instead of forcing it all onto the first row.
+      var LINE = 15, self = this;
+      var rowNeed = {};
+      function bump(r, h) { if (!rowNeed[r] || rowNeed[r] < h) rowNeed[r] = h; }
+      for (var rr = 1; rr <= this._maxR; rr++) {
+        for (var cc = 1; cc <= this._maxC; cc++) {
+          var k = rr + "," + cc;
+          if (hCovered[k] || vCovered[k]) continue;      // not an anchor
+          var cel = this._cells[k]; if (!cel || cel.value == null || cel.value === "") continue;
+          if (!(cel.alignment && cel.alignment.wrapText)) continue;
+          var cspan = hSpan[k] || 1, widthChars = 0;
+          for (var sc = cc; sc < cc + cspan; sc++) widthChars += ((this._cols[sc] && this._cols[sc].width) || 8.43);
+          var perLine = Math.max(8, Math.floor(widthChars * 1.05));
+          var lines = 0;
+          String(cel.value).split("\n").forEach(function (seg) { lines += Math.max(1, Math.ceil((seg.replace(/\s+/g, " ").length || 1) / perLine)); });
+          var need = lines * LINE + 4;
+          var rspan = vSpan[k] || 1;
+          if (rspan === 1) { bump(rr, need); }
+          else {
+            // distribute across the merged rows; only raise the deficit vs default
+            var per = Math.ceil(need / rspan);
+            for (var vr = rr; vr < rr + rspan; vr++) bump(vr, per);
+          }
+        }
+      }
+      Object.keys(rowNeed).forEach(function (rs) {
+        var r = +rs, row = self.getRow(r), target = rowNeed[r];
+        if (!row.height || row.height < target) row.height = target;
+      });
+    };
+
+    // Serialize the SAME cells/merges/styles to an HTML <table> so "Copy for Sheets"
+    // pastes the identical blueprint grid that Download Excel produces. Honors
+    // rowspan/colspan (merges), fills, fonts, alignment, and borders.
+    Worksheet.prototype.toHtmlTable = function () {
+      var self = this;
+      // map top-left of each merge -> {rs,cs}; and every covered cell -> "skip"
+      var anchor = {}, covered = {};
+      this._merges.forEach(function (m) {
+        var r0 = m[0], c0 = m[1], r1 = m[2], c1 = m[3];
+        anchor[r0 + "," + c0] = { rs: r1 - r0 + 1, cs: c1 - c0 + 1 };
+        for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) if (!(r === r0 && c === c0)) covered[r + "," + c] = 1;
+      });
+      function cssOf(cell) {
+        var s = "border:1px solid #d0d5de;padding:3px 7px;font-family:Calibri,Arial,sans-serif;";
+        if (cell) {
+          if (cell.fill && cell.fill.fgColor && cell.fill.fgColor.argb) s += "background:#" + cell.fill.fgColor.argb.slice(2) + ";";
+          if (cell.font) {
+            if (cell.font.bold) s += "font-weight:700;";
+            if (cell.font.italic) s += "font-style:italic;";
+            if (cell.font.size) s += "font-size:" + cell.font.size + "px;";
+            if (cell.font.color && cell.font.color.argb) s += "color:#" + cell.font.color.argb.slice(2) + ";";
+          }
+          var a = cell.alignment;
+          if (a) {
+            if (a.horizontal) s += "text-align:" + a.horizontal + ";";
+            var v = a.vertical === "middle" ? "middle" : a.vertical;
+            if (v) s += "vertical-align:" + v + ";";
+          }
+        }
+        return s;
+      }
+      var out = "<table style='border-collapse:collapse;font-size:12px'>";
+      for (var r = 1; r <= this._maxR; r++) {
+        out += "<tr>";
+        for (var c = 1; c <= this._maxC; c++) {
+          var key = r + "," + c;
+          if (covered[key]) continue;
+          var cell = this._cells[key];
+          var span = anchor[key] || { rs: 1, cs: 1 };
+          var attrs = (span.rs > 1 ? " rowspan='" + span.rs + "'" : "") + (span.cs > 1 ? " colspan='" + span.cs + "'" : "");
+          var v = cell ? cell.value : "";
+          var txt = (v == null ? "" : String(v)).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          out += "<td" + attrs + " style='" + cssOf(cell) + "'>" + txt + "</td>";
+        }
+        out += "</tr>";
+      }
+      return out + "</table>";
+    };
+
+    Worksheet.prototype._sheetXml = function (styles) {
+      var self = this, gridOff = false;
+      try {
+        var v = this.opts.views && this.opts.views[0];
+        if (v && v.showGridLines === false) gridOff = true;
+      } catch (e) {}
+
+      // <cols>
+      var colsXml = "";
+      var colKeys = Object.keys(this._cols).map(Number).sort(function (a, b) { return a - b; });
+      if (colKeys.length) {
+        colsXml = "<cols>" + colKeys.map(function (c) {
+          var w = self._cols[c].width;
+          return '<col min="' + c + '" max="' + c + '" width="' + (w || 8.43) + '" customWidth="1"/>';
+        }).join("") + "</cols>";
+      }
+
+      // rows
+      var rowsXml = "";
+      for (var r = 1; r <= this._maxR; r++) {
+        var cellsXml = "", any = false;
+        for (var c = 1; c <= this._maxC; c++) {
+          var cell = this._cells[r + "," + c];
+          if (!cell) continue;
+          var ref = colLetter(c) + r;
+          var sIdx = styles.cellXf(cell);
+          var sAttr = sIdx ? ' s="' + sIdx + '"' : "";
+          var v = cell.value;
+          if (v == null || v === "") { cellsXml += '<c r="' + ref + '"' + sAttr + '/>'; any = true; continue; }
+          if (typeof v === "number" && isFinite(v)) {
+            cellsXml += '<c r="' + ref + '"' + sAttr + '><v>' + v + "</v></c>";
+          } else {
+            cellsXml += '<c r="' + ref + '"' + sAttr + ' t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(v) + "</t></is></c>";
+          }
+          any = true;
+        }
+        var rowMeta = this._rows[r];
+        var htAttr = (rowMeta && rowMeta.height) ? ' ht="' + rowMeta.height + '" customHeight="1"' : "";
+        if (any || htAttr) rowsXml += '<row r="' + r + '"' + htAttr + ">" + cellsXml + "</row>";
+      }
+
+      var mergeXml = "";
+      if (this._merges.length) {
+        mergeXml = '<mergeCells count="' + this._merges.length + '">' +
+          this._merges.map(function (m) {
+            return '<mergeCell ref="' + colLetter(m[1]) + m[0] + ":" + colLetter(m[3]) + m[2] + '"/>';
+          }).join("") + "</mergeCells>";
+      }
+
+      var dim = "A1:" + colLetter(Math.max(1, this._maxC)) + Math.max(1, this._maxR);
+      return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        '<dimension ref="' + dim + '"/>' +
+        '<sheetViews><sheetView' + (gridOff ? ' showGridLines="0"' : "") + ' workbookViewId="0"/></sheetViews>' +
+        '<sheetFormatPr defaultRowHeight="15"/>' +
+        colsXml +
+        "<sheetData>" + rowsXml + "</sheetData>" +
+        mergeXml +
+        "</worksheet>";
+    };
+
+    function Workbook() {
+      this._sheets = [];
+      var self = this;
+      this.xlsx = { writeBuffer: function () { return Promise.resolve(self._build()); } };
+    }
+    Workbook.prototype.addWorksheet = function (name, opts) {
+      var ws = new Worksheet(name || ("Sheet" + (this._sheets.length + 1)), opts);
+      this._sheets.push(ws); return ws;
+    };
+    Workbook.prototype._build = function () {
+      var styles = new StyleBook();
+      var self = this;
+      // render sheets first so the style book is populated
+      var sheetXmls = this._sheets.map(function (ws) { return ws._sheetXml(styles); });
+
+      var files = [];
+      function add(name, str) { files.push({ name: name, data: utf8(str) }); }
+
+      add("[Content_Types].xml",
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+        self._sheets.map(function (ws, i) {
+          return '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+        }).join("") +
+        "</Types>");
+
+      add("_rels/.rels",
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+        "</Relationships>");
+
+      var sheetsMeta = this._sheets.map(function (ws, i) {
+        return '<sheet name="' + xmlEsc(ws.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>';
+      }).join("");
+      add("xl/workbook.xml",
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        "<sheets>" + sheetsMeta + "</sheets></workbook>");
+
+      var relRows = this._sheets.map(function (ws, i) {
+        return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>';
+      }).join("");
+      var stylesRid = "rId" + (this._sheets.length + 1);
+      add("xl/_rels/workbook.xml.rels",
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        relRows +
+        '<Relationship Id="' + stylesRid + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+        "</Relationships>");
+
+      sheetXmls.forEach(function (xml, i) { add("xl/worksheets/sheet" + (i + 1) + ".xml", xml); });
+      add("xl/styles.xml", styles.xml());
+
+      return zipStore(files);
+    };
+
+    var api = { Workbook: Workbook, zipStore: zipStore, utf8: utf8 };
+    { root.MiniXLSX = api; }
+  })(SEGX_NS);
+
+    /* ==== blueprint renderer (container bars + AND/OR rails) ==== */
+  /* render-xlsx.js — build the single-tab blueprint workbook with ExcelJS.
+   * Browser (extension) friendly: bundle ExcelJS, call downloadSegmentXLSX(tree).
+   * Mirrors the validated openpyxl layout: container header bars + member rows,
+   * and right-side rails inner(H) / mid(I) / outer(J), one merged bar each.
+   *
+   *   import ExcelJS from "exceljs";           // or <script src=".../exceljs.min.js">
+   *   const buf = await buildSegmentWorkbook(ExcelJS, tree);
+   *   // extension: chrome.downloads / <a download>; the demo uses saveAs
+   */
+  (function (root) {
+    const ENTITY = {
+      "Unified Individual TDIR":                ["DCE9F5", "9DC3E6"],
+      "Individual Additional Information":       ["E2EFDA", "A9D08E"],
+      "Insurance Policy":                        ["FFF2CC", "FFD966"],
+      "Unified Indv Contact Point Email TDIR":   ["E6E0F0", "B4A7D6"],
+      "Exact_10_Tier_Splits":                    ["F2F2F2", "D9D9D9"],
+    };
+    const FALLBACK = ["EEF3FA", "C9D6E5"];
+    const HEADER_FILL = "1F3864", TITLE_FILL = "2E5496";
+    const AND = "008000", OR = "C55A11", GRID = "BFBFBF", BLOCK = "404040";
+    const AND_BAR = "EAF3E2", AND_OUTER = "C6E0B4", OR_BAR = "FCE4D6", NOTE = "FBFBFB";
+    const col = (e) => ENTITY[e] || FALLBACK;
+
+    // If entity is empty and the attribute is "<ObjectApiName> <FieldApiName>"
+    // (last whitespace-token looks like an API name, i.e. has an underscore),
+    // split it so the object lands in the Object/Entity column and the field in
+    // Attribute. e.g. "" + "Exact_10_Tier_Splits Control_5_Pct__c"
+    //   -> entity "Exact_10_Tier_Splits", attr "Control_5_Pct__c".
+    // Conservative: only fires when entity is blank AND the trailing token has "_",
+    // so plain phrases ("Data Source Object", "Days to Expiration") are untouched.
+    function splitEntityAttr(entity, attr) {
+      let e = entity || "", a = attr || "";
+      if (!e && / /.test(a)) {
+        const toks = a.split(/\s+/), last = toks[toks.length - 1];
+        if (toks.length >= 2 && /_/.test(last)) { e = toks.slice(0, -1).join(" "); a = last; }
+      }
+      return { entity: e, attr: a };
+    }
+
+    // Write a value cell as a real number when it round-trips exactly (so "83"/"93"
+    // become numbers and lose Excel's green "stored as text" flag), otherwise as
+    // text. Rejects leading-zero / oversized ids to avoid mangling codes.
+    function setValueCell(cell, raw) {
+      const s = String(raw == null ? "" : raw).trim();
+      const bare = s.replace(/,/g, "");
+      if (/^-?\d{1,15}(\.\d+)?$/.test(bare) && String(Number(bare)) === bare) {
+        cell.value = Number(bare);
+        cell.numFmt = bare.indexOf(".") >= 0 ? "0.####" : "0";
+      } else {
+        cell.value = raw;
+      }
+    }
+
+    // ---- flatten the tree into printable blocks (mirrors the Python model) ----
+    // Each block => { entity, container, agg, note, groups:[{grp,box,join,rows:[{attr,op,v1,v2}]}], blockJoin }
+    function flatten(tree) {
+      const blocks = [];
+      const kids = tree.children;
+      kids.forEach((node, i) => {
+        const blockJoin = i < kids.length - 1 ? (tree.join || "") : "";
+        if (node.t === "cond") {
+          blocks.push({ entity: node.entity, container: false, agg: "", blockJoin, kind: node.kind || "direct", note: node.note || "",
+            groups: [{ grp: "", box: false, join: "", rows: [row(node)] }] });
+        } else if (node.t === "rank") {
+          // Rank & Limit block: header = object. These are SETTINGS (Sort/Group By,
+          // Limit) — not attribute/operator/value conditions — so mark setting:true
+          // and render them as "Label: value" property lines (see renderSheet).
+          const rrows = [];
+          // Carry the scraped API names onto the rank rows so Excel can show them (same
+          // authoritative source hover/HTML use: .groupRankLimitCondition.conditions[0].subject).
+          // Field API only on the Group By / Sort By row (that's the row that names a field);
+          // object API on every rank row (it's the ranked DMO).
+          if (node.rankType) rrows.push({ label: node.rankType, value: node.rankField || "", setting: true, entity: node.entity, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
+          if (node.limit)    rrows.push({ label: "Limit", value: node.limit, setting: true, entity: node.entity, objApi: node.objApi || "" });
+          if (!rrows.length) rrows.push({ label: node.attr || "(rank & limit)", value: "", setting: true, entity: node.entity, objApi: node.objApi || "", fieldApi: node.fieldApi || "" });
+          blocks.push({ entity: node.entity, container: true, agg: "Rank & Limit", blockJoin, kind: "rank", note: node.note || "",
+            groups: [{ grp: "", box: false, join: "AND", rows: rrows, descriptive: true }] });
+        } else if (node.t === "nested") {
+          // Two distinct SF concepts (per docs):
+          //  • Waterfall member = a Segment processed in PRIORITY order ("Priority N").
+          //  • Nested Segment    = a segment reused as a condition inside criteria.
+          // Publish Schedule / Publish Behavior are SETTINGS (not attr/op/value), so
+          // they're setting:true → written as "Label: value" property lines.
+          const label = node.waterfall
+            ? (node.tier ? node.tier + " · Segment" : "Segment")
+            : "Nested Segment";
+          const nrows = [];
+          if (node.sched) nrows.push({ label: "Publish Schedule", value: node.sched, setting: true, entity: node.entity });
+          if (node.pub)   nrows.push({ label: "Publish Behavior", value: node.pub, setting: true, entity: node.entity });
+          // If the nested segment exposes no publish settings, show ONLY the header
+          // bar — no redundant "(no extra settings shown)" filler row. The header
+          // already states it's a nested segment; the empty row was pure noise.
+          blocks.push({ entity: node.entity, container: true, agg: label, blockJoin, kind: node.waterfall ? "priority" : "nested", note: node.note || "",
+            groups: [{ grp: "", box: false, join: "AND", rows: nrows, descriptive: true }] });
+        } else if (node.t === "container") {
+          // When a Container Path was captured for this container (multi-path, user opened
+          // it), document it as the first row under the header — a literal "Container Path:
+          // <breadcrumb>" setting line (never reconstructed).
+          const crows = flattenRows(node.children);
+          if (node.containerPath) crows.unshift({ label: "Container Path", value: node.containerPath, setting: true, entity: node.entity, objApi: node.objApi || "" });
+          blocks.push({ entity: node.entity, container: true, agg: node.agg, blockJoin, kind: node.kind || "related", note: node.note || "",
+            groups: [{ grp: "", box: false, join: node.join, rows: crows }] });
+        } else if (node.t === "group") {
+          // group of conds/containers => one block with multiple groups joined by node.join.
+          // Each sub-group keeps its OWN kind (related/direct/ci) + objApi + how-to note,
+          // so a Calculated Insight (or DLO/DMO related object) nested in a group is not
+          // lost from the Notes column — it's labeled just like a top-level block.
+          const groups = node.children.map((child, gi) => {
+            const label = "G" + (i + 1) + "." + "abcdefgh"[gi];
+            if (child.t === "container")
+              return { grp: label, box: true, join: gi < node.children.length - 1 ? node.join : "",
+                       rows: flattenRows(child.children), header: child.entity, agg: child.agg,
+                       kind: child.kind || "related", objApi: child.objApi || "", note: child.note || "" };
+            if (child.t === "group")   // nested pair (insurer matrix)
+              return { grp: label, box: true, join: gi < node.children.length - 1 ? node.join : "",
+                       rows: flattenRows(child.children), header: null, innerJoin: child.join,
+                       note: "Sub-group joined internally by " + (child.join || "AND") + "." };
+            return { grp: label, box: true, join: gi < node.children.length - 1 ? node.join : "",
+                     rows: [row(child)], header: null, kind: child.kind || "direct",
+                     objApi: child.objApi || "", note: child.note || "" };
+          });
+          // Note for the whole grouped block: describe the OR/AND-of-groups shape.
+          const gnote = "Grouped block: " + node.children.length + " sub-group(s) joined by " +
+            (node.join || "AND") + ". Build each sub-group, then combine them with " + (node.join || "AND") + ".";
+          blocks.push({ entity: node.children[0].entity || rowEntity(node), container: false,
+            agg: "", blockJoin, groups, groupOp: node.join, kind: "group", note: gnote });
+        }
+      });
+      return blocks;
+    }
+    const row = (n) => {
+      const s = splitEntityAttr(n.entity, n.attr);
+      return { attr: s.attr, op: n.op, v1: n.v1 || "", v2: n.v2 || "", entity: s.entity,
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
+    };
+    // flatten a list of nodes (which may include nested groups) into flat cond rows
+    function flattenRows(nodes) {
+      const out = [];
+      (nodes || []).forEach((n) => {
+        if (!n) return;
+        if (n.t === "cond") out.push(row(n));
+        else if (n.children) out.push(...flattenRows(n.children));   // group/container → dig in
+      });
+      return out;
+    }
+    const rowEntity = (g) => (g.children[0] && (g.children[0].entity ||
+                       (g.children[0].children && g.children[0].children[0].entity))) || "";
+
+    // render one tab's tree onto a given worksheet (shared by single + multi-sheet)
+    function renderSheet(ws, tree) {
+      const NCOLS = 12;
+      // Columns: Blk | Group | Object/Entity | Object API | Attribute | Field API |
+      //          Operator | Value 1 | Value 2 | Join in group | Join groups | Join all blocks
+      // (each API name sits in the column immediately AFTER the label it belongs to).
+      const widths = [5, 7, 27, 26, 26, 24, 12, 24, 8, 6, 6, 9];
+      widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+      const thin = { style: "thin", color: { argb: "FF" + GRID } };
+      const fill = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb: "FF" + argb } });
+      const border = (r, c, sides) => { ws.getCell(r, c).border = Object.assign(ws.getCell(r, c).border || {}, sides); };
+      function boxRange(r0, r1, c0, c1, style, argb) {
+        const s = { style, color: { argb: "FF" + argb } };
+        for (let c = c0; c <= c1; c++) { border(r0, c, { top: s }); border(r1, c, { bottom: s }); }
+        for (let r = r0; r <= r1; r++) { border(r, c0, { left: s }); border(r, c1, { right: s }); }
+      }
+
+      // Title + subtitle
+      ws.mergeCells(1, 1, 1, NCOLS);
+      let t = ws.getCell(1, 1); t.value = "DATA CLOUD SEGMENT BLUEPRINT — " + (tree.tab || "Include");
+      t.font = { bold: true, size: 15, color: { argb: "FFFFFFFF" } };
+      t.fill = fill(TITLE_FILL); t.alignment = { horizontal: "center", vertical: "middle" };
+      ws.getRow(1).height = 22;
+      ws.mergeCells(2, 1, 2, NCOLS);
+      let s = ws.getCell(2, 1);
+      s.value = "Each dark header bar is a container (Entity : Count At Least N) with its member rows below; direct attributes are single rows. "
+              + "The three right-hand columns show the AND/OR logic: 'Join in group' = inside one block, 'Join groups' = across sub-groups, 'Join all blocks' = top-level. "
+              + "Colours: green = AND, orange = OR, blue = Priority (waterfall), grey = sequential (Rank & Limit).";
+      s.font = { italic: true, size: 9, color: { argb: "FF333333" } };
+      s.fill = fill("EAEFF7"); s.alignment = { wrapText: true, vertical: "middle" };
+      ws.getRow(2).height = 34;
+
+      // Header row. The three right-hand "join" columns are scoped, narrow→wide:
+      //   Join in group  = joins rows WITHIN one grouped block (thin)
+      //   Join groups    = joins a group-of-groups, e.g. (A OR B) (medium)
+      //   Join all blocks= the top-level join across every block (thick)
+      const HEAD = ["Blk#", "Group /\nNest", "Object / Entity\n(container header)", "Object API",
+        "Attribute", "Field API", "Operator", "Value 1", "Value 2", "Join in\ngroup",
+        "Join\ngroups", "Join all\nblocks"];
+      HEAD.forEach((h, i) => {
+        const cell = ws.getCell(3, i + 1); cell.value = h;
+        cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
+        cell.fill = fill(HEADER_FILL); cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        boxRange(3, 3, i + 1, i + 1, "thin", GRID);
+      });
+      ws.getRow(3).height = 40;
+
+      // empty tab: write a clear note instead of a blank sheet
+      if (!tree.children || !tree.children.length) {
+        ws.mergeCells(4, 1, 4, NCOLS);
+        const em = ws.getCell(4, 1);
+        em.value = "(No criteria on the " + (tree.tab || "this") + " tab.)";
+        em.font = { italic: true, size: 11, color: { argb: "FF888888" } };
+        em.alignment = { horizontal: "center", vertical: "middle" };
+        ws.getRow(4).height = 24;
+        return;
+      }
+
+      // Data rows
+      // Each API-name column sits immediately AFTER the label it describes:
+      //   Object/Entity(3) · Object API(4) · Attribute(5) · Field API(6) · Operator(7) …
+      const ENT = 3, OBJAPI = 4, ATTR = 5, FLDAPI = 6, OPC = 7, V1 = 8, V2 = 9;
+      const INNER = 10, MID = 11, OUTER = 12;   // join rails, now the three right-most cols
+      const blocks = flatten(tree);
+      let r = 4; const dataFirst = 4;
+      const records = [];
+      // Inline TYPE tag shown on the block header (or the entity cell for bare direct
+      // attributes) so it's obvious what to drag. Derived from the scraped kind.
+      const KIND_TAG = { direct: "DIRECT", related: "RELATED ATTR", ci: "CALC INSIGHT", nested: "NESTED SEG", priority: "SEGMENT", rank: "RANK & LIMIT" };
+      for (const blk of blocks) {
+        const [light, dark] = col(blk.entity);
+        const blockStart = r; const groupsMeta = [];
+        let bi = blocks.indexOf(blk);
+        for (let gi = 0; gi < blk.groups.length; gi++) {
+          const grp = blk.groups[gi]; const grpStart = r;
+          // container / group header bar
+          const headerEntity = grp.header || (blk.container ? blk.entity : null);
+          if (headerEntity) {
+            ws.mergeCells(r, ENT, r, V2);
+            const hc = ws.getCell(r, ENT);
+            // Inline TYPE tag so it's obvious what to drag, right on the header
+            // (not just in the far Notes column). Derived from the scraped kind.
+            const k = grp.kind || blk.kind;
+            const tag = KIND_TAG[k] ? "[" + KIND_TAG[k] + "]  " : "";
+            hc.value = "▦  " + tag + headerEntity + ((grp.agg || blk.agg) ? "     ·     " + (grp.agg || blk.agg) : "");
+            hc.font = { bold: true, size: 10, color: { argb: "FF1A1A1A" } };
+            hc.fill = fill(col(headerEntity)[1]); hc.alignment = { horizontal: "left", vertical: "middle" };
+            for (let c = ENT; c <= V2; c++) { ws.getCell(r, c).fill = fill(col(headerEntity)[1]); boxRange(r, r, c, c, "thin", GRID); }
+            ws.getRow(r).height = 18; r++;
+          }
+          const attrStart = r;
+          grp.rows.forEach((row, ri) => {
+            ws.getCell(r, 1).value = bi + 1; ws.getCell(r, 1).font = { bold: true, size: 11 };
+            ws.getCell(r, 1).alignment = { horizontal: "center", vertical: "middle" };
+            ws.getCell(r, 2).value = grp.grp; ws.getCell(r, 2).font = { size: 8, italic: true, color: { argb: "FF7030A0" } };
+            ws.getCell(r, 2).alignment = { horizontal: "center", vertical: "middle" };
+            const isMember = !!headerEntity;
+            // SETTING rows (nested-segment publish settings, rank/limit) are NOT
+            // attribute/operator/value conditions. Render as one merged
+            // "Label: value" property line across ATTR→V2 so nothing masquerades as
+            // a queryable field with an operator.
+            if (row.setting) {
+              // Property line (rank/limit, nested-segment publish settings). After the
+              // column reorder the API columns (Object API=4, Field API=6) sit INSIDE the
+              // old ATTR..V2 span, so instead of one merged "Label: value" cell we lay it
+              // out as columns: Attribute=label, Field API next to it, and the long value in
+              // the merged Operator→Value2 tail. API names populate (ranked DMO + field);
+              // blank for publish settings. This is why Rank & Limit now shows API in Excel.
+              const pc = ws.getCell(r, ATTR);
+              pc.value = "•  " + row.label;
+              pc.font = { size: 9, italic: true, color: { argb: "FF44546A" } };
+              pc.alignment = { horizontal: "left", vertical: "middle" };
+              const roac = ws.getCell(r, OBJAPI); roac.value = row.objApi || ""; roac.font = { name: "Consolas", size: 8, color: { argb: "FF5C6B8A" } }; roac.alignment = { horizontal: "left", vertical: "middle" };
+              const rfac = ws.getCell(r, FLDAPI); rfac.value = row.fieldApi || ""; rfac.font = { name: "Consolas", size: 8, color: { argb: "FF4338CA" } }; rfac.alignment = { horizontal: "left", vertical: "middle" };
+              if (OPC <= V2) ws.mergeCells(r, OPC, r, V2);   // the long "value" lives in the tail
+              const vc = ws.getCell(r, OPC);
+              vc.value = row.value || "";
+              vc.font = { size: 9, italic: true, color: { argb: "FF44546A" } };
+              vc.alignment = { horizontal: "left", vertical: "middle" };
+              for (let c = ATTR; c <= V2; c++) { if (c === OBJAPI || c === FLDAPI) continue; ws.getCell(r, c).fill = fill(light); }
+              [1, 2, ATTR, OBJAPI, FLDAPI, OPC].forEach((c) => boxRange(r, r, c, c, "thin", GRID));
+              ws.getRow(r).height = 16; r++;
+              return;
+            }
+            if (isMember) { ws.getCell(r, ATTR).value = "•  " + row.attr; }
+            else {
+              const ec = ws.getCell(r, ENT);
+              // No header bar on a bare direct attribute → put the TYPE tag inline on
+              // the entity cell (first row only) so it reads like the container blocks.
+              const dtag = (ri === 0 && KIND_TAG[blk.kind]) ? "[" + KIND_TAG[blk.kind] + "]  " : "";
+              ec.value = dtag + (row.entity || blk.entity);
+              ec.font = { bold: true, size: 9, color: { argb: "FF1A1A1A" } }; ec.fill = fill(col(row.entity || blk.entity)[1]);
+              ec.alignment = { horizontal: "left", vertical: "middle" };
+              ws.getCell(r, ATTR).value = row.attr;
+            }
+            ws.getCell(r, ATTR).alignment = { horizontal: "left", vertical: "middle" };
+            const fo = ws.getCell(r, OPC); fo.value = row.op; fo.alignment = { horizontal: "center", vertical: "middle" };
+            fo.font = { size: 9, color: { argb: "FF1F3864" } }; fo.fill = fill("F2F2F2");
+            setValueCell(ws.getCell(r, V1), row.v1); ws.getCell(r, V1).alignment = { horizontal: "left", vertical: "middle" };
+            setValueCell(ws.getCell(r, V2), row.v2); ws.getCell(r, V2).alignment = { horizontal: "center", vertical: "middle" };
+            // API-name columns sit DIRECTLY after their label (Object API after Object,
+            // Field API after Attribute). Monospace, kept white (no row tint) so they read
+            // as metadata; blank when not scraped (never fabricated).
+            const oac = ws.getCell(r, OBJAPI); oac.value = row.objApi || ""; oac.font = { name: "Consolas", size: 8, color: { argb: "FF5C6B8A" } }; oac.alignment = { horizontal: "left", vertical: "middle" };
+            const fac = ws.getCell(r, FLDAPI); fac.value = row.fieldApi || ""; fac.font = { name: "Consolas", size: 8, color: { argb: "FF4338CA" } }; fac.alignment = { horizontal: "left", vertical: "middle" };
+            // Row tint across the label/value span. API columns stay white; the direct
+            // attribute's entity cell keeps its own dark colour.
+            const from = isMember ? ATTR : ENT;
+            for (let c = from; c <= V2; c++) {
+              if (c === OBJAPI || c === FLDAPI) continue;            // API cols stay white
+              if (!isMember && c === ENT) continue;                 // direct entity cell = dark
+              ws.getCell(r, c).fill = fill(light);
+            }
+            const cols = [1, 2]; for (let c = ENT; c <= V2; c++) cols.push(c);   // API cols are within ENT..V2 now
+            cols.forEach((c) => boxRange(r, r, c, c, "thin", GRID));
+            ws.getRow(r).height = 16; r++;
+          });
+          const attrEnd = r - 1;
+          if (grpStart !== r - 1) ws.mergeCells(grpStart, 2, r - 1, 2);
+          if (grp.box) boxRange(grpStart, r - 1, ENT, V2, "medium", "7030A0");
+          groupsMeta.push({ attrStart, attrEnd, grpStart, grpEnd: r - 1, kind: grp.kind, objApi: grp.objApi, note: grp.note,
+            nrows: grp.rows.length, descriptive: !!grp.descriptive,
+            within: (grp.rows[0] && grp.innerJoin) || grp.join || "AND" });
+        }
+        const blockEnd = r - 1;
+        if (blockStart !== blockEnd) ws.mergeCells(blockStart, 1, blockEnd, 1);
+        boxRange(blockStart, blockEnd, 1, V2, "thick", BLOCK);
+        records.push({ blk, start: blockStart, end: blockEnd, groups: groupsMeta, groupOp: blk.groupOp });
+      }
+      const dataLast = r - 1;
+
+      // ---- rails: one merged bar, single centered operator ----
+      // THEN (waterfall hierarchy) reuses the blue-ish OR palette but its own color.
+      // SEQ (rank & limit sequential rulesets) uses grey.
+      const THEN = "0B5CAB";
+      const SEQ_C = "6B7280";
+      function paintBar(c, r0, r1, op, style, outer, ctx) {
+        const f = op === "AND" ? (outer ? AND_OUTER : AND_BAR) : OR_BAR;
+        const rc = op === "AND" ? AND : op === "THEN" ? THEN : op === "SEQ" ? SEQ_C : OR;
+        for (let rr = r0; rr <= r1; rr++) ws.getCell(rr, c).fill = fill(f);
+        if (r0 !== r1) ws.mergeCells(r0, c, r1, c);
+        const label = op === "THEN" ? "Priority" : op === "SEQ" ? "Where " + (ctx || "") + " is in the results of" : op;
+        const cell = ws.getCell(r0, c); cell.value = label;
+        cell.font = { bold: true, size: outer ? (op === "SEQ" ? 9 : 12) : 10, color: { argb: "FF" + rc } };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        boxRange(r0, r1, c, c, style, rc);
+      }
+      for (const rec of records) {
+        // descriptive groups (nested-segment fields, rank rows) are NOT joined
+        // conditions — never draw a join rail for them.
+        for (const gm of rec.groups) if (gm.nrows > 1 && !gm.descriptive) paintBar(INNER, gm.attrStart, gm.attrEnd, gm.within, "thin", false);
+        if (rec.groups.length > 1) paintBar(MID, rec.start, rec.end, rec.groupOp || "OR", "medium", false);
+      }
+      // Outer rail joins top-level blocks — only meaningful when there are 2+.
+      // A single block joins nothing.
+      if (records.length > 1 && tree.join) paintBar(OUTER, dataFirst, dataLast, tree.join, "thick", true, tree.seqEntity);
+
+      // Auto-fit so nothing is clipped on open. Per-column clamps keep the grid
+      // readable: rail columns stay narrow, value/notes columns can grow.
+      if (typeof ws.autoSize === "function") ws.autoSize({
+        //     Blk Grp Ent ObjAPI Attr FldAPI Op  V1  V2  Jin Jgr Jall
+        min: [  4,  6, 18,  24,   18,  22,    10, 12,  6,  8,  8,  9],
+        max: [  6, 10, 40,  48,   40,  44,    18, 40, 14, 10, 10, 12],
+      });
+    }
+
+    const SHEET_VIEW = { views: [{ showGridLines: false, state: "frozen", xSplit: 3, ySplit: 3 }] };
+    const sheetName = (tab) => (tab || "Segment").replace(/[\\/*?:\[\]]/g, " ").slice(0, 31);
+
+    // Single-tab workbook (kept for back-compat).
+    async function buildSegmentWorkbook(ExcelJS, tree) {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet(sheetName(tree.tab || "Segment"), SHEET_VIEW);
+      renderSheet(ws, tree);
+      return await wb.xlsx.writeBuffer();
+    }
+
+    // Multi-tab workbook: ONE file, one sheet per tab. `treesByTab` is an object
+    // like { Include: tree, Exclude: tree, "Rank and Limit": tree }. Only tabs that
+    // exist in the object get a sheet; empty tabs render a "(no criteria)" note.
+    // Pass includeEmpty=false to skip tabs with no criteria entirely.
+    // `meta` (optional) = { segName, segmentOn, dataSpace, publishSchedule, refreshMode,
+    // status, description, population } — rendered as a Segment Setup header + Legend sheet
+    // so the file is self-sufficient for rebuilding the segment from scratch.
+    async function buildSegmentWorkbookMulti(ExcelJS, treesByTab, includeEmpty, meta) {
+      const wb = new ExcelJS.Workbook();
+      const order = ["Include", "Exclude", "Rank and Limit"];
+      const names = Object.keys(treesByTab).sort((a, b) => {
+        const ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      });
+      // First tab: a Segment Setup sheet with everything needed to START the segment.
+      if (meta && (meta.segName || meta.segmentOn)) renderSetupSheet(wb, meta);
+      let added = 0;
+      for (const name of names) {
+        const tree = treesByTab[name];
+        const hasCriteria = tree && tree.children && tree.children.length;
+        if (!hasCriteria && includeEmpty === false) continue;    // skip empty when asked
+        const ws = wb.addWorksheet(sheetName(name), SHEET_VIEW);
+        renderSheet(ws, tree || { t: "root", tab: name, join: "AND", children: [] });
+        added++;
+      }
+      if (!added) {   // nothing at all — still emit a placeholder sheet
+        const ws = wb.addWorksheet("Segment", SHEET_VIEW);
+        renderSheet(ws, { t: "root", tab: "Include", join: "AND", children: [] });
+      }
+      return await wb.xlsx.writeBuffer();
+    }
+
+    // Segment Setup sheet — the header info someone needs BEFORE building any
+    // criteria: name, the object it's Segment On, Data Space, publish/refresh,
+    // status, description, and the live population as a validation target.
+    function renderSetupSheet(wb, meta) {
+      const ws = wb.addWorksheet("Segment Setup", { views: [{ showGridLines: false }] });
+      ws.getColumn(1).width = 26; ws.getColumn(2).width = 90;
+      const fill = (argb) => ({ type: "pattern", pattern: "solid", fgColor: { argb: "FF" + argb } });
+      let r = 1;
+      ws.mergeCells(r, 1, r, 2);
+      const t = ws.getCell(r, 1); t.value = "SEGMENT SETUP";
+      t.font = { bold: true, size: 14, color: { argb: "FFFFFFFF" } }; t.fill = fill(TITLE_FILL);
+      t.alignment = { horizontal: "center", vertical: "middle" }; ws.getRow(r).height = 22; r++;
+      ws.mergeCells(r, 1, r, 2);
+      const sub = ws.getCell(r, 1);
+      sub.value = "Segment settings — the criteria are on the tab sheets.";
+      sub.font = { italic: true, size: 9, color: { argb: "FF333333" } }; sub.fill = fill("EAEFF7");
+      sub.alignment = { wrapText: true, vertical: "middle" }; ws.getRow(r).height = 26; r += 2;
+      // Labels mirror the SF segment header fields; values are DOM-scraped, blanks omitted.
+      const rows = [
+        ["Segment Name", meta.segName],
+        ["Segment Type", meta.segmentType],
+        ["Segment On (object)", meta.segmentOn],
+        ["Data Space", meta.dataSpace],
+        ["Publish Type", meta.publishType],
+        ["Publish Schedule", meta.publishSchedule],
+        ["Refresh Mode", meta.refreshMode],
+        ["Status", meta.status],
+        ["Description", meta.description],
+        ["Population (validation target)", meta.population],
+      ];
+      rows.forEach(([k, v]) => {
+        if (v == null || v === "") return;                 // omit blanks; never fabricate
+        const ck = ws.getCell(r, 1), cv = ws.getCell(r, 2);
+        ck.value = k; cv.value = v;
+        ck.font = { bold: true, size: 10, color: { argb: "FF1F3864" } };
+        cv.font = { size: 10, color: { argb: "FF1A1A1A" } };
+        ck.fill = fill("F3F6FB");
+        ck.alignment = { vertical: "middle" }; cv.alignment = { vertical: "middle", wrapText: true };
+        ck.border = cv.border = { bottom: { style: "thin", color: { argb: "FF" + GRID } } };
+        ws.getRow(r).height = 18; r++;
+      });
+      if (typeof ws.autoSize === "function") ws.autoSize({ min: [24, 40], max: [34, 90] });
+    }
+
+
+    const api = { buildSegmentWorkbook, buildSegmentWorkbookMulti, renderSheet };
+    Object.assign(root, api);
+  })(SEGX_NS);
+
+    /* ==== blueprint HTML renderer (SF-canvas bracket rails: outer top-level join + per-group AND/OR) ==== */
+    /* render-html.js — turn a segment logic tree into the SF-canvas-style HTML.
+     * Pure function, no deps. Works in a content script, bookmarklet, or Node.
+     * Port of the validated Python renderer. Usage: renderSegmentHTML(tree) -> string
+     */
+    (function (root) {
+      const COLORS = {
+        "Unified Individual TDIR":                ["#DCE9F5", "#9DC3E6"],
+        "Individual Additional Information":       ["#E2EFDA", "#A9D08E"],
+        "Insurance Policy":                        ["#FFF2CC", "#FFD966"],
+        "Unified Indv Contact Point Email TDIR":   ["#E6E0F0", "#B4A7D6"],
+        "Exact_10_Tier_Splits":                    ["#F2F2F2", "#D9D9D9"],
+      };
+      const FALLBACK = ["#EEF3FA", "#C9D6E5"]; // any entity not in the map
+
+      const esc = (s) => String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const color = (entity) => COLORS[entity] || FALLBACK;
+
+      // If entity is blank and attr is "<ObjectApiName> <FieldApiName>" (trailing
+      // token looks like an API name), split so the object shows as the entity and
+      // the field as the attribute. Mirrors the xlsx renderer; leaves plain phrases
+      // ("Days to Expiration") untouched.
+      function splitEntityAttr(entity, attr) {
+        let e = entity || "", a = attr || "";
+        if (!e && / /.test(a)) {
+          const toks = a.split(/\s+/), last = toks[toks.length - 1];
+          if (toks.length >= 2 && /_/.test(last)) { e = toks.slice(0, -1).join(" "); a = last; }
+        }
+        return { entity: e, attr: a };
+      }
+
+      // Render a human label with its API name stacked directly UNDERNEATH (not beside /
+      // dangling at the end). Top line = the label; second line = the monospace API name.
+      // Blank second line when the API name wasn't scraped (never fabricated).
+      function labelWithApi(label, api, cls) {
+        const under = api ? `<span class="api-under">${esc(api)}</span>` : "";
+        return `<span class="lblcol ${cls || ""}"><span class="lbltop">${esc(label == null ? "" : label)}</span>${under}</span>`;
+      }
+
+      function renderCond(n, member) {
+        const sea = splitEntityAttr(n.entity, n.attr);
+        n = Object.assign({}, n, { entity: sea.entity, attr: sea.attr });
+        let val = esc(n.v1);
+        if (n.op === "Is Between") val = `<b>${esc(n.v1)}</b> <span class="op">AND</span> <b>${esc(n.v2)}</b>`;
+        else if (n.v1) val = `<b>${esc(n.v1)}</b>`;
+        const [light] = color(n.entity);
+        // API names go UNDER their labels: object API under the object label, field API
+        // under the field label. On member rows the container header already states the
+        // object, so repeating it under every member row is noise → object API only on
+        // direct cards (which have no header). Field API is always shown under the field.
+        const entUnit = labelWithApi(n.entity, member ? "" : n.objApi, "obj");
+        const attrUnit = labelWithApi(n.attr, n.fieldApi, "fld");
+        const inner = `${entUnit}<span class="dot">&bull;</span> ${attrUnit}<span class="op">${esc(n.op)}</span> ${val}`;
+        if (member) return `<div class="member">${inner}</div>`;
+        const chip = kindChip(n.kind || "direct", n.objApi);
+        return `<div class="card" style="--bg:${light}"><div class="card-main">${chip}${inner}</div></div>`;
+      }
+
+      // Inline type chip on a container header so it reads at a glance what to drag.
+      // Full words (not abbreviations) + a DLO/DMO/CI sub-badge derived ONLY from the
+      // scraped API suffix (objectKindFromApi) — blank when the suffix is unknown.
+      function kindChip(kind, objApi) {
+        const M = { direct: ["DIRECT ATTRIBUTE", "#0f766e"], related: ["RELATED ATTRIBUTE", "#0b5cab"], ci: ["CALCULATED INSIGHT", "#7c3aed"], nested: ["NESTED SEGMENT", "#0b5cab"], priority: ["SEGMENT", "#0b5cab"], rank: ["RANK & LIMIT", "#c55a11"] };
+        const m = M[kind]; if (!m) return "";
+        const ok = objectKindFromApi(objApi);
+        const sub = (ok && ok !== "CI") ? `<span class="kchip-sub">${ok}</span>` : "";
+        return `<span class="kchip" style="background:${m[1]}">${m[0]}</span>${sub}`;
+      }
+      function renderContainer(n) {
+        const [light, dark] = color(n.entity);
+        const agg = n.agg ? `<span class="agg">: ${esc(n.agg).replace(/Count/, "Count <b>").concat("</b>")}</span>`
+                          : "";
+        // Show the full API name of the related object next to the label, when scraped.
+        const api = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
+        const head = `<div class="cont-head" style="background:${dark}">${kindChip(n.kind || "related", n.objApi)}<b>${esc(n.entity)}</b>${api}${agg}</div>`;
+        // Container Path (the literal SF breadcrumb, captured while the container was open).
+        // Only shown for multi-path containers the user opened; omitted otherwise.
+        const pathLine = n.containerPath ? `<div class="cont-path"><span class="cont-path-k">Container Path</span>${esc(n.containerPath)}</div>` : "";
+        const body = renderJoin(n.children, n.join, false, true);
+        return `<div class="container" style="--bg:${light}">${head}${pathLine}${body}</div>`;
+      }
+
+      // Rank & Limit rule — a labeled card with Object / Group|Sort By / Field / Limit.
+      function renderRank(n) {
+        const [light, dark] = color(n.entity);
+        // object API next to the DMO label; field API next to the ranked field.
+        const oApi = n.objApi ? `<span class="cont-api">${esc(n.objApi)}</span>` : "";
+        const fApi = n.fieldApi ? `<span class="fld-api">${esc(n.fieldApi)}</span>` : "";
+        const head = `<div class="cont-head" style="background:${dark}">${kindChip("rank")}<b>${esc(n.entity || "Rank & Limit")}</b>${oApi}</div>`;
+        const rows = [];
+        if (n.rankType) rows.push(`<span class="rk-k">${esc(n.rankType)}</span> <b class="attr">${esc(n.rankField || "")}</b>${fApi}`);
+        if (n.limit)    rows.push(`<span class="rk-k">Limit</span> <b class="attr">${esc(n.limit)}</b>`);
+        if (!rows.length && n.attr) rows.push(`<b class="attr">${esc(n.attr)}</b>${fApi}`);
+        const body = rows.map((r) => `<div class="member">${r}</div>`).join("");
+        return `<div class="container rank" style="--bg:${light}">${head}${body}</div>`;
+      }
+
+      // Waterfall member (a Segment in Priority order) or a true nested segment.
+      // Blue-accented card: segment name + optional priority badge + publish behavior.
+      function renderNested(n) {
+        const kind = n.waterfall ? "priority" : "nested";
+        const tier = n.tier ? `<span class="ns-badge">${esc(n.tier)}</span>` : "";
+        const head = `<div class="cont-head" style="background:#dbe7f6">${kindChip(kind)}${tier}<span class="ns-ico">&#9673;</span><b>${esc(n.entity || n.attr)}</b></div>`;
+        let rows = "";
+        if (n.sched) rows += `<div class="ns-pub"><b>Publish Schedule:</b> ${esc(n.sched)}</div>`;
+        if (n.pub)   rows += `<div class="ns-pub"><b>Publish Behavior:</b> <i>${esc(n.pub)}</i></div>`;
+        // No publish settings → show only the header card, no filler row.
+        return `<div class="container nested-seg" style="--bg:#dbe7f6">${head}${rows}</div>`;
+      }
+
+      function renderNode(n, member) {
+        if (n.t === "cond")      return renderCond(n, member);
+        if (n.t === "container") return renderContainer(n);
+        if (n.t === "rank")      return renderRank(n);
+        if (n.t === "nested")    return renderNested(n);
+        if (n.t === "group")     return renderJoin(n.children, n.join, n.boxed, false);
+        throw new Error("unknown node " + n.t);
+      }
+
+      // Map a join operator to its rail CSS modifier. AND=green, OR=orange,
+      // THEN (waterfall hierarchy)=blue.
+      function railMod(op) { return op === "OR" ? "or" : op === "THEN" ? "then" : op === "SEQ" ? "seq" : "and"; }
+      function railText(op, ctx) { return op === "THEN" ? "Priority" : op === "SEQ" ? "Where " + (ctx || "") + " is in the results of" : op; }
+
+      // stack children; if >1, add a right-side bracket rail carrying the operator
+      function renderJoin(children, op, boxed, member) {
+        const inner = children.map((c) => renderNode(c, member)).join("\n");
+        if (children.length <= 1) return `<div class="stack">${inner}</div>`;
+        const cls = boxed ? "grp-body boxed" : "grp-body";
+        const railCls = "rail " + railMod(op);
+        return `<div class="grp ${railMod(op)}">
+          <div class="${cls}">${inner}</div>
+          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op))}<span class="caret">&#9662;</span></span></div>
+        </div>`;
+      }
+
+      function renderRoot(tree) {
+        const kids = tree.children || [];
+        // SEQ: render connector BETWEEN blocks (centered, like SF), not as a side rail.
+        if (tree.join === "SEQ" && kids.length > 1) {
+          const parts = [];
+          kids.forEach((c, i) => {
+            parts.push(`<div class="toprow">${renderNode(c, false)}</div>`);
+            if (i < kids.length - 1) {
+              parts.push(`<div class="seq-connector"><div class="seq-line"></div><span class="seq-badge">${esc("Where " + (tree.seqEntity || "") + " is in the results of")}</span><div class="seq-line"></div></div>`);
+            }
+          });
+          return `<div class="root"><div class="root-body">${parts.join("\n")}</div></div>`;
+        }
+        const blocks = kids.map((c) => `<div class="toprow">${renderNode(c, false)}</div>`).join("\n");
+        // A single top-level block joins nothing — omit the outer rail entirely.
+        if (kids.length <= 1 || !tree.join) return `<div class="root"><div class="root-body">${blocks}</div></div>`;
+        const op = tree.join;
+        const railCls = "rail " + railMod(op) + " outer";
+        return `<div class="root grp ${railMod(op)}">
+          <div class="root-body">${blocks}</div>
+          <div class="${railCls}"><span class="line"></span><span class="conn">${esc(railText(op, tree.seqEntity))}<span class="caret">&#9662;</span></span></div>
+        </div>`;
+      }
+
+      const CSS = `
+      :root { --bd:#d8dde6; --txt:#16325c; --sub:#54698d; }
+      * { box-sizing:border-box; }
+      body { margin:0; background:#f3f3f3; color:var(--txt);
+             font:13px/1.4 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+      .seg-wrap { max-width:1200px; margin:0 auto; padding:16px; }
+      .tabs { display:flex; gap:22px; border-bottom:1px solid var(--bd); margin-bottom:18px; }
+      .tabs a { padding:10px 2px; text-decoration:none; color:var(--sub); font-weight:600; }
+      .tabs a.active { color:#0b5cab; border-bottom:3px solid #0b5cab; }
+      .root { align-items:stretch; }
+      .root-body { flex:1; display:flex; flex-direction:column; gap:14px; }
+      .toprow { display:block; }
+      .stack { display:flex; flex-direction:column; gap:10px; }
+      .card { background:#fff; border:1px solid var(--bd); border-left:5px solid var(--bg);
+              border-radius:5px; box-shadow:0 1px 1px rgba(0,0,0,.05); }
+      .card-main { padding:9px 12px; position:relative; }
+      .entity { color:var(--sub); }
+      .dot { color:#b0b8c4; }
+      .attr { color:var(--txt); }
+      .op { color:var(--sub); margin:0 4px; }
+      .container { background:#fff; border:1px solid var(--bd); border-radius:6px;
+                   box-shadow:0 1px 2px rgba(0,0,0,.06); overflow:hidden; }
+      .cont-head { padding:9px 12px; font-size:14px; color:#1a1a1a; }
+      .cont-head .agg { font-weight:400; margin-left:4px; }
+      .kchip { display:inline-block; font:700 9px/1 system-ui; color:#fff; padding:2px 6px;
+               border-radius:9px; letter-spacing:.04em; margin-right:5px; vertical-align:middle; }
+      .kchip-sub { display:inline-block; font:700 9px/1 system-ui; color:#16325c; background:#fff;
+                   border:1px solid rgba(0,0,0,.18); padding:2px 6px; border-radius:9px; margin-right:7px; vertical-align:middle; }
+      .cont-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#5c6b8a; margin-left:8px; vertical-align:middle; }
+      .cont-path { padding:6px 12px; background:#f8fafc; border-bottom:1px solid var(--bd); font:600 11px/1.4 "SF Mono",Menlo,monospace; color:#334155; word-break:break-word; }
+      .cont-path-k { display:inline-block; font:700 9px/1 system-ui; color:#64748b; background:#e2e8f0; border-radius:4px; padding:2px 6px; margin-right:7px; letter-spacing:.03em; vertical-align:middle; }
+      .fld-api { font:600 10px/1 "SF Mono",Menlo,monospace; color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; margin-left:7px; vertical-align:middle; }
+      .fld-api.obj { color:#5c6b8a; background:#f1f5f9; }
+      /* Stacked label + API name: the API name sits directly UNDER its label (not beside
+         it, not dangling at the end of the row). Keeps condition rows aligned on a baseline. */
+      .lblcol { display:inline-flex; flex-direction:column; vertical-align:top; margin:0 2px; line-height:1.25; }
+      .lblcol .lbltop { white-space:nowrap; }
+      .lblcol.obj .lbltop { color:var(--sub); }
+      .lblcol.fld .lbltop { color:var(--txt); font-weight:700; }
+      .api-under { font:600 10px/1.2 "SF Mono",Menlo,monospace; margin-top:2px; align-self:flex-start; }
+      .lblcol.fld .api-under { color:#4338ca; background:#eef2ff; border-radius:4px; padding:1px 5px; }
+      .lblcol.obj .api-under { color:#5c6b8a; background:#f1f5f9; border-radius:4px; padding:1px 5px; }
+      .card-main, .member { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 4px; }
+      .container > .stack, .container > .grp { padding:0; }
+      .container .card { box-shadow:none; }
+      .member { position:relative; padding:10px 12px; border-top:1px dashed #e2e6ee; }
+      .member:first-child { border-top:none; }
+      .grp { display:flex; align-items:stretch; }
+      .grp-body { flex:1; display:flex; flex-direction:column; gap:10px; }
+      .grp-body.boxed { border:1.5px solid #c9cfda; border-radius:8px; padding:10px; background:#fbfcfe; }
+      .rail { position:relative; width:58px; display:flex; align-items:center; justify-content:center; margin-left:2px; }
+      .rail .line { position:absolute; left:8px; top:10px; bottom:10px; width:16px;
+                    border:2px solid var(--rc); border-left:none; border-radius:0 7px 7px 0; }
+      .rail .conn { position:relative; background:#fff; padding:3px 6px; border:1px solid var(--rc);
+                    border-radius:12px; font-weight:700; color:var(--rc); font-size:12px; white-space:nowrap; }
+      .rail.and { --rc:#008000; }
+      .rail.or  { --rc:#c55a11; }
+      .rail.then { --rc:#0b5cab; }
+      .rail.seq { --rc:#6b7280; }
+      .seq-connector { display:flex; flex-direction:column; align-items:center; padding:12px 0; }
+      .seq-line { width:2px; height:16px; background:#94a3b8; }
+      .seq-badge { font:600 11px/1.3 -apple-system,BlinkMacSystemFont,sans-serif; color:#475569; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:16px; padding:5px 14px; white-space:nowrap; }
+      .nested-seg .cont-head { display:flex; align-items:center; gap:8px; }
+      .nested-seg .ns-badge { font:700 10px/1 system-ui; background:#0b5cab; color:#fff;
+                              padding:2px 7px; border-radius:10px; letter-spacing:.05em; }
+      .nested-seg .ns-ico { color:#0b5cab; font-size:13px; }
+      .nested-seg .ns-pub { color:var(--sub); font-size:12px; padding:9px 12px; }
+      .nested-seg .ns-pub b { color:var(--txt); }
+      .rail.outer { width:66px; }
+      .rail.outer .line { left:10px; width:22px; border-width:3px; top:6px; bottom:6px; }
+      .rail.outer .conn { font-size:13px; padding:4px 8px; }
+      .caret { font-size:9px; margin-left:3px; opacity:.8; }
+      .rk-k { display:inline-block; min-width:64px; color:var(--sub); font-weight:600; }`;
+
+      // returns just the inner markup (no <html>). Pass {tabs:false} to omit the
+      // internal tab strip (the panel supplies its own tab switcher).
+      function renderSegmentBody(tree, opts) {
+        const showTabs = !(opts && opts.tabs === false);
+        const tabs = showTabs ? `<div class="tabs">` + ["Include", "Exclude", "Rank and Limit"]
+          .map((t) => `<a class="${t === (tree.tab || "Include") ? "active" : ""}" href="#">${t}</a>`).join("") + `</div>` : "";
+        return `<div class="seg-wrap">${tabs}${renderRoot(tree)}</div>`;
+      }
+
+      // returns a full standalone document string
+      function renderSegmentHTML(tree) {
+        return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+    <title>Data Cloud Segment — ${esc(tree.tab || "Include")}</title>
+    <style>${CSS}</style></head><body>${renderSegmentBody(tree)}</body></html>`;
+      }
+
+      const api = { renderSegmentHTML, renderSegmentBody, SEG_CSS: CSS };
+      Object.assign(root, api);
+    })(SEGX_NS);
+
+    /* ==== adapter: tool tree ({type:set|simple|aggregation|ci|nested-segment}) -> kit tree ({t:root|group|container|cond}) ==== */
+    function condOf(n) {
+      var op = n.operator || "";
+      var v1 = n.values || "", v2 = "";
+      if (/between/i.test(op) && v1) {
+        var m = v1.split(/\s*,\s*|\s+AND\s+/i);
+        if (m.length >= 2) { v1 = (m[0]||"").trim(); v2 = m.slice(1).join(" ").trim(); }
+      }
+      var entity = n.objectLabel || "";
+      var attr = n.fieldLabel || "";
+      if (n.type === "nested-segment") { attr = attr || "(nested segment)"; }
+      return { t: "cond", entity: entity, attr: attr, op: op, v1: v1, v2: v2,
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "" };
+    }
+    // "(API: field_api__c on Object__dlm)" suffix when API names are available.
+    // A Rank & Limit row from readRankLimitFromDOM: fieldLabel = "Group By"/"Sort By",
+    // operator = the ranked/sorted field (+ direction), values = "Limit: N …".
+    function rankOf(n) {
+      var limit = (n.values || "").replace(/^Limit:\s*/i, "").trim();
+      return { t: "rank", entity: n.objectLabel || "Rank & Limit",
+               rankType: n.fieldLabel || "", rankField: n.operator || "", limit: limit,
+               objApi: n.objApi || "", fieldApi: n.fieldApi || "",
+               attr: [n.fieldLabel, n.operator, n.values].filter(Boolean).join(" ") };
+    }
+    // Waterfall member (a Segment in Priority order) OR a true nested segment.
+    // operator carries "Priority N" for waterfall members (SF's term).
+    function nestedOf(n) {
+      var isWf = !!n.waterfallPriority || /^priority\b/i.test(n.operator || "");
+      return { t: "nested", entity: n.objectLabel || "(segment)",
+               attr: n.objectLabel || "", pub: n.fieldLabel || "", sched: n.publishSchedule || "",
+               waterfall: isWf,
+               tier: /^(priority|tier)\b/i.test(n.operator || "") ? n.operator : "" };
+    }
+    // Human-readable "how to build this in Salesforce" note per block kind. This is
+    // what makes the export self-sufficient for a migration: the person rebuilding
+    // the segment knows exactly WHAT to drag from the left panel and how to set it.
+    function conv(node, isRank) {
+      if (!node) return null;
+      if (node.type === "set") {
+        return { t: "group", join: node.join || "AND", boxed: true,
+                 children: (node.items || []).map(function (c) { return conv(c, isRank); }).filter(Boolean) };
+      }
+      if (isRank) { var rk = rankOf(node); rk.kind = "rank"; return rk; }
+      if (node.type === "nested-segment") { var ns = nestedOf(node); ns.kind = ns.waterfall ? "priority" : "nested"; return ns; }
+      if (node.type === "aggregation" || node.type === "ci") {
+        var isCi = node.type === "ci";
+        var agg = isCi ? (node.fieldLabel || "Calculated Insight")
+                       : [node.fieldLabel, node.operator, node.values].filter(Boolean).join(" ");
+        // Container Path (literal, captured while the container was open — see cache). Only
+        // present for multi-path containers the user has opened; "" otherwise. Never derived.
+        var cpath = "";
+        try { dcCaptureOpenContainerPaths(); cpath = (node.objApi && _dcPathCache[node.objApi]) || ""; } catch (e) {}
+        var c = { t: "container", entity: node.objectLabel || "", agg: agg, join: node.subJoin || "AND",
+                  kind: isCi ? "ci" : "related", objApi: node.objApi || "", containerPath: cpath,
+                  children: (node.subFilters || []).map(function (sf) { return condOf(Object.assign({ type: "simple" }, sf)); }) };
+        // A CI with an inline operator/value but no sub-filters: keep the comparison as a member row.
+        if (isCi && !c.children.length && (node.operator || node.values)) {
+          c.children.push(condOf(Object.assign({ type: "simple" }, { objectLabel: node.objectLabel, fieldLabel: node.fieldLabel, operator: node.operator, values: node.values })));
+        }
+        return c;
+      }
+      var cd = condOf(node); cd.kind = "direct"; return cd;
+    }
+    function segTreeToKit(toolTree, tab) {
+      var isRank = /rank/i.test(tab || "");
+      // Waterfall tiers are ordered/prioritised → THEN join (blue rail), not AND/OR.
+      // Rank & Limit rulesets are sequential (each operates on the results of the
+      // previous one) → SEQ join (grey rail with "results of" label).
+      var join = (toolTree && toolTree.waterfall) ? "THEN"
+               : (toolTree && toolTree.join) || (isRank ? "" : "AND");
+      var root = { t: "root", tab: tab || "Include", join: join, seqEntity: (toolTree && toolTree.seqEntity) || "", children: [] };
+      if (toolTree && toolTree.items) root.children = toolTree.items.map(function (c) { return conv(c, isRank); }).filter(Boolean);
+      return root;
+    }
+    return { MiniXLSX: SEGX_NS.MiniXLSX, buildSegmentWorkbookMulti: SEGX_NS.buildSegmentWorkbookMulti,
+             renderSheet: SEGX_NS.renderSheet, segTreeToKit: segTreeToKit,
+             renderSegmentBody: SEGX_NS.renderSegmentBody, SEG_CSS: SEGX_NS.SEG_CSS };
+  })();
+
+
   /* [in-development features removed from public build] */
+
+  // ── Segment export modal ──────────────────────────────────────────────────
+
+  function openSegmentExport() {
+    const segName = readSegmentName();
+    const meta    = readSegmentMeta();
+    const { activeTab, availableTabs, tree, flat } = readSegmentRules();
+
+    const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const tsvEsc = (s) => String(s == null ? "" : s).replace(/\t/g, " ");
+    const safeFilename = (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, "_");
+
+    const buildMetaStr = (tab) => {
+      const parts = ["Segment: " + segName, "Tab: " + tab];
+      if (meta.segmentType)     parts.push("Segment Type: " + meta.segmentType);
+      if (meta.segmentOn)       parts.push("Segment On: " + meta.segmentOn);
+      if (meta.publishType)     parts.push("Publish Type: " + meta.publishType);
+      if (meta.publishSchedule) parts.push("Publish Schedule: " + meta.publishSchedule);
+      if (meta.status)          parts.push("Status: " + meta.status);
+      return parts.join("\n");
+    };
+
+    // Build a Sheets-friendly TSV with group structure.
+    // Layout: Group | Join | # | Type | Object | Field | Operator | Value(s)
+    // Groups are visually separated by a blank row; sub-filters are indented.
+    // Build an HTML table for clipboard (Google Sheets / Excel).
+    // Works from the TREE so all joins and group structure are preserved.
+    //
+    // NO rowspan/colspan — Google Sheets mis-places cells when rowspan meets colspan.
+    // Instead: visual "merged" look via consistent background + thick left border
+    // on every row of a group. First row shows "Group N" text; others are blank.
+    //   Col A = Group label (first row) or blank (same color = looks merged)
+    //   Col B–F = # | Object/CI | Field | Operator | Value(s)
+    //   Inner AND/OR = thin row within a group, pill on right only
+    //   Between-group AND/OR = compact gap row, pill on right only
+    //   No "Container" column — root join shown via between-group pill on the right
+    const toClipboardHtml = (tree, flatRows, tab) => {
+      // No rowspan/colspan — Sheets breaks cell alignment when they mix.
+      // "Merged" group look = same tinted bg + thick left border on EVERY row in the group.
+      // Col layout (6 cols): Group | # | Object/CI | Field | Operator | Value(s)
+      // AND/OR badges appear ONLY on the far right of joiner rows.
+      const B     = "border:1px solid #d0d5de;";
+      const TOTAL = 6; // Group | # | Object/CI | Field | Operator | Value(s)
+
+      const TYPE_DOT = {
+        "simple": "#3b82f6", "aggregation": "#f59e0b",
+        "ci": "#7c3aed", "nested-segment": "#0b5cab",
+      };
+
+      // ── Build a flat display list from the tree ─────────────────────────────
+      const DR = [];
+      let condNum = 0;
+
+      function collectG(groupNode, gIdx, gJoin, state) {
+        const items = groupNode.items || [];
+        items.forEach((item, i) => {
+          const isLast = i === items.length - 1;
+          if (item.type === "set") {
+            collectG(item, gIdx, gJoin, state);
+          } else {
+            condNum++;
+            const grpLabel = (state.condCount === 0) ? state.groupLabel : "";
+            state.condCount++;
+            DR.push({ kind: "cond", node: item, condNum, gIdx, gJoin, grpLabel });
+            if (item.type === "aggregation" && item.subFilters && item.subFilters.length) {
+              item.subFilters.forEach((sf, si) => {
+                DR.push({ kind: "cond", node: { ...sf, type: "sub" }, condNum: null, gIdx, gJoin, grpLabel: "" });
+                if (si < item.subFilters.length - 1)
+                  DR.push({ kind: "inner", label: item.subJoin || "AND", gIdx, gJoin });
+              });
+            }
+            if (!isLast && items[i + 1] && items[i + 1].type !== "set") {
+              DR.push({ kind: "inner", label: groupNode.join || "AND", gIdx, gJoin });
+            }
+          }
+        });
+      }
+
+      if (tree && tree.items) {
+        const topGroups = [];
+        let batch = [];
+        tree.items.forEach(item => {
+          if (item.type === "set") {
+            if (batch.length) { topGroups.push({ type:"set", join:tree.join, items:batch }); batch=[]; }
+            topGroups.push(item);
+          } else {
+            batch.push(item);
+          }
+        });
+        if (batch.length) topGroups.push({ type:"set", join:tree.join, items:batch });
+
+        topGroups.forEach((g, gi) => {
+          const hasSubSets = (g.items || []).some(it => it.type === "set");
+          const barJoin = hasSubSets ? (g.join || "AND") : "AND";
+          const groupLabel = hasSubSets
+            ? "Group " + (gi + 1) + " (" + (g.join || "AND") + ")"
+            : "Group " + (gi + 1);
+          collectG(g, gi, barJoin, { condCount: 0, groupLabel });
+          if (gi < topGroups.length - 1 && tree.join) DR.push({ kind: "inner", label: tree.join, gIdx: -1, gJoin: tree.join, isBetweenGroups: true });
+        });
+      }
+
+      // ── Render ───────────────────────────────────────────────────────────────
+      // Col layout: Group | # | Object/CI | Field | Operator | Value(s)
+      let html = "";
+
+      const GRP_PALETTES_AND = ["#f0f6ff","#e8f4fd","#f0f9ff","#eaf2ff"];
+      const GRP_PALETTES_OR  = ["#faf5ff","#f3eeff","#f8f4ff","#f0ebff"];
+      const grpBg = (gIdx, isOrGroup) => {
+        const pal = isOrGroup ? GRP_PALETTES_OR : GRP_PALETTES_AND;
+        return pal[gIdx % pal.length];
+      };
+
+      DR.forEach(dr => {
+        if (dr.kind === "inner") {
+          const isOr = dr.label === "OR";
+          const isSeq = dr.label === "SEQ";
+          const jc   = isSeq ? "#6b7280" : isOr ? "#7c3aed" : "#0b5cab";
+          const jbg  = isSeq ? "#f3f4f6" : isOr ? "#f5f0ff" : "#edf4ff";
+          const jText = isSeq ? "Where " + esc(tree.seqEntity || "") + " is in the results of" : dr.label;
+
+          if (dr.isBetweenGroups) {
+            // Compact gap between groups — connector pill on the right only
+            html += "<tr style='height:18px'>";
+            for (let k = 0; k < TOTAL - 1; k++) html += "<td style='border:none;background:#f4f6fb'></td>";
+            html += "<td style='border:none;background:#f4f6fb;text-align:right;padding:2px 10px'>" +
+              "<span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + jbg + ";padding:2px 10px;border-radius:10px;border:1px solid " + jc + "55;letter-spacing:.07em'>" + esc(jText) + "</span></td>";
+            html += "</tr>\n";
+          } else {
+            // Inner joiner within a group — thin divider row, AND/OR pill on right only
+            const gIsOr = dr.gJoin === "OR";
+            const gbg   = grpBg(dr.gIdx, gIsOr);
+            html += "<tr style='height:16px'>";
+            html += "<td style='border:none;background:" + gbg + ";border-left:4px solid " + (gIsOr?"#a78bfa":"#93c5fd") + "'></td>";
+            for (let k = 1; k < TOTAL - 1; k++) html += "<td style='border:none;background:" + gbg + "'></td>";
+            html += "<td style='border:none;background:" + gbg + ";text-align:right;padding:1px 10px'>" +
+              "<span style='display:inline-block;font:700 10px/1 -apple-system,sans-serif;color:" + jc + ";background:" + jbg + ";padding:1px 8px;border-radius:8px;border:1px solid " + jc + "40;letter-spacing:.07em'>" + esc(dr.label) + "</span></td>";
+            html += "</tr>\n";
+          }
+          return;
+        }
+
+        // Condition row
+        const n      = dr.node;
+        const isSub  = n.type === "sub";
+        const dot    = isSub ? "#f59e0b" : (TYPE_DOT[n.type] || "#3b82f6");
+        const obj    = n.objectLabel || "";
+        const gIsOrC = dr.gJoin === "OR";
+        const gbgC   = grpBg(dr.gIdx, gIsOrC);
+        const rowBg  = isSub ? (gIsOrC ? "#f3ecff" : "#eef4ff") : gbgC;
+        const barCol = gIsOrC ? "#a78bfa" : "#93c5fd";
+        const grpCell = "border:none;border-left:4px solid " + barCol + ";padding:4px 10px;background:" + gbgC + ";color:" + (gIsOrC?"#7c3aed":"#0b5cab") + ";font-size:12px;font-weight:700;text-align:center;white-space:nowrap;vertical-align:middle;";
+
+        html += "<tr>";
+        // Group col — label only on first row of group; rest empty but same tint
+        html += "<td style='" + grpCell + "'>" + esc(dr.grpLabel || "") + "</td>";
+        // #
+        html += "<td style='" + B + "padding:5px 8px;font-size:12px;color:#8a94ab;font-weight:700;background:" + rowBg + ";text-align:right;white-space:nowrap;vertical-align:middle'>" +
+          esc(isSub ? "└" : (dr.condNum ? String(dr.condNum) : "")) + "</td>";
+        // Object/CI
+        html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + rowBg + ";vertical-align:middle" + (isSub ? ";padding-left:20px" : "") + "'>" +
+          "<span style='display:inline-block;width:7px;height:7px;border-radius:50%;background:" + dot + ";margin-right:6px;vertical-align:middle'></span>" +
+          esc(obj) + "</td>";
+        // Field
+        html += "<td style='" + B + "padding:5px 9px;font-size:11.5px;color:#0b5cab;font-family:Consolas,Courier New,monospace;background:" + rowBg + ";vertical-align:middle'>" +
+          esc(n.fieldLabel || "") + "</td>";
+        // Operator
+        html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-style:italic;color:#54698d;background:" + rowBg + ";vertical-align:middle;white-space:nowrap'>" +
+          esc(n.operator || "") + "</td>";
+        // Value(s)
+        html += "<td style='" + B + "padding:5px 9px;font-size:12px;font-weight:700;color:#16325c;background:" + rowBg + ";vertical-align:middle'>" +
+          esc(n.values || "") + "</td>";
+        html += "</tr>\n";
+      });
+
+      // Metadata footer
+      const blankRow = "<tr>" + Array(TOTAL).fill("<td style='padding:3px;border:none'></td>").join("") + "</tr>\n";
+      html += blankRow;
+      buildMetaStr(tab).split("\n").forEach(l => {
+        html += "<tr><td style='" + B + "padding:3px 9px;font-size:11px;color:#5c6b8a;background:#f9fafc'>" + esc(l) + "</td>" +
+          Array(TOTAL - 1).fill("<td style='" + B + "background:#f9fafc'></td>").join("") + "</tr>\n";
+      });
+
+      const TH = (t) => "<th style='" + B + "padding:6px 9px;font-size:12px;background:#16325c;color:#fff;font-weight:700;white-space:nowrap;text-align:left'>" + esc(t) + "</th>";
+      return "<table style='border-collapse:collapse;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif'>" +
+        "<thead><tr>" + TH("Group") + TH("#") + TH("Object / CI") + TH("Field") + TH("Operator") + TH("Value(s)") + "</tr></thead>" +
+        "<tbody>\n" + html + "</tbody></table>";
+    };
+
+    // Plain-text fallback (used when ClipboardItem API not available)
+    const toTSV = (flatRows, tab) => {
+      const e = tsvEsc;
+      const lines = [["Group","Type","Object / CI","Field","Operator","Value(s)","Join"].map(e).join("\t"), ""];
+      let groupNum = 0, prevJoin = "";
+      flatRows.forEach((r, i) => {
+        const isSub = r.objectLabel && r.objectLabel.startsWith("  └ ");
+        if (!isSub && (i === 0 || prevJoin === "")) { if (i > 0) lines.push(""); groupNum++; }
+        const typeLabel = isSub ? "└ Filter" : (r.type === "aggregation" ? "Aggregation" : r.type === "ci" ? "Calc. Insight" : r.type === "nested-segment" ? "Nested Seg." : "Simple");
+        lines.push([e(isSub ? "" : "Group " + groupNum), e(typeLabel), e(isSub ? r.objectLabel.replace("  └ ","") : r.objectLabel||""), e(r.fieldLabel||""), e(r.operator||""), e(r.values||""), e(r.joinWithNext||"")].join("\t"));
+        if (!isSub) prevJoin = r.joinWithNext || "";
+      });
+      lines.push("", "", e("=== Metadata ==="));
+      buildMetaStr(tab).split("\n").forEach(l => lines.push(e(l)));
+      return lines.join("\n");
+    };
+
+    // ── FLAT CSV for QE / automation ────────────────────────────────────────────────
+    // The colored Excel + copy-grid are for HUMANS (merged cells → scripts read blanks). This
+    // emits a flat table a script can read directly: EVERY row fully populated with Tab, Group #,
+    // Group join (AND/OR), Condition #, Type, Object label + API, Field label + API, Operator,
+    // Value, and Sub-of (for aggregation sub-filters). No merges, no blanks for grouping keys.
+    // Walks the SAME tree the canvas/Excel use, so it can't drift from what's shown.
+    const FLAT_COLS = ["Tab", "Group #", "Group join", "Condition #", "Type", "Object", "Object API Name", "Field", "Field API Name", "Operator", "Value(s)", "Sub-of"];
+    function segFlatRows(tree, tab) {
+      const out = [];
+      if (!tree || !tree.items) return out;
+      // top-level groups: a run of non-set items is one implicit group; a "set" item is a group.
+      const topGroups = [];
+      let batch = [];
+      tree.items.forEach(item => {
+        if (item.type === "set") { if (batch.length) { topGroups.push({ join: tree.join, items: batch }); batch = []; } topGroups.push(item); }
+        else batch.push(item);
+      });
+      if (batch.length) topGroups.push({ join: tree.join, items: batch });
+      let cn = 0;
+      const typeOf = (t) => t === "aggregation" ? "Aggregation" : t === "ci" ? "Calculated Insight" : t === "nested-segment" ? "Nested Segment" : "Simple";
+      function emitLeaf(gi, gjoin, item) {
+        cn++;
+        out.push([tab, gi + 1, gjoin || "", cn, typeOf(item.type), item.objectLabel || "", item.objApi || "", item.fieldLabel || "", item.fieldApi || "", item.operator || "", item.values || "", ""]);
+        if (item.type === "aggregation" && item.subFilters && item.subFilters.length) {
+          item.subFilters.forEach(sf => {
+            cn++;
+            out.push([tab, gi + 1, gjoin || "", cn, "Sub-filter", sf.objectLabel || "", sf.objApi || "", sf.fieldLabel || "", sf.fieldApi || "", sf.operator || "", sf.values || "", item.fieldLabel || item.objectLabel || ""]);
+          });
+        }
+      }
+      function walk(gi, node, gjoin) {
+        (node.items || []).forEach(it => { if (it.type === "set") walk(gi, it, it.join); else emitLeaf(gi, node.join || gjoin, it); });
+      }
+      topGroups.forEach((g, gi) => walk(gi, g, g.join));
+      return out;
+    }
+    const csvEscS = (s) => { const t = String(s == null ? "" : s); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const toFlatCsv = (rowsArr) => rowsArr.map(r => r.map(csvEscS).join(",")).join("\r\n");
+
+    // Renders one condition row exactly as SF shows it:
+    // [dot] ObjectLabel · FieldLabel  Operator  Value
+    // Nested-segment row — segment icon + bold name + publish behavior subtitle
+    function nestedSegRow(r) {
+      return "<div style='padding:8px 10px;min-height:38px'>" +
+        "<div style='display:flex;align-items:center;gap:8px'>" +
+        "<span style='width:16px;height:16px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center'>" +
+        "<svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='#0b5cab' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>" +
+        "<circle cx='12' cy='12' r='10'/><path d='M8 12l3 3 5-5'/>" +
+        "</svg></span>" +
+        "<span style='font-weight:700;color:#0b5cab;font-size:13px'>" + esc(r.objectLabel) + "</span>" +
+        "</div>" +
+        (r.fieldLabel ? "<div style='font-size:11.5px;color:#5c6b8a;padding-left:24px;margin-top:2px'><b style=\"color:#16325c\">Nested Publish Behavior:</b> <i>" + esc(r.fieldLabel) + "</i></div>" : "") +
+        "</div>";
+    }
+
+    // Single condition row — dot + Object · Field  Operator  Value(s)
+    function condRow(r) {
+      if (!r.objectLabel && !r.fieldLabel) return "";
+      if (r.type === "nested-segment") return nestedSegRow(r);
+      const dotColor = r.type === "aggregation" ? "#f59e0b" : r.type === "ci" ? "#7c3aed" : "#3b82f6";
+      return "<div style='display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 0;padding:7px 10px 7px 10px;min-height:32px'>" +
+        "<span style='width:7px;height:7px;border-radius:50%;background:" + dotColor + ";flex-shrink:0;margin-right:8px;margin-top:4px;display:inline-block'></span>" +
+        "<span style='font-weight:600;color:#16325c;margin-right:4px'>" + esc(r.objectLabel) + "</span>" +
+        "<span style='color:#b0bac9;margin-right:4px'>&#183;</span>" +
+        "<span style='font-family:SF Mono,Consolas,monospace;font-size:11.5px;color:#0b5cab;font-weight:600;margin-right:8px'>" + esc(r.fieldLabel) + "</span>" +
+        (r.operator ? "<span style='color:#54698d;margin-right:6px;font-style:italic'>" + esc(r.operator) + "</span>" : "") +
+        (r.values   ? "<span style='font-weight:700;color:#16325c'>" + esc(r.values) + "</span>" : "") +
+        "</div>";
+    }
+
+    // ── Rendering primitives ──────────────────────────────────────────────────
+
+    // Thin horizontal rule + right-aligned AND/OR pill between rows inside one card
+    function innerJoiner(label) {
+      const c  = label === "OR" ? "#7c3aed" : "#0b5cab";
+      const bg = label === "OR" ? "#f5f0ff" : "#edf4ff";
+      return "<div style='display:flex;align-items:center;padding:0 10px;height:20px'>" +
+        "<div style='flex:1;height:1px;background:#dee3ed'></div>" +
+        "<span style='font:700 10px/1 -apple-system,sans-serif;color:" + c + ";background:" + bg + ";padding:2px 8px;border-radius:5px;margin-left:6px;letter-spacing:.07em;flex-shrink:0'>" + esc(label) + "</span>" +
+        "</div>";
+    }
+
+    // A card with left-bracket bar. No outer margin — parent spacing handles gaps.
+    function card(rowsHtml, opts) {
+      opts = opts || {};
+      const barC = opts.barColor || "#0b5cab";
+      const bdr  = opts.bdrColor || "#c9d9f0";
+      const bg   = opts.bgColor  || "#ffffff";
+      return "<div style='display:flex'>" +
+        "<div style='width:4px;flex-shrink:0;background:" + barC + ";border-radius:3px 0 0 3px'></div>" +
+        "<div style='flex:1;border:1px solid " + bdr + ";border-left:none;border-radius:0 6px 6px 0;background:" + bg + ";overflow:hidden'>" +
+        rowsHtml +
+        "</div></div>";
+    }
+
+    // Wraps multiple card-blocks under ONE vertical bar with a single badge at top-right.
+    // When a set has N blocks joined by AND/OR, we show ONE label, not N-1 labels.
+    function groupedBlocks(blocksHtml, label) {
+      const isOr = label === "OR";
+      const c    = isOr ? "#7c3aed" : "#0b5cab";
+      const bg   = isOr ? "#f5f0ff" : "#edf4ff";
+      const barC = isOr ? "#a78bfa" : "#93c5fd";
+      return "<div style='display:flex;margin-bottom:8px'>" +
+        "<div style='width:3px;flex-shrink:0;background:" + barC + ";border-radius:3px 0 0 3px'></div>" +
+        "<div style='flex:1;min-width:0;padding-left:6px'>" +
+        "<div style='display:flex;justify-content:flex-end;margin-bottom:4px'>" +
+        "<span style='font:700 10px/1 -apple-system,sans-serif;color:" + c + ";background:" + bg + ";padding:2px 9px;border-radius:5px;letter-spacing:.07em;border:1px solid " + c + "55'>" + esc(label) + "</span>" +
+        "</div>" +
+        "<div style='display:flex;flex-direction:column;gap:4px'>" + blocksHtml + "</div>" +
+        "</div></div>";
+    }
+
+    // Render a leaf node (simple/ci/nested-segment/aggregation) into HTML rows string.
+    // Returns { html, isEmpty }
+    function leafHtml(node) {
+      if (node.type === "nested-segment") return { html: nestedSegRow(node), isEmpty: !node.objectLabel };
+      if (node.type === "simple" || node.type === "ci") {
+        const h = condRow(node);
+        return { html: h, isEmpty: !h };
+      }
+      if (node.type === "aggregation") {
+        let h = "<div style='display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 0;padding:7px 10px;background:#fff8ed;border-bottom:" + (node.subFilters && node.subFilters.length ? "1px solid #ffe0a0" : "none") + "'>" +
+          "<span style='width:7px;height:7px;border-radius:50%;background:#f59e0b;flex-shrink:0;margin-right:8px;margin-top:4px;display:inline-block'></span>" +
+          "<span style='font-weight:700;color:#92400e;margin-right:4px'>" + esc(node.objectLabel) + "</span>" +
+          "<span style='color:#b0bac9;margin-right:4px'>&#183;</span>" +
+          "<span style='font-family:SF Mono,Consolas,monospace;font-size:11.5px;color:#b45309;font-weight:600;margin-right:8px'>" + esc(node.fieldLabel) + "</span>" +
+          (node.operator ? "<span style='color:#54698d;font-style:italic;margin-right:6px'>" + esc(node.operator) + "</span>" : "") +
+          (node.values   ? "<span style='font-weight:700;color:#16325c'>" + esc(node.values) + "</span>" : "") +
+          "</div>";
+        if (node.subFilters && node.subFilters.length) {
+          const sfRows = node.subFilters.map(sf => condRow(Object.assign({ type: "simple" }, sf))).filter(Boolean);
+          let sfInner = "";
+          sfRows.forEach((r, i) => { sfInner += r; if (i < sfRows.length - 1) sfInner += innerJoiner(node.subJoin || "AND"); });
+          h += "<div style='padding:5px 8px 5px 12px;background:#fffdf5'>" +
+            card(sfInner, { barColor: "#f59e0b", bdrColor: "#ffe0a0", bgColor: "#fff8ed" }) +
+            "</div>";
+        }
+        return { html: h, isEmpty: false };
+      }
+      return { html: "", isEmpty: true };
+    }
+
+    // Render a set node.
+    // Design rule: if this set produces more than one card-block, wrap them all in
+    // groupedBlocks() so there is exactly ONE join label for the whole group — not
+    // one badge between every pair of blocks.
+    function renderSet(node) {
+      if (!node.items || !node.items.length) return "";
+
+      const blocks = [];
+      let batch = [];
+
+      function flushBatch(batchJoin) {
+        if (!batch.length) return;
+        const rows = batch.map(item => leafHtml(item)).filter(r => !r.isEmpty);
+        if (!rows.length) { batch = []; return; }
+        let inner = "";
+        rows.forEach((r, i) => { inner += r.html; if (i < rows.length - 1) inner += innerJoiner(batchJoin); });
+        blocks.push(card(inner));
+        batch = [];
+      }
+
+      node.items.forEach(item => {
+        if (item.type === "set") {
+          flushBatch(node.join);
+          const inner = renderSet(item);
+          if (inner) blocks.push(inner);
+        } else {
+          batch.push(item);
+        }
+      });
+      flushBatch(node.join);
+
+      if (!blocks.length) return "";
+      // One block: no wrapper needed
+      if (blocks.length === 1) return blocks[0];
+      // Multiple blocks: wrap in ONE group with a single join label
+      return groupedBlocks(blocks.join(""), node.join);
+    }
+
+    function buildCanvasView(t, tabName) {
+      if (!t || !t.items || !t.items.length) return "<div style='padding:32px;text-align:center;color:#8a94ab;font-size:13px'>No conditions found. Make sure the correct tab is active on the Salesforce page, then reopen this modal.</div>";
+      // Use the blueprint renderer (SF-canvas bracket rails: outer top-level join +
+      // per-group AND/OR rails between containers). Scoped so the kit CSS can't leak.
+      try {
+        const kit = SEGX.segTreeToKit(t, tabName || currentModalTab || activeTab);
+        return "<style>" + SEGX.SEG_CSS.replace(/(^|\})\s*body\s*\{[^}]*\}/, "$1") + "</style>" +
+               "<div class='dc-seg-canvas'>" + SEGX.renderSegmentBody(kit, { tabs: false }) + "</div>";
+      } catch (e) {
+        return renderSet(t); // fallback to the native renderer
+      }
+    }
+
+    function buildHtmlFile(t, tab) {
+      const condCount = countConditions(t);
+      const chips = [
+        meta.segmentType     ? "<span class='chip'><b>Segment Type:</b> " + esc(meta.segmentType) + "</span>" : "",
+        meta.segmentOn       ? "<span class='chip'><b>Segment On:</b> " + esc(meta.segmentOn) + "</span>" : "",
+        meta.publishType     ? "<span class='chip'><b>Publish Type:</b> " + esc(meta.publishType) + "</span>" : "",
+        meta.publishSchedule ? "<span class='chip'><b>Publish Schedule:</b> " + esc(meta.publishSchedule) + "</span>" : "",
+        meta.status          ? "<span class='chip status'>" + esc(meta.status) + "</span>" : "",
+        "<span class='chip'><b>Tab:</b> " + esc(tab) + "</span>",
+        "<span class='chip'><b>Conditions:</b> " + condCount + "</span>",
+      ].filter(Boolean).join("\n");
+
+      const css = [
+        "*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}",
+        "body{font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;margin:0;padding:24px 32px;color:#16325c;background:#f4f6fb}",
+        ".page{max-width:820px;margin:0 auto}",
+        /* header card */
+        ".seg-header{background:#fff;border-radius:10px;border:1px solid #c9d9f0;padding:18px 22px 14px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.07)}",
+        ".seg-header h1{margin:0 0 8px;font-size:20px;color:#0b5cab;font-weight:800;letter-spacing:-.01em}",
+        ".chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}",
+        ".chip{display:inline-block;padding:2px 10px;border-radius:12px;background:#edf4ff;color:#16325c;font-size:11.5px;border:1px solid #c9d9f0}",
+        ".chip b{color:#0b5cab}",
+        ".chip.status{background:#d4f0db;color:#0a6b2d;border-color:#a3d9b1}",
+        /* legend */
+        ".legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-bottom:14px;font-size:11.5px;color:#5c6b8a;align-items:center}",
+        ".legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}",
+        /* conditions */
+        ".cond-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 0;padding:7px 10px;min-height:32px}",
+        ".dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-right:8px;margin-top:4px;display:inline-block}",
+        ".obj{font-weight:700;color:#16325c;margin-right:4px}",
+        ".sep{color:#b0bac9;margin-right:4px}",
+        ".fld{font-family:SFMono-Regular,Consolas,monospace;font-size:11.5px;color:#0b5cab;font-weight:600;margin-right:8px}",
+        ".op{color:#54698d;margin-right:6px;font-style:italic}",
+        ".val{font-weight:700;color:#16325c}",
+        /* card */
+        ".card{display:flex;margin-bottom:0}",
+        ".card-bar{width:4px;flex-shrink:0;border-radius:3px 0 0 3px}",
+        ".card-body{flex:1;border:1px solid #c9d9f0;border-left:none;border-radius:0 6px 6px 0;background:#fff;overflow:hidden}",
+        /* inner joiner (within card) */
+        ".inner-join{display:flex;align-items:center;padding:0 10px;height:20px}",
+        ".inner-join hr{flex:1;border:none;border-top:1px solid #dee3ed;margin:0}",
+        ".inner-join .badge{font:700 10px/1 -apple-system,sans-serif;padding:2px 8px;border-radius:5px;margin-left:6px;flex-shrink:0;letter-spacing:.07em}",
+        ".badge-and{color:#0b5cab;background:#edf4ff}",
+        ".badge-or{color:#7c3aed;background:#f5f0ff}",
+        /* group wrapper */
+        ".group{display:flex;margin-bottom:8px}",
+        ".group-bar{width:3px;flex-shrink:0;border-radius:3px 0 0 3px}",
+        ".group-bar-and{background:#93c5fd}",
+        ".group-bar-or{background:#a78bfa}",
+        ".group-inner{flex:1;min-width:0;padding-left:6px}",
+        ".group-label{display:flex;justify-content:flex-end;margin-bottom:4px}",
+        ".group-label .badge{font:700 10px/1 -apple-system,sans-serif;padding:2px 9px;border-radius:5px;letter-spacing:.07em}",
+        ".group-cards{display:flex;flex-direction:column;gap:4px}",
+        /* agg */
+        ".agg-header{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 0;padding:7px 10px;background:#fff8ed}",
+        ".agg-sub{padding:5px 8px 5px 12px;background:#fffdf5}",
+        /* nested segment */
+        ".nested-seg{padding:8px 10px}",
+        ".nested-seg .ns-name{font-weight:700;color:#0b5cab;font-size:13px}",
+        ".nested-seg .ns-pub{font-size:11.5px;color:#5c6b8a;padding-left:24px;margin-top:2px}",
+        /* print */
+        "@media print{body{padding:12px 16px;background:#fff}.seg-header{box-shadow:none}}"
+      ].join("\n");
+
+      // Render with the blueprint renderer (SF-canvas bracket rails) so the
+      // downloaded file matches the on-screen view. Fall back to renderSet on error.
+      let rulesHtml, kitCss = "";
+      if (t && t.items && t.items.length) {
+        try {
+          const kit = SEGX.segTreeToKit(t, tab);
+          rulesHtml = "<div class='dc-seg-canvas'>" + SEGX.renderSegmentBody(kit, { tabs: false }) + "</div>";
+          kitCss = SEGX.SEG_CSS.replace(/(^|\})\s*body\s*\{[^}]*\}/, "$1"); // drop kit's body{} so page shell wins
+        } catch (e) { rulesHtml = renderSet(t); }
+      } else {
+        rulesHtml = "<p style='color:#8a94ab;font-size:13px'>No conditions found for this tab.</p>";
+      }
+
+      return "<!DOCTYPE html>\n<html lang='en'>\n<head>\n<meta charset='utf-8'>\n" +
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>\n" +
+        "<title>" + esc((segName || "Segment") + " — " + tab + " Rules") + "</title>\n" +
+        "<style>\n" + css + "\n" + kitCss + "\n</style>\n</head>\n<body>\n<div class='page'>\n" +
+        "<div class='seg-header'>\n" +
+        "<h1>" + esc(segName || "Segment") + "</h1>\n" +
+        "<div class='chips'>\n" + chips + "\n</div>\n</div>\n" +
+        "<div class='legend'>" +
+        "<span><span class='legend-dot' style='background:#008000'></span>AND join</span>" +
+        "<span><span class='legend-dot' style='background:#c55a11'></span>OR join</span>" +
+        (/rank/i.test(tab) ? "<span><span class='legend-dot' style='background:#6b7280'></span>\"Where X is in the results of\" — each ruleset filters results of the one above</span>" : "") +
+        "</div>\n" +
+        rulesHtml + "\n</div>\n</body>\n</html>";
+    }
+
+    function countConditions(t) {
+      if (!t) return 0;
+      if (t.type === "set") return t.items.reduce((s, i) => s + countConditions(i), 0);
+      return 1;
+    }
+    const totalConditions = countConditions(tree);
+
+    // tabData[tabName] = { tree, flat } — current tab is pre-filled; others
+    // are eagerly loaded in the background right after the modal opens.
+    const tabData = {};
+    tabData[activeTab] = { tree, flat };
+
+    if (!detailExportEl) { detailExportEl = document.createElement("div"); document.body.appendChild(detailExportEl); }
+    detailExportEl.id = "dc-detail-export";
+    detailExportEl.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);z-index:2147483647;width:min(900px,94vw);height:min(82vh,700px);min-width:340px;min-height:260px;max-width:98vw;max-height:96vh;display:flex;flex-direction:column;background:#fff;color:#16325c;border:1px solid #c9cede;border-radius:10px;box-shadow:0 24px 60px rgba(0,0,0,.5);font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden";
+    // No backdrop for segment export — user needs to see the SF segment canvas behind the modal
+
+    // Build tab bar — only show tabs that exist in the SF UI
+    const tabBarHtml = availableTabs.map((name, i) => {
+      const count = name === activeTab ? totalConditions : "…";
+      return "<div class='tab" + (name === activeTab ? " active" : "") + "' data-tab='" + esc(name) + "'>" + esc(name) + " (<span class='tc'>" + count + "</span>)</div>";
+    }).join("");
+    // Panes for each tab
+    const panesHtml = availableTabs.map((name) => {
+      const isActive = name === activeTab;
+      const content = isActive ? buildCanvasView(tree, name) : "<div style='padding:24px 0;text-align:center;color:#8a94ab;font-size:13px'>Loading…</div>";
+      return "<div class='pane" + (isActive ? " active" : "") + "' data-pane='" + esc(name) + "'>" + content + "</div>";
+    }).join("");
+
+    detailExportEl.innerHTML =
+      "<style>" +
+      "#dc-detail-export .hd{display:flex;align-items:center;gap:8px;padding:10px 16px;background:#f3f6fb;border-bottom:1px solid #e0e5ee;flex-shrink:0;flex-wrap:wrap;cursor:move}" +
+      "#dc-detail-export .hd strong{font-size:15px;flex-shrink:0}" +
+      "#dc-detail-export .meta-bar{display:flex;flex-wrap:wrap;gap:4px 18px;padding:7px 16px;background:#f9fafc;border-bottom:1px solid #e0e5ee;font-size:11px;color:#5c6b8a;flex-shrink:0}" +
+      "#dc-detail-export .meta-bar b{color:#16325c}" +
+      "#dc-detail-export .tabs{display:flex;gap:0;padding:0 16px;border-bottom:1px solid #e0e5ee;background:#fff;flex-shrink:0;flex-wrap:wrap;align-items:flex-end}" +
+      "#dc-detail-export .tab{padding:9px 16px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#5c6b8a;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;flex-shrink:0}" +
+      "#dc-detail-export .tab.active{color:#0b5cab;border-bottom-color:#0b5cab}" +
+      "#dc-detail-export .tab.loading{opacity:.6;cursor:default;pointer-events:none}" +
+      "#dc-detail-export .tab-actions{display:none}" +
+      "#dc-detail-export .toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 12px;border-bottom:1px solid #e0e5ee;background:#fff;flex-shrink:0}" +
+      "#dc-detail-export button{flex:1 1 120px;min-width:110px;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid #0b5cab;background:#0b5cab;color:#fff;border-radius:6px;padding:7px 8px;font-weight:600;cursor:pointer;font-size:12px;text-align:center}" +
+      "#dc-detail-export button.sec{background:#fff;color:#0b5cab}" +
+      "#dc-detail-export button svg{flex-shrink:0}" +
+      "#dc-detail-export .x{flex:0 0 auto;min-width:auto;border:none;background:transparent;color:#5c6b8a;font-size:20px;padding:0 4px;cursor:pointer;line-height:1;margin-left:4px}" +
+      "#dc-detail-export .bd{overflow:auto;flex:1;min-height:0;padding:12px 16px}" +
+      "#dc-detail-export .ft{padding:6px 16px;border-top:1px solid #e0e5ee;color:#8a94ab;font-size:11px;background:#f9fafc;flex-shrink:0}" +
+      "#dc-detail-export .pane{display:none}#dc-detail-export .pane.active{display:block}" +
+      "#dc-detail-export .sp{flex:1 1 0}" +
+      "</style>" +
+      "<div class='hd'>" +
+        "<strong>" + esc(segName || "Segment") + "</strong>" +
+        (meta.segmentOn ? "<span style='font-size:11px;color:#5c6b8a'>" + esc(meta.segmentOn) + "</span>" : "") +
+        (meta.status    ? "<span style='display:inline-block;padding:1px 8px;border-radius:10px;background:#d4f0db;color:#0a6b2d;font-size:11px'>" + esc(meta.status) + "</span>" : "") +
+        "<span class='sp'></span><button class='x' id='dc-d-close'>&times;</button>" +
+      "</div>" +
+      "<div class='meta-bar'>" +
+        (meta.segmentType     ? "<span><b>Segment Type:</b> " + esc(meta.segmentType)   + "</span>" : "") +
+        (meta.segmentOn       ? "<span><b>Segment On:</b> " + esc(meta.segmentOn)       + "</span>" : "") +
+        (meta.publishType     ? "<span><b>Publish Type:</b> " + esc(meta.publishType)   + "</span>" : "") +
+        (meta.publishSchedule ? "<span><b>Publish Schedule:</b> " + esc(meta.publishSchedule) + "</span>" : "") +
+        (meta.status          ? "<span><b>Status:</b> "    + esc(meta.status)          + "</span>" : "") +
+      "</div>" +
+      "<div class='tabs'>" + tabBarHtml + "</div>" +
+      "<div class='toolbar'>" +
+        "<button id='dc-d-copy' title='Copies the current tab only, as a grid you can paste into Google Sheets or Excel'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>Copy tab for Sheets</button>" +
+        "<button class='sec' id='dc-d-csv' title='Downloads the current tab as a standalone HTML file (opens with no tools installed)'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>Download HTML (tab)</button>" +
+        "<button class='sec' id='dc-d-xlsx' title='Downloads ONE Excel workbook with all tabs and a Segment Setup sheet'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)</button>" +
+        "<button class='sec' id='dc-d-flatcsv' title='Flat CSV for scripts/automation — every row fully filled (tab, group #, join, condition #, object/field API, operator, value), no merged cells'><svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)</button>" +
+/* [in-development features removed from public build] */
+      "</div>" +
+      "<div class='bd'>" + panesHtml + "</div>" +
+      "<div class='ft' id='dc-seg-ft'>" + totalConditions + " condition(s) · " + esc(activeTab) + "</div>";
+
+    const closeDetail = () => { if (detailExportEl) { detailExportEl.remove(); detailExportEl = null; } hideBackdrop(); };
+    detailExportEl.querySelector("#dc-d-close").onclick = closeDetail;
+
+    const ftEl = detailExportEl.querySelector("#dc-seg-ft");
+
+    // Track which tab is currently shown in the modal
+    let currentModalTab = activeTab;
+
+    // Helper: fill a tab's pane + count once its data arrives
+    function applyTabData(name, t2, f2) {
+      if (!detailExportEl) return;
+      const tabEl = detailExportEl.querySelector(".tab[data-tab='" + name + "']");
+      const pane  = detailExportEl.querySelector(".pane[data-pane='" + name + "']");
+      const n = countConditions(t2);
+      if (tabEl) {
+        const tcEl = tabEl.querySelector(".tc");
+        if (tcEl) tcEl.textContent = n;
+        tabEl.classList.remove("loading");
+      }
+      // Only overwrite pane content if it still shows the loading placeholder
+      // (don't stomp on content the user is already reading)
+      if (pane && (!pane.classList.contains("active") || pane.innerHTML.includes("Loading"))) {
+        pane.innerHTML = buildCanvasView(t2, name);
+      }
+      if (name === currentModalTab && ftEl && detailExportEl) {
+        ftEl.textContent = n + " condition(s) · " + name;
+      }
+    }
+
+    // Wire up tab clicks — data is pre-loaded; click just switches the view
+    detailExportEl.querySelectorAll(".tab").forEach((tabEl) => {
+      tabEl.addEventListener("click", async () => {
+        const name = tabEl.getAttribute("data-tab");
+        if (!name || name === currentModalTab) return;
+
+        detailExportEl.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        tabEl.classList.add("active");
+        detailExportEl.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+        const pane = detailExportEl.querySelector(".pane[data-pane='" + name + "']");
+
+        if (!tabData[name]) {
+          // Still loading — show spinner and wait
+          tabEl.classList.add("loading");
+          if (pane) { pane.classList.add("active"); pane.innerHTML = "<div style='padding:24px 0;text-align:center;color:#8a94ab;font-size:13px'>Loading " + esc(name) + "…</div>"; }
+          const { tree: t2, flat: f2 } = await readConditionsForTab(name, activeTab);
+          tabData[name] = { tree: t2, flat: f2 };
+          applyTabData(name, t2, f2);
+        } else {
+          // Already loaded — instant switch
+          if (pane) { pane.classList.add("active"); pane.innerHTML = buildCanvasView(tabData[name].tree, name); }
+        }
+
+        tabEl.classList.remove("loading");
+        currentModalTab = name;
+        const n = countConditions(tabData[name].tree);
+        if (ftEl && detailExportEl) ftEl.textContent = n + " condition(s) · " + name;
+      });
+    });
+
+    // Eagerly pre-load all other tabs in the background so clicking them is instant.
+    // Runs sequentially (one SF tab-switch at a time) to avoid race conditions.
+    (async () => {
+      for (const name of availableTabs) {
+        if (tabData[name]) continue; // already loaded (the active tab)
+        if (!detailExportEl) break;  // modal was closed
+        try {
+          const { tree: t2, flat: f2 } = await readConditionsForTab(name, activeTab);
+          if (!detailExportEl) break;
+          tabData[name] = { tree: t2, flat: f2 };
+          applyTabData(name, t2, f2);
+        } catch(e) {}
+      }
+    })();
+
+    /* [in-development features removed from public build] */
+
+    detailExportEl.querySelector("#dc-d-copy").onclick = (e) => {
+      const d = tabData[currentModalTab] || {};
+      const flat = d.flat || [];
+      const btn = e.currentTarget || e.target;
+      const COPY_ICON = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><rect x='5' y='4' width='8' height='10' rx='1.5' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M3 2h7v2H5v8H3z' fill='currentColor'/></svg>";
+      const restore = (txt) => setTimeout(() => (btn.innerHTML = COPY_ICON + "Copy tab for Sheets"), 1400);
+      const ok   = () => { btn.textContent = "✓ Copied!"; restore(); };
+      const fail = () => { btn.textContent = "Failed";  restore(); };
+      // Nothing to copy on an empty tab — tell the user instead of copying a blank grid.
+      const hasCriteria = d.tree && d.tree.items && d.tree.items.length;
+      if (!hasCriteria) { btn.textContent = "Nothing to copy on this tab"; restore(); return; }
+      // Copy the SAME blueprint grid that Download Excel produces: render the kit
+      // tree onto a MiniXLSX sheet, then serialize that sheet to an HTML table.
+      // Falls back to the legacy clipboard table if anything goes wrong.
+      let tableHtml;
+      try {
+        const kit = SEGX.segTreeToKit(d.tree || { type:"set", items:[] }, currentModalTab);
+        const wb = new SEGX.MiniXLSX.Workbook();
+        const ws = wb.addWorksheet("seg", { views: [{ showGridLines: false }] });
+        SEGX.renderSheet(ws, kit);
+        tableHtml = ws.toHtmlTable();
+      } catch (err) {
+        tableHtml = toClipboardHtml(d.tree || { type:"set", items:[] }, flat, currentModalTab);
+      }
+
+      // execCommand('copy') on a real DOM selection produces CF_HTML that Excel/Word/Sheets all understand.
+      // ClipboardItem+Blob only works for browser targets (Google Sheets web), not Excel desktop.
+      const tryExecCopy = () => {
+        const div = document.createElement("div");
+        div.contentEditable = "true";
+        div.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none";
+        div.innerHTML = tableHtml;
+        document.body.appendChild(div);
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(div);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        let success = false;
+        try { success = document.execCommand("copy"); } catch(err) {}
+        sel.removeAllRanges();
+        div.remove();
+        return success;
+      };
+
+      if (tryExecCopy()) { ok(); return; }
+
+      // Fallback: ClipboardItem API (works in Chrome/Edge for Google Sheets)
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        const htmlBlob  = new Blob([tableHtml], { type: "text/html" });
+        const plainBlob = new Blob([toTSV(flat, currentModalTab)], { type: "text/plain" });
+        navigator.clipboard.write([new ClipboardItem({ "text/html": htmlBlob, "text/plain": plainBlob })]).then(ok).catch(() => {
+          navigator.clipboard.writeText(toTSV(flat, currentModalTab)).then(ok).catch(fail);
+        });
+      } else {
+        navigator.clipboard.writeText(toTSV(flat, currentModalTab)).then(ok).catch(fail);
+      }
+    };
+
+    addResizeHandle(detailExportEl, 340, 260);
+    try { installDetailExportTooltips(detailExportEl); } catch (e) {}
+    detailExportEl.querySelector("#dc-d-csv").onclick = (e) => {
+      const d = tabData[currentModalTab] || {};
+      const btn = e.currentTarget || e.target;
+      // Don't produce an empty HTML file — if this tab has no conditions, say so
+      // instead of downloading a blank document.
+      const hasCriteria = d.tree && d.tree.items && d.tree.items.length;
+      if (!hasCriteria) {
+        const CSV_ICON = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M10 2v3h3'/><path d='M6 9l2 2 2-2M8 7v4'/></svg>";
+        btn.textContent = "No conditions on this tab";
+        setTimeout(() => (btn.innerHTML = CSV_ICON + "Download HTML (tab)"), 1600);
+        return;
+      }
+      const fn = safeFilename(segName || "segment");
+      const html = buildHtmlFile(d.tree, currentModalTab);
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn + "-" + safeFilename(currentModalTab) + "-rules.html";
+      document.body.appendChild(a); a.click(); a.remove();
+    };
+
+    // Download Excel — ONE .xlsx, one sheet per tab that actually has criteria
+    // (Include / Exclude / Rank and Limit). Uses the self-contained blueprint
+    // renderer (container bars + AND/OR rails) with no external dependency.
+    const xlsxBtn = detailExportEl.querySelector("#dc-d-xlsx");
+    if (xlsxBtn) xlsxBtn.onclick = async () => {
+      const btn = xlsxBtn;
+      const restore = () => setTimeout(() => (btn.innerHTML = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M6 8l4 4M10 8l-4 4' stroke='currentColor' stroke-width='1.5'/></svg>Download Excel (all tabs)"), 1600);
+      try {
+        // Make sure every available tab is loaded (background loader may still be running)
+        for (const name of availableTabs) {
+          if (!tabData[name]) {
+            btn.textContent = "Loading " + name + "…";
+            try { const r = await readConditionsForTab(name, activeTab); tabData[name] = { tree: r.tree, flat: r.flat }; applyTabData(name, r.tree, r.flat); } catch (e) {}
+          }
+        }
+        // Convert each non-empty tab to the kit tree; skip tabs with no criteria.
+        const trees = {};
+        for (const name of availableTabs) {
+          const t = tabData[name] && tabData[name].tree;
+          if (t && t.items && t.items.length) trees[name] = SEGX.segTreeToKit(t, name);
+        }
+        const names = Object.keys(trees);
+        if (!names.length) { btn.textContent = "No criteria"; restore(); return; }
+        btn.textContent = "Building…";
+        const xlMeta = {
+          segName: segName, segmentType: meta.segmentType, segmentOn: meta.segmentOn, dataSpace: meta.dataSpace,
+          publishType: meta.publishType, publishSchedule: meta.publishSchedule, refreshMode: meta.refreshMode,
+          status: meta.status, description: meta.description, population: meta.population,
+        };
+        const buf = await SEGX.buildSegmentWorkbookMulti(SEGX.MiniXLSX, trees, false, xlMeta);
+        const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const fn = safeFilename(segName || "segment") + ".xlsx";
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fn;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 8000);
+        btn.textContent = "✓ " + names.length + " sheet" + (names.length > 1 ? "s" : "");
+        restore();
+      } catch (e) {
+        btn.textContent = "Failed"; restore();
+      }
+    };
+
+    // Download FLAT CSV (for scripts/automation) — loads every tab, then emits ONE flat CSV with a
+    // Tab column, every row fully populated, no merges. Mirrors the Data Space filter flat CSV.
+    const flatBtn = detailExportEl.querySelector("#dc-d-flatcsv");
+    if (flatBtn) flatBtn.onclick = async () => {
+      const btn = flatBtn;
+      const restore = () => setTimeout(() => (btn.innerHTML = "<svg width='13' height='13' viewBox='0 0 16 16' fill='currentColor' style='vertical-align:middle;margin-right:4px'><path d='M3 2h7l3 3v9H3z' fill='none' stroke='currentColor' stroke-width='1.5'/><path d='M5 8h6M5 11h6M5 5h3' stroke='currentColor' stroke-width='1.3'/></svg>CSV (flat, for scripts)"), 1600);
+      try {
+        for (const name of availableTabs) {
+          if (!tabData[name]) {
+            btn.textContent = "Loading " + name + "…";
+            try { const r = await readConditionsForTab(name, activeTab); tabData[name] = { tree: r.tree, flat: r.flat }; applyTabData(name, r.tree, r.flat); } catch (e) {}
+          }
+        }
+        let out = [FLAT_COLS.slice()];
+        for (const name of availableTabs) {
+          const t = tabData[name] && tabData[name].tree;
+          if (t && t.items && t.items.length) out = out.concat(segFlatRows(t, name));
+        }
+        if (out.length <= 1) { btn.textContent = "No criteria"; restore(); return; }
+        const blob = new Blob([toFlatCsv(out)], { type: "text/csv;charset=utf-8" });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = safeFilename(segName || "segment") + "-rules.csv";
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 8000);
+        btn.textContent = "✓ CSV"; restore();
+      } catch (e) { btn.textContent = "Failed"; restore(); }
+    };
+
+    // Drag by header
+    const hdEl = detailExportEl.querySelector(".hd");
+    if (hdEl) {
+      let dx = 0, dy = 0;
+      hdEl.addEventListener("pointerdown", (e) => {
+        if (e.target.closest("button")) return;
+        const r = detailExportEl.getBoundingClientRect();
+        detailExportEl.style.left = r.left + "px"; detailExportEl.style.top = r.top + "px";
+        detailExportEl.style.transform = "none";
+        dx = e.clientX - r.left; dy = e.clientY - r.top;
+        const onMove = (ev) => {
+          detailExportEl.style.left = Math.max(0, Math.min(window.innerWidth  - 100, ev.clientX - dx)) + "px";
+          detailExportEl.style.top  = Math.max(0, Math.min(window.innerHeight - 40,  ev.clientY - dy)) + "px";
+        };
+        const onUp = () => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", onUp); };
+        document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", onUp);
+        e.preventDefault();
+      });
+    }
+
+    const onEsc = (e) => { if (e.key === "Escape") { closeDetail(); document.removeEventListener("keydown", onEsc, true); } };
+    document.addEventListener("keydown", onEsc, true);
+    // (No click-outside close — closes only via its × button or Escape.)
+  }
+
+  // ===== DATA EXPLORE PAGE =====
+  // Detects runtime_cdp-data-view-record-list (Data Explore / Data View tab).
+  // Features:
+  //   - Column picker: select any of ALL available fields (not just SF's 10)
+  //   - Save/restore column selection per object (localStorage, keyed by objectApiName)
+  //   - Export visible rows to CSV
+  //   - Copy SOQL with selected columns + custom LIMIT
+
+  function findRecordListEl() {
+    let el = null;
+    eachElement(document, e => { if (!el && tagOf(e) === "runtime_cdp-data-view-record-list") el = e; });
+    return el;
+  }
+
+  // INSTANT custom tooltip for a container's controls. Native `title` tooltips take ~1.5s
+  // to appear and users don't discover them — this shows the same text immediately on
+  // hover. Call attachInstantTooltips(container): any descendant with a `title` gets its
+  // title moved to data-tip (suppressing the slow native one) and shown in a fast bubble.
+  var _dcTipEl = null;
+  function attachInstantTooltips(container) {
+    if (!container || container.__dcTipWired) return;
+    container.__dcTipWired = true;
+    if (!_dcTipEl) {
+      _dcTipEl = document.createElement("div");
+      _dcTipEl.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:280px;background:#1e293b;color:#fff;font:500 11px/1.45 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;white-space:normal;";
+      document.body.appendChild(_dcTipEl);
+    }
+    var show = function (el) {
+      var tip = el.getAttribute("data-tip") || el.getAttribute("title");
+      if (!tip) return;
+      if (el.hasAttribute("title")) { el.setAttribute("data-tip", tip); el.removeAttribute("title"); }
+      _dcTipEl.textContent = tip;
+      _dcTipEl.style.display = "block";
+      var r = el.getBoundingClientRect();
+      var top = r.top - _dcTipEl.offsetHeight - 8;                 // prefer above
+      if (top < 6) top = r.bottom + 8;                             // else below
+      var left = Math.min(Math.max(6, r.left), window.innerWidth - _dcTipEl.offsetWidth - 6);
+      _dcTipEl.style.top = top + "px"; _dcTipEl.style.left = left + "px";
+    };
+    var hide = function () { if (_dcTipEl) _dcTipEl.style.display = "none"; };
+    // Delegated: covers current AND future controls. IMPORTANT: only fire for actual
+    // CONTROLS (button/select/label/tab/close), NEVER for table cells — a <td>/<th> has a
+    // title set to its full (possibly huge JSON) value and its own Copy/View widget, so
+    // tooltip-ing cells both showed giant bubbles and fought the cell buttons.
+    container.addEventListener("mouseover", function (e) {
+      var el = e.target && e.target.closest ? e.target.closest("[title],[data-tip]") : null;
+      if (!el || !container.contains(el)) return;
+      var tag = (el.tagName || "").toLowerCase();
+      // Only real controls get a tooltip — never a data cell/header itself (its title is
+      // the full value + it has its own Copy/View). Buttons INSIDE a header still work
+      // because the matched element is the <button>, not the <td>/<th>.
+      if (tag === "td" || tag === "th") return;
+      var isControl = tag === "button" || tag === "select" || tag === "label" || tag === "a" ||
+                      el.hasAttribute("data-tab");
+      if (!isControl) return;
+      show(el);
+    }, true);
+    container.addEventListener("mouseout", hide, true);
+    container.addEventListener("click", hide, true);
+  }
+
+  // Small transient toast near the Explorer launcher — used to tell the user why an
+  // action can't run instead of the button doing nothing.
+  function dcExploreToast(msg) {
+    try {
+      var existing = document.getElementById("dc-explore-toast");
+      if (existing) existing.remove();
+      var t = document.createElement("div");
+      t.id = "dc-explore-toast";
+      t.textContent = msg;
+      t.style.cssText = "position:fixed;bottom:80px;right:24px;z-index:2147483647;max-width:300px;background:#111827;color:#fff;font:500 13px/1.5 -apple-system,sans-serif;padding:12px 16px;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.35);opacity:0;transition:opacity .25s;";
+      document.body.appendChild(t);
+      requestAnimationFrame(function () { t.style.opacity = "1"; });
+      setTimeout(function () { t.style.opacity = "0"; setTimeout(function () { try { t.remove(); } catch (e) {} }, 300); }, 4000);
+    } catch (e) {}
+  }
+
+  // Resolve the DATA SPACE for a given object — using ONLY authoritative sources, never
+  // guessing from the object name (that was the "RH_Profile__dll → RH → denied" bug:
+  // the name prefix is NOT the data space). Priority:
+  //   1) the exact space the PAGE used for THIS object (captured from its own query)
+  //   2) LWC/object-selector props, if exposed
+  //   3) the most-recent sniffed space (same page session)
+  // Returns "" if genuinely unknown — callers then try candidate spaces incl. "default".
+  // UI placeholder text that must never be treated as a real dataspace name.
+  var _badDsNames = /^(Selected|Select|Sort|Filter|Edit|View|Loading|None|All|Default selection)$/i;
+  // The data space read from the page's dropdown is only a FALLBACK. If Salesforce's own query for this object already
+  // told us its data space (sniffed), that wins — never overwrite it with a DOM guess.
+  function dcAdoptPageDs(objectName, ds) {
+    if (!ds) return;
+    if (objectName && _dsByObject[objectName] != null) return;
+    if (_auraSniff && _auraSniff.dataSpace == null) { _auraSniff.dataSpace = ds; _auraSniff.dsGuess = true; }
+    if (objectName) { _dsByObject[objectName] = ds; _dsGuess[objectName] = true; }
+  }
+  // A page-dropdown value is only a GUESS. Salesforce authorizes our queries only after ITS OWN query ran for the
+  // object, so a guess must never count as "established" (that skipped the auto-sort and caused the denied errors).
+  function dcDsConfirmed(objectName) {
+    // Per-OBJECT only: in an org with several data spaces, the space last used for ANOTHER object proves nothing here.
+    return !!(objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]);
+  }
+  // The last sniffed space is usable for an object only if it was learned for THAT object (or from the Query Editor,
+  // which is not tied to an object). A space learned for a different object is stale and must not be reused.
+  // Remember a space that just WORKED for a query - together with the table it worked for.
+  function dcLearnSpace(space, sql) {
+    if (!space) return;
+    var m = String(sql || "").match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+    _auraSniff.dataSpace = space; _auraSniff.dsLastObj = m ? m[1] : null;
+  }
+  function dcSniffedSpaceApplies(objectName) {
+    if (_auraSniff.dataSpace == null || _badDsNames.test(_auraSniff.dataSpace)) return false;
+    return !_auraSniff.dsLastObj || _auraSniff.dsLastObj === objectName;
+  }
+  function resolveDataSpace(objectName) {
+    // 1) authoritative: the space the page itself queried THIS object with
+    if (objectName && _dsByObject[objectName] != null) return _dsByObject[objectName];
+    // 2) LWC props (usually undefined, but authoritative when present)
+    var rl = findRecordListEl();
+    var cand = ["dataSpace", "dataspace", "selectedDataSpaceName", "dataSpaceName", "space"];
+    if (rl) { for (var i = 0; i < cand.length; i++) { try { var v = rl[cand[i]]; if (v && typeof v === "string" && !_badDsNames.test(v)) return v; } catch (e) {} } }
+    var sel = null;
+    eachElement(document, function (e) { if (!sel && tagOf(e) === "runtime_cdp-data-view-object-selector") sel = e; });
+    if (sel) { for (var j = 0; j < cand.length; j++) { try { var v2 = sel[cand[j]]; if (v2 && typeof v2 === "string" && !_badDsNames.test(v2)) return v2; } catch (e) {} } }
+    // 3) the space currently selected in the page's own Data Space dropdown (read from the component, validated)
+    var _cur = dcReadDsFromComponent(); if (_cur && _cur.name) return _cur.name;
+    // 4) last sniffed space - only if it was learned for THIS object (never one learned for another object)
+    if (dcSniffedSpaceApplies(objectName)) return _auraSniff.dataSpace;
+    return "";   // unknown → caller tries candidate spaces (incl. "default")
+  }
+  // Known-space candidates to try, MOST-AUTHORITATIVE first. We collect every distinct
+  // data space the page has used this session (from _dsByObject) plus "" and "default",
+  // so a query works even when we haven't captured THIS object's space yet.
+  function dataSpaceCandidates(objectName) {
+    var out = [], seen = {};
+    var add = function (s) { if (s != null && !seen[s]) { seen[s] = 1; out.push(s); } };
+    // This object's own space, as used by Salesforce's own query for it, is the ONLY candidate: never try other
+    // spaces (a same-named table in another space would silently return the wrong rows).
+    if (objectName && _dsByObject[objectName] != null && !_dsGuess[objectName]) return [_dsByObject[objectName]];
+    add(resolveDataSpace(objectName));
+    // Read from page UI as fallback (covers cold-start bookmarklet)
+    if (typeof readPageDataSpace === "function") { var pageDs = readPageDataSpace(); if (pageDs && _pageDsAuth) add(pageDs); }
+    // No name is ever derived from the object name or from page text: only values Salesforce itself provided.
+    add(""); add("default");
+    return out;
+  }
+
+  // Module-level store for state that must survive SF re-rendering the DOM element.
+  // Keys are objectApiName strings. Values: { allColumns, lastApplied }.
+  const _exploreCache = {};
+  function exploreCache(objectName) {
+    if (!_exploreCache[objectName]) _exploreCache[objectName] = { allColumns: null, lastApplied: null };
+    return _exploreCache[objectName];
+  }
+  function exploreCacheClear(objectName) {
+    if (_exploreCache[objectName]) {
+      _exploreCache[objectName].allColumns  = null;
+      _exploreCache[objectName].lastApplied = null;
+      _exploreCache[objectName].lastData    = null;
+    }
+  }
+
+  function isDataExplorePage() {
+    // URL hint: Data Explorer lives under specific paths. Exclude known non-Explorer pages.
+    var h = location.href;
+    // Object-level LIST/HOME pages (/o/<Obj>/list|home) are NOT Data Explorer — they can
+    // render the same record-list component but are just record grids.
+    if (/\/o\/[^/]+\/(list|home)/i.test(h)) return false;
+    // Record LIST / related views (no single record context) are NOT Data Explorer
+    if (/\/r\/(DataStream|DataLakeObjectInstance|Segment|DataQueryWorkspace)\/?$/i.test(h)) return false;
+    if (/\/r\/(DataStream|DataLakeObjectInstance|Segment|DataQueryWorkspace)\/[^/]*\/?(list|related)/i.test(h)) return false;
+    // Segment / Query Editor / Data Model pages are NOT Data Explorer (even if they
+    // happen to contain a record-list component).
+    if (/segmentWizard|standard-Segment|\/r\/Segment\//i.test(h)) return false;
+    if (/DataQueryWorkspace|queryEditor|query-editor/i.test(h)) return false;
+    if (/standard-DataModel/i.test(h)) return false;
+    if (/marketSegmentActivation|\/r\/MarketSegmentActivation\//i.test(h)) return false;
+    // URL-AUTHORITATIVE guard (same fix as isQueryEditorPage): a real DataStream/DLO/DMO/
+    // Segment RECORD page (…/r/DataStream/<id>/view) is NOT Data Explorer. The bare/list
+    // exclusions above miss the "/view" record route, so without this the DOM check below
+    // would match the STALE record-list component left mounted from the previous Explorer
+    // page (Lightning SPA doesn't unmount on in-tab nav) → wrong FAB until reload.
+    if (typeof urlIsOtherDetailPage === "function" && urlIsOtherDetailPage(h, "DataExplore")) return false;
+    // one.app HASH routes (the Mapping Canvas, Explorer, etc.) carry no path to match. When the
+    // hash decodes to a componentDef, the URL IS authoritative: it is Data Explorer only if it
+    // names the dataViewTab. This stops a record-list component left MOUNTED from an earlier
+    // Explorer visit in the same tab (SPA doesn't unmount) from showing the Explorer launcher
+    // on the Mapping Canvas or any other hash page (reported bug).
+    var hashDecoded = (typeof decodeHashRoute === "function") ? decodeHashRoute(h) : "";
+    if (hashDecoded) return /dataViewTab/i.test(hashDecoded);
+    // The Mapping Canvas is never Data Explorer, even if a stale record list is still mounted.
+    try { if (typeof findVisibleByTag === "function" && findVisibleByTag(TAGGING_CMP).length) return false; } catch (e) {}
+    // DOM check: a VISIBLE record-list LWC component (hidden/stale copies don't count)
+    var rl = findRecordListEl();
+    if (rl && isVisible(rl)) return true;
+    return false;
+  }
+
+  // Decode a one.app "#<base64 JSON>" route to its text, or "" if the URL has no such hash.
+  function decodeHashRoute(h) {
+    try {
+      var m = String(h || location.href).match(/#([A-Za-z0-9+\/=_-]{20,})$/);
+      if (!m) return "";
+      var b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      try { return decodeURIComponent(escape(atob(b))); } catch (e) { return atob(b); }
+    } catch (e) { return ""; }
+  }
+
+  // ── Safety limits for the Data Explorer query/render (prevents browser freeze) ──
+  // The documented /ssot/query-sql endpoint allows up to 49,999 rows, but rendering
+  // 50k×60 = 3M DOM nodes would hang the tab. So: allow FETCHING a lot (CSV can hold
+  // it), but only RENDER a bounded number of rows into the table (the rest stay in the
+  // data set for CSV export). Conservative, tunable ceilings; defined here (module top)
+  // so every function below can rely on them.
+  var DC_MAX_FETCH_ROWS  = 49999;  // hard ceiling accepted by the endpoint
+  var DC_WARN_ROWS       = 5000;   // above this we warn it may be slow
+  var DC_MAX_RENDER_ROWS = 2000;   // cap DOM rows; extras remain exportable via CSV
+
+  // ── Aura query harvesting ───────────────────────────────────────────────────
+  // Data Explorer fetches rows via an Aura server action (proven by probes 1–5):
+  //   POST /aura?...ui-cdp-components-controllers.CdpDataView.query=1
+  //   message.actions[0].descriptor =
+  //     serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$query
+  //   params.query = { objectName, columns:[...], selectedDataSpaceName }
+  //   response.actions[0].returnValue = [ { fields:{ <fieldApi>:value, ..., Id } }, ... ]
+  // The 10-column limit is UI-ONLY — the backend returns ALL requested columns in one
+  // call. So we passively capture a live request's aura.context/token/pageURI, then
+  // replay the SAME read-only query with EVERY selected column. No dialog, no batching.
+  var _auraSniff = { context: null, token: null, pageURI: null, dataSpace: null, objectName: null, template: null, installed: false, querySeq: 0 };
+  // REAL data space per object, captured from the page's own queries. The data space is
+  // NOT derivable from the object name (e.g. DLO "RH_Profile__dll" is NOT in space "RH").
+  // The ONLY reliable source is the {objectName, selectedDataSpaceName} pair the page
+  // itself sends — so we remember it here, keyed by objectName.
+  var _dsByObject = {};
+  var _dsGuess = {};   // objects whose data space came from the page dropdown (unconfirmed guess)
+
+  // Object names (DLO/DMO/CI) seen in Salesforce's OWN /aura responses as the user browses
+  // (object lists, Query Editor tree, mapping pages…). There is no listing API we can call from a
+  // bookmarklet, so this passive, read-only harvest is how the Helpful Queries table list learns real
+  // objects. Capped + size-guarded + fully try/caught so it can never affect the page.
+  var _dcObjSeen = {}, _dcObjSeenN = 0;
+  // Exact data space API names learned from Salesforce's own responses: { label: apiName }. Only objects that sit under a
+  // data-space key (or carry one) are taken, so a label is never paired with an unrelated name.
+  var _dsLabelToName = {};
+  function dcHarvestSpacePairs(text) {
+    try {
+      if (!/data.?space/i.test(text)) return;
+      var j = JSON.parse(text), n = 0;
+      (function walk(v, key, depth) {
+        if (!v || typeof v !== "object" || depth > 9 || n > 60000) return; n++;
+        if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) walk(v[i], key, depth + 1); return; }
+        var hint = /data.?space/i.test(String(key || "")), ks = Object.keys(v);
+        if (!hint) for (var h = 0; h < ks.length; h++) if (/data.?space/i.test(ks[h])) { hint = true; break; }
+        if (hint && typeof v.label === "string") {
+          var nm = v.name || v.apiName || v.developerName || v.dataSpaceName || v.value;
+          if (typeof nm === "string" && /^[A-Za-z0-9_]{1,80}$/.test(nm) && nm !== v.label) _dsLabelToName[v.label] = nm;
+        }
+        for (var k = 0; k < ks.length; k++) walk(v[ks[k]], ks[k], depth + 1);
+      })(j, "", 0);
+    } catch (e) {}
+  }
+  // ── Workspace data space, EXACT (no guessing). Proven on the live page: the workspace header shows only the LABEL, but the
+  // workspace is a DataQueryWorkspace record whose field "DataSpace" holds the API name. The record id is on
+  // <runtime_cdp-query-workspace>.recordId (and in the URL). Source 1: Salesforce's own cached list view / record data in the DOM
+  // (recordData / records / data carry DataSpace.value). Source 2: ask Salesforce for that one field of that one record (read-only).
+  var _wsSpaceByRecord = {}, _wsSpaceInflight = {}, _wsSpaceErr = "";
+  function qeWorkspaceRecordId() {
+    var rid = "";
+    try {
+      eachElement(document, function (el) {
+        if (String(el.tagName || "").toLowerCase() !== "runtime_cdp-query-workspace") return;
+        var v = ""; try { v = String(el.recordId || ""); } catch (e) {}
+        if (!/^[A-Za-z0-9]{15,18}$/.test(v)) return;
+        var vis = false; try { vis = !!(el.getClientRects && el.getClientRects().length); } catch (e) { vis = true; }
+        if (!rid || vis) rid = v;   // a visible workspace wins over a hidden (kept-alive) one
+      });
+    } catch (e) {}
+    if (!rid) { try { var m = String(location.pathname).match(/\/DataQueryWorkspace\/([A-Za-z0-9]{15,18})(?:\/|$)/); if (m) rid = m[1]; } catch (e) {} }
+    return rid;
+  }
+  function qeSpaceFromDomRecords(rid) {
+    var found = "";
+    function fromList(arr) {
+      if (!Array.isArray(arr)) return;
+      for (var i = 0; i < arr.length && !found; i++) {
+        var r = arr[i]; if (!r || typeof r !== "object") continue;
+        var f = r.fields, v = null;
+        if (f && f.Id && f.Id.value === rid && f.DataSpace) v = f.DataSpace.value;          // lst-common-list-internal.records
+        else if ((r.id === rid || r["__v.Id"] === rid) && r.DataSpace) v = r.DataSpace.value; // list datatable .data / recordData
+        if (typeof v === "string" && /^[A-Za-z0-9_]{1,80}$/.test(v)) found = v;
+      }
+    }
+    try {
+      eachElement(document, function (el) {
+        if (found) return;
+        var t = String(el.tagName || "").toLowerCase();
+        if (!/^(lst-|lightning-datatable|runtime_cdp-)/.test(t)) return;
+        ["recordData", "records", "data"].forEach(function (p) { if (found) return; var x; try { x = el[p]; } catch (e) { return; } fromList(x); });
+      });
+    } catch (e) {}
+    return found;
+  }
+  function qeCachedWorkspaceSpace() {
+    var rid = qeWorkspaceRecordId(); if (!rid) return "";
+    if (_wsSpaceByRecord[rid]) return _wsSpaceByRecord[rid];
+    var d = qeSpaceFromDomRecords(rid); if (d) _wsSpaceByRecord[rid] = d;
+    return d;
+  }
+  function qeFindDataSpaceValue(v, depth) {
+    if (!v || typeof v !== "object" || depth > 8) return "";
+    if (v.DataSpace && typeof v.DataSpace === "object" && typeof v.DataSpace.value === "string") return v.DataSpace.value;
+    var ks = Object.keys(v);
+    for (var i = 0; i < ks.length; i++) { var r = qeFindDataSpaceValue(v[ks[i]], depth + 1); if (r) return r; }
+    return "";
+  }
+  // Calls cb() when done (never rejects, never blocks longer than the request). Result lands in _wsSpaceByRecord.
+  function qePrimeWorkspaceSpace(cb) {
+    var done = false; function fin() { if (done) return; done = true; try { cb(); } catch (e) {} }
+    try {
+      var rid = qeWorkspaceRecordId();
+      if (!rid || qeCachedWorkspaceSpace() || !haveCredsOnly() || typeof fetch !== "function") { fin(); return; }
+      if (_wsSpaceInflight[rid]) { _wsSpaceInflight[rid].push(fin); return; }
+      _wsSpaceInflight[rid] = [fin];
+      _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;
+      var act = { id: "dcws-" + _auraSniff.querySeq + ";a", descriptor: "aura://RecordUiController/ACTION$getRecordWithFields", callingDescriptor: "UNKNOWN", params: { recordId: rid, fields: ["DataQueryWorkspace.DataSpace"] } };
+      var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+      var to = setTimeout(function () { _wsSpaceErr = "timeout"; flush(); }, 8000);
+      function flush() { clearTimeout(to); var q = _wsSpaceInflight[rid] || []; delete _wsSpaceInflight[rid]; q.forEach(function (f) { try { f(); } catch (e) {} }); }
+      fetch("/aura?r=" + _auraSniff.querySeq + "&aura.RecordUi.getRecordWithFields=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+        .then(function (r) { return r.text(); }).then(function (txt) {
+          try {
+            var j = JSON.parse(txt), a = j && j.actions && j.actions[0];
+            var v = (a && a.state === "SUCCESS") ? qeFindDataSpaceValue(a.returnValue, 0) : "";
+            if (/^[A-Za-z0-9_]{1,80}$/.test(v)) _wsSpaceByRecord[rid] = v; else _wsSpaceErr = (a && a.state) || "no DataSpace in reply";
+          } catch (e) { _wsSpaceErr = "unreadable reply"; }
+          flush();
+        }, function () { _wsSpaceErr = "network"; flush(); });
+    } catch (e) { fin(); }
+  }
+  function dcHarvestObjects(text) {
+    try { if (text && text.length < 3000000 && text.charAt(0) === "{") dcHarvestSpacePairs(text); } catch (e) {}
+    try {
+      if (!text || text.length > 3000000 || _dcObjSeenN > 3000) return;
+      var m = String(text).match(/\b[A-Za-z][A-Za-z0-9_]{1,80}__(?:dlm|dll|cio)\b/g);
+      if (!m) return;
+      for (var i = 0; i < m.length && _dcObjSeenN <= 3000; i++) if (!_dcObjSeen[m[i]]) { _dcObjSeen[m[i]] = 1; _dcObjSeenN++; }
+    } catch (e) {}
+  }
+  function decodeFormField(v) { try { return decodeURIComponent((v || "").replace(/\+/g, " ")); } catch (e) { return v || ""; } }
+
+  // Pull the aura.* credentials + query params out of a captured x-www-form-urlencoded body.
+  // aura.context / aura.token / aura.pageURI are SESSION-GLOBAL — identical across EVERY
+  // aura action — so we grab them from ANY /aura POST (telemetry, navigation, etc.), which
+  // the page fires constantly. objectName + dataSpace come only from a CdpDataView.query.
+  var _graphCalls = {};   // graph name -> data space, learned from Salesforce's own View calls
+  function absorbAuraForm(body) {
+    var s = String(body || "");
+    var parts = s.split("&"), map = {};
+    parts.forEach(function (p) { var i = p.indexOf("="); if (i > 0) map[p.slice(0, i)] = p.slice(i + 1); });
+    if (map["aura.context"]) _auraSniff.context = map["aura.context"];   // keep URL-encoded (posted verbatim)
+    if (map["aura.token"])   _auraSniff.token   = map["aura.token"];
+    if (map["aura.pageURI"]) _auraSniff.pageURI = map["aura.pageURI"];
+    // From a CdpDataView query, keep the WHOLE decoded action as a template — cloning
+    // it (and swapping only columns) is far more reliable than rebuilding from parts,
+    // because it preserves the exact query shape SF expects (dataSpace, etc.).
+    if (/CdpDataView|ACTION\$query|QueryWorkspace|queryDCSql/i.test(s) && map["message"]) {
+      try {
+        var msg = JSON.parse(decodeFormField(map["message"]));
+        var actions = (msg && msg.actions) || [];
+        for (var ai = 0; ai < actions.length; ai++) {
+          var act = actions[ai];
+          if (!act || !act.params) continue;
+          // Our OWN calls (ids dc-, dcsql-, dcraw-, dcqe*...) are never evidence of what the page uses: learning from them
+          // let our failed data-space guesses become the 'page's' data space, and made our own query look like the
+          // page's sort. Only Salesforce's own traffic teaches the sniffer.
+          if (/^dc/i.test(String(act.id || ""))) continue;
+          var q = act.params.query;
+          if (q) {
+            _auraSniff.template = act;
+            _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;   // lets the sort guide notice "the page just ran a query"
+            if (q.objectName) _auraSniff.objectName = q.objectName;
+            if (q.selectedDataSpaceName != null) { _auraSniff.dataSpace = q.selectedDataSpaceName; _auraSniff.dsGuess = false; _auraSniff.dsLastObj = q.objectName || null; }
+            if (q.objectName && q.selectedDataSpaceName != null) { _dsByObject[q.objectName] = q.selectedDataSpaceName; delete _dsGuess[q.objectName]; }
+          }
+          // Salesforce's own Data Graph "View" call: remember the exact graph name + data space it used.
+          if (act.params.objectName && act.params.dataSpaceName && /queryDataGraph/i.test(String(act.descriptor || "")) && String(act.id || "").indexOf("dc-") !== 0) {   // never learn from OUR OWN guesses (ids start "dc-")
+            _graphCalls[act.params.objectName] = act.params.dataSpaceName;
+          }
+          // Capture dataspace from QueryWorkspace.queryDCSql params (Query Editor page)
+          // Handle both "dataspace" and "dataSpace" casing
+          var capturedDs = act.params.dataspace || act.params.dataSpace || act.params.selectedDataSpaceName || "";
+          if (capturedDs) { _auraSniff.dataSpace = capturedDs; _auraSniff.dsLastObj = null; }
+        }
+      } catch (e) {}
+    }
+  }
+  // Ready only when we have credentials AND a real captured query template — the
+  // template carries the correct dataSpace/shape, without which the backend rejects
+  // the query ("Something's not right with the query").
+  function haveAuraCreds() { return !!(_auraSniff.context && _auraSniff.token && _auraSniff.template); }
+
+  // Install fetch + XHR wrappers ONCE to passively remember the freshest credentials
+  // from ANY aura traffic. Read-only observation; we never block or alter requests.
+  function installAuraSniffer() {
+    if (_auraSniff.installed) return;
+    _auraSniff.installed = true;
+    try {
+      var of = window.fetch;
+      window.fetch = function (input, init) {
+        try {
+          var url = (typeof input === "string") ? input : (input && input.url) || "";
+          if (/\/aura/i.test(url) && init && init.body) absorbAuraForm(init.body);
+        } catch (e) {}
+        var fp = of.apply(this, arguments);
+        try {
+          var fu = (typeof input === "string") ? input : (input && input.url) || "";
+          if (/\/aura/i.test(fu) && fp && fp.then) fp.then(function (r) { try { r.clone().text().then(dcHarvestObjects, function () {}); } catch (e) {} }, function () {});
+        } catch (e) {}
+        return fp;
+      };
+    } catch (e) {}
+    try {
+      var oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (m, u) { this.__dcU = u; return oo.apply(this, arguments); };
+      XMLHttpRequest.prototype.send = function (b) {
+        try { if (/\/aura/i.test(String(this.__dcU || "")) && b) absorbAuraForm(b); } catch (e) {}
+        try { if (/\/aura/i.test(String(this.__dcU || ""))) this.addEventListener("load", function () { try { if (!this.responseType || this.responseType === "text") dcHarvestObjects(this.responseText); } catch (e) {} }); } catch (e) {}
+        return os.apply(this, arguments);
+      };
+    } catch (e) {}
+  }
+
+  // Guarantee we have a captured CdpDataView query template before running the query
+  // functions. If one was already seen (page load / sort / apply) we're set. Otherwise
+  // we must trigger a REAL re-query so the sniffer captures a template.
+  //
+  // CRITICAL: re-applying the SAME columns is a NO-OP in SF — no re-query fires, so no
+  // template is captured (this was the "Couldn't reach the query service" bug). To
+  // force an actual query we apply a DIFFERENT column set (drop the last column), let
+  // it fire, then restore the original. Both go through SF's dialog (flash suppressed).
+  // We only truly need session CREDENTIALS (context+token) — queryAllColumns can build
+  // the query from scratch when no template was captured. Credentials come from ANY
+  // /aura request, and the page fires those constantly, so this almost always succeeds
+  // fast. The dialog-drive below is a best-effort nudge to speed up a cold start.
+  function haveCredsOnly() { return !!(_auraSniff.context && _auraSniff.token); }
+
+  // Read aura token + context DIRECTLY from the page's own Aura framework. This is the
+  // deterministic path — no sniffing, no waiting for a request. If it yields both, we
+  // populate _auraSniff so every query works on the FIRST click. Best-effort + guarded;
+  // if the framework shape differs we simply fall back to the sniffer (below).
+  function primeCredsFromAura() {
+    if (haveCredsOnly()) return true;
+    try {
+      var $A = window.$A;
+      if (!$A || !$A.getContext) return false;
+      var ctx = $A.getContext();
+      // token: try every known location across SF framework versions
+      var token = "";
+      if (ctx.getCsrfToken) try { token = ctx.getCsrfToken() || ""; } catch (e) {}
+      if (!token && $A.clientService) token = $A.clientService._token || $A.clientService.token || "";
+      if (!token && window.aura) token = window.aura.token || "";
+      if (!token) try { var el = document.querySelector("input[name='aura.token'], meta[name='_csrf']"); if (el) token = el.value || el.content || ""; } catch (e) {}
+      // Scan inline scripts for aura token pattern (SF embeds it during SSR)
+      if (!token) try {
+        var scripts = document.querySelectorAll("script:not([src])");
+        for (var si = 0; si < scripts.length && !token; si++) {
+          var stxt = scripts[si].textContent || "";
+          var tm = stxt.match(/["\']aura\.token["\'][\s]*[,:]\s*["']([^"']+)["']/);
+          if (tm && tm[1] && tm[1].length > 10) token = tm[1];
+          if (!token) { var tm2 = stxt.match(/token\s*[:=]\s*["']([A-Za-z0-9_\-+/=]{20,})["']/); if (tm2) token = tm2[1]; }
+        }
+      } catch (e) {}
+      // Try reading from Performance entries (past fetch calls to /aura)
+      if (!token) try {
+        var entries = performance.getEntriesByType("resource").filter(function (e) { return /\/aura/i.test(e.name); });
+        if (entries.length > 0 && window.__dcAuraTokenFromPerf) token = window.__dcAuraTokenFromPerf;
+      } catch (e) {}
+      if (!token) return false;
+      // context: the exact object aura posts as aura.context
+      var ctxForServer = ctx.getContextForServer && ctx.getContextForServer();
+      var ctxStr = ctxForServer ? (typeof ctxForServer === "string" ? ctxForServer : JSON.stringify(ctxForServer)) : "";
+      if (token && ctxStr) {
+        _auraSniff.token = encodeURIComponent(token);
+        _auraSniff.context = encodeURIComponent(ctxStr);
+        if (!_auraSniff.pageURI) { try { _auraSniff.pageURI = encodeURIComponent("/one/one.app"); } catch (e) {} }
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // Proactively warm up credentials on Explore-page load: try the direct framework
+  // read first; if that doesn't yield creds, trigger ONE real query (invisible column
+  // flip + restore) so the sniffer captures them BEFORE the user clicks anything. This
+  // is what removes the hit-and-trial: by the time the modal opens, creds are ready.
+  var _warmedUp = false;
+  function warmUpQueryContext() {
+    if (_warmedUp) return; _warmedUp = true;
+    if (extBridgePresent()) return;
+    if (primeCredsFromAura()) return;
+    // Strategy: auto-click a sortable column header — proven to fire /aura on this org.
+    // Click it twice (sort asc then desc) to restore original order.
+    try {
+      var sortBtn = document.querySelector("th[aria-sort] button, th button[title*='Sort'], [role='columnheader'] button, lightning-datatable th a, th a[role='button']");
+      if (sortBtn) {
+        sortBtn.click();
+        setTimeout(function () { try { sortBtn.click(); } catch (e) {} }, 800);
+        return;
+      }
+    } catch (e) {}
+    // Fallback: dummy /aura POST — sniffer captures context+token from ANY aura response.
+    // Column toggle was here but removed: it modifies recList.columns and the restore
+    // sometimes fails (timing race), permanently dropping a column each bookmarklet load.
+    try {
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  // Auto-establish the page's dataspace WITHOUT asking the user to sort manually.
+  // On some orgs the object lives in a non-default dataspace that we can't read from
+  // the DOM until the page fires its own query. This clicks a sortable column header
+  // (which makes SF fire CdpDataView.query → the sniffer captures selectedDataSpaceName),
+  // then polls until _auraSniff.dataSpace / _dsByObject is populated. Calls cb(true) as
+  // soon as a dataspace is known, or cb(false) after ~3s so the caller can proceed and
+  // fall back to the candidate list. Idempotent-safe: clicks twice to restore sort order.
+  function establishDataSpace(objectName, cb) {
+    // Already known? Done immediately — no page interaction needed.
+    if (dcDsConfirmed(objectName)) { cb(true); return; }
+    var fired = false;
+    var _dxSortTarget = null;   // the sort control we click; reused for the restore-click
+    // CRITICAL: the Data Explorer grid lives in deep LWC SHADOW DOM. The real sort trigger is
+    // an <a class="slds-th__action" role="button"> that sits INSIDE a
+    // <lightning-primitive-header-factory>'s OWN shadow root — i.e. one shadow level below the
+    // <th>. document.querySelector can't see it, and querySelector from the <th> can't cross
+    // into the factory's shadow either. So we walk the ENTIRE shadow tree with eachElement and
+    // match that anchor directly. Clicking it makes SF fire CdpDataView.query → the sniffer
+    // captures selectedDataSpaceName. Skip the row-select column (empty label / aria-sort=none).
+    try {
+      var candidates = [];
+      eachElement(document, function (el) {
+        if (candidates.length >= 4) return;
+        var tag = tagOf(el);
+        var role = (el.getAttribute && el.getAttribute("role")) || "";
+        var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
+        cls = (cls || "").toLowerCase();
+        var aria = ((el.getAttribute && el.getAttribute("aria-label")) || "").toLowerCase();
+        // Primary target: the SLDS sort action anchor (proven markup on CDP grids).
+        if ((tag === "a" || role === "button") && /slds-th__action/.test(cls)) {
+          candidates.push(el); return;
+        }
+        // Fallback target: an explicit "sort" button (e.g. "Toggle sort order").
+        if ((tag === "button" || role === "button") && /sort/.test(aria)) {
+          candidates.push(el); return;
+        }
+      });
+      if (candidates.length) {
+        var target = candidates[0];
+        fired = true;
+        // LWC sort handlers often ignore a synthetic .click() but respond to a REAL
+        // pointer/mouse event sequence. Dispatch the full sequence, then also call
+        // .click() as a belt-and-suspenders. Wrapped in try/catch — if anything throws
+        // the poll simply times out and the existing manual-sort fallback message shows,
+        // so this can never break the normal flow.
+        var realClick = function (elm) {
+          try {
+            var opts = { bubbles: true, cancelable: true, view: window };
+            ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
+              var Ctor = (type.indexOf("pointer") === 0 && typeof PointerEvent === "function") ? PointerEvent : MouseEvent;
+              try { elm.dispatchEvent(new Ctor(type, opts)); } catch (e) { try { elm.dispatchEvent(new MouseEvent(type, opts)); } catch (e2) {} }
+            });
+            try { elm.click(); } catch (e) {}
+          } catch (e) {}
+        };
+        _dxSortTarget = target;   // remember for the deferred restore-click (see below)
+        realClick(target);
+      }
+    } catch (e) {}
+    // Poll for the dataspace to show up (sniffer fills it when the query returns).
+    // DETERMINISTIC: the moment a dataspace is captured we (a) fire the restore-click ONCE
+    // to put the sort order back, then (b) call cb(true) AFTER a short settle so the restore
+    // query doesn't race the caller's data query. This removes the "sometimes works" timing:
+    // we act on capture, not on a fixed delay. Poll a bit longer (~6s) for slow orgs.
+    var tries = 0, done = false;
+    function finish(ok) {
+      if (done) return; done = true;
+      cb(ok);
+    }
+    (function poll() {
+      if (done) return;
+      var got = dcDsConfirmed(objectName);
+      if (got) {
+        // Restore the original sort order once (best-effort), then proceed after a short
+        // settle so this restore query can't collide with the caller's upcoming data query.
+        if (fired && _dxSortTarget) { try { _dxSortTarget.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window })); } catch (e) {} }
+        setTimeout(function () { finish(true); }, 250);
+        return;
+      }
+      if (!fired || tries++ > 30) { finish(false); return; }  // ~6s max, or no button found
+      setTimeout(poll, 200);
+    })();
+  }
+
+  function ensureQueryContext(cb0) {
+    // Before any query runs, make sure the workspace's exact data space (DataQueryWorkspace.DataSpace) is known.
+    var cb = function (ok) { try { qePrimeWorkspaceSpace(function () { cb0(ok); }); } catch (e) { cb0(ok); } };
+    if (extBridgePresent()) { cb(true); return; }
+    if (primeCredsFromAura()) { cb(true); return; }
+    if (haveCredsOnly()) { cb(true); return; }
+    const rl = findRecordListEl();
+    const current = rl ? getCurrentFields(rl) : [];
+    var polls = 0, done = false;
+    function finish(ok) { if (done) return; done = true; cb(ok); }
+    function poll() {
+      if (primeCredsFromAura() || haveCredsOnly()) { finish(true); return; }
+      if (polls++ > 80) { finish(false); return; }   // ~16s max
+      setTimeout(poll, 200);
+    }
+    // Try ALL connection methods at once — don't wait for one to fail
+    // NOTE: column toggle was here but removed — it modifies recList.columns and the restore
+    // sometimes races, permanently dropping a column each bookmarklet load.
+    // 1) Row checkbox click (toggles on then off)
+    try {
+      var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox']");
+      if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 600); }
+    } catch (e) {}
+    // 3) Dummy /aura POST
+    try {
+      fetch("/aura?r=99&aura.ApexAction.execute=1", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+        credentials: "include"
+      }).catch(function () {});
+    } catch (e) {}
+    poll();
+  }
+
+  // "Connect to Data Cloud" — renders a button that triggers credential capture, then
+  // calls `onConnected()`. Use wherever ensureQueryContext fails in bookmarklet mode.
+  // ── "Sort a column once" guide (Data Explorer) ───────────────────────────────────────────────
+  // Data 360 only lets this tool read a table after Salesforce itself has run one query on it, and the
+  // easiest way to make Salesforce run one is to sort a column. The old message was two plain lines that
+  // people skipped. This card: (1) uses a REAL header name from the table behind the panel, (2) says WHY,
+  // (3) watches for the sort and, the moment it lands, turns green and offers the button.
+  // A→Z / Z→A by visible label (case-insensitive, numeric-aware, stable; ties fall back to the API name).
+  // Returns a NEW array. `labelOf(item)` gives the text to sort on.
+  function dcSortByLabel(items, asc, labelOf) {
+    var key = function (x) { return String(labelOf(x) == null ? "" : labelOf(x)).toLowerCase(); };
+    var out = (items || []).map(function (x, i) { return { x: x, k: key(x), i: i }; });
+    out.sort(function (a, b) {
+      var c = a.k.localeCompare(b.k, undefined, { numeric: true, sensitivity: "base" });
+      return c !== 0 ? (asc ? c : -c) : a.i - b.i;
+    });
+    return out.map(function (o) { return o.x; });
+  }
+  // Pure helper (unit-tested): choose a header label that a person can actually find and click.
+  function dcPickHeaderLabel(texts) {
+    var skip = /^(select( all)?( rows?)?|row( number)?|actions?|#|show actions?|checkbox)$/i;
+    for (var i = 0; i < (texts || []).length; i++) {
+      var t = String(texts[i] == null ? "" : texts[i]).replace(/\s+/g, " ").trim();
+      t = t.replace(/\s*(sort(ed)?( by)?:?\s*(ascending|descending|none)?|ascending|descending)\s*$/i, "").trim();
+      if (t && t.length <= 40 && !skip.test(t)) return t;
+    }
+    return "";
+  }
+  // A column header the user can really see and click: visible, inside the viewport, and not under our panel.
+  // Returns { label, el } or null. The label is read from that same element so name and highlight always match.
+  function dcFindVisibleHeader() {
+    var found = null, panelRect = null;
+    try { if (typeof exploreModalEl !== "undefined" && exploreModalEl && exploreModalEl.isConnected) panelRect = exploreModalEl.getBoundingClientRect(); } catch (e) {}
+    var vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    try {
+      eachElement(document, function (el) {
+        if (found || tagOf(el) !== "a") return;
+        var cls = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (typeof el.className === "string" ? el.className : "");
+        if (!/slds-th__action/i.test(cls || "")) return;
+        var r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8 || r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return;
+        if (panelRect && r.right > panelRect.left && r.left < panelRect.right && r.bottom > panelRect.top && r.top < panelRect.bottom) return;
+        var lab = dcPickHeaderLabel([el.getAttribute("title") || el.textContent || ""]);
+        if (!lab) return;
+        found = { label: lab, el: el };
+      });
+    } catch (e) {}
+    return found;
+  }
+  // Full pointer-event sequence (what a real click sends) so Lightning's header handler reacts.
+  function dcClickLikeUser(el) {
+    try {
+      ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (type) {
+        var Ctor = (type.indexOf("pointer") === 0 && typeof PointerEvent === "function") ? PointerEvent : MouseEvent;
+        el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true, view: window, button: 0 }));
+      });
+    } catch (e) { try { el.click(); } catch (e2) {} }
+  }
+  function dcEsc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // Builds the guide card. opts: { lockBtn: the page's ORIGINAL action button (locked while waiting, unlocked on ready;
+  // the card never has a button of its own), isReady(): extra readiness test, onReady() }.
+  // Returns the element; el.dcStop() stops watching and restores everything (button, spotlight).
+  function dcBuildSortGuide(opts) {
+    opts = opts || {};
+    if (!document.getElementById("dc-guide-style")) {
+      var st = document.createElement("style"); st.id = "dc-guide-style";
+      st.textContent = "@keyframes dc-guide-pulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}50%{box-shadow:0 0 0 7px rgba(245,158,11,0)}}" +
+                       "@keyframes dc-guide-bpulse{0%,100%{box-shadow:0 0 0 0 rgba(13,110,253,.45)}50%{box-shadow:0 0 0 8px rgba(13,110,253,0)}}";
+      document.head.appendChild(st);
+    }
+    var hdr = dcFindVisibleHeader();
+    var label = hdr ? hdr.label : "";
+    var box = document.createElement("div");
+    box.setAttribute("data-dc-sort-guide", "1");
+    var baseSeq = _auraSniff.querySeq || 0;
+    var btn = opts.lockBtn || null, saved = null, locked = false;
+    function lock() {
+      if (!btn || locked) return; locked = true;
+      saved = { text: btn.textContent, disabled: btn.disabled, opacity: btn.style.opacity, cursor: btn.style.cursor, title: btn.title, anim: btn.style.animation };
+      btn.disabled = true; btn.style.opacity = "0.55"; btn.style.cursor = "not-allowed";
+      btn.textContent = "🔒 " + saved.text.replace(/^🔒\s*/, "");
+      btn.title = "Locked until you click a column header in the Salesforce table (see the orange box above). It unlocks by itself.";
+    }
+    function unlock(pulse) {
+      if (!btn || !locked) return; locked = false;
+      btn.disabled = saved.disabled; btn.style.opacity = saved.opacity || "1"; btn.style.cursor = saved.cursor || "pointer";
+      btn.textContent = saved.text; btn.title = saved.title;
+      btn.style.animation = pulse ? "dc-guide-bpulse 1.2s ease-in-out 3" : saved.anim;
+    }
+    // spotlight on the REAL header (fixed overlay on <body>; never inserted into Salesforce's own DOM; clicks pass through)
+    var ring = null, tag = null;
+    function placeSpot() {
+      if (!hdr) return;
+      var r = hdr.el.isConnected ? hdr.el.getBoundingClientRect() : null;
+      var vis = r && r.width >= 8 && r.height >= 8 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+      if (!vis) { if (ring) ring.style.display = "none"; if (tag) tag.style.display = "none"; return; }
+      if (!ring) {
+        ring = document.createElement("div"); ring.setAttribute("data-dc-guide-spot", "1");
+        ring.style.cssText = "position:fixed;z-index:2147483640;pointer-events:none;border:3px solid #f59e0b;border-radius:6px;animation:dc-guide-pulse 1.5s ease-in-out infinite;box-sizing:border-box;";
+        tag = document.createElement("div"); tag.setAttribute("data-dc-guide-spot", "1");
+        tag.style.cssText = "position:fixed;z-index:2147483640;cursor:pointer;background:#92400e;color:#fff;font:700 11px -apple-system,sans-serif;padding:4px 9px;border-radius:6px;white-space:nowrap;";
+        tag.textContent = "👆 Click this header";
+        tag.title = "Same as clicking the highlighted column header";
+        tag.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); dcClickLikeUser(hdr.el); };
+        document.body.appendChild(ring); document.body.appendChild(tag);
+      }
+      ring.style.display = tag.style.display = "";
+      ring.style.left = (r.left - 3) + "px"; ring.style.top = (r.top - 3) + "px"; ring.style.width = (r.width + 6) + "px"; ring.style.height = (r.height + 6) + "px";
+      tag.style.left = Math.max(4, r.left + 4) + "px"; tag.style.top = (r.bottom + 8) + "px";
+    }
+    function clearSpot() { [ring, tag].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); }); ring = tag = null; }
+    // stepper: 1 click header, 2 Salesforce loads, 3 unlocked
+    function stepper(stage) {
+      function dot(n) {
+        var done = stage > n || (n === 3 && stage >= 3), on = stage === n;
+        var bg = done ? "#16a34a;color:#fff" : on ? "#f59e0b;color:#fff;animation:dc-guide-pulse 1.5s ease-in-out infinite" : "#fde68a;color:#92400e";
+        return "<span style='display:inline-block;width:18px;height:18px;border-radius:50%;background:" + bg + ";font:700 10px/18px sans-serif;text-align:center;'>" + (done ? "&#10003;" : n) + "</span>";
+      }
+      function bar(n) { return "<span style='flex:1;height:2px;min-width:10px;margin:0 6px;background:" + (stage > n ? "#16a34a" : "#fde68a") + ";'></span>"; }
+      function step(n, txt) { return "<span style='display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;white-space:nowrap;color:" + (stage > n || (n === 3 && stage >= 3) ? "#166534" : "#a16207") + ";'>" + dot(n) + txt + "</span>"; }
+      return "<div style='display:flex;align-items:center;margin-top:2px;'>" + step(1, "Click header") + bar(1) + step(2, "Salesforce connects") + bar(2) + step(3, "Button unlocks") + "</div>";
+    }
+    var chip = label ? "<span style='display:inline-block;background:#fef3c7;color:#92400e;border:1.5px solid #f59e0b;border-radius:5px;padding:0 7px;font-weight:700;'>" + dcEsc(label) + "</span>" : "<b>any column header</b>";
+    function renderWait(stage) {
+      var title = stage === 1 ? "Click " + chip + " to connect" : "Connecting&hellip; Salesforce is loading the table";
+      var body = stage === 1
+        ? "This tool reads your data through Salesforce&rsquo;s own connection, and Salesforce opens it when a table is sorted. Click the header" + (hdr ? " (highlighted in the table)" : " of any column") + ". It&rsquo;s just a sort: read-only, nothing is changed."
+        : "Hang on a second. The button below unlocks by itself as soon as Salesforce finishes.";
+      box.innerHTML =
+        "<div style='background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:10px;padding:11px 12px;color:#78350f;font-size:12px;line-height:1.5;'>" +
+        "<div style='font-weight:700;font-size:13px;color:#92400e;margin-bottom:4px;'>" + title + "</div>" +
+        "<div style='margin:0 0 9px;'>" + body + "</div>" +
+        stepper(stage) +
+        "<div class='dc-guide-note' style='margin-top:6px;font-size:11px;color:#92400e;'></div></div>";
+    }
+    function renderDone() {
+      box.innerHTML =
+        "<div style='background:#f0fdf4;border:1px solid #86efac;border-left:4px solid #16a34a;border-radius:10px;padding:11px 12px;color:#166534;font-size:12px;line-height:1.45;'>" +
+        "<div style='font-weight:700;font-size:13px;margin-bottom:4px;'>&#10003; Connected. Now press the button below</div>" + stepper(3) + "</div>";
+    }
+    var finished = false, timer = null, started = Date.now(), stage = 1, onClick = null;
+    function cleanup() {
+      finished = true; if (timer) clearInterval(timer);
+      clearSpot();
+      if (onClick) { try { document.removeEventListener("click", onClick, true); } catch (e) {} onClick = null; }
+    }
+    function ready() {
+      if (finished) return; cleanup();
+      renderDone(); unlock(true);
+      if (typeof opts.onReady === "function") { try { opts.onReady(); } catch (e) {} }
+    }
+    // the user clicked a sortable header -> advance to step 2 right away
+    onClick = function (e) {
+      if (finished || stage !== 1) return;
+      try {
+        var path = e.composedPath ? e.composedPath() : [];
+        for (var i = 0; i < path.length; i++) {
+          var n = path[i];
+          if (n && n.nodeType === 1 && tagOf(n) === "a" && /slds-th__action/i.test(typeof n.className === "string" ? n.className : "")) { stage = 2; clearSpot(); renderWait(2); return; }
+        }
+      } catch (err) {}
+    };
+    document.addEventListener("click", onClick, true);
+    function check() {
+      if (finished) return;
+      if (box.__dcSeen && !box.isConnected) { cleanup(); unlock(false); return; }   // panel closed
+      if (box.isConnected) box.__dcSeen = true;
+      // Column picker hidden (closeExploreModal only display:none's it): take the spotlight ring off Salesforce's
+      // header and stand by; it comes back by itself when the picker is reopened.
+      try { var _mdl = box.closest && box.closest("#dc-explore-modal"); if (_mdl && _mdl.style.display === "none") { clearSpot(); return; } } catch (e) {}
+      var sorted = (_auraSniff.querySeq || 0) > baseSeq;                      // the page ran a query after the card appeared
+      var extra = typeof opts.isReady === "function" ? !!opts.isReady() : false;
+      if (sorted || extra) { ready(); return; }
+      placeSpot();
+      var note = box.querySelector(".dc-guide-note");
+      if (note && Date.now() - started > 20000 && !note.textContent) note.textContent = "Still waiting? Clicking a row checkbox in that table also works. Click it once, then click it again to untick it.";
+      if (Date.now() - started > 600000) { cleanup(); unlock(false); }
+    }
+    renderWait(1); lock();
+    timer = setInterval(check, 300);
+    setTimeout(function () { if (!finished) placeSpot(); }, 0);
+    box.dcStop = function () { cleanup(); unlock(false); };
+    box.dcUnlock = function () { unlock(false); };      // release the button but keep watching (fallback)
+    box.dcForceReady = ready;                             // test hook / session poll
+    return box;
+  }
+
+  var _connectingInProgress = false;
+  function renderConnectButton(container, onConnected) {
+    if (extBridgePresent()) { onConnected(); return; }
+    container.innerHTML = "";
+    var box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px;";
+    var msg = document.createElement("div");
+    msg.style.cssText = "font:12px/1.5 -apple-system,sans-serif;color:#475569;text-align:center;";
+    msg.textContent = "Connect to Data Cloud to enable querying.";
+    var btn = document.createElement("button");
+    btn.textContent = "Connect to Data Cloud";
+    btn.title = "Establish a Data Cloud query session (runs one small query) so the tool can fetch data. Needed once per session.";
+    btn.style.cssText = "border:none;border-radius:20px;padding:10px 20px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#6366f1,#4f46e5);box-shadow:0 3px 12px rgba(99,102,241,.3);transition:transform .1s;";
+    btn.onmouseenter = function () { btn.style.transform = "scale(1.03)"; };
+    btn.onmouseleave = function () { btn.style.transform = "scale(1)"; };
+    btn.onclick = function () {
+      btn.disabled = true; btn.textContent = "Connecting…";
+      msg.textContent = "Establishing session… (this may take a few seconds)";
+      _connectingInProgress = true;
+      // Try direct framework read first (instant if available)
+      if (primeCredsFromAura() || haveCredsOnly()) {
+        _connectingInProgress = false;
+        btn.textContent = "Connected ✓";
+        btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
+        msg.textContent = "Ready — you can query now.";
+        setTimeout(onConnected, 600);
+        return;
+      }
+      // Force an /aura call: try column toggle on record list, or fire a minimal
+      // navigation aura action (which also sends aura.context + aura.token)
+      var triggered = false;
+      // NOTE: column toggle removed here — it modifies recList.columns and the restore
+      // sometimes races, permanently dropping a column each time Connect is clicked.
+      // Fire a dummy /aura POST instead (sniffer captures context+token from any aura response).
+      try {
+        fetch("/aura?r=99&aura.ApexAction.execute=1", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: "message=%7B%22actions%22%3A%5B%5D%7D&aura.context=%7B%7D&aura.token=undefined",
+          credentials: "include"
+        }).catch(function () {});
+        triggered = true;
+      } catch (e) {}
+      // Try multiple UI interactions that fire aura calls
+      if (!triggered) {
+        try {
+          // Try sort header
+          var sortBtn = document.querySelector("th[aria-sort] button, th button[title*='Sort'], [data-aura-rendered-by] th");
+          if (sortBtn) { sortBtn.click(); setTimeout(function () { sortBtn.click(); }, 500); triggered = true; }
+        } catch (e) {}
+      }
+      if (!triggered) {
+        try {
+          // Try clicking a row checkbox (select/deselect a row = fires aura)
+          var rowCb = document.querySelector("table input[type='checkbox'], lightning-datatable input[type='checkbox'], [data-aura-rendered-by] input[type='checkbox'], runtime_cdp-data-view input[type='checkbox']");
+          if (rowCb) { rowCb.click(); setTimeout(function () { rowCb.click(); }, 500); triggered = true; }
+        } catch (e) {}
+      }
+      if (!triggered) {
+        try {
+          // Try page navigation (next/prev page button in the table)
+          var pageBtn = document.querySelector("button[title*='Next'], button[title*='next'], [data-aura-rendered-by] button[title*='Page']");
+          if (pageBtn && !pageBtn.disabled) { pageBtn.click(); triggered = true; }
+        } catch (e) {}
+      }
+      // Poll for credentials (longer timeout since we're trying multiple approaches)
+      var attempts = 0;
+      var check = function () {
+        if (primeCredsFromAura() || haveCredsOnly()) {
+          _connectingInProgress = false;
+          btn.textContent = "Connected ✓";
+          btn.style.background = "linear-gradient(135deg,#10b981,#059669)";
+          msg.textContent = "Ready — you can query now.";
+          setTimeout(onConnected, 600);
+          return;
+        }
+        if (attempts++ > 60) {
+          _connectingInProgress = false;
+          btn.disabled = false; btn.textContent = "Retry";
+          msg.innerHTML = "Could not auto-connect. Please <b>click any row checkbox</b> in the table below, then click <b>Retry</b>.<br><span style='color:#64748b;font-size:11px;margin-top:4px;display:inline-block;'>Selecting a row triggers a data call that establishes the session.</span>";
+          return;
+        }
+        setTimeout(check, 250);
+      };
+      setTimeout(check, 500);
+    };
+    box.appendChild(msg); box.appendChild(btn);
+    container.appendChild(box);
+  }
+
+  // Run ONE read-only query for the given columns; resolves to an array of row objects
+  // (each a flat {fieldApi: value, Id}). Rejects with a readable message on failure.
+  // We CLONE the captured live-query action and swap only columns (+ optional limit),
+  // preserving SF's exact query shape (dataSpace, paging keys, etc.) so the backend
+  // doesn't reject it. `limit` (optional) overrides the page's default row count.
+  function queryAllColumns(objectName, columns, dataSpace, limit) {
+    return new Promise(function (resolve, reject) {
+      // Need session credentials (from ANY /aura call). A captured template is
+      // preferred (exact shape), but if we only have creds we BUILD a minimal query
+      // from the shape probe 4/5 proved — {objectName, columns, selectedDataSpaceName}.
+      if (!_auraSniff.context || !_auraSniff.token) {
+        reject(new Error("Session not connected — click 'Connect to Data Cloud' or sort a column to establish a session.")); return;
+      }
+      var act;
+      if (_auraSniff.template) {
+        try { act = JSON.parse(JSON.stringify(_auraSniff.template)); }
+        catch (e) { act = null; }
+      }
+      if (!act) {
+        // Build from scratch — proven-valid minimal CdpDataView.query shape.
+        var ds0 = (dataSpace != null) ? dataSpace : (_auraSniff.dataSpace != null ? _auraSniff.dataSpace : "default");
+        act = {
+          descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$query",
+          callingDescriptor: "UNKNOWN",
+          params: { query: { objectName: objectName, columns: [], selectedDataSpaceName: ds0 } }
+        };
+      }
+      _auraQid = (_auraQid || 0) + 1;
+      act.id = "dc-" + _auraQid + ";a";
+      var q = act.params && act.params.query;
+      if (!q) { reject(new Error("Query template shape unexpected.")); return; }
+      q.columns = columns.slice();
+      if (objectName) q.objectName = objectName;
+      if (dataSpace != null) q.selectedDataSpaceName = dataSpace;
+      // Row count: SF uses keys like maxRows/pageSize/count/limit depending on version.
+      // Only override the ones the captured template ALREADY has, so we don't invent a
+      // param the backend rejects.
+      if (limit != null) {
+        ["maxRows", "pageSize", "count", "limit", "rowLimit", "size"].forEach(function (k) {
+          if (q[k] != null) q[k] = limit;
+        });
+      }
+      var msg = { actions: [act] };
+      var form = "message=" + encodeURIComponent(JSON.stringify(msg)) +
+        "&aura.context=" + _auraSniff.context +
+        "&aura.pageURI=" + (_auraSniff.pageURI || "") +
+        "&aura.token=" + _auraSniff.token;
+      fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.CdpDataView.query=1", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: form, credentials: "include"
+      }).then(function (r) { return r.text(); }).then(function (txt) {
+        // SESSION EXPIRED: SF's /aura returns a login redirect / invalidSession marker
+        // instead of JSON when the session dies. Detect and give a clear message.
+        if (/aura:invalidSession|window\.location|\/secur\/login|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) {
+          reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return;
+        }
+        var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Query response was not JSON.")); return; }
+        var a2 = json && json.actions && json.actions[0];
+        if (!a2) { reject(new Error("Query response had no actions.")); return; }
+        if (a2.state !== "SUCCESS") {
+          var em = "";
+          try { em = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; } catch (e) { em = a2.state; }
+          if (/invalidSession|INVALID_SESSION|session expired/i.test(em)) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
+          reject(new Error("Query failed: " + em)); return;
+        }
+        var rv = a2.returnValue || [];
+        var list = Array.isArray(rv) ? rv : (rv.records || rv.data || []);
+        var rows = list.map(function (r) { return (r && r.fields) ? r.fields : r; }).filter(Boolean);
+        resolve(rows);
+      }).catch(function (err) { reject(new Error("Query request failed: " + err)); });
+    });
+  }
+  var _auraQid = 0;
+
+  // ── Data Graph "View" parity: the SAME aura action Salesforce's own View dialog fires (captured from a real org):
+  //   POST /aura?...CdpDataView.queryDataGraphWithLookupKeys=1
+  //   params { objectName, dataSpaceName, lookupKeys:"[Id__c=<value>]", noCache }
+  // noCache:false = the stored/cached graph, noCache:true = built live ("Real-time View").
+  // Pull the graph JSON out of whatever shape returnValue has (string / wrapper object / the object itself).
+  function dcExtractGraphJson(rv) {
+    function asJson(x) {
+      if (typeof x === "string") { var t = x.trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return undefined; }
+      return x && typeof x === "object" ? x : undefined;
+    }
+    if (typeof rv === "string") return asJson(rv);
+    if (!rv || typeof rv !== "object") return asJson(rv);
+    // Salesforce wraps the graph: [ { fields: { json_blob__c: "<graph as a JSON string>" } } ] (stored AND real-time).
+    // Search the whole reply, breadth-first, for a JSON string. Only a field NAMED like json/blob/graph is trusted anywhere;
+    // any other JSON-looking string is accepted only when the reply is a thin wrapper (single key / single element all the way
+    // down), so a genuine graph that merely contains JSON-looking text is never mistaken for a wrapper.
+    var q = [{ v: rv, d: 0, k: "", thin: true }], named = null, thinHit = null, seen = 0;
+    while (q.length && seen++ < 4000) {
+      var n = q.shift(), x = n.v;
+      if (typeof x === "string") {
+        var t2 = x.trim();
+        if ((t2.charAt(0) === "{" || t2.charAt(0) === "[") && t2.length > 2) {
+          var pj; try { pj = JSON.parse(t2); } catch (e) { pj = null; }
+          if (pj && typeof pj === "object") { if (/json|blob|graph/i.test(n.k)) { named = pj; break; } if (n.thin && !thinHit) thinHit = pj; }
+        }
+      } else if (x && typeof x === "object" && n.d < 8) {
+        var ks = Object.keys(x), thinHere = n.thin && ks.length <= 1;
+        ks.forEach(function (kk) { q.push({ v: x[kk], d: n.d + 1, k: kk, thin: thinHere }); });
+      }
+    }
+    if (named) return named;
+    if (thinHit) return thinHit;
+    if (!Array.isArray(rv)) { var ok2 = Object.keys(rv); for (var oi = 0; oi < ok2.length; oi++) { if (/json|blob|graph/i.test(ok2[oi]) && rv[ok2[oi]] && typeof rv[ok2[oi]] === "object") return rv[ok2[oi]]; } }   // an already-parsed graph under a json/blob/graph key
+    return rv;
+  }
+  // Which field identifies this Data Graph row? Not a fixed name (orgs differ: Id__c, ssot__Id__c, ...): take a top-level
+  // scalar of the graph JSON that ALSO appears, with the same value, as a column of the row; prefer names that look like an id.
+  // Fallback: an id-looking top-level scalar of the blob itself. Returns {key,value} or null. Pure.
+  function dcPickLookupKey(blobText, rowMap) {
+    var top; try { top = JSON.parse(blobText); } catch (e) { return null; }
+    if (Array.isArray(top)) top = top[0];
+    if (!top || typeof top !== "object") return null;
+    var idLike = /(^|_)id(__c)?$/i, scal = function (v) { return typeof v === "string" || typeof v === "number"; };
+    var ks = Object.keys(top).filter(function (k) { return scal(top[k]) && String(top[k]).trim() !== ""; });
+    var hit = ks.filter(function (k) { return rowMap && rowMap[k] !== undefined && String(rowMap[k]).trim() === String(top[k]).trim(); });
+    var pick = hit.filter(function (k) { return idLike.test(k); })[0] || hit[0] || ks.filter(function (k) { return idLike.test(k); })[0];
+    return pick ? { key: pick, value: String(top[pick]).trim() } : null;
+  }
+  // A Data Graph State row names its graph like "Dg_<GraphApiName>_<13-digit timestamp>"; the graph API name is the middle.
+  function dcGraphNameFromCell(t) { var m = /^Dg_(.+?)_\d{9,}$/.exec(String(t || "").trim()); return m ? m[1] : ""; }
+  function dcQueryDataGraph(live, realtime) {
+    return new Promise(function (resolve, reject) {
+      if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected. Sort a column or click Connect first.")); return; }
+      // Candidate (graph name x data space) pairs, the one that worked last time first. A wrong guess gives Salesforce's
+      // generic "Something's not right with the query", so we try the plausible ones and remember the winner.
+      var trimmed = String(live.objectName || "").replace(/__(dlm|dll|cio)$/i, "");
+      var names = []; (live.graphHints || []).forEach(function (h) { if (h && names.indexOf(h) < 0) names.push(h); });   // graph name read from the row itself first
+      [trimmed, live.objectName].forEach(function (n) { if (n && names.indexOf(n) < 0) names.push(n); });
+      var spaces = [], seenS = {};
+      var addS = function (x) { if (x && !seenS[x]) { seenS[x] = 1; spaces.push(x); } };
+      addS(live.dataSpace);
+      try { if (typeof dataSpaceCandidates === "function") dataSpaceCandidates(live.objectName).forEach(addS); } catch (e) {}
+      if (!spaces.length) spaces.push("default");
+      var combos = [];
+      var seenGraph = [];
+      names.forEach(function (n) { if (_graphCalls[n]) { seenGraph.push(n + " @ " + _graphCalls[n]); combos.push({ name: n, space: _graphCalls[n] }); } });   // Salesforce's own known-good pair
+      if (live._ok) combos.push(live._ok);
+      names.forEach(function (n) { spaces.forEach(function (sp) { if (!live._ok || live._ok.name !== n || live._ok.space !== sp) combos.push({ name: n, space: sp }); }); });
+      var seenC = {}; combos = combos.filter(function (c) { var k = c.name + "\u0001" + c.space; if (seenC[k]) return false; seenC[k] = 1; return true; }).slice(0, 10);
+      var lastErr = "", lastRaw = "";
+      (function attempt(i) {
+        if (i >= combos.length) {
+          reject(new Error((lastErr || "Request failed") + " [tried " + combos.map(function (c) { return c.name + " @ " + c.space; }).join("; ") + "]" +
+            "\nSalesforce said: " + (lastRaw || "(nothing)") + "\nLookup: [" + live.keyField + "=" + live.keyValue + "], noCache=" + (!!realtime) +
+            "\nGraph/space Salesforce's own View used this session: " + (Object.keys(_graphCalls).map(function (k) { return k + " @ " + _graphCalls[k]; }).join("; ") || "none seen (open Salesforce's View on this row once, then retry)")));
+          return;
+        }
+        var c = combos[i];
+        _auraQid = (_auraQid || 0) + 1;
+        var act = { id: "dc-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.CdpDataViewController/ACTION$queryDataGraphWithLookupKeys", callingDescriptor: "UNKNOWN",
+          params: { objectName: c.name, dataSpaceName: c.space, lookupKeys: "[" + live.keyField + "=" + live.keyValue + "]", noCache: !!realtime } };
+        var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+        fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.CdpDataView.queryDataGraphWithLookupKeys=1", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include"
+        }).then(function (r) { return r.text(); }).then(function (txt) {
+          if (/aura:invalidSession|INVALID_SESSION/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("Session expired. Run any query in Salesforce first.")); return; }
+          var json; try { json = JSON.parse(txt); } catch (e) { reject(new Error("Response was not JSON.")); return; }
+          var a2 = json && json.actions && json.actions[0];
+          if (!a2) { reject(new Error("Response had no actions.")); return; }
+          if (a2.state !== "SUCCESS") {
+            try { lastErr = (a2.error && a2.error[0] && a2.error[0].message) || a2.state; lastRaw = JSON.stringify(a2.error).slice(0, 600); } catch (e) { lastErr = a2.state; }
+            attempt(i + 1); return;
+          }
+          var v = dcExtractGraphJson(a2.returnValue);
+          if (v === undefined || v === null) { reject(new Error("Empty graph returned.")); return; }
+          live._ok = c; resolve(v);
+        }).catch(function (err) { reject(new Error("Request failed: " + err)); });
+      })(0);
+    });
+  }
+
+  // >100 rows: the Data Explorer's own query is hard-capped at 100 (probe 6) and the
+  // REST Query API is CORS-walled (probe 7). But the Data Cloud QUERY EDITOR runs SQL
+  // via a same-origin aura action that honors rowLimit (probe 8):
+  //   POST /aura ... QueryWorkspace.queryDCSql=1
+  //   params { sql, rowLimit, dataspace }
+  //   returnValue.dataRows[ { row:[v1,v2,...] } ]  — POSITIONAL, in SELECT order.
+  // We BUILD the SQL from the user's selected columns (proven-valid field names) so the
+  // user never writes SQL, then map each positional row back to {fieldApi:value, Id}.
+  // Requires the same aura creds the sniffer already captured. Reject with the SF
+  // error verbatim so SQL-dialect edge cases are visible.
+  function sqlQuoteIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+
+
+  // Are we running as the browser EXTENSION (bridge.js present)? It stamps this attr.
+  // Extension mode unlocks the DOCUMENTED /ssot/query-sql endpoint (via the bridge →
+  // background, which reads the sid cookie) — up to 49,999 rows, supported API. The
+  // bookmarklet has no bridge → we fall back to the internal /aura path (100-row cap).
+  function extBridgePresent() {
+    try { return document.documentElement.getAttribute("data-dc-ext") === "1"; } catch (e) { return false; }
+  }
+  var _dcBridgeSeq = 0;
+  // Run a SELECT via the extension bridge → background → documented /ssot/query-sql.
+  // Resolves rows as POSITIONAL arrays aligned to `metadata[]` (mapped to selectCols by
+  // the caller). Rejects with the server error. 20s timeout so a dead bridge can't hang.
+  function runDcSqlViaBridge(sql, rowLimit, dataspace) {
+    return new Promise(function (resolve, reject) {
+      var id = "dcq-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-sql-query" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [], queryId: d.resp.queryId || "", rowCount: d.resp.rowCount || 0 });
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "bridge query failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      // dataspace is REQUIRED by /ssot/query-sql (probe: no ds → 400, ds="TDI" → 201).
+      window.postMessage({ __dcReq: "dc-sql-query", id: id, sql: sql, rowLimit: rowLimit || 2000, dataspace: dataspace || "" }, "*");
+      // No fixed timeout — let the query run as long as it needs. The background
+      // polls async queries until finished, large tables can take minutes.
+    });
+  }
+
+  // Fetch one page of a paginated query result via the extension bridge.
+  function fetchPageViaBridge(queryId, offset, rowLimit, dataspace) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) { reject(new Error("Pagination requires the extension.")); return; }
+      var id = "dcp-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-fetch-page" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve({ data: d.resp.data || [], metadata: d.resp.metadata || [] });
+        else reject(new Error(d.error || "page fetch failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-fetch-page", id: id, queryId: queryId, offset: offset, rowLimit: rowLimit, dataspace: dataspace || "" }, "*");
+      // No fixed timeout for page fetches — large pagination can take time.
+    });
+  }
+
+  // Paginated CSV export: runs a query (rowLimit=CHUNK_SIZE), then loops GET /rows until
+  // all rows fetched (or cap hit). Builds CSV incrementally so memory stays bounded (we
+  // hold the CSV string, not parsed objects). Returns a Blob URL to download.
+  // `onProgress(fetched, total)` is called after each chunk for a UI progress bar.
+  // Extension-only (pagination requires the sid-cookie background).
+  var DC_PAGE_SIZE = 49999;
+  var DC_MAX_TOTAL_EXPORT = 500000;   // hard cap (memory + credit safety)
+  // Explorer "Export All" is capped at DC_MAX_TOTAL_EXPORT rows. Every label/message about it comes from here
+  // so the button can never promise "everything" when the table is bigger than the cap.
+  var DC_BIGGER_EXPORT_HINT = " To get the rest, export in slices using a filter.";
+  /* [in-development features removed from public build] */
+  function dcExportCapInfo(total) {
+    var cap = DC_MAX_TOTAL_EXPORT, t = Number(total) || 0, over = t > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Export first " + cap.toLocaleString() + " of " + t.toLocaleString() + " rows"
+                  : "\u2B07 Export All" + (t ? " (" + t.toLocaleString() + " rows)" : ""),
+      confirmMsg: over
+        ? "This table has " + t.toLocaleString() + " rows, but Export All downloads at most the first " + cap.toLocaleString() + " rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " rows now? You can click Cancel while it runs."
+        : (t ? "Download all " + t.toLocaleString() + " rows? This may take a while for large datasets. You can click Cancel while it runs."
+             : "Download up to " + cap.toLocaleString() + " rows from this object? This may take a while. You can click Cancel while it runs."),
+      tip: "Download this object as CSV (ignores any filter), fetched in batches. Limit: the first " + cap.toLocaleString() + " rows per export." + (over ? DC_BIGGER_EXPORT_HINT : "") + " Uses Data Cloud credits. Click again while running to cancel; after it finishes, re-clicking re-downloads the same file for free.",
+      doneLabel: function (n) { return "\u2713 Exported " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + t.toLocaleString() : ""); },
+      infoSuffix: over ? " &mdash; <b>Export All</b> saves the first " + cap.toLocaleString() + " rows only." + DC_BIGGER_EXPORT_HINT
+                       : " &mdash; enter a number above and click Reload, or use <b>Export All</b> to download everything as CSV"
+    };
+  }
+  // Download CSV when a filter matches MORE rows than are loaded: it re-queries the matching rows, but through the same
+  // engine as Export All, so it is capped at DC_MAX_TOTAL_EXPORT too. Same rule: never say "all" when it is not all.
+  function dcFilteredCsvInfo(matching) {
+    var cap = DC_MAX_TOTAL_EXPORT, m = Number(matching) || 0, over = m > cap;
+    return {
+      capped: over,
+      label: over ? "\u2B07 Download first " + cap.toLocaleString() + " of " + m.toLocaleString() + " filtered"
+                  : "\u2B07 Download CSV (all " + m.toLocaleString() + " filtered)",
+      confirmMsg: over
+        ? m.toLocaleString() + " rows match your filter, but Download CSV fetches at most the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT + "\n\nDownload the first " + cap.toLocaleString() + " matching rows now?\n\nFetches in batches \u2014 you can click Cancel while it runs."
+        : m.toLocaleString() + " rows match your filter. Download all as CSV?\n\nFetches in batches \u2014 you can click Cancel while it runs.",
+      tip: over
+        ? "Downloads the currently loaded rows as CSV. Because your filter matches more rows than are loaded, it fetches the matching rows in batches (cancellable) \u2014 limit: the first " + cap.toLocaleString() + " matching rows." + DC_BIGGER_EXPORT_HINT
+        : "Download the CURRENTLY loaded/filtered rows as CSV. If a filter matches more rows than are loaded, it fetches all matching rows in batches (cancellable). No extra query for what's already in memory.",
+      doneLabel: function (n) { return "\u2713 Saved " + (over ? "first " : "") + Number(n).toLocaleString() + " rows" + (over ? " of " + m.toLocaleString() + " filtered" : ""); },
+      headerNote: over ? " \u2014 Download CSV saves the first " + cap.toLocaleString() + " matching rows only" : " \u2014 Download CSV will fetch all"
+    };
+  }
+
+  // Paginated CSV export: runs a query, then pages through all results building CSV
+  // incrementally. Extension-only (pagination needs the sid-cookie background).
+  // `onProgress(fetchedSoFar, totalRows)` for UI feedback.
+  // Resolves { blobUrl, totalRows, columns } — the caller triggers the download.
+  // `isCancelled` (optional) = a per-caller function returning true when THAT caller's
+  // own cancel button was pressed. Passing it keeps each feature's cancel state private
+  // so Explorer and Query Editor (which share this function) can never cancel each other.
+  // If omitted, nothing cancels (the caller simply doesn't offer cancellation).
+  function exportPaginatedCsv(sql, dataspace, onProgress, isCancelled) {
+    var cancelled = (typeof isCancelled === "function") ? isCancelled : function () { return false; };
+    return new Promise(function (resolve, reject) {
+      // Bookmarklet: paginate via LIMIT/OFFSET batches through /aura.
+      if (!extBridgePresent()) {
+        var BM_PAGE = 49999;
+        var BM_MAX = DC_MAX_TOTAL_EXPORT;
+        var esc2 = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        var csvOut = []; var cols2 = []; var totalFetched = 0; var bmTotal = 0;
+        var rowData = [];
+
+        // Detect if user's SQL already has a LIMIT (respect it as a cap)
+        var userLimitMatch = sql.match(/\bLIMIT\s+(\d+)/i);
+        var userLimit = userLimitMatch ? parseInt(userLimitMatch[1], 10) : 0;
+        var effectiveMax = userLimit > 0 ? Math.min(userLimit, BM_MAX) : BM_MAX;
+
+        // Strip only trailing LIMIT/OFFSET (preserve subquery LIMIT) to build our own pagination
+        var baseSql = sql.replace(/\bOFFSET\s+\d+\s*$/i, "").trim().replace(/\bLIMIT\s+\d+\s*$/i, "").trim();
+
+        function fetchBatch(offset) {
+          // Per-caller cancel check — reads only THIS caller's own flag (no cross-feature leak).
+          if (cancelled()) {
+            reject(new Error("Export cancelled by user"));
+            return;
+          }
+          var remaining = effectiveMax - offset;
+          if (remaining <= 0) {
+            var blob = new Blob(csvOut, { type: "text/csv" });
+            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData });
+            return;
+          }
+          var pageSize = Math.min(BM_PAGE, remaining);
+          var batchSql = baseSql + " LIMIT " + pageSize + (offset > 0 ? " OFFSET " + offset : "");
+          runRawSql(batchSql, dataspace, pageSize).then(function (res) {
+            if (!cols2.length && res.columns.length) {
+              cols2 = res.columns;
+              csvOut.push(cols2.map(esc2).join(",") + "\n");
+            }
+            res.rows.forEach(function (row) {
+              csvOut.push(cols2.map(function (c) { return esc2(row[c]); }).join(",") + "\n");
+              if (rowData.length < 2000) rowData.push(row);
+              totalFetched++;
+            });
+            if (onProgress) onProgress(totalFetched, bmTotal || (userLimit || totalFetched));
+            if (res.rows.length === 0 || totalFetched >= effectiveMax) {
+              var blob = new Blob(csvOut, { type: "text/csv" });
+              resolve({ blobUrl: URL.createObjectURL(blob), totalRows: totalFetched, columns: cols2, rowData: rowData });
+            } else {
+              fetchBatch(offset + res.rows.length);
+            }
+          }).catch(reject);
+        }
+
+        // Run first batch directly — no COUNT(*) (it can fail on complex queries
+        // and adds latency). Progress shows fetched so far; total updates as we go.
+        fetchBatch(0);
+        return;
+      }
+      var csvParts = []; var cols = []; var fetched = 0; var totalRows = 0;
+      var esc = function (v) { var s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      function appendRows(data, metadata) {
+        if (!cols.length && metadata && metadata.length) {
+          cols = metadata.map(function (m) { return m.name; });
+          csvParts.push(cols.map(esc).join(",") + "\n");   // header
+        }
+        data.forEach(function (row) {
+          if (!Array.isArray(row)) return;
+          csvParts.push(cols.map(function (c, i) { return esc(row[i]); }).join(",") + "\n");
+          fetched++;
+        });
+      }
+      // 1) initial query — the background polls async queries to completion, so
+      //    rowCount is the TRUE total (not partial). Paginate until we reach it.
+      runDcSqlViaBridge(sql, DC_PAGE_SIZE, dataspace).then(function (first) {
+        appendRows(first.data, first.metadata);
+        totalRows = first.rowCount || fetched;
+        if (onProgress) onProgress(fetched, totalRows);
+        if (!first.queryId || fetched >= totalRows || fetched >= DC_MAX_TOTAL_EXPORT) {
+          var blob = new Blob(csvParts, { type: "text/csv" });
+          resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+          return;
+        }
+        // 2) paginate remaining chunks
+        var queryId = first.queryId;
+        function nextPage() {
+          // Per-caller cancel check (extension path).
+          if (cancelled()) {
+            reject(new Error("Export cancelled by user"));
+            return;
+          }
+          if (fetched >= totalRows || fetched >= DC_MAX_TOTAL_EXPORT) {
+            var blob = new Blob(csvParts, { type: "text/csv" });
+            resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+            return;
+          }
+          fetchPageViaBridge(queryId, fetched, DC_PAGE_SIZE, dataspace).then(function (page) {
+            appendRows(page.data, page.metadata);
+            if (onProgress) onProgress(fetched, totalRows);
+            if (!page.data || page.data.length === 0) {
+              var blob = new Blob(csvParts, { type: "text/csv" });
+              resolve({ blobUrl: URL.createObjectURL(blob), totalRows: fetched, columns: cols });
+            } else { nextPage(); }
+          }).catch(reject);
+        }
+        nextPage();
+      }).catch(reject);
+    });
+  }
+
+  // Read a Data Transform's full definition via the extension bridge → background
+  // (documented GET /ssot/data-transforms/{nameOrId}, sid-cookie auth). Extension-only:
+  // the page can't fetch my.salesforce.com (CORS). Resolves the parsed definition JSON.
+  function fetchTransformViaBridge(nameOrId) {
+    return new Promise(function (resolve, reject) {
+      if (!extBridgePresent()) { reject(new Error("Reading a transform needs the browser extension (the page can't reach the API directly).")); return; }
+      var id = "dct-" + (_dcBridgeSeq = (_dcBridgeSeq || 0) + 1);
+      var done = false;
+      function onMsg(ev) {
+        if (ev.source !== window) return;
+        var d = ev.data;
+        if (!d || d.__dcRes !== "dc-transform" || d.id !== id) return;
+        window.removeEventListener("message", onMsg, false);
+        if (done) return; done = true;
+        if (d.ok && d.resp) resolve(d.resp);
+        else reject(new Error(d.error || (d.resp && d.resp.error) || "transform read failed"));
+      }
+      window.addEventListener("message", onMsg, false);
+      window.postMessage({ __dcReq: "dc-transform", id: id, nameOrId: nameOrId }, "*");
+      setTimeout(function () { if (!done) { done = true; window.removeEventListener("message", onMsg, false); reject(new Error("bridge timeout")); } }, 20000);
+    });
+  }
+
+  // Read the transform id + devName from the editor URL (standalone Aura app):
+  //   .../transformEditor/transformEditor.app?transformId=<id>&definitionDevName=<devName>
+  function transformIdsFromUrl() {
+    var out = { transformId: "", devName: "" };
+    try {
+      var qs = (location.href.split("?")[1] || "").replace(/#.*/, "");
+      qs.split("&").forEach(function (kv) {
+        var i = kv.indexOf("="); if (i < 0) return;
+        var k = kv.slice(0, i), v = decodeURIComponent(kv.slice(i + 1));
+        if (/transformId/i.test(k)) out.transformId = v;
+        if (/definitionDevName|devName/i.test(k)) out.devName = v;
+      });
+    } catch (e) {}
+    return out;
+  }
+  function isTransformPage() {
+    if (/marketSegmentActivation|\/r\/MarketSegmentActivation\//i.test(window.location.href)) return false;
+    var t = transformIdsFromUrl(); return !!(t.transformId || t.devName);
+  }
+
+  // Detect the Data Cloud QUERY EDITOR page (the SQL workspace tab).
+  // URL: /r/DataQueryWorkspace/<18-char-id>/view OR contains queryEditor/queryWorkspace keywords with an ID.
+  function isQueryEditorPage() {
+    var h = location.href;
+    if (/\/o\/DataQueryWorkspace\/home/i.test(h)) return false;
+    if (/\/r\/DataQueryWorkspace\/[a-zA-Z0-9]{15,18}\//i.test(h)) return true;
+    if (/queryEditor|query-editor/i.test(h) && /[a-zA-Z0-9]{15,18}/.test(h)) return true;
+    // URL-AUTHORITATIVE guard: this is a Lightning SPA — after navigating away from the
+    // Query Editor in the SAME tab, SF often leaves the old `runtime_cdp-query-workspace`
+    // component mounted in the DOM. The component-scan fallback below would then match that
+    // STALE node and wrongly report a Query Editor page (e.g. on a /r/DataStream/ page),
+    // showing the wrong FAB until a full reload destroys the component. So: if the URL is
+    // clearly ANOTHER detail-page type, do NOT fall back to the DOM scan. (Confirmed RCA.)
+    if (urlIsOtherDetailPage(h, "QueryEditor")) return false;
+    // Component-based fallback: look for the query workspace tag (only when the URL is
+    // ambiguous, e.g. the SPA route hasn't settled yet on first inject).
+    var found = false;
+    eachElement(document, function (el) {
+      if (found) return;
+      var t = tagOf(el);
+      if (/cdp-query-workspace|query-workspace|queryWorkspace/i.test(t)) found = true;
+    });
+    return found;
+  }
+
+  // ── CENTRAL URL→page-type resolver (the ONE source of truth) ─────────────────
+  // The whole "wrong/stale FAB after in-tab navigation" class of bug comes from detectors
+  // trusting components still MOUNTED in the DOM (Lightning SPA doesn't unmount on in-tab
+  // nav). The fix, applied uniformly to every FAB and every direction: the URL decides the
+  // page type. This returns the definitive type from the URL ALONE (no DOM), or "" when the
+  // URL is genuinely ambiguous (only then may a detector consult the DOM). Add new page
+  // types here once and every detector inherits the guard.
+  function urlDefinitePageType(h) {
+    h = h || location.href;
+    try {
+      // Order matters: most-specific record/nav routes first.
+      if (/\/r\/DataQueryWorkspace\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "QueryEditor";
+      if (/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DataStream";
+      if (/\/r\/DataLakeObjectInstance\/[a-zA-Z0-9]{15,18}\//i.test(h)) return "DLO";
+      if (/\/r\/MarketSegmentActivation\/[a-zA-Z0-9]{15,18}\//i.test(h) || /marketSegmentActivation/i.test(h)) return "Activation";
+      if (/\/r\/Segment\/[a-zA-Z0-9]{15,18}\//i.test(h) || /standard-Segment|segmentWizard/i.test(h)) return "Segment";
+      if (/standard-DataModel/i.test(h)) return "DataModel";
+      if (/c__objectApiName=[a-zA-Z0-9_]+/i.test(h)) return "DMO";
+      // Data Explorer is a one.app hash route; the hash base64-decodes to a componentDef
+      // naming the tab. Detect it from the URL so it no longer relies on a lingering
+      // record-list component.
+      var m = h.match(/#(.+)$/);
+      if (m) {
+        var decoded = "";
+        try { decoded = decodeURIComponent(escape(atob(m[1]))); } catch (e) { try { decoded = atob(m[1]); } catch (e2) { decoded = ""; } }
+        if (/dataViewTab/i.test(decoded)) return "DataExplore";
+      }
+    } catch (e) {}
+    return "";
+  }
+
+  // Back-compat helper: true when the URL definitely identifies SOME page type other than
+  // the one asking. `exceptType` is the caller's own type (so it doesn't exclude itself).
+  function urlIsOtherDetailPage(h, exceptType) {
+    var t = urlDefinitePageType(h);
+    return t !== "" && t !== (exceptType || "__none__");
+  }
+
+  // Track the last-focused SQL editor element. When the user clicks "Export CSV",
+  // focus moves to the button — so we need to remember which editor they were in.
+  var _lastSqlEditor = null;
+  document.addEventListener("focusin", function (e) {
+    var el = e.target;
+    if (!el) return;
+    var t = tagOf(el);
+    if (t === "textarea" && el.value && /select|from/i.test(el.value)) { _lastSqlEditor = el; return; }
+    if (el.getAttribute && el.getAttribute("contenteditable") === "true" && el.textContent && /select|from/i.test(el.textContent)) { _lastSqlEditor = el; return; }
+  }, true);
+
+  function readQueryEditorSql() {
+    var result = { full: "", selected: "" };
+    try {
+      eachElement(document, function (scan) {
+        if (result.full) return;
+        if (!scan.cmView || !scan.cmView.view) return;
+        try { var r = scan.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return; } catch (e) { return; }
+        var state = scan.cmView.view.state;
+        result.full = state.doc.toString().trim();
+        var sel = state.selection && state.selection.main;
+        if (sel && sel.from !== sel.to) {
+          result.selected = state.sliceDoc(sel.from, sel.to).trim();
+        }
+      });
+    } catch (e) {}
+    return result.full ? result : null;
+  }
+
+  // Read the dataspace from the Query Editor page header.
+  // The page shows "Data Space" label with the value nearby.
+  // A valid dataspace is short, alphanumeric (may have underscores/hyphens), no spaces.
+  var _pageDataSpaceLabel = "";
+  // true only when the LAST readPageDataSpace() value came from the dropdown component's own value/options
+  // (authoritative). false = it came from scraping page text (a guess).
+  var _pageDsAuth = false;
+  // AUTHORITATIVE read: the Data Space picker is a combobox whose JS properties hold { options:[{label,value}], value }.
+  // `value` is the API name and must be one of the option values - so nothing is guessed from visible text.
+  function dcPickDsFromCombobox(el) {
+    var lbl = ""; try { lbl = String(el.label || (el.getAttribute && el.getAttribute("label")) || (el.getAttribute && el.getAttribute("aria-label")) || ""); } catch (e) {}
+    var idHint = ""; try { idHint = String(el.name || (el.getAttribute && (el.getAttribute("name") || el.getAttribute("data-id") || el.getAttribute("data-name"))) || ""); } catch (e) {}
+    if (!/data\s*-?\s*space/i.test(lbl) && !/data[-_ ]?space/i.test(idHint)) return null;   // label (any language) OR the component's own name/id
+    var v = ""; try { v = el.value; } catch (e) {}
+    if (v && typeof v === "object") { try { v = v.value || v.name || v.apiName || ""; } catch (e) { v = ""; } }
+    var opts = null; try { opts = el.options; } catch (e) {}
+    if (!v || typeof v !== "string") return null;
+    if (opts && opts.length) {
+      var hit = null;
+      for (var i = 0; i < opts.length; i++) { var o = opts[i]; if (o && (o.value === v || o.name === v || o.apiName === v)) { hit = o; break; } }
+      if (!hit) return null;                      // value not among the component's own options -> not trustworthy
+      return { name: v, label: String(hit.label || "") };
+    }
+    return /^[A-Za-z0-9_-]{1,80}$/.test(v) ? { name: v, label: "" } : null;
+  }
+  var _dsCompCache = { t: 0, v: null };
+  function dcReadDsFromComponent() {
+    // Whole-document walk: cache briefly so hot callers (cache keys, per-query resolves) stay cheap on slow VDIs.
+    var _now = Date.now();
+    if (_now - _dsCompCache.t < 1500) return _dsCompCache.v;
+    var r = dcReadDsFromComponentUncached(); _dsCompCache.t = _now; _dsCompCache.v = r; return r;
+  }
+  // Every authoritative Data Space picker on the page. A Query Editor workspace can hold several tabs (and
+  // other panels), each with its own picker in the DOM — reading the FIRST match could return a hidden
+  // tab's space, so the query ran against the wrong space (0 rows) while Salesforce's own Run worked.
+  function dcAllDsFromComponents() {
+    var all = [];
+    try {
+      eachElement(document, function (el) {
+        var t = tagOf(el);
+        if (t !== "lightning-combobox" && t !== "lightning-base-combobox" && t !== "lightning-select" && t.indexOf("data-space") < 0) return;
+        var r = dcPickDsFromCombobox(el); if (!r) return;
+        var vis = false;
+        try {
+          var bb = el.getBoundingClientRect();
+          vis = bb.width > 0 && bb.height > 0 && (typeof el.checkVisibility !== "function" || el.checkVisibility());
+        } catch (e) {}
+        all.push({ name: r.name, label: r.label, visible: vis });
+      });
+    } catch (e) {}
+    return all;
+  }
+  function dcReadDsFromComponentUncached() {
+    var all = dcAllDsFromComponents();
+    if (!all.length) return null;
+    for (var i = 0; i < all.length; i++) if (all[i].visible) return { name: all[i].name, label: all[i].label };   // the picker the user can see
+    return { name: all[0].name, label: all[0].label };
+  }
+  function readPageDataSpace() {
+    var ds = "";
+    _pageDsAuth = false;
+    var _auth = dcReadDsFromComponent();
+    if (_auth && _auth.name) { _pageDsAuth = true; if (_auth.label) _pageDataSpaceLabel = _auth.label; return _auth.name; }
+    var isValidDs = function (s) {
+      if (!s || s.length === 0 || s.length >= 30) return false;
+      if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
+      if (/^(Sort|Filter|Select|Selected|Search|Edit|View|Home|Notes|Files|Data|Space|Workspace|Query|Result|Run|Save|New|Delete|Close|Cancel|Apply|Clear|Add|Remove|Show|Hide|All|None|By|In|On|Or|And|Not|The|Loading|Duration|Rows|Processed|Retrieved|count)$/i.test(s)) return false;
+      return true;
+    };
+
+    // Strategy 0 (most reliable): read the VALUE attribute of the selected <option> in any
+    // <select> whose label/aria-label mentions "Data Space" or "Workspace". The option's
+    // value is the API name even when the visible text is "Selected" or a display label.
+    try {
+      var selEls = document.querySelectorAll("select");
+      for (var si = 0; si < selEls.length && !ds; si++) {
+        var se = selEls[si];
+        var seLabel = (se.getAttribute("aria-label") || se.getAttribute("title") || "").toLowerCase();
+        var seId = se.id || "";
+        var nearLabel = "";
+        // look for a <label for="..."> referencing this <select>
+        if (seId) { try { var lf = document.querySelector('label[for="' + seId + '"]'); if (lf) nearLabel = (lf.textContent || "").toLowerCase(); } catch(e){} }
+        if (/data.?space|workspace/i.test(seLabel + nearLabel)) {
+          var selVal = se.value;
+          if (isValidDs(selVal)) { ds = selVal; break; }
+          var selOpt = se.options && se.options[se.selectedIndex];
+          if (selOpt && isValidDs(selOpt.value)) { ds = selOpt.value; break; }
+        }
+      }
+    } catch (e) {}
+    if (ds) return ds;
+
+    // Strategy 0b: Lightning combobox — data-value attribute on the selected button/option
+    try {
+      eachElement(document, function (el) {
+        if (ds) return;
+        var role = el.getAttribute && el.getAttribute("role");
+        if (role !== "option" && role !== "combobox") return;
+        // Check if this combobox/option is inside a "Data Space" labelled group
+        var ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        var dv = el.getAttribute("data-value") || "";
+        if (isValidDs(dv) && /data.?space|workspace/i.test(ariaLabel)) { ds = dv; return; }
+        // Also check aria-selected="true" options near a Data Space heading
+        if (role === "option" && el.getAttribute("aria-selected") === "true") {
+          var parent = el.parentElement;
+          var ancestor = parent;
+          for (var depth = 0; depth < 6 && ancestor && !ds; depth++) {
+            if (/data.?space|workspace/i.test((ancestor.textContent || "").slice(0, 80))) {
+              if (isValidDs(dv)) { ds = dv; return; }
+            }
+            ancestor = ancestor.parentElement;
+          }
+        }
+      });
+    } catch (e) {}
+    if (ds) return ds;
+
+    // (Former text-scraping strategies removed: a value is returned only when the page itself provides it.)
+    // Strategy 4: URL may contain dataspace param
+    try {
+      var urlParams = new URLSearchParams(location.search);
+      var urlDs = urlParams.get("dataspace") || urlParams.get("dataSpace") || urlParams.get("ds") || "";
+      if (isValidDs(urlDs)) ds = urlDs;
+    } catch (e) {}
+    return ds;
+  }
+
+  // Given the full SQL text and cursor position, extract the single statement at cursor.
+  // Splits on ";" AND on blank lines (two+ consecutive newlines where the next non-blank
+  // line starts with a SQL keyword like SELECT/INSERT/UPDATE/DELETE/WITH/CREATE).
+  // Ignores separators inside string literals, -- comments, and /* */ blocks.
+  function statementAtCursor(fullSql, cursorPos) {
+    if (!fullSql || cursorPos < 0) return fullSql || "";
+    // First, find split points: semicolons + blank-line-before-keyword boundaries
+    var splits = [];
+    var i = 0;
+    var len = fullSql.length;
+    while (i < len) {
+      var ch = fullSql[i];
+      if (ch === "'" || ch === '"') {
+        var q = ch; i++;
+        while (i < len && fullSql[i] !== q) { if (fullSql[i] === "\\") i++; i++; }
+        i++;
+      } else if (ch === "-" && fullSql[i + 1] === "-") {
+        while (i < len && fullSql[i] !== "\n") i++;
+      } else if (ch === "/" && fullSql[i + 1] === "*") {
+        i += 2;
+        while (i < len && !(fullSql[i] === "*" && fullSql[i + 1] === "/")) i++;
+        i += 2;
+      } else if (ch === ";") {
+        splits.push(i);
+        i++;
+      } else if (ch === "\n") {
+        // Check for blank-line boundary: \n followed by optional whitespace/newlines,
+        // then a SQL keyword at the start of a line
+        var peek = i + 1;
+        var sawBlank = false;
+        while (peek < len && (fullSql[peek] === "\n" || fullSql[peek] === "\r" || fullSql[peek] === " " || fullSql[peek] === "\t")) {
+          if (fullSql[peek] === "\n") sawBlank = true;
+          peek++;
+        }
+        if (sawBlank && peek < len) {
+          var rest = fullSql.substring(peek, Math.min(peek + 10, len));
+          if (/^(SELECT|INSERT|UPDATE|DELETE|MERGE|CREATE|WITH|VALUES)\b/i.test(rest)) {
+            splits.push(peek - 1);
+          }
+        }
+        i++;
+      } else {
+        i++;
+      }
+    }
+    // Build statement ranges from split points
+    var stmts = [];
+    var start = 0;
+    for (var s = 0; s < splits.length; s++) {
+      var text = fullSql.substring(start, splits[s]).trim();
+      if (text.length > 0) stmts.push({ text: text, start: start, end: splits[s] });
+      start = splits[s] + 1;
+      while (start < len && /[\s;]/.test(fullSql[start])) start++;
+    }
+    if (start < len) {
+      var tail = fullSql.substring(start).trim();
+      if (tail.length > 0) stmts.push({ text: tail, start: start, end: len });
+    }
+    if (stmts.length === 0) return fullSql;
+    for (var j = 0; j < stmts.length; j++) {
+      if (cursorPos >= stmts[j].start && cursorPos <= stmts[j].end) {
+        return stmts[j].text;
+      }
+    }
+    return stmts[stmts.length - 1].text;
+  }
+
+  // Run RAW user SQL (from the SQL editor / filter) through the documented endpoint
+  // (extension) or the /aura action (bookmarklet). Unlike runDcSql we DON'T know the
+  // column order in advance, so we key rows by the server's metadata[] names. Resolves
+  // { columns:[names in result order], rows:[{name:value}] }.
+  function runRawSql(sql, dataSpace, rowLimit) {
+    return new Promise(function (resolve, reject) {
+      var ds = (dataSpace != null && dataSpace !== "") ? dataSpace : (_auraSniff.dataSpace != null && _auraSniff.dataSpace !== "") ? _auraSniff.dataSpace : "";
+      // Fallback: derive from table name prefix or page header
+      if (!ds) { ds = (typeof readPageDataSpace === "function") ? readPageDataSpace() : ""; }
+      // (no data space is ever derived from the table-name prefix; dataSpaceCandidates supplies concrete values)
+      var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, rowLimit || 2000));
+      function mapByMeta(data, metadata) {
+        var cols = (metadata || []).map(function (m) { return m && m.name; });
+        var rows = (data || []).map(function (arr) {
+          if (!Array.isArray(arr)) return null;
+          var o = {}; for (var i = 0; i < cols.length; i++) o[cols[i]] = arr[i]; return o;
+        }).filter(Boolean);
+        return { columns: cols, rows: rows };
+      }
+      if (extBridgePresent()) {
+        runDcSqlViaBridge(sql, n, ds).then(function (res) {
+          resolve(mapByMeta(res.data, res.metadata));
+        }).catch(reject);
+        return;
+      }
+      // Bookmarklet fallback: /aura QueryWorkspace.queryDCSql (positional dataRows[].row).
+      if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("Session not connected — click 'Connect to Data Cloud' or scroll the table to establish a session.")); return; }
+      // Build candidate dataspaces to try (most-likely first). "denied authorization" means wrong space.
+      var dsCandidates = [ds];
+      if (typeof dataSpaceCandidates === "function") {
+        var fm2 = sql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i);
+        var tblName = fm2 ? fm2[1] : "";
+        dataSpaceCandidates(tblName).forEach(function (c) { if (dsCandidates.indexOf(c) < 0) dsCandidates.push(c); });
+      }
+      function tryDs(dsi) {
+        var trySpace = dsCandidates[dsi] || "";
+        _auraQid = (_auraQid || 0) + 1;
+        var act = { id: "dcraw-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: sql, rowLimit: n, dataspace: trySpace } };
+        var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+        fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+          .then(function (r) { return r.text(); }).then(function (txt) {
+            if (/aura:invalidSession|INVALID_SESSION|\/secur\/login/i.test(txt) && txt.indexOf("actions") < 0) { reject(new Error("No active session — run any query using SF's Run Query button first to connect.")); return; }
+            var j; try { j = JSON.parse(txt); } catch (e) {
+              // Non-JSON response = no active session or SF returned an error page
+              var isQueryEditor = /DataQueryWorkspace/i.test(location.href);
+              var sessionHint = isQueryEditor
+                ? "Click SF's \"Run Query\" (or \"Run Highlighted Query\") button first to establish a session, then click our Fetch & Export again."
+                : "Sort any column on the Data Explorer table to re-establish the session, then retry.";
+              if (/<!DOCTYPE|<html/i.test(txt)) { reject(new Error("No active session — " + sessionHint)); return; }
+              reject(new Error("No active session — " + sessionHint));
+              return;
+            }
+            var a = j && j.actions && j.actions[0];
+            if (!a || a.state !== "SUCCESS") {
+              var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+              // Try to parse JSON error for a cleaner message
+              var cleanErr = em;
+              try {
+                var parsed = (typeof em === "string" && em.charAt(0) === "{") ? JSON.parse(em) : null;
+                if (parsed && parsed.primaryMessage) cleanErr = parsed.primaryMessage;
+                else if (parsed && parsed.errorMessage) cleanErr = parsed.errorMessage.replace(/^[A-Z_]+:\s*/, "");
+              } catch (e2) {}
+              // "denied authorization" = wrong dataspace → try next candidate
+              if (/denied authorization|not authorized/i.test(cleanErr) && dsi + 1 < dsCandidates.length) { tryDs(dsi + 1); return; }
+              // Add helpful hints based on error type
+              var hint = "";
+              if (/does not exist|42P01/i.test(cleanErr)) hint = "\n\nCheck the table name — it may need a different prefix or the dataspace may be wrong.";
+              else if (/unknown column|42703/i.test(cleanErr)) hint = "\n\nCheck the column name in your query — it may be misspelled or not exist on this object.";
+              else if (/syntax error|42601/i.test(cleanErr)) hint = "\n\nCheck your SQL syntax.";
+              reject(new Error(cleanErr + hint));
+              return;
+            }
+            // Success — remember this dataspace for future queries
+            dcLearnSpace(trySpace, sql);
+            var rv = a.returnValue || {}; var dr = rv.dataRows || rv.rows || []; var meta = rv.metadata || [];
+            var arrData = dr.map(function (d) { return d && d.row ? d.row : d; });
+            resolve(mapByMeta(arrData, meta));
+          }).catch(function (err) { reject(new Error("SQL request failed: " + err)); });
+      }
+      tryDs(0);
+    });
+  }
+
+
+  // Fire ONE queryDCSql for an exact SELECT column list; resolve rows mapped positionally
+  // back to {selectCol: value}. `idKey` (if any) is included in the SELECT and its column
+  // renamed to "Id" in the output. Rejects with the SF error verbatim.
+  // EXTENSION mode → documented /ssot/query-sql via bridge; else → internal /aura action.
+  function runDcSql(objectName, selectCols, ds, rowLimit) {
+    return new Promise(function (resolve, reject) {
+      var want = rowLimit || 2000;
+
+      // ── DOCUMENTED path (extension): send SQL WITHOUT LIMIT so the server's rowCount
+      //    reflects the TRUE total rows in the table. We use the API's rowLimit param to
+      //    control page size and stop fetching after `want` rows ourselves. ──
+      if (extBridgePresent()) {
+        var sqlNoLimit = "SELECT " + selectCols.map(sqlQuoteIdent).join(", ") + " FROM " + objectName;
+        runDcSqlViaBridge(sqlNoLimit, want, ds).then(function (res) {
+          var allData = res.data || [];
+          var totalRows = res.rowCount || allData.length;
+          var _totalKnown = !!res.rowCount;   // server omitted the count -> we only know how many we fetched
+          var queryId = res.queryId || "";
+
+          function mapRows(data) {
+            var mapped = data.map(function (arr) {
+              if (!Array.isArray(arr)) return null;
+              var obj = {};
+              for (var i = 0; i < selectCols.length; i++) obj[selectCols[i]] = arr[i];
+              return obj;
+            }).filter(Boolean);
+            mapped.__serverRowCount = totalRows;
+            if (!_totalKnown && data.length >= want) mapped.__totalUnknown = true;   // may be truncated: do not claim "complete"
+            mapped.__queryId = queryId;
+            return mapped;
+          }
+
+          // Done if: no pagination possible, already got all server rows, or hit our limit
+          if (!queryId || allData.length >= totalRows || allData.length >= want) {
+            resolve(mapRows(allData));
+            return;
+          }
+          // Paginate remaining rows until empty page or limits reached
+          function fetchMore() {
+            if (allData.length >= want || allData.length >= totalRows) {
+              resolve(mapRows(allData));
+              return;
+            }
+            fetchPageViaBridge(queryId, allData.length, Math.min(DC_PAGE_SIZE, want - allData.length), ds).then(function (page) {
+              var pageData = page.data || [];
+              if (pageData.length === 0) { resolve(mapRows(allData)); return; }
+              allData = allData.concat(pageData);
+              fetchMore();
+            }).catch(function () { resolve(mapRows(allData)); });
+          }
+          fetchMore();
+        }).catch(reject);
+        return;
+      }
+
+      // ── FALLBACK path (bookmarklet): internal /aura QueryWorkspace.queryDCSql ──
+      // Paginate via LIMIT/OFFSET batches. First run COUNT(*) to get true total,
+      // then fetch data rows in batches up to `bmWant`.
+      var BM_BATCH = 49999;
+      var bmWant = rowLimit || 2000;
+      var allRows = [];
+      var baseSql = "SELECT " + selectCols.map(sqlQuoteIdent).join(", ") + " FROM " + objectName;
+      var bmServerTotal = 0;
+
+      function bmAuraQuery(sql2, rl, cb) {
+        _auraQid = (_auraQid || 0) + 1;
+        var act = {
+          id: "dcsql-" + _auraQid + ";a",
+          descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql",
+          callingDescriptor: "UNKNOWN",
+          params: { sql: sql2, rowLimit: rl, dataspace: ds }
+        };
+        var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) +
+          "&aura.context=" + _auraSniff.context +
+          "&aura.pageURI=" + (_auraSniff.pageURI || "") +
+          "&aura.token=" + _auraSniff.token;
+        fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+          body: form, credentials: "include"
+        }).then(function (r) { return r.text(); }).then(function (txt) {
+          var json; try { json = JSON.parse(txt); } catch (e) { cb(new Error("SQL response was not JSON."), null); return; }
+          var a = json && json.actions && json.actions[0];
+          if (!a || a.state !== "SUCCESS") {
+            var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+            cb(new Error(em || "query failed"), null); return;
+          }
+          cb(null, a.returnValue || {});
+        }).catch(function (err) { cb(new Error("SQL request failed: " + err), null); });
+      }
+
+      function fetchBmBatch(offset) {
+        var batchSql = baseSql + " LIMIT " + Math.min(BM_BATCH, bmWant - offset) + (offset > 0 ? " OFFSET " + offset : "");
+        bmAuraQuery(batchSql, Math.min(BM_BATCH, bmWant - offset), function (err, rv) {
+          if (err) { reject(err); return; }
+          var dataRows = rv.dataRows || rv.rows || [];
+          var batchRows = dataRows.map(function (dr) {
+            var arr = dr && dr.row ? dr.row : dr;
+            if (!Array.isArray(arr)) return null;
+            var obj = {};
+            for (var i = 0; i < selectCols.length; i++) obj[selectCols[i]] = arr[i];
+            return obj;
+          }).filter(Boolean);
+          allRows = allRows.concat(batchRows);
+          // The server caps each RESPONSE by payload size, so a page can come back SHORTER than
+          // asked while more rows still exist. A short page is therefore NOT the end: keep paging
+          // by OFFSET until we have `bmWant` rows, an empty page, or the true total (when known).
+          if (batchRows.length === 0 || allRows.length >= bmWant || (bmServerTotal && allRows.length >= bmServerTotal)) {
+            allRows.__serverRowCount = bmServerTotal || allRows.length;
+            if (!bmServerTotal && allRows.length >= bmWant) allRows.__totalUnknown = true;   // count unavailable and we stopped at our limit
+            resolve(allRows);
+          } else {
+            fetchBmBatch(allRows.length);
+          }
+        });
+      }
+
+      // Get true row count first, then fetch data
+      var countSql = "SELECT COUNT(*) FROM " + objectName;
+      bmAuraQuery(countSql, 1, function (err, rv) {
+        if (!err && rv) {
+          var dr = rv.dataRows || rv.rows || [];
+          if (dr.length > 0) {
+            var row = dr[0] && dr[0].row ? dr[0].row : dr[0];
+            if (Array.isArray(row) && row.length > 0) bmServerTotal = parseInt(row[0], 10) || 0;
+          }
+        }
+        fetchBmBatch(0);
+      });
+    });
+  }
+  // The Data Explorer's objectName PREPENDS the data-space name, e.g. data space "TDI" +
+  // table "TDI_GI_Individual_Additional__dlm" → "TDI_TDI_GI_Individual_Additional__dlm".
+  // The CdpDataView query accepts that (space is implicit) but the SQL engine wants the
+  // REAL table name + the data space passed separately. So we try the name as-is, then
+  // with a leading "<dataspace>_" stripped. Evidence-driven (matches the doubled prefix).
+  function tableNameCandidates(objectName, ds) {
+    var out = [objectName], seen = {}; seen[objectName] = 1;
+    var add = function (name) { if (name && !seen[name]) { seen[name] = 1; out.push(name); } };
+    // 1) If we know the data space, strip a leading "<ds>_" (the documented doubling).
+    if (ds && ds !== "default") {
+      var pre = ds + "_";
+      if (objectName.indexOf(pre) === 0) add(objectName.slice(pre.length));
+    }
+    // 2) dataSpace is often NOT captured (sniffer may miss it), so ALSO detect the
+    //    doubled prefix straight from the name: "<TOK>_<TOK>_rest" → strip one "<TOK>_".
+    //    e.g. "TDI_TDI_GI_Individual_Additional__dlm" → "TDI_GI_Individual_Additional__dlm".
+    var m = objectName.match(/^([A-Za-z0-9]+)_(\1_.*)$/);
+    if (m) add(m[2]);
+    // (the blind "strip the first token" fallback was removed: it could match a DIFFERENT table with that name)
+    return out;
+  }
+  function querySqlAllColumns(objectName, columns, dataSpace, rowLimit) {
+    return new Promise(function (resolve, reject) {
+      // Extension mode auths via the sid cookie in the background (no sniffed creds
+      // needed). Bookmarklet mode needs the sniffed /aura creds for the fallback.
+      if (!extBridgePresent() && (!_auraSniff.context || !_auraSniff.token)) {
+        reject(new Error("Session not connected — click 'Connect to Data Cloud' or scroll the table to establish a session.")); return;
+      }
+      // De-dupe the user's (already-valid) selected columns, preserving order.
+      // NOTE: we no longer append an Id column — the table doesn't show it, and many
+      // objects (DLO/DMO/CI) have no "Id" field (that caused "unknown column" retries).
+      var base = [], seen = {};
+      columns.forEach(function (c) { if (c && !seen[c]) { seen[c] = 1; base.push(c); } });
+
+      // Build (table, dataspace) combos to try. Probe 9 PROVED the winner is the FULL
+      // object name + the REAL data space (e.g. "TDI").
+      // So try that FIRST, then variants only as fallbacks. The wrong data space — not
+      // the name — is the usual "table does not exist" cause.
+      // Data space: use ALL authoritative candidates (captured per-object spaces, then
+      // "", "default") — never derived from the name. If the caller passed one, try it first.
+      var spaces = [];
+      var addSp = function (s) { if (s != null && spaces.indexOf(s) < 0) spaces.push(s); };
+      if (dataSpace != null) addSp(dataSpace);
+      dataSpaceCandidates(objectName).forEach(addSp);
+      if (!spaces.length) spaces.push("");
+      // Table name: use the object name AS-IS first (what the page uses), then the
+      // prefix-stripped variants only as fallbacks (some orgs differ).
+      var names = tableNameCandidates(objectName, resolveDataSpace(objectName) || "");
+      // combos: for each data space, try each table name (as-is name first).
+      var combos = [];
+      spaces.forEach(function (sp) { names.forEach(function (nm) { combos.push({ tbl: nm, ds: sp }); }); });
+
+      var _allErrs = [];      // every combo's error, shown in the failure message so the real cause is visible
+      var _firstErr = null;   // remember the FIRST combo's error (the most meaningful)
+      function tryCombo(ci) {
+        var c = combos[ci];
+        runDcSql(c.tbl, base.slice(), c.ds, rowLimit).then(function (rows) {
+          resolve(rows);
+        }).catch(function (err) {
+          var msg = String(err && err.message || err);
+          if (ci === 0 && !_firstErr) _firstErr = "[tried table=\"" + c.tbl + "\" dataspace=" + JSON.stringify(c.ds) + "] " + msg;
+          _allErrs.push(c.tbl + " @ " + JSON.stringify(c.ds) + ": " + msg.replace(/\s+/g, " ").slice(0, 120));
+          // Wrong table OR wrong data space (incl. "denied authorization", which means
+          // the object isn't in that space / no access there) → try the next combo.
+          if (/does not exist|not found|42P01|INVALID_ARGUMENT|invalid|denied authorization|not authorized|no access/i.test(msg) && ci + 1 < combos.length) { tryCombo(ci + 1); return; }
+          // Surface the FIRST combo's error (the proven-good combo) — trailing combos
+          // are just fallbacks and their errors are noise.
+          reject(new Error("SQL query failed: " + (_firstErr || msg) + (_allErrs.length > 1 ? "  ||  All attempts: " + _allErrs.join(" | ") : "")));
+        });
+      }
+      tryCombo(0);
+    });
+  }
+
+  // Single router for "load column data". Picks the best path automatically:
+  //   • EXTENSION mode → documented /ssot/query-sql (via bridge) — supported, ≤49,999 rows,
+  //     reliable (sid cookie), no hit-and-trial. Used for ANY row count.
+  //   • BOOKMARKLET, ≤100 rows → internal /aura CdpDataView (fast, existing path).
+  //   • BOOKMARKLET, >100 rows → internal /aura queryDCSql (existing path).
+  // Returns rows as {fieldApi: value} objects. `want` is the desired row count.
+  function loadColumnsData(objectName, columns, want) {
+    // Single choke point: clamp to the endpoint's hard ceiling so no caller can ask for
+    // an abusive/oversized row count (guards the browser + is polite to the server).
+    var n = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000));
+    if (extBridgePresent()) return querySqlAllColumns(objectName, columns, null, n);
+    if (n > 100) return querySqlAllColumns(objectName, columns, null, n);
+    return queryAllColumns(objectName, columns, null, n);
+  }
+
+  // Credit-saving cache around loadColumnsData: the last successful result is kept in
+  // memory keyed by object + exact column set + row count. Re-viewing the SAME selection
+  // returns the cached rows WITHOUT
+  // another Data Cloud query. `force:true` (the Refresh button) bypasses the cache.
+  // Returns a Promise<rows>; rows carry a non-enumerable __fromCache flag when reused.
+  function _dataCacheKey(columns, want, objectName) {
+    // Include the data space: the same object name can exist in two spaces with different rows.
+    var ds = ""; try { ds = objectName ? String(resolveDataSpace(objectName) || "") : ""; } catch (e) {}
+    return ds + "@@" + String(Math.max(1, Math.min(DC_MAX_FETCH_ROWS, want || 1000))) + "::" + columns.slice().join("|");
+  }
+  function loadColumnsDataCached(objectName, columns, want, force) {
+    var cache = exploreCache(objectName);
+    var key = _dataCacheKey(columns, want, objectName);
+    if (!force && cache.lastData && cache.lastData.key === key && cache.lastData.rows) {
+      var cached = cache.lastData.rows;
+      try { Object.defineProperty(cached, "__fromCache", { value: true, configurable: true }); } catch (e) {}
+      return Promise.resolve(cached);
+    }
+    return loadColumnsData(objectName, columns, want).then(function (rows) {
+      cache.lastData = { key: _dataCacheKey(columns, want, objectName), rows: rows, cols: columns.slice(), want: want };
+      return rows;
+    });
+  }
+
+  // ── localStorage helpers ──────────────────────────────────────────────────
+  // Key: dc-explore::<objectApiName>
+  // Value: { fields: ["api1","api2",...], savedAt: <timestamp> }
+  // TTL: 90 days of no use; auto-cleared on object switch if key changes.
+  const LS_PREFIX = "dc-explore::";
+  const LS_TTL    = 90 * 24 * 60 * 60 * 1000;
+
+
+  // Extract a stable org identifier from the current Salesforce URL.
+  // SF URLs contain the 15/18-char org ID in the subdomain, e.g.:
+  //   https://<orgId>.lightning.force.com/...  OR
+  //   https://<myDomain>.my.salesforce.com/...
+  // We use the full hostname as the org token — unique per org, stable.
+  function lsOrgToken() {
+    try { return location.hostname.toLowerCase().replace(/[^a-z0-9.-]/g, "_"); } catch(e) { return "default"; }
+  }
+
+  function lsKey(objectApiName) { return LS_PREFIX + lsOrgToken() + "::" + objectApiName; }
+
+  // Clear all dc-explore keys for the current org (e.g. on logout detection)
+  function lsClearOrg() {
+    try {
+      const prefix = LS_PREFIX + lsOrgToken() + "::";
+      const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
+      keys.forEach(k => localStorage.removeItem(k));
+    } catch(e) {}
+  }
+
+  // Detect logout: SF sets a flag in session storage. If the user session ends
+  // the page navigates away; on reload (login page) the hostname changes so
+  // lsOrgToken() naturally produces a different prefix. No extra detection needed.
+
+  // Store full column objects (not just names) so restore works even when
+  // SF's default columns change between sessions. The fieldName is still used
+  // as the identity key when cross-checking against the live column list.
+  function lsSave(objectApiName, columns) {
+    try {
+      const key = lsKey(objectApiName);
+      // Always remove existing entry first so stale data can never bleed through
+      localStorage.removeItem(key);
+      localStorage.setItem(key, JSON.stringify({ cols: columns, savedAt: Date.now() }));
+    } catch(e) {}
+  }
+
+  function lsLoad(objectApiName) {
+    try {
+      const raw = localStorage.getItem(lsKey(objectApiName));
+      if (!raw) return null;
+      const obj = JSON.parse(raw);
+      if (!obj) return null;
+      // Expire after TTL
+      if (obj.savedAt && Date.now() - obj.savedAt > LS_TTL) { localStorage.removeItem(lsKey(objectApiName)); return null; }
+      // Support both old format (fields:[]) and new format (cols:[])
+      if (Array.isArray(obj.cols)) return obj.cols;
+      if (Array.isArray(obj.fields)) return obj.fields.map(fn => ({ fieldName: fn }));
+      return null;
+    } catch(e) { return null; }
+  }
+
+  function lsClear(objectApiName) {
+    try { localStorage.removeItem(lsKey(objectApiName)); } catch(e) {}
+  }
+
+  // ── Column application ────────────────────────────────────────────────────
+  // recList.columns holds the rendered columns. We replace it with a new array
+  // built from allCols (all available columns from the full set).
+  // The first column is always the "View" link (type=url, fieldName=recordPageUrl) —
+  // keep it in place.
+
+  function findEditColumnsBtn() {
+    let btn = null;
+    eachElement(document, el => {
+      if (!btn && tagOf(el) === "button" &&
+          ((el.getAttribute("aria-label") || "") === "Edit Columns" || (el.textContent || "").trim() === "Edit Columns") &&
+          isVisible(el)) btn = el;
+    });
+    return btn;
+  }
+
+  // Inject a CSS rule that forces any SF modal/dialog off-screen with !important.
+  // This works even when SF reveals a pre-existing hidden dialog (not a DOM insertion),
+  // which is why MutationObserver addedNodes alone was insufficient.
+  // SF's Edit Columns dialog lives inside lightning-overlay-container's shadow DOM.
+  // Probe confirmed: setting visibility:hidden on that light-DOM element hides the whole
+  // dialog. CSS rules and MutationObserver cannot cross the shadow boundary, so this is
+  // the only reliable approach.
+  function sfOverlay() { return document.querySelector("lightning-overlay-container"); }
+
+  // Returns true when the Object type dropdown shows "Calculated Insights".
+  // For that object type, manipulating SF's Edit Columns panel breaks the insight
+  // loading pipeline — we must only use applyColumnsDirect (headers only).
+  function isCalculatedInsights() {
+    let found = false;
+    eachElement(document, el => {
+      if (found) return;
+      const t = tagOf(el);
+      if (t === "lightning-combobox" || t === "lightning-base-combobox" || t === "select") {
+        const txt = (el.textContent || "").toLowerCase();
+        if (txt.includes("calculated insight")) found = true;
+      }
+      // Also check combobox button/input values
+      if (!found && (t === "button" || t === "input") && el.value) {
+        if ((el.value || "").toLowerCase().includes("calculated insight")) found = true;
+      }
+      // Check aria labels on list options
+      if (!found && el.getAttribute) {
+        const aria = (el.getAttribute("aria-label") || el.getAttribute("aria-selected") === "true" ? el.textContent : "") || "";
+        if (aria.toLowerCase().includes("calculated insight")) found = true;
+      }
+    });
+    return found;
+  }
+
+  // Hide the SF overlay so the Edit Columns dialog is completely invisible.
+  // opacity:0 + left:-9999px is the only approach that works — visibility:hidden
+  // is overridden by shadow-DOM child styles; CSS rules can't cross the shadow boundary.
+  function hideOverlay(ov) {
+    if (!ov) return;
+    ov.style.cssText = "opacity:0!important;pointer-events:none!important;position:fixed!important;left:-99999px!important;";
+  }
+  function showOverlay(ov) {
+    if (!ov) return;
+    ov.style.cssText = "";
+  }
+
+  // FLASH FIX (wider approach): the inline hideOverlay above only runs AFTER we click
+  // and poll — leaving a visible frame where SF's dialog flashes on screen. Instead,
+  // pre-install a document stylesheet rule that hides lightning-overlay-container from
+  // the moment it renders (it's a light-DOM element, so a document rule applies to it
+  // with no reactive gap). Call hideOverlayCss() BEFORE clicking Edit Columns and
+  // showOverlayCss() once we're done. This removes the flash entirely.
+  var _ovStyleEl = null;
+  function hideOverlayCss() {
+    if (_ovStyleEl) return;
+    try {
+      _ovStyleEl = document.createElement("style");
+      _ovStyleEl.id = "dc-hide-overlay";
+      // Push the overlay OFF-SCREEN + transparent — but DO NOT zero its width/height.
+      // Zeroing dimensions collapses the dialog so its dual-listbox never lays out /
+      // renders options, which broke the invisible dialog-drive (no query fired →
+      // "Couldn't reach the query service"). This matches the proven inline hideOverlay:
+      // the dialog stays fully laid out (drivable), just invisible and off-screen.
+      // Scope to ONLY the overlay container — broad selectors like .slds-modal could
+      // displace legitimate page modals. Off-screen + transparent, full size preserved.
+      _ovStyleEl.textContent =
+        "lightning-overlay-container{" +
+        "opacity:0!important;pointer-events:none!important;position:fixed!important;" +
+        "left:-99999px!important;top:0!important;}";
+      (document.head || document.documentElement).appendChild(_ovStyleEl);
+    } catch (e) {}
+  }
+  function showOverlayCss() {
+    if (_ovStyleEl) { try { _ovStyleEl.remove(); } catch (e) {} _ovStyleEl = null; }
+  }
+
+  // Search inside the overlay's shadow root for a button with exact trimmed text.
+  // Must use ov.shadowRoot — querySelectorAll on ov itself never crosses the shadow boundary.
+  function findBtnInOverlay(ov, exactText) {
+    if (!ov || !ov.shadowRoot) return null;
+    let found = null;
+    eachElement(ov.shadowRoot, el => {
+      if (found) return;
+      if (tagOf(el) === "button" && (el.textContent || "").trim() === exactText) found = el;
+    });
+    return found;
+  }
+
+  function applyColumnViaSF(fieldNames, statusCb) {
+    // Calculated Insights objects break when we touch SF's Edit Columns panel —
+    // the insight pipeline errors with "Cannot load the created insight".
+    // Use direct column write only for those.
+    if (isCalculatedInsights()) {
+      const rl = findRecordListEl();
+      if (rl) applyColumnsDirect(rl, fieldNames);
+      statusCb("Applied");
+      return;
+    }
+    const editBtn = findEditColumnsBtn();
+    if (!editBtn) { statusCb(""); return; }
+    statusCb("Applying…");
+    hideOverlayCss();   // pre-emptively hide the dialog so it never flashes
+
+    const patchWidths = () => {
+      try {
+        const rl = findRecordListEl();
+        if (rl && rl.columns) {
+          rl.columns = rl.columns.map(c => {
+            const col = Object.assign({}, c);
+            col.wrapText = false;
+            col.initialWidth = 200;
+            return col;
+          });
+        }
+      } catch(e) {}
+      fixDatatableOverflow();
+    };
+
+    // Click first — overlay is created dynamically on first open
+    try { editBtn.click(); } catch(e) {}
+
+    // Wait for lightning-dual-listbox to appear (not just the overlay element —
+    // the overlay persists in DOM between openings, so we must wait for the dlb
+    // content itself to be freshly rendered before hiding and interacting).
+    let attempts = 0;
+    const waitDlb = () => {
+      const ov = sfOverlay();
+      let dlb = null;
+      if (ov && ov.shadowRoot) eachElement(ov.shadowRoot, el => { if (!dlb && tagOf(el) === "lightning-dual-listbox") dlb = el; });
+
+      if (!dlb) {
+        // Hide overlay as soon as it appears, even before dlb is rendered
+        if (ov) hideOverlay(ov);
+        if (attempts++ < 80) { setTimeout(waitDlb, 30); return; }
+        if (ov) showOverlay(ov);
+        showOverlayCss();
+        statusCb(""); return;
+      }
+
+      // dlb is rendered — hide overlay (idempotent) and interact
+      hideOverlay(ov);
+
+      // Remove SF's max-selection limit before setting value (default is often 10)
+      try { if (!dlb.max || dlb.max < fieldNames.length) dlb.max = fieldNames.length; } catch(e) {}
+      try { dlb.value = fieldNames.slice(); } catch(e) {}
+      try { dlb.dispatchEvent(new CustomEvent("change", { detail: { value: fieldNames.slice() }, bubbles: true, composed: true })); } catch(e) {}
+
+      // Small settle delay so dlb registers the value before Done is clicked
+      setTimeout(() => {
+        const ov2 = sfOverlay();
+        const saveBtn = findBtnInOverlay(ov2, "Done");
+        if (!saveBtn) {
+          const cancelBtn = findBtnInOverlay(ov2, "Cancel");
+          if (cancelBtn) try { cancelBtn.click(); } catch(e) {}
+          if (ov2) showOverlay(ov2);
+          showOverlayCss();
+          statusCb(""); return;
+        }
+        try { saveBtn.click(); } catch(e) {}
+
+        // Poll until dlb disappears (SF closed the dialog after Done)
+        let closeAttempts = 0;
+        const waitClose = () => {
+          closeAttempts++;
+          const ov3 = sfOverlay();
+          let open = false;
+          if (ov3 && ov3.shadowRoot) eachElement(ov3.shadowRoot, el => { if (!open && tagOf(el) === "lightning-dual-listbox") open = true; });
+          if (!open || closeAttempts > 50) {
+            if (ov3) showOverlay(ov3);
+            showOverlayCss();
+            patchWidths();
+            setTimeout(patchWidths, 800);
+            setTimeout(patchWidths, 2500);
+            statusCb("Applied");
+          } else {
+            setTimeout(waitClose, 200);
+          }
+        };
+        setTimeout(waitClose, 200);
+      }, 80);
+    };
+    waitDlb();
+  }
+
+  // Fix cell overflow on every shadow root inside the datatable tree.
+  // SF's datatable is deeply nested shadow DOM — styles don't inherit across boundaries.
+  // Strategy: (1) inject a <style> into every shadow root we find, and
+  //           (2) stamp max-width/overflow directly on every <td> element.
+  // A MutationObserver re-runs when SF adds new rows.
+  let _dtObserver = null;
+  function fixDatatableOverflow() {
+    const CSS =
+      "td,th{overflow:hidden!important;max-width:200px!important;}" +
+      ".slds-truncate,.slds-cell-wrap,span,a{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;max-width:200px!important;display:block!important;}";
+
+    const injectStyle = (sr) => {
+      if (!sr || sr.querySelector("style[data-dc-ov]")) return;
+      const s = document.createElement("style");
+      s.setAttribute("data-dc-ov", "1");
+      s.textContent = CSS;
+      sr.insertBefore(s, sr.firstChild);
+    };
+
+    const fixAll = () => {
+      try {
+        // Walk each lightning-datatable ONCE, handling both style injection and td
+        // clamping in a single pass (was three separate walks → 3× the work).
+        eachElement(document, el => {
+          if (tagOf(el) !== "lightning-datatable") return;
+          injectStyle(el.shadowRoot);
+          eachElement(el, inner => {
+            if (inner.shadowRoot) injectStyle(inner.shadowRoot);
+            var t = tagOf(inner);
+            if (t === "td" || t === "th") {
+              // stamp so we never re-touch a cell we've already clamped (avoids
+              // re-processing the same nodes on every scroll mutation).
+              if (inner.__dcClamped) return;
+              inner.__dcClamped = 1;
+              inner.style.overflow = "hidden";
+              inner.style.maxWidth = "200px";
+            }
+          });
+        });
+      } catch(e) {}
+    };
+
+    fixAll();
+
+    // Watch for row additions and re-apply (SF renders rows lazily) — but DEBOUNCE:
+    // scrolling a datatable fires MANY childList mutations; without debouncing, fixAll
+    // (a full shadow-DOM walk) would run on each one → jank. Coalesce bursts into one
+    // run ~150ms after activity settles.
+    if (!_dtObserver) {
+      var _dtDebounce = null;
+      var schedule = function () {
+        if (_dtDebounce) return;
+        _dtDebounce = setTimeout(function () { _dtDebounce = null; fixAll(); }, 150);
+      };
+      _dtObserver = new MutationObserver(schedule);
+      try {
+        eachElement(document, el => {
+          if (tagOf(el) === "lightning-datatable" && el.shadowRoot) {
+            _dtObserver.observe(el.shadowRoot, { childList: true, subtree: true });
+          }
+        });
+      } catch(e) {}
+    }
+  }
+
+  // Direct column write — used for restore-on-load where we can't open a panel.
+  function applyColumnsDirect(recList, fieldNames) {
+    try {
+      const objN = recList.objectName || "";
+      const pool = (objN && exploreCache(objN).allColumns) || recList.columns || [];
+      const viewCol = (recList.columns || []).find(c => c.fieldName === "recordPageUrl")
+                   || pool.find(c => c.fieldName === "recordPageUrl");
+      const selected = fieldNames.map(fn => {
+        const found = pool.find(c => c.fieldName === fn);
+        const col = found ? Object.assign({}, found) : { fieldName: fn, label: fn, type: "formattedText" };
+        col.wrapText = false;
+        col.initialWidth = 200;
+        return col;
+      }).filter(c => c.fieldName !== "recordPageUrl");
+      recList.columns = viewCol ? [viewCol, ...selected] : selected;
+      try { recList.dispatchEvent(new CustomEvent("columnschange", { bubbles: false })); } catch(e) {}
+      fixDatatableOverflow();
+    } catch(e) {}
+  }
+
+  // Keep applyColumns as alias for direct write (used in restore/export paths)
+  function applyColumns(recList, fieldNames) { applyColumnsDirect(recList, fieldNames); }
+
+  function getCurrentFields(recList) {
+    return (recList.columns || [])
+      .filter(c => c.fieldName && c.fieldName !== "recordPageUrl")
+      .map(c => c.fieldName);
+  }
+
+  // Count options inside the SOURCE listbox specifically (aria-label contains "source-list").
+  // The source listbox = the "available" (unselected) fields — always has more than the selected list.
+  function countSourceOptions() {
+    let count = 0;
+    eachElement(document, el => {
+      if (!el.getAttribute) return;
+      if (el.getAttribute("role") !== "listbox") return;
+      const aria = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || "";
+      if (!/source-list/i.test(aria)) return;
+      eachElement(el, opt => {
+        if (opt.getAttribute && opt.getAttribute("role") === "option" && opt.getAttribute("data-value")) count++;
+      });
+    });
+    return count;
+  }
+
+  // Read ALL options from BOTH the source and selected listboxes.
+  function readAllListboxOptions() {
+    const seen = new Map();
+    eachElement(document, el => {
+      if (!el.getAttribute) return;
+      if (el.getAttribute("role") !== "listbox") return;
+      const aria = el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") || "";
+      if (!/source-list|selected-list/i.test(aria)) return;
+      eachElement(el, opt => {
+        if (!opt.getAttribute || opt.getAttribute("role") !== "option") return;
+        const dv = opt.getAttribute("data-value");
+        if (!dv || seen.has(dv)) return;
+        const lbl = (opt.textContent || "").trim().replace(/\s+/g, " ") || dv;
+        seen.set(dv, { fieldName: dv, label: lbl, type: "formattedText" });
+      });
+    });
+    return seen;
+  }
+
+  // Opens the Edit Columns panel, polls ONLY for the SOURCE listbox (the available-fields
+  // side). The selected-list appears first with ~10 items — we ignore that and keep
+  // waiting until the source-list has items, which means SF has loaded the full field set.
+  function discoverAllColumns(recList, callback) {
+    const objN = recList.objectName || "";
+    const cached = objN ? exploreCache(objN).allColumns : null;
+    if (cached && cached.length > 10) {
+      callback(cached); return;
+    }
+    let editBtn = null;
+    eachElement(document, el => {
+      if (!editBtn && tagOf(el) === "button" && ((el.getAttribute("aria-label") || "") === "Edit Columns" || (el.textContent || "").trim() === "Edit Columns") && isVisible(el))
+        editBtn = el;
+    });
+    if (!editBtn) { callback(recList.columns || []); return; }
+
+    hideOverlayCss();   // pre-emptively hide so the dialog never flashes during discovery
+    // Click first — overlay is created on first open
+    try { editBtn.click(); } catch(e) {}
+
+    function closeSfPanel() {
+      const ov = sfOverlay();
+      const cancelBtn = findBtnInOverlay(ov, "Cancel");
+      if (cancelBtn) try { cancelBtn.click(); } catch(e) {}
+      if (ov) showOverlay(ov);
+      showOverlayCss();
+    }
+
+    // Poll for dlb — hide overlay only once dlb is rendered inside it
+    // (overlay element persists in DOM between opens; hiding it too early breaks next open)
+    let attempts = 0;
+    const poll = () => {
+      attempts++;
+      const ov = sfOverlay();
+      if (ov) {
+        let dlb = null;
+        eachElement(ov.shadowRoot || ov, el => { if (!dlb && tagOf(el) === "lightning-dual-listbox") dlb = el; });
+        if (dlb) hideOverlay(ov);
+      }
+      const srcCount = countSourceOptions();
+      if (srcCount > 0 || attempts >= 80) {  // max ~8 s
+        const seen = readAllListboxOptions();
+        closeSfPanel();
+        if (seen.size > 0) {
+          const cols = [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+          (recList.columns || []).forEach(c => {
+            if (c.fieldName && seen.has(c.fieldName)) {
+              const entry = seen.get(c.fieldName);
+              if (c.label) entry.label = c.label;
+              if (c.type)  entry.type  = c.type;
+            }
+          });
+          if (objN) exploreCache(objN).allColumns = cols;
+          callback(cols);
+        } else {
+          callback(recList.columns || []);
+        }
+      } else {
+        setTimeout(poll, 100);
+      }
+    };
+    setTimeout(poll, 100);
+  }
+
+  // Make a result readable in a spreadsheet: (1) JSON-object columns are EXPANDED into one column per key
+  // (Record.Id, Record.LastName, ...) instead of one giant text cell; (2) columns whose every value
+  // is a plain short number become real numbers (IDs with leading zeros / long digit strings stay text);
+  // (3) a sensible width per column. Pure: returns { cols, rows (objects keyed by the new column names), widths }.
+  function qePrepResults(cols, rows, expandJson) {
+    var MAXKEYS = 80, outCols = [], plan = {};
+    cols.forEach(function (c) {
+      var keys = [], seen = {}, objs = 0, nonEmpty = 0, bad = false, parsed = new Array(rows.length);
+      if (expandJson) for (var i = 0; i < rows.length && !bad; i++) {
+        var v = rows[i][c]; if (v == null || v === "") continue; nonEmpty++;
+        var o = null;
+        if (v && typeof v === "object" && !Array.isArray(v)) o = v;
+        else if (typeof v === "string" && v.charAt(0) === "{") { try { var j = JSON.parse(v); if (j && typeof j === "object" && !Array.isArray(j)) o = j; } catch (e) {} }
+        if (!o) { bad = true; break; }
+        parsed[i] = o; objs++;
+        Object.keys(o).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+      }
+      if (expandJson && !bad && objs > 0 && objs === nonEmpty && keys.length > 0 && keys.length <= MAXKEYS) {
+        plan[c] = { keys: keys, parsed: parsed, names: keys.map(function (k) { var nm = c + "." + k; return nm; }) };
+        plan[c].names.forEach(function (n) { outCols.push(n); });
+      } else outCols.push(c);
+    });
+    var NUM = /^-?(0|[1-9]\d{0,9})(\.\d{1,6})?$/;
+    var outRows = rows.map(function (r, ri) {
+      var o = {};
+      cols.forEach(function (c) {
+        var pl = plan[c];
+        if (!pl) { o[c] = r[c]; return; }
+        var po = pl.parsed[ri];
+        pl.keys.forEach(function (k, ki) { var v = po ? po[k] : null; o[pl.names[ki]] = (v && typeof v === "object") ? JSON.stringify(v) : v; });
+      });
+      return o;
+    });
+    var widths = outCols.map(function (c) {
+      var w = String(c).length, allNum = true, any = false;
+      for (var i = 0; i < outRows.length; i++) {
+        var v = outRows[i][c]; if (v == null || v === "") continue; any = true;
+        var t = typeof v === "string" ? v : String(v);
+        if (i < 300 && t.length > w) w = t.length;
+        if (allNum && !(typeof v === "number" || NUM.test(t))) allNum = false;
+      }
+      if (allNum && any) for (var q = 0; q < outRows.length; q++) { var vv = outRows[q][c]; if (vv != null && vv !== "" && typeof vv !== "number") outRows[q][c] = Number(vv); }
+      return Math.max(10, Math.min(60, Math.round(w * 1.15) + 2));
+    });
+    return { cols: outCols, rows: outRows, widths: widths };
+  }
+    // ── STREAMING .xlsx writer (memory-flat, multi-sheet) ──────────────────────────────
+    // Builds a real Excel workbook straight onto a FileSystemWritableFileStream, one sheet per
+    // `sheetRows` data rows (header repeated on each sheet, frozen + bold + filter). Nothing is
+    // held in memory beyond the current batch: every sheet is its own deflate-compressed zip entry
+    // written as the rows arrive; the small workbook/rels parts are appended at the END (zip entry
+    // order is free), when the real sheet count is known. Strings are inline (no shared-string table,
+    // which could not be streamed); only real JS numbers become numeric cells, so IDs/zip codes with
+    // leading zeros are never altered. close() always finalises a valid workbook of whatever was written.
+    function dcXlsxStream(out, sheetRows) {
+      var widths = null, enc = new TextEncoder(), pos = 0, entries = [], cur = null, cols = [], sheetNames = [], rowsInSheet = 0, sheetNo = 0, ended = false;
+      var CRC = (function () { var t = new Uint32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+      function u16(v, n) { v.push(n & 255, (n >> 8) & 255); }
+      function u32(v, n) { v.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255); }
+      function emit(bytes) { pos += bytes.length; return out.write(bytes); }
+      function colLetter(i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+      function xe(s) { return String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+      function cell(v, style) {
+        var s = style ? " s='1'" : "";
+        if (v == null || v === "") return "<c" + s + "/>";
+        if (typeof v === "number" && isFinite(v)) return "<c" + s + "><v>" + v + "</v></c>";
+        if (typeof v === "boolean") return "<c" + s + " t='b'><v>" + (v ? 1 : 0) + "</v></c>";
+        var t = typeof v === "object" ? JSON.stringify(v) : String(v);
+        if (t.length > 32767) t = t.slice(0, 32767);   // Excel's per-cell limit; longer text would corrupt the file
+        if (!style) s = " s='2'";   // data text wraps (long values stay readable; row height auto-fits in Excel)
+        return "<c" + s + " t='inlineStr'><is><t xml:space='preserve'>" + xe(t) + "</t></is></c>";
+      }
+      function startEntry(name) {
+        var cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), r = cs.readable.getReader();
+        var e = { name: name, nameB: enc.encode(name), crc: 0xFFFFFFFF, usize: 0, csize: 0, offset: pos, w: w };
+        var h = []; u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0808); u16(h, 8); u16(h, 0); u16(h, 0x21); u32(h, 0); u32(h, 0); u32(h, 0); u16(h, e.nameB.length); u16(h, 0);
+        e.pump = emit(new Uint8Array(h)).then(function () { return emit(e.nameB); }).then(function () {
+          return (function loop() { return r.read().then(function (x) { if (x.done) return; e.csize += x.value.length; return emit(x.value).then(loop); }); })();
+        });
+        return e;
+      }
+      function entryWrite(e, str) {
+        var b = enc.encode(str), c = e.crc;
+        for (var i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8);
+        e.crc = c; e.usize += b.length;
+        if (e.usize > 4000000000) throw new Error("A sheet is too large for one workbook part - use a smaller rows-per-sheet or split CSV files.");
+        return e.w.write(b);
+      }
+      function endEntry(e) {
+        return e.w.close().then(function () { return e.pump; }).then(function () {
+          e.crc = (e.crc ^ 0xFFFFFFFF) >>> 0;
+          var d = []; u32(d, 0x08074b50); u32(d, e.crc); u32(d, e.csize); u32(d, e.usize);
+          entries.push(e); return emit(new Uint8Array(d));
+        });
+      }
+      function wholeEntry(name, text) { var e = startEntry(name); return entryWrite(e, text).then(function () { return endEntry(e); }); }
+      function sheetHead() {
+        var nC = Math.max(1, cols.length), x = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'>" +
+          "<sheetViews><sheetView workbookViewId='0'><pane ySplit='1' topLeftCell='A2' activePane='bottomLeft' state='frozen'/></sheetView></sheetViews>" +
+          "<cols>" + (widths && widths.length === cols.length ? widths.map(function (w, i) { return "<col min='" + (i + 1) + "' max='" + (i + 1) + "' width='" + w + "' customWidth='1'/>"; }).join("") : "<col min='1' max='" + nC + "' width='18' customWidth='1'/>") + "</cols><sheetData><row>";
+        for (var i = 0; i < cols.length; i++) x += cell(cols[i], true);
+        return x + "</row>";
+      }
+      function openSheet() { sheetNo++; rowsInSheet = 0; cur = startEntry("xl/worksheets/sheet" + sheetNo + ".xml"); return entryWrite(cur, sheetHead()); }
+      function closeSheet() {
+        if (!cur) return Promise.resolve();
+        var e = cur; cur = null;
+        var last = colLetter(Math.max(0, cols.length - 1)) + (rowsInSheet + 1);
+        sheetNames.push("Rows " + (((sheetNo - 1) * sheetRows) + 1) + "-" + (((sheetNo - 1) * sheetRows) + rowsInSheet));
+        return entryWrite(e, "</sheetData><autoFilter ref='A1:" + last + "'/></worksheet>").then(function () { return endEntry(e); });
+      }
+      var chain = Promise.resolve();
+      function serial(fn) { var p = chain.then(fn); chain = p.catch(function () {}); return p; }
+      return {
+        setCols: function (c, w) { cols = c.slice(); widths = w || null; },
+        sheets: function () { return sheetNames.length + (cur ? 1 : 0); },
+        // rows: array of arrays (positional). Rotates to a new sheet when the current one is full.
+        addRows: function (rows) {
+          return serial(function () {
+            var i = 0;
+            function step() {
+              var buf = "";
+              while (i < rows.length) {
+                if (!cur || rowsInSheet >= sheetRows) {
+                  var pend = buf; buf = "";
+                  return Promise.resolve(pend && cur ? entryWrite(cur, pend) : null).then(closeSheet).then(openSheet).then(step);
+                }
+                var r = rows[i++], x = "<row>";
+                for (var k = 0; k < cols.length; k++) x += cell(r[k], false);
+                buf += x + "</row>"; rowsInSheet++;
+              }
+              return buf ? entryWrite(cur, buf) : null;
+            }
+            return step();
+          });
+        },
+        // Finalise: close the open sheet, append workbook parts + central directory, close the file.
+        close: function () {
+          return serial(function () {
+            if (ended) return null; ended = true;
+            var p = cur ? Promise.resolve() : openSheet();   // never produce a workbook with zero sheets
+            return p.then(closeSheet).then(function () {
+              var n = sheetNames.length, ct = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/xl/workbook.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'/><Override PartName='/xl/styles.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml'/>";
+              var wb = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets>", rel = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>";
+              for (var s = 1; s <= n; s++) {
+                ct += "<Override PartName='/xl/worksheets/sheet" + s + ".xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'/>";
+                wb += "<sheet name='" + xe(sheetNames[s - 1]) + "' sheetId='" + s + "' r:id='rId" + s + "'/>";
+                rel += "<Relationship Id='rId" + s + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet' Target='worksheets/sheet" + s + ".xml'/>";
+              }
+              rel += "<Relationship Id='rId" + (n + 1) + "' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles' Target='styles.xml'/></Relationships>";
+              var styles = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><styleSheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><fonts count='2'><font><sz val='11'/><name val='Calibri'/></font><font><b/><color rgb='FFFFFFFF'/><sz val='11'/><name val='Calibri'/></font></fonts><fills count='3'><fill><patternFill patternType='none'/></fill><fill><patternFill patternType='gray125'/></fill><fill><patternFill patternType='solid'><fgColor rgb='FF1E293B'/><bgColor indexed='64'/></patternFill></fill></fills><borders count='1'><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count='1'><xf numFmtId='0' fontId='0' fillId='0' borderId='0'/></cellStyleXfs><cellXfs count='3'><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0'/><xf numFmtId='0' fontId='1' fillId='2' borderId='0' xfId='0' applyFont='1' applyFill='1' applyAlignment='1'><alignment vertical='center'/></xf><xf numFmtId='0' fontId='0' fillId='0' borderId='0' xfId='0' applyAlignment='1'><alignment vertical='top' wrapText='1'/></xf></cellXfs><cellStyles count='1'><cellStyle name='Normal' xfId='0' builtinId='0'/></cellStyles></styleSheet>";
+              return wholeEntry("[Content_Types].xml", ct + "</Types>")
+                .then(function () { return wholeEntry("_rels/.rels", "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='xl/workbook.xml'/></Relationships>"); })
+                .then(function () { return wholeEntry("xl/workbook.xml", wb + "</sheets></workbook>"); })
+                .then(function () { return wholeEntry("xl/_rels/workbook.xml.rels", rel); })
+                .then(function () { return wholeEntry("xl/styles.xml", styles); });
+            }).then(function () {
+              var cdStart = pos, cdSize = 0, chain2 = Promise.resolve();
+              entries.forEach(function (e) {
+                chain2 = chain2.then(function () {
+                  var c = []; u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0808); u16(c, 8); u16(c, 0); u16(c, 0x21); u32(c, e.crc); u32(c, e.csize); u32(c, e.usize); u16(c, e.nameB.length); u16(c, 0); u16(c, 0); u16(c, 0); u16(c, 0); u32(c, 0); u32(c, e.offset);
+                  cdSize += c.length + e.nameB.length;
+                  return emit(new Uint8Array(c)).then(function () { return emit(e.nameB); });
+                });
+              });
+              return chain2.then(function () {
+                var z = []; u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, entries.length); u16(z, entries.length); u32(z, cdSize); u32(z, cdStart); u16(z, 0);
+                return emit(new Uint8Array(z));
+              });
+            }).then(function () { return out.close(); });
+          });
+        }
+      };
+    }
+    function qeCanXlsx() { try { return typeof window.showSaveFilePicker === "function" && typeof CompressionStream === "function" && typeof TextEncoder === "function"; } catch (e) { return false; } }
+
+
+  // ── Export visible rows to CSV ────────────────────────────────────────────
+  function exportExploreCsv(recList) {
+    const cols = (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
+    const rows = recList.data || [];
+    // Don't download an empty/header-only file — tell the user what to do instead.
+    if (!cols.length) { dcExploreToast("No columns to export — open an object and let its data load, then try again."); return; }
+    if (!rows.length) { dcExploreToast("No rows on screen to export. Load some data first (scroll or run a query)."); return; }
+    const esc = v => { const s = v == null ? "" : String(v); return s.includes(",") || s.includes('"') || s.includes("\n") ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [cols.map(c => esc(c.label || c.fieldName)).join(",")];
+    rows.forEach(row => lines.push(cols.map(c => esc(row[c.fieldName])).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (recList.objectName || "data-explore") + ".csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  // Download an arbitrary rows[]×columns[] set as CSV (used by the full-table view,
+  // so ALL columns export with data — not just SF's 10).
+  // Styled HTML table for the clipboard: Excel / Google Sheets paste it WITH the bold coloured header,
+  // borders and column widths (plain TSV carries no formatting). Fields are HTML-escaped.
+  function qeToHtmlTable(cols, rows, widths) {
+    var e = function (v) { return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+    var bd = "border:1px solid #cbd5e1;";
+    var h = '<table style="border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:11pt;">';
+    if (widths) { h += "<colgroup>"; cols.forEach(function (c, i) { h += '<col width="' + Math.round((widths[i] || 18) * 7) + '">'; }); h += "</colgroup>"; }
+    h += "<tr>" + cols.map(function (c) { return '<th style="' + bd + 'background:#1e293b;color:#ffffff;font-weight:bold;text-align:left;padding:4px 8px;">' + e(c) + "</th>"; }).join("") + "</tr>";
+    rows.forEach(function (r, ri) {
+      var bg = ri % 2 ? "background:#f1f5f9;" : "";
+      h += "<tr>" + cols.map(function (c) { var v = r[c]; if (v && typeof v === "object") v = JSON.stringify(v); return '<td style="' + bd + bg + 'padding:3px 8px;vertical-align:top;white-space:normal;word-wrap:break-word;">' + e(v) + "</td>"; }).join("") + "</tr>";
+    });
+    return h + "</table>";
+  }
+  // Drag the right edge of any header cell to resize that column; double-click the edge to auto-fit again.
+  function dcMakeColsResizable(root) {
+    root.querySelectorAll("th").forEach(function (th) {
+      if (th.querySelector(".dc-col-grip")) return;
+      if (!th.style.position) th.style.position = "relative";
+      th.style.boxSizing = "border-box";
+      var g = document.createElement("div"); g.className = "dc-col-grip"; g.title = "Drag to resize · double-click to auto-fit";
+      g.style.cssText = "position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
+      g.onclick = function (e) { e.stopPropagation(); };
+      g.ondblclick = function (e) { e.stopPropagation(); var tb = th.closest("table"); if (tb) { tb.style.tableLayout = ""; tb.style.width = "100%"; tb.querySelectorAll("th").forEach(function (t) { t.style.width = t.style.minWidth = t.style.maxWidth = ""; }); } };
+      g.onpointerdown = function (e) {
+        e.preventDefault(); e.stopPropagation();
+        var tbl = th.closest("table");
+        // First drag: freeze every column at its current width and switch to fixed layout so the dragged
+        // column really grows/shrinks (cells clip with an ellipsis) instead of the browser re-balancing.
+        if (tbl && tbl.style.tableLayout !== "fixed") {
+          var ths = Array.prototype.slice.call(tbl.querySelectorAll("th")), ws = ths.map(function (t) { return t.getBoundingClientRect().width; }), tot = 0;
+          ths.forEach(function (t, i) { t.style.width = t.style.minWidth = t.style.maxWidth = ws[i] + "px"; tot += ws[i]; });
+          tbl.style.tableLayout = "fixed"; tbl.style.width = tot + "px";
+        }
+        var x0 = e.clientX, w0 = th.getBoundingClientRect().width, t0 = tbl ? parseFloat(tbl.style.width) || 0 : 0;
+        var mv = function (ev) { var w = Math.max(50, w0 + ev.clientX - x0); th.style.width = th.style.minWidth = th.style.maxWidth = w + "px"; if (tbl && t0) tbl.style.width = (t0 + w - w0) + "px"; };
+        var up = function () { window.removeEventListener("pointermove", mv, true); window.removeEventListener("pointerup", up, true); };
+        window.addEventListener("pointermove", mv, true); window.addEventListener("pointerup", up, true);
+      };
+      th.appendChild(g);
+    });
+  }
+  // Formatted Excel (.xlsx) of the loaded rows: JSON-blob columns expanded into one column per key,
+  // numbers stored as numbers, bold frozen filtered header, sized columns. Built in memory.
+  function downloadRowsXlsx(objectName, columns, rows, btn) {
+    if (!rows || !rows.length) { if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows."); return; }
+    var old = btn ? btn.textContent : ""; if (btn) { btn.disabled = true; btn.textContent = "Building…"; }
+    var chunks = [], pp = qePrepResults(columns, rows, true);
+    var x = dcXlsxStream({ write: function (b) { chunks.push(b); return Promise.resolve(); }, close: function () { return Promise.resolve(); } }, 1000000);
+    x.setCols(pp.cols, pp.widths);
+    x.addRows(pp.rows.map(function (r) { return pp.cols.map(function (c) { return r[c]; }); })).then(function () { return x.close(); }).then(function () {
+      var nm = (objectName || "data-explore") + ".xlsx";
+      var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); a.download = nm; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      if (btn) btn.textContent = "\u2713 Saved";
+    }).catch(function (e) { if (btn) { btn.textContent = "Excel build failed"; btn.title = String(e && e.message || e); } }).then(function () { if (btn) { btn.disabled = false; setTimeout(function () { btn.textContent = old; }, 2000); } });
+  }
+  function downloadRowsCsv(objectName, columns, rows) {
+    // Don't produce a header-only CSV when the object has no records — tell the user
+    // instead of silently downloading an empty file.
+    if (!rows || !rows.length) {
+      if (typeof dcExploreToast === "function") dcExploreToast("No records to download — " + (objectName || "this object") + " has 0 rows.");
+      return;
+    }
+    const esc = v => { const s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    // Header = exactly the columns shown. An "Id" column is added ONLY if the rows really carry
+    // one (Data Cloud objects usually have none → it was always an empty column), and never twice.
+    const header = (columns.indexOf("Id") < 0 && rows.some(r => r && Object.prototype.hasOwnProperty.call(r, "Id")))
+      ? ["Id"].concat(columns) : columns.slice();
+    const doDownload = (parts) => {
+      const blob = new Blob(parts, { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (objectName || "data-explore") + "-all-columns.csv";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    };
+    // Small result → build synchronously (fast, no UI churn).
+    if (rows.length <= 2000) {
+      const lines = [header.map(esc).join(",")];
+      rows.forEach(r => lines.push(header.map(c => esc(r[c])).join(",")));
+      doDownload([lines.join("\n") + "\n"]);
+      return;
+    }
+    // Large result → build the CSV string in non-blocking chunks so a wide/tall dataset
+    // can't trigger "page unresponsive". Accumulate into a
+    // parts array (each part = one chunk of joined lines) and hand it all to Blob at the end.
+    const CHUNK = 2000;
+    const parts = [header.map(esc).join(",") + "\n"];
+    let idx = 0;
+    const buildChunk = () => {
+      const end = Math.min(idx + CHUNK, rows.length);
+      let buf = "";
+      for (let i = idx; i < end; i++) {
+        const r = rows[i];
+        buf += header.map(c => esc(r[c])).join(",") + "\n";
+      }
+      parts.push(buf);
+      idx = end;
+      if (idx < rows.length) { setTimeout(buildChunk, 0); }
+      else { doDownload(parts); }
+    };
+    buildChunk();
+  }
+
+  /* [in-development features removed from public build] */
+
+  // Render the tool's OWN full-width, scrollable results table showing EVERY selected
+  // column with real data (from one queryAllColumns call). This is what removes the
+  // 10-column ceiling for the user — no SF datatable involved. Draggable + resizable,
+  // sticky header + sticky Id column, with a "Download CSV (all columns)" action.
+  let allColsTableEl = null;
+  // Remembers the last rendered results table so it can be REOPENED after the user
+  // closes it (accidentally or not) WITHOUT re-querying — the rows are still in memory.
+  let _lastTableState = null;   // { objectName, columns, rows, wantRows, allColumns }
+
+  // Distinct values of ONE column, computed from the ALREADY-LOADED rows (no extra query, no
+  // credits). Returns [{ value, count }] sorted by count desc, then value asc. null/"" collapse to
+  // a single "(blank)" bucket keyed by "". Pure + testable (mirrored in the explorer test).
+  function dcDistinctValues(rows, fieldName) {
+    var map = Object.create(null), order = [];
+    for (var i = 0; i < (rows ? rows.length : 0); i++) {
+      var r = rows[i]; if (!r) continue;
+      var v = r[fieldName];
+      var key = (v == null || v === "") ? "" : String(v);
+      if (map[key] === undefined) { map[key] = 0; order.push(key); }
+      map[key]++;
+    }
+    return order.map(function (k) { return { value: k, count: map[k] }; })
+      .sort(function (a, b) { return b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0); });
+  }
+
+  // Cancels any Explorer export still running for the table being closed/re-rendered (Hide empty, filter, Reload,
+  // Back to original ...) — otherwise it keeps spending credits with no Cancel button and still downloads.
+  // Table name out of a FROM clause token: strips double quotes and a leading schema ("a"."b" -> b).
+  function dcFromTableName(tok) { var t = String(tok || "").trim().replace(/;$/, ""); var parts = t.match(/"(?:[^"]|"")*"|[^.\s]+/g) || [t]; return String(parts[parts.length - 1]).replace(/^"|"$/g, "").replace(/""/g, '"'); }
+  var _explorerCancelFn = null;
+  function closeAllColumnsTable() { try { if (_explorerCancelFn) { _explorerCancelFn(); _explorerCancelFn = null; } } catch (e) {} if (allColsTableEl) { allColsTableEl.remove(); allColsTableEl = null; } var ct = document.getElementById("dc-cell-tools"); if (ct) ct.remove(); var cvp = document.getElementById("dc-colviz-panel"); if (cvp) cvp.remove(); var dv = document.getElementById("dc-distinct-pop"); if (dv) dv.remove(); }
+  function reopenLastTable() {
+    if (_lastTableState && typeof showAllColumnsTable === "function") {
+      var s = _lastTableState;
+      showAllColumnsTable(s.objectName, s.columns, s.rows, s.wantRows, s.allColumns);
+      return true;
+    }
+    return false;
+  }
+  // ── Cell value / JSON viewer (Data Explorer) ────────────────────────────────────────────────────
+  // Three views of the same value: Table (record view: summary cards + one tab per nested table), Tree (collapsible,
+  // colour-coded, built lazily so a huge blob never floods the DOM) and Raw (pretty text with line numbers).
+  // Pure helpers below are unit-tested; none of them mutates the caller's object.
+  function dcJsonPathStr(path) {
+    var s = "$";
+    (path || []).forEach(function (p) { s += typeof p === "number" ? "[" + p + "]" : (/^[A-Za-z_$][\w$]*$/.test(p) ? "." + p : "[" + JSON.stringify(p) + "]"); });
+    return s;
+  }
+  // How many leaf values differ between two JSON documents (added / removed / changed)? Pure; capped so it stays fast.
+  // Used to show whether Real-time really returned something different from the stored copy.
+  function dcJsonDiffCount(a, b, cap) {
+    cap = cap || 500; var n = 0;
+    (function walk(x, y, d) {
+      if (n >= cap) return;
+      var ox = x && typeof x === "object", oy = y && typeof y === "object";
+      if (ox && oy && Array.isArray(x) === Array.isArray(y)) {
+        var ks = {}; Object.keys(x).forEach(function (k) { ks[k] = 1; }); Object.keys(y).forEach(function (k) { ks[k] = 1; });
+        if (d > 40) return;
+        Object.keys(ks).forEach(function (k) { walk(x[k], y[k], d + 1); });
+      } else if (ox !== oy || (!ox && x !== y)) { n++; }
+      else if (ox && oy) { n++; }   // array vs object
+    })(a, b, 0);
+    return n;
+  }
+  function dcJsonStats(v) {
+    var st = { nodes: 0, depth: 0, arrays: 0, objects: 0 };
+    (function walk(x, d) {
+      st.nodes++; if (d > st.depth) st.depth = d;
+      if (x && typeof x === "object") {
+        if (Array.isArray(x)) { st.arrays++; x.forEach(function (c) { walk(c, d + 1); }); }
+        else { st.objects++; Object.keys(x).forEach(function (k) { walk(x[k], d + 1); }); }
+      }
+    })(v, 0);
+    return st;
+  }
+  // Which branches must be open to reveal every key/value containing q (case-insensitive)? Capped so a 1-letter query is safe.
+  function dcJsonSearch(root, q, cap) {
+    var out = { open: {}, hits: 0, capped: false };
+    q = String(q || "").toLowerCase(); cap = cap || 300;
+    if (!q) return out;
+    (function walk(x, path) {
+      if (out.hits >= cap) { out.capped = true; return; }
+      var isC = x && typeof x === "object";
+      var key = path.length ? path[path.length - 1] : null;
+      var hit = (typeof key === "string" && key.toLowerCase().indexOf(q) >= 0) || (!isC && String(x).toLowerCase().indexOf(q) >= 0);
+      if (hit) { out.hits++; for (var i = 0; i < path.length; i++) out.open[JSON.stringify(path.slice(0, i))] = true; }
+      if (isC) { if (Array.isArray(x)) x.forEach(function (c, i) { walk(c, path.concat(i)); }); else Object.keys(x).forEach(function (k) { walk(x[k], path.concat(k)); }); }
+    })(root, []);
+    return out;
+  }
+  // Table plan: scalar fields of the root + one tab per nested key (found at ANY depth, merged by key name).
+  function dcJsonTablePlan(data) {
+    var d = JSON.parse(JSON.stringify(data));
+    var asArr = function (v) { return Array.isArray(v) ? v : [v]; };
+    var isObj = function (x) { return x && typeof x === "object" && !Array.isArray(x); };
+    var plan = { scalars: [], tabs: [] }, idx = {};
+    function addTab(name, rows, parent) {
+      if (idx[name] == null) { idx[name] = plan.tabs.length; plan.tabs.push({ name: name, parent: parent || "", rows: [], cols: [], done: 0 }); }
+      var t = plan.tabs[idx[name]]; rows.forEach(function (r) { t.rows.push(r); });
+    }
+    if (Array.isArray(d)) addTab("Rows", d, "");
+    else if (isObj(d)) {
+      Object.keys(d).forEach(function (k) { if (d[k] && typeof d[k] === "object") addTab(k, asArr(d[k]), ""); else plan.scalars.push({ k: k, v: d[k] }); });
+    } else plan.scalars.push({ k: "value", v: d });
+    var changed;
+    do {
+      changed = false;
+      plan.tabs.forEach(function (t) {
+        while (t.done < t.rows.length) {
+          var r = t.rows[t.done++]; changed = true;
+          if (isObj(r)) Object.keys(r).forEach(function (k) { if (r[k] && typeof r[k] === "object") addTab(k, asArr(r[k]), t.name); });
+        }
+      });
+    } while (changed);
+    plan.tabs.forEach(function (t) {
+      t.rows.forEach(function (r) {
+        if (isObj(r)) Object.keys(r).forEach(function (k) { if ((!r[k] || typeof r[k] !== "object") && t.cols.indexOf(k) < 0) t.cols.push(k); });
+        else if (t.cols.indexOf("value") < 0 && !(r && typeof r === "object")) t.cols.push("value");
+      });
+      delete t.done;
+    });
+    return plan;
+  }
+  // One pretty-printed line -> coloured HTML (keys / strings / numbers / booleans / null).
+  function dcJsonColorLine(line, esc) {
+    var m = /^(\s*)("(?:[^"\\]|\\.)*")(\s*:\s*)(.*)$/.exec(line), indent, key = "", rest;
+    if (m) { indent = m[1]; key = "<span class='k'>" + esc(m[2]) + "</span>" + esc(m[3]); rest = m[4]; }
+    else { var mi = /^(\s*)(.*)$/.exec(line); indent = mi[1]; rest = mi[2]; }
+    var vm = /^("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(,?)$/.exec(rest), val;
+    if (vm) {
+      var t = vm[1], cls = t.charAt(0) === '"' ? "s" : t === "null" ? "z" : (t === "true" || t === "false") ? "b" : "n";
+      val = "<span class='" + cls + "'>" + esc(t) + "</span>" + esc(vm[2]);
+    } else val = "<span class='p'>" + esc(rest) + "</span>";
+    return esc(indent) + key + val;
+  }
+  function dcJsonBytes(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+
+  var _cellViewEl = null, _cellViewEsc = null;
+  function closeCellView() {
+    if (_cellViewEl) { try { _cellViewEl.remove(); } catch (e) {} _cellViewEl = null; }
+    if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; }
+  }
+  // Turn-off backstop: remove any floating overlay of ours that sits directly on <body> but has no dc- id
+  // (JSON viewer, sort-guide spotlight + tag, popups...). Only top-level, position:fixed/absolute elements, so
+  // Salesforce's own app root can never be hit.
+  function dcSweepOverlays() {
+    try {
+      Array.prototype.slice.call(document.body.children).forEach(function (el) {
+        var ours = false;
+        if (el.id && el.id.indexOf("dc-") === 0) ours = true;
+        else {
+          if (typeof el.className === "string" && /(^|\s)dc-/.test(el.className)) ours = true;
+          if (!ours && el.attributes) for (var i = 0; i < el.attributes.length; i++) { if (el.attributes[i].name.indexOf("data-dc") === 0) { ours = true; break; } }
+          if (ours) { var pos = ""; try { pos = getComputedStyle(el).position; } catch (e) {} if (pos !== "fixed" && pos !== "absolute") ours = false; }
+        }
+        if (ours) el.remove();
+      });
+    } catch (e) {}
+  }
+  function dcJsonViewerCss() {
+    if (document.getElementById("dc-jv-style")) return;
+    var st = document.createElement("style"); st.id = "dc-jv-style";
+    st.textContent =
+      ".dc-jv{--ink:#1e293b;--mut:#64748b;--line:#e2e8f0;--acc:#6366f1;}" +
+      ".dc-jv *{box-sizing:border-box}" +
+      ".dc-jv .hd{display:flex;align-items:center;gap:10px;padding:11px 14px;background:linear-gradient(120deg,#1e1b4b,#3730a3 60%,#4f46e5);color:#fff;cursor:move}" +
+      ".dc-jv .ttl{font-weight:700;font-size:14px;letter-spacing:.01em}.dc-jv .sub{font:600 10px SF Mono,Consolas,monospace;color:#c7d2fe;margin-top:2px}" +
+      ".dc-jv .seg{display:inline-flex;background:rgba(255,255,255,.14);border-radius:8px;padding:2px}" +
+      ".dc-jv .seg button{border:none;background:none;color:#e0e7ff;font:600 11px -apple-system,sans-serif;padding:5px 11px;border-radius:6px;cursor:pointer}" +
+      ".dc-jv .seg button.on{background:#fff;color:#3730a3;box-shadow:0 1px 3px rgba(0,0,0,.25)}" +
+      ".dc-jv .btn{border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:7px;padding:5px 11px;font:600 11px -apple-system,sans-serif;cursor:pointer}" +
+      ".dc-jv .btn:hover{background:rgba(255,255,255,.22)}.dc-jv .btn.pri{background:#fff;color:#3730a3;border-color:#fff}" +
+      ".dc-jv .x{border:none;background:none;color:#e0e7ff;font-size:20px;line-height:1;cursor:pointer;padding:0 4px}" +
+      ".dc-jv .bar{display:flex;align-items:center;gap:8px;padding:7px 14px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut);flex-wrap:wrap}.dc-jv .bar span,.dc-jv .bar button{white-space:nowrap}" +
+      ".dc-jv .chip{display:inline-block;background:#eef2ff;color:#4338ca;border-radius:999px;padding:2px 9px;font-weight:600}" +
+      ".dc-jv .q{flex:1 1 150px;max-width:260px;margin-left:auto;border:1px solid #cbd5e1;border-radius:7px;padding:4px 9px;font:12px -apple-system,sans-serif;outline:none}.dc-jv .q:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(99,102,241,.18)}" +
+      ".dc-jv .body{overflow:auto;flex:1;min-height:0;background:#fff;color:var(--ink)}" +
+      ".dc-jv .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;padding:10px 14px}" +
+      ".dc-jv .card{border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:8px;padding:7px 10px;background:#fff;cursor:copy;min-width:0}" +
+      ".dc-jv .card:hover{background:#f5f7ff}.dc-jv .card .l{font:700 9.5px -apple-system,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}" +
+      ".dc-jv .card .v{font:12.5px SF Mono,Consolas,monospace;word-break:break-all;margin-top:2px}" +
+      ".dc-jv .cards{max-height:30%;overflow:auto;flex:none;border-bottom:1px solid var(--line)}" +
+      ".dc-jv .main{display:flex;flex:1 1 auto;min-height:230px;min-width:0}" +
+      ".dc-jv .rail{flex:none;width:250px;overflow:auto;border-right:1px solid var(--line);background:#f8fafc;padding:6px 0}" +
+      ".dc-jv .rl{font:700 9.5px -apple-system,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#64748b;padding:4px 12px}" +
+      ".dc-jv .ri{display:flex;align-items:center;gap:6px;width:100%;border:none;border-left:3px solid transparent;background:none;text-align:left;padding:6px 10px;font:600 12px -apple-system,sans-serif;color:#334155;cursor:pointer}" +
+      ".dc-jv .ri:hover{background:#eef2ff}.dc-jv .ri.on{background:#e0e7ff;border-left-color:var(--acc);color:#312e81}" +
+      ".dc-jv .ri .nm{flex:1;min-width:0;white-space:normal;word-break:break-word;line-height:1.25}.dc-jv .ri .br{color:#a5b4fc}" +
+      ".dc-jv .ri .n{background:#e2e8f0;color:#475569;border-radius:999px;padding:0 7px;font-size:10.5px}.dc-jv .ri.on .n{background:var(--acc);color:#fff}.dc-jv .ri.empty{opacity:.65}" +
+      ".dc-jv .pane{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}" +
+      ".dc-jv .ph{display:flex;gap:8px;align-items:baseline;padding:9px 14px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mut)}.dc-jv .ph b{font-size:13px;color:#312e81}.dc-jv .ph .sp{flex:1}" +
+      ".dc-jv .tw{overflow:auto;flex:1;padding:0 0 10px}" +
+      ".dc-jv table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px}" +
+      ".dc-jv th{position:sticky;top:0;background:#eef2ff;color:#3730a3;text-align:left;padding:7px 10px;font:700 10px -apple-system,sans-serif;letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid #c7d2fe;white-space:nowrap}" +
+      ".dc-jv td{padding:6px 10px;border-bottom:1px solid #f1f5f9;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px SF Mono,Consolas,monospace;cursor:copy}" +
+      ".dc-jv tbody tr:nth-child(even) td{background:#fafbff}.dc-jv tbody tr:hover td{background:#eef2ff}" +
+      ".dc-jv .nul{color:#64748b;font-style:italic}.dc-jv .bt{background:#ede9fe;color:#6d28d9;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .bf{background:#f1f5f9;color:#64748b;border-radius:5px;padding:0 6px;font-weight:700}.dc-jv .num{color:#b45309}" +
+      ".dc-jv .tree{padding:10px 12px 14px;font:12.5px/1.6 SF Mono,Consolas,monospace}" +
+      ".dc-jv .row{white-space:nowrap}.dc-jv .tg{display:inline-block;width:14px;color:#6366f1;cursor:pointer;user-select:none}" +
+      ".dc-jv .kids{margin-left:7px;padding-left:12px;border-left:1px solid var(--g,#c7d2fe)}" +
+      ".dc-jv .k{color:#4338ca;cursor:copy}.dc-jv .k:hover{text-decoration:underline}.dc-jv .s{color:#047857}.dc-jv .n{color:#b45309}.dc-jv .b{color:#7c3aed;font-weight:700}.dc-jv .z{color:#64748b;font-style:italic}.dc-jv .p{color:#64748b}" +
+      ".dc-jv .live{display:inline-flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid #cbd5e1}" +
+      ".dc-jv .sw{display:inline-flex;align-items:center;gap:6px;border:none;background:none;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#475569;padding:2px}.dc-jv .sw i{width:28px;height:16px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}.dc-jv .sw i:after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}" +
+      ".dc-jv .sw[aria-checked=true] i{background:#16a34a}.dc-jv .sw[aria-checked=true] i:after{left:14px}.dc-jv .sw[aria-checked=true]{color:#15803d}" +
+      ".dc-jv .rf{color:#4338ca;border-color:#c7d2fe;background:#fff}.dc-jv .rf[disabled],.dc-jv .sw[disabled]{opacity:.5;cursor:wait}.dc-jv .st{font-size:11px;color:#64748b;white-space:nowrap}.dc-jv .st.bad{color:#b91c1c}" +
+      ".dc-jv .dbox{background:#fef2f2;border-bottom:1px solid #fecaca;color:#7f1d1d;padding:8px 14px;font:11.5px/1.5 SF Mono,Consolas,monospace;white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow:auto;user-select:text}" +
+      ".dc-jv .meta{color:#64748b;font-size:11px;margin-left:6px}.dc-jv .col{cursor:pointer}" +
+      ".dc-jv mark{background:#fde68a;color:inherit;border-radius:3px;padding:0 1px}" +
+      ".dc-jv .raw{display:flex;font:12.5px/1.6 SF Mono,Consolas,monospace;padding:10px 0}.dc-jv .raw .g{color:#64748b;text-align:right;padding:0 10px 0 14px;border-right:1px solid var(--line);user-select:none;white-space:pre}.dc-jv .raw .c{padding:0 14px;white-space:pre}" +
+      ".dc-jv .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:#0f172a;color:#fff;border-radius:8px;padding:6px 12px;font:600 11px -apple-system,sans-serif;opacity:0;transition:opacity .15s;pointer-events:none}";
+    document.head.appendChild(st);
+  }
+  // Parse a cell value as JSON. Data Cloud often stores JSON as a JSON-encoded STRING (double-encoded: "\"{...}\""),
+  // or as an already-parsed object; both must open in Table view, not as plain text. Pure.
+  // Returns { value, text } (text = the JSON text that was actually parsed) or null when it is not a JSON object/array.
+  function dcParseJsonLoose(raw) {
+    if (raw == null) return null;
+    if (typeof raw === "object") { try { return { value: raw, text: JSON.stringify(raw) }; } catch (e) { return null; } }
+    var t = String(raw).replace(/^\uFEFF/, "").trim();
+    for (var i = 0; i < 4; i++) {
+      var v; try { v = JSON.parse(t); } catch (e) { return null; }
+      if (v && typeof v === "object") return { value: v, text: t };
+      if (typeof v !== "string") return null;     // number / boolean / null: not a JSON document
+      t = v.replace(/^\uFEFF/, "").trim();         // a JSON string: unwrap one level and try again
+    }
+    return null;
+  }
+  function showCellValue(fieldApi, fieldLabel, value, live) {
+    closeCellView();
+    dcJsonViewerCss();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]); }); };
+    var text = value == null ? "" : (typeof value === "object" ? (function () { try { return JSON.stringify(value); } catch (e) { return String(value); } })() : String(value)), parsed = null;
+    var _jl = dcParseJsonLoose(value); if (_jl) { parsed = _jl.value; text = _jl.text; }
+    if (!parsed) live = null;
+    var m = document.createElement("div"); _cellViewEl = m; m.className = "dc-jv"; m.id = "dc-jv-modal";
+    m.style.cssText = "position:fixed;top:4vh;left:50%;transform:translateX(-50%);width:min(1000px,94vw);max-height:92vh;z-index:2147483647;background:#fff;border-radius:14px;box-shadow:0 28px 70px rgba(15,23,42,.55);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;resize:both;";
+    var stats = parsed ? dcJsonStats(parsed) : null, pretty = parsed ? JSON.stringify(parsed, null, 2) : text;
+    var plan = parsed ? dcJsonTablePlan(parsed) : null;
+    m.innerHTML =
+      "<div class='hd'><div style='flex:1;min-width:0'><div class='ttl'>" + esc(fieldLabel) + "</div>" + (fieldApi && fieldApi !== fieldLabel ? "<div class='sub'>" + esc(fieldApi) + "</div>" : "") + "</div>" +
+      (parsed ? "<div class='seg'><button data-v='table' title='Easy to read: each nested list as its own table'>Table</button><button data-v='tree' title='Explore the structure: open and close branches, click a key to copy its path'>Tree</button><button data-v='raw' title='The exact JSON text with line numbers'>Raw</button></div>" : "") +
+      "<button class='btn dc-cv-fs' title='Full screen / back'>&#x26F6;</button><button class='btn pri dc-cv-copy'>Copy</button><button class='x dc-cv-x' title='Close (Esc)'>&times;</button></div>" +
+      "<div class='bar'>" + (parsed
+        ? "<span class='chip'>JSON</span><span class='info'></span>" +
+          (live ? "<span class='live'><button class='sw' data-a='rt' role='switch' aria-checked='false' title='Off: show the stored graph. On: build the graph live from the latest data (same as Salesforce&#39;s Real-time View).'><i></i>Real-time</button><button class='btn rf' data-a='rf' title='Reload the graph now'>&#8635; Refresh</button><span class='st'></span><a class='dt' href='#' style='display:none;font-size:11px;color:#4338ca'>Details</a></span>" : "") +
+          "<span class='tools' style='display:none'><button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='exp'>Expand all</button> <button class='btn' style='color:#4338ca;border-color:#c7d2fe;background:#fff' data-a='col'>Collapse</button></span>" +
+          "<input class='q' placeholder='Search keys and values…' />"
+        : "<span class='chip'>Text</span><span>" + dcJsonBytes(text.length) + "</span>") + "</div>" +
+      "<div class='dbox' style='display:none'></div><div class='body'></div><div class='toast'></div>";
+    if (parsed) m.style.minHeight = "64vh";
+    document.body.appendChild(m);
+    var bodyEl = m.querySelector(".body"), toastEl = m.querySelector(".toast"), qEl = m.querySelector(".q"), toolsEl = m.querySelector(".tools");
+    var fsOn = false, view = parsed ? "raw" : "text", query = "", activeTab = 0, expandAll = false, tmr = null;
+    function toast(t) { toastEl.textContent = t; toastEl.style.opacity = "1"; clearTimeout(tmr); tmr = setTimeout(function () { toastEl.style.opacity = "0"; }, 1100); }
+    function copy(t, msg) { try { navigator.clipboard.writeText(t); toast(msg || "Copied"); } catch (e) { toast("Copy blocked by the browser"); } }
+    function hl(s) {   // escape + highlight the search query
+      s = String(s == null ? "" : s); if (!query) return esc(s);
+      var i = s.toLowerCase().indexOf(query.toLowerCase()); if (i < 0) return esc(s);
+      return esc(s.slice(0, i)) + "<mark>" + esc(s.slice(i, i + query.length)) + "</mark>" + hl2(s.slice(i + query.length));
+    }
+    function hl2(s) { return hl(s); }
+    function cellHtml(v) {
+      if (v === null || v === undefined) return "<span class='nul'>null</span>";
+      if (v === true) return "<span class='bt'>true</span>";
+      if (v === false) return "<span class='bf'>false</span>";
+      if (typeof v === "number") return "<span class='num'>" + hl(v) + "</span>";
+      return hl(v);
+    }
+    function fit(chars, cols) {   // size the window to the data instead of a fixed box
+      if (fsOn) return;
+      var mn = live ? 900 : 0;
+      var w = view === "table" ? Math.max(700, mn, Math.min(cols * 150 + 290, 1500)) : Math.max(980, mn, Math.min(chars * 7.4 + 90, 1300));
+      m.style.width = Math.min(w, window.innerWidth * 0.94) + "px";
+    }
+    // ---------------- Table view: left rail (tables, indented under their parent) + the selected table
+    function cleanName(n) { return n.replace(/__(dlm|cio|c)(?=_|$)/, ""); }
+    var depthOf = {};
+    function calcDepth() { depthOf = {}; if (plan) plan.tabs.forEach(function (t) { depthOf[t.name] = t.parent && depthOf[t.parent] != null ? depthOf[t.parent] + 1 : 0; }); }
+    function rowMatches(t, r, cols) {
+      var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r }, q = query.toLowerCase();
+      if (t.name.toLowerCase().indexOf(q) >= 0) return true;   // searching a table's NAME selects all of its rows
+      return cols.some(function (c) { return String(obj[c] == null ? "" : obj[c]).toLowerCase().indexOf(q) >= 0; });
+    }
+    function renderTable() {
+      calcDepth();
+      var h = "";
+      if (plan.scalars.length) {
+        h += "<div class='cards'>" + plan.scalars.map(function (s) {
+          return "<div class='card' data-copy='" + esc(s.v == null ? "" : String(s.v)) + "' title='Click to copy'><div class='l'>" + esc(s.k.replace(/__c$/, "")) + "</div><div class='v'>" + cellHtml(s.v) + "</div></div>";
+        }).join("") + "</div>";
+      }
+      if (plan.tabs.length) {
+        h += "<div class='main'><div class='rail'><div class='rl'>Tables</div>" + plan.tabs.map(function (t, i) {
+          var cols = t.cols.length ? t.cols : ["value"], cnt = t.rows.length, dim = !cnt;
+          var badge = String(cnt);
+          if (query) { var mm = t.rows.filter(function (r) { return rowMatches(t, r, cols); }).length; badge = mm + "/" + cnt; dim = !mm; }
+          return "<button class='ri" + (i === activeTab ? " on" : "") + (dim ? " empty" : "") + "' data-t='" + i + "' title='" + esc(t.name) + "' style='padding-left:" + (10 + depthOf[t.name] * 14) + "px'>" +
+            (depthOf[t.name] ? "<span class='br'>&#8627;</span>" : "") + "<span class='nm'>" + esc(cleanName(t.name)) + "</span><span class='n'>" + badge + "</span></button>";
+        }).join("") + "</div><div class='pane'>";
+        var t = plan.tabs[activeTab];
+        h += "<div class='ph'><b>" + esc(cleanName(t.name)) + "</b> " + (t.parent ? "<span>inside " + esc(cleanName(t.parent)) + "</span>" : "<span>top level</span>") + "<span class='sp'></span><span>" + t.rows.length + " row" + (t.rows.length === 1 ? "" : "s") + "</span></div>";
+        if (!t.rows.length) h += "<div style='padding:26px;text-align:center;color:#64748b'>Empty: no rows in this table</div>";
+        else {
+          var cols2 = t.cols.length ? t.cols : ["value"];
+          h += "<div class='tw'><table><thead><tr>" + cols2.map(function (c) { return "<th>" + esc(c.replace(/__c$/, "")) + "</th>"; }).join("") + "</tr></thead><tbody>";
+          var shown = 0;
+          t.rows.forEach(function (r) {
+            var obj = r && typeof r === "object" && !Array.isArray(r) ? r : { value: r };
+            if (query && !rowMatches(t, r, cols2)) return;
+            shown++;
+            h += "<tr>" + cols2.map(function (c) { var v = obj[c]; return "<td data-copy='" + esc(v == null ? "" : String(v)) + "' title='" + esc(v == null ? "null" : String(v).slice(0, 300)) + "'>" + cellHtml(v) + "</td>"; }).join("") + "</tr>";
+          });
+          h += "</tbody></table>" + (query && !shown ? "<div style='padding:18px;text-align:center;color:#64748b'>No rows match &ldquo;" + esc(query) + "&rdquo; in this table. Tables on the left show how many rows match.</div>" : "") + "</div>";
+        }
+        h += "</div></div>";
+      }
+      bodyEl.innerHTML = h;
+      var maxCols = 0; plan.tabs.forEach(function (t) { if (t.cols.length > maxCols) maxCols = t.cols.length; });
+      fit(0, maxCols + 1.4 || 4);
+    }
+    // ---------------- Tree view (children are created only when a branch is opened)
+    var GUIDES = ["#c7d2fe", "#fbcfe8", "#bbf7d0", "#fde68a", "#bae6fd", "#ddd6fe"];
+    function renderTree() {
+      var srch = dcJsonSearch(parsed, query), budget = 4000;
+      var root = document.createElement("div"); root.className = "tree";
+      function leaf(v) {
+        if (v === null) return "<span class='z'>null</span>";
+        if (typeof v === "boolean") return "<span class='b'>" + v + "</span>";
+        if (typeof v === "number") return "<span class='n'>" + v + "</span>";
+        return "<span class='s'>&quot;" + hl(v) + "&quot;</span>";
+      }
+      function node(v, key, path, depth, last) {
+        var wrap = document.createElement("div"), row = document.createElement("div"); row.className = "row"; wrap.appendChild(row);
+        var kHtml = key === null ? "" : "<span class='k' data-path='" + esc(dcJsonPathStr(path)) + "' title='Click to copy path'>&quot;" + hl(key) + "&quot;</span><span class='p'>: </span>";
+        var comma = last ? "" : "<span class='p'>,</span>";
+        if (!v || typeof v !== "object") { row.innerHTML = "<span class='tg'></span>" + (typeof key === "number" ? "" : kHtml) + leaf(v) + comma; return wrap; }
+        var isA = Array.isArray(v), keys = isA ? null : Object.keys(v), n = isA ? v.length : keys.length;
+        var ob = isA ? "[" : "{", cb = isA ? "]" : "}";
+        var pk = JSON.stringify(path), open = depth < 3 || srch.open[pk] || (expandAll && budget-- > 0), built = false;
+        var kids = document.createElement("div"); kids.className = "kids"; kids.style.setProperty("--g", GUIDES[depth % GUIDES.length]);
+        var closeRow = document.createElement("div"); closeRow.className = "row";
+        closeRow.innerHTML = "<span class='tg'></span><span class='p'>" + cb + "</span>" + comma;
+        function head() {
+          row.innerHTML = "<span class='tg col'>" + (open ? "&#9662;" : "&#9656;") + "</span>" + (typeof key === "number" ? "<span class='meta' style='margin:0 6px 0 0'>" + key + "</span>" : kHtml) + "<span class='p'>" + ob + "</span>" +
+            (open ? "" : "<span class='meta col'>" + (n ? n + (isA ? " item" : " key") + (n === 1 ? "" : "s") : "empty") + "</span><span class='p'>" + cb + "</span>" + comma);
+        }
+        function build() {
+          if (built) return; built = true;
+          if (isA) v.forEach(function (c, i) { kids.appendChild(node(c, i, path.concat(i), depth + 1, i === n - 1)); });
+          else keys.forEach(function (k, i) { kids.appendChild(node(v[k], k, path.concat(k), depth + 1, i === n - 1)); });
+        }
+        function sync() { head(); kids.style.display = open && n ? "" : "none"; closeRow.style.display = open && n ? "" : "none"; if (open) build(); }
+        row.onclick = function (e) { if (e.target.closest && e.target.closest(".k")) return; open = !open; sync(); };
+        wrap.appendChild(kids); wrap.appendChild(closeRow); sync();
+        if (open && !n) { head(); row.innerHTML = row.innerHTML.replace(/<span class="meta col">empty<\/span><span class="p">[\]}]<\/span>/, ""); }
+        return wrap;
+      }
+      root.appendChild(node(parsed, null, [], 0, true));
+      bodyEl.innerHTML = ""; bodyEl.appendChild(root);
+      if (query) { var note = document.createElement("div"); note.style.cssText = "padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0"; note.textContent = srch.hits ? srch.hits + (srch.capped ? "+" : "") + " match" + (srch.hits === 1 ? "" : "es") + " highlighted (matching branches are opened)" : "No keys or values match “" + query + "”"; bodyEl.appendChild(note); }
+      var ml = 0; pretty.split("\n").forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
+    }
+    // ---------------- Raw view
+    function renderRaw() {
+      var lines = pretty.split("\n"), color = lines.length <= 4000;
+      var g = lines.map(function (_, i) { return i + 1; }).join("\n");
+      var c = color ? lines.map(function (l) { return dcJsonColorLine(l, esc); }).join("\n") : esc(pretty);
+      bodyEl.innerHTML = "<div class='raw'><div class='g'>" + g + "</div><div class='c'>" + c + "</div></div>" +
+        (color ? "" : "<div style='padding:6px 14px;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0'>Large value (" + lines.length + " lines): shown without colours to stay fast.</div>");
+      var ml = 0; lines.forEach(function (l) { if (l.length > ml) ml = l.length; }); fit(ml, 0);
+    }
+    function renderText() {
+      bodyEl.innerHTML = "<pre style='margin:0;padding:14px;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 SF Mono,Consolas,monospace;color:#1e293b'>" + esc(text) + "</pre>";
+    }
+    function render() {
+      if (parsed) {
+        m.querySelectorAll(".seg button").forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-v") === view); });
+        toolsEl.style.display = view === "tree" ? "" : "none";
+        qEl.style.display = view === "raw" ? "none" : "";
+      }
+      if (view === "table") renderTable(); else if (view === "tree") renderTree(); else if (view === "raw") renderRaw(); else renderText();
+    }
+    function infoText() { return dcJsonBytes(text.length) + " \u00b7 " + plan.tabs.length + " table" + (plan.tabs.length === 1 ? "" : "s") + " \u00b7 " + stats.depth + " level" + (stats.depth === 1 ? "" : "s") + " deep"; }
+    function setData(newText) {
+      text = newText; parsed = JSON.parse(newText); stats = dcJsonStats(parsed); pretty = JSON.stringify(parsed, null, 2); plan = dcJsonTablePlan(parsed);
+      if (activeTab >= plan.tabs.length) activeTab = 0;
+      m.querySelector(".info").textContent = infoText();
+    }
+    var rt = false, loadedAt = Date.now(), modeLbl = "Stored", busy = false, dtEl = m.querySelector(".dt"), dboxEl = m.querySelector(".dbox"), lastDetail = "", stEl = m.querySelector(".st"), swEl = m.querySelector(".sw"), rfEl = m.querySelector(".rf");
+    function ago() { var sec = Math.round((Date.now() - loadedAt) / 1000); return sec < 5 ? "just now" : sec < 60 ? sec + "s ago" : Math.round(sec / 60) + " min ago"; }
+    var snap = { Stored: text }, cmpTxt = "";   // Stored starts as the copy already in the table; each load is remembered per mode
+    function paintSt(err) { if (!stEl) return; stEl.classList.toggle("bad", !!err); stEl.textContent = err ? err : modeLbl + " \u00b7 updated " + ago() + cmpTxt; }
+    function compareWithOther(newStr) {
+      var other = snap[modeLbl === "Live" ? "Stored" : "Live"];
+      if (other == null) return "";
+      var A, B; try { A = JSON.parse(newStr); B = JSON.parse(other); } catch (e) { return ""; }
+      var d = dcJsonDiffCount(A, B, 500), nm = modeLbl === "Live" ? "stored copy" : "last live";
+      return d === 0 ? " \u00b7 identical to the " + nm : " \u00b7 " + (d >= 500 ? "500+" : d) + " value" + (d === 1 ? "" : "s") + " differ from the " + nm;
+    }
+    function reload() {
+      if (!live || busy) return; busy = true; if (dtEl) dtEl.style.display = "none"; dboxEl.style.display = "none"; swEl.disabled = rfEl.disabled = true; stEl.classList.remove("bad"); stEl.textContent = rt ? "Building live graph\u2026" : "Loading\u2026";
+      dcQueryDataGraph(live, rt).then(function (v) {
+        var newStr = JSON.stringify(v); setData(newStr); loadedAt = Date.now(); modeLbl = rt ? "Live" : "Stored"; cmpTxt = compareWithOther(newStr); snap[modeLbl] = newStr; paintSt(); render();
+      }).catch(function (e) { paintSt("Could not load live data (showing previous data)"); lastDetail = e.message; if (stEl) stEl.title = e.message; if (dtEl) dtEl.style.display = ""; if (dboxEl.style.display !== "none") dboxEl.textContent = lastDetail; })
+        .then(function () { busy = false; swEl.disabled = rfEl.disabled = false; });
+    }
+    if (parsed) m.querySelector(".info").textContent = infoText();
+    if (live) { paintSt(); var agoTimer = setInterval(function () { if (!m.isConnected) { clearInterval(agoTimer); return; } if (!busy && !stEl.classList.contains("bad")) paintSt(); }, 15000); }
+    render();
+    // ---- events
+    m.addEventListener("click", function (e) {
+      var t = e.target; if (!t || !t.closest) return;
+      var b = t.closest(".seg button"); if (b) { view = b.getAttribute("data-v"); render(); return; }
+      var tb = t.closest(".ri"); if (tb) { activeTab = +tb.getAttribute("data-t"); renderTable(); return; }
+      var a = t.closest("[data-a]");
+      if (a && a.getAttribute("data-a") === "rt") { rt = !rt; swEl.setAttribute("aria-checked", rt ? "true" : "false"); reload(); return; }
+      if (a && a.getAttribute("data-a") === "rf") { reload(); return; }
+      var dt = t.closest(".dt"); if (dt) { e.preventDefault(); var openD = dboxEl.style.display === "none"; dboxEl.style.display = openD ? "" : "none"; dboxEl.textContent = lastDetail; if (openD) { var cb = document.createElement("button"); cb.className = "btn"; cb.style.cssText = "color:#7f1d1d;border-color:#fca5a5;background:#fff;margin-left:8px"; cb.textContent = "Copy details"; cb.onclick = function () { copy(lastDetail, "Details copied"); }; dboxEl.insertBefore(cb, dboxEl.firstChild); dboxEl.insertBefore(document.createTextNode("\n"), cb.nextSibling); } return; }
+      if (a) { expandAll = a.getAttribute("data-a") === "exp"; renderTree(); return; }
+      var kp = t.closest(".k[data-path]"); if (kp) { copy(kp.getAttribute("data-path"), "Copied path " + kp.getAttribute("data-path")); return; }
+      var cp = t.closest("[data-copy]"); if (cp) { copy(cp.getAttribute("data-copy"), "Copied value"); return; }
+    });
+    if (qEl) qEl.addEventListener("input", function () { query = qEl.value.trim(); if (view === "table") renderTable(); else if (view === "tree") renderTree(); });
+    m.querySelector(".dc-cv-copy").onclick = function () { copy(view === "raw" || !parsed ? (parsed ? pretty : text) : text, parsed ? "Copied full JSON" : "Copied"); };
+    var savedBox = "";
+    m.querySelector(".dc-cv-fs").onclick = function () {
+      fsOn = !fsOn;
+      if (fsOn) { savedBox = m.style.cssText; m.style.top = "0"; m.style.left = "0"; m.style.transform = "none"; m.style.width = "100vw"; m.style.height = "100vh"; m.style.maxHeight = "100vh"; m.style.borderRadius = "0"; }
+      else { m.style.cssText = savedBox; fit(0, 0); render(); }
+    };
+    var close = function () { if (_cellViewEl) { _cellViewEl.remove(); _cellViewEl = null; } if (_cellViewEsc) { document.removeEventListener("keydown", _cellViewEsc, true); _cellViewEsc = null; } };
+    m.querySelector(".dc-cv-x").onclick = close;
+    _cellViewEsc = function (e) { if (e.key === "Escape" && _cellViewEl === m) { close(); e.stopPropagation(); } };
+    document.addEventListener("keydown", _cellViewEsc, true);
+    if (typeof makeDraggable === "function") try { makeDraggable(m, m.firstChild); } catch (e) {}
+  }
+
+  // Persisted filter state per object so conditions SURVIVE re-renders (Apply re-renders
+  // the table; without this the filter bar would reset and the user loses what they typed).
+  // Shape: { conds:[{col,op,val}], join:"AND"|"OR", active:bool }.
+  var _filterState = {};
+  var _filterCount = {};
+  var _countCache = {};
+  var _soqlEditorOpen = false; // true while any SQL editor panel is in the DOM
+  // Original (pre-filter) rows per object — set once on first table open, never overwritten
+  // by filter/SQL results. Restoring from here costs zero credits.
+  var _originalRows = {};
+  var _originalColumns = {};
+  var _originalWantRows = {};
+  var _originalTotal = {};   // server total of the unfiltered table, restored by Clear / Back to original
+  // Per-object set of fieldNames the user has hidden via the column-visibility toggle.
+  // Pure view filter — doesn't affect the in-memory data or CSV export.
+  var _hiddenColumns = {};
+  // SQL editor state — hoisted to module scope so background _buildExploreModal rebuilds
+  // don't wipe a successfully-run query (#4)
+  var _savedSoqlText = "";
+  var _savedSoqlRanOk = false;
+  var _savedSoqlObjName = "";
+  function showTableSpinner(panel, msg) {
+    var existing = panel.querySelector(".dc-table-spinner");
+    if (existing) { var lbl = existing.querySelector(".dc-spin-msg"); if (lbl) lbl.textContent = msg || "Loading…"; existing.style.display = "flex"; return; }
+    var overlay = document.createElement("div");
+    overlay.className = "dc-table-spinner";
+    overlay.style.cssText = "display:flex;position:absolute;inset:0;background:rgba(255,255,255,.88);z-index:20;align-items:center;justify-content:center;flex-direction:column;gap:10px;border-radius:12px;";
+    if (!document.getElementById("dc-spin-style")) { var ss = document.createElement("style"); ss.id = "dc-spin-style"; ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(ss); }
+    var wheel = document.createElement("div");
+    wheel.style.cssText = "width:32px;height:32px;border:3px solid #d0d5de;border-top-color:#5b4f9e;border-radius:50%;animation:dc-spin 0.7s linear infinite;flex-shrink:0;";
+    var lbl = document.createElement("span");
+    lbl.className = "dc-spin-msg";
+    lbl.style.cssText = "font:600 13px -apple-system,sans-serif;color:#1e3a5f;";
+    lbl.textContent = msg || "Loading…";
+    // Always show a Cancel button so user can escape a stuck state
+    var cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = "margin-top:4px;padding:5px 18px;font:600 11px -apple-system,sans-serif;color:#5c6b8a;background:#fff;border:1px solid #c9d0da;border-radius:5px;cursor:pointer;";
+    cancelBtn.onclick = function () {
+      overlay.style.display = "none";
+    };
+    overlay.appendChild(wheel);
+    overlay.appendChild(lbl);
+    overlay.appendChild(cancelBtn);
+    panel.style.position = "relative";
+    panel.appendChild(overlay);
+  }
+  function hideTableSpinner(panel) {
+    var s = panel && panel.querySelector(".dc-table-spinner");
+    if (s) s.style.display = "none";
+  }
+  // Module-level handle to the SQL editor opener (it's defined inside _buildExploreModal,
+  // out of scope for the results table). Assigned when the modal builds; used by the
+  // results table's "Edit SQL" button to relaunch the editor.
+  var _openSoqlEditor = null;
+
+  // Distinct-values popover for a column — opened from a header "Σ" button. Lists each distinct
+  // value with its row count and a Copy button (copy the value straight into a WHERE clause), plus
+  // "Copy IN (…)" to grab all values at once. Computed from loaded rows (no query). anchorRect
+  // positions it under the header; `complete` tells the user whether the loaded set is the full
+  // result (so counts/values aren't mistaken for the whole table when only a page is loaded).
+  function dcShowDistinct(fieldName, label, rows, anchorRect, complete) {
+    var old = document.getElementById("dc-distinct-pop"); if (old) old.remove();
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]); }); };
+    var vals = dcDistinctValues(rows, fieldName);
+    var pop = document.createElement("div");
+    pop.id = "dc-distinct-pop";
+    pop.style.cssText = "position:fixed;z-index:2147483647;width:min(380px,92vw);max-height:60vh;display:flex;flex-direction:column;background:#0b1020;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);font:12px/1.5 -apple-system,sans-serif;";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border-bottom:1px solid #243049;flex-shrink:0;";
+    head.innerHTML = "<span style='font:600 12px/1.3 -apple-system,sans-serif;color:#9fb0c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>" + esc(label || fieldName) + " &middot; " + vals.length + " distinct</span>";
+    var headBtns = document.createElement("div"); headBtns.style.cssText = "display:flex;gap:6px;flex-shrink:0;";
+    var copyIn = document.createElement("button"); copyIn.textContent = "Copy IN (…)"; copyIn.title = "Copy all values as a SQL IN (...) list";
+    copyIn.style.cssText = "border:1px solid #3b82f6;background:#1d4ed8;color:#fff;border-radius:6px;padding:3px 8px;font:600 10px -apple-system,sans-serif;cursor:pointer;";
+    var closeB = document.createElement("button"); closeB.textContent = "×"; closeB.style.cssText = "border:none;background:none;color:#9fb0c6;font-size:16px;line-height:1;cursor:pointer;";
+    closeB.onclick = function () { pop.remove(); };
+    headBtns.appendChild(copyIn); headBtns.appendChild(closeB); head.appendChild(headBtns); pop.appendChild(head);
+
+    if (!complete) {
+      var warn = document.createElement("div");
+      warn.style.cssText = "padding:6px 10px;background:#3a2c10;color:#fde9c8;font-size:11px;border-bottom:1px solid #243049;flex-shrink:0;";
+      warn.textContent = "From the loaded rows only — fetch more rows for the complete set.";
+      pop.appendChild(warn);
+    }
+    var list = document.createElement("div");
+    list.style.cssText = "overflow:auto;padding:4px 0;";
+    var sqlLit = function (v) { return v === "" ? "NULL" : "'" + String(v).replace(/'/g, "''") + "'"; };
+    vals.forEach(function (d) {
+      var row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #141c2e;";
+      var txt = document.createElement("span");
+      txt.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.4 'SF Mono',Menlo,Consolas,monospace;" + (d.value === "" ? "color:#64748b;font-style:italic;" : "color:#e5edff;");
+      txt.textContent = d.value === "" ? "(blank)" : d.value;
+      txt.title = d.value;
+      var cnt = document.createElement("span"); cnt.textContent = String(d.count); cnt.style.cssText = "flex-shrink:0;color:#94a3b8;font-size:10px;min-width:28px;text-align:right;";
+      var cp = document.createElement("button"); cp.textContent = "Copy"; cp.style.cssText = "flex-shrink:0;border:1px solid #334;background:#162134;color:#cfe0ff;border-radius:5px;padding:2px 7px;font:600 10px -apple-system,sans-serif;cursor:pointer;";
+      cp.onclick = function () { var v = d.value; try { navigator.clipboard.writeText(v); } catch (e) {} cp.textContent = "✓"; setTimeout(function () { cp.textContent = "Copy"; }, 700); };
+      row.appendChild(txt); row.appendChild(cnt); row.appendChild(cp); list.appendChild(row);
+    });
+    pop.appendChild(list);
+    copyIn.onclick = function () {
+      var inList = vals.map(function (d) { return sqlLit(d.value); }).join(", ");
+      var clause = sqlQuoteIdent(fieldName) + " IN (" + inList + ")";
+      try { navigator.clipboard.writeText(clause); } catch (e) {}
+      copyIn.textContent = "✓ Copied"; setTimeout(function () { copyIn.textContent = "Copy IN (…)"; }, 900);
+    };
+    document.body.appendChild(pop);
+    // position under the header cell, clamped to viewport
+    var pw = pop.offsetWidth || 360, ph = pop.offsetHeight || 240;
+    var left = Math.max(8, Math.min(anchorRect.left, (window.innerWidth || 1200) - pw - 8));
+    var top = anchorRect.bottom + 4;
+    if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 4);
+    pop.style.left = left + "px"; pop.style.top = top + "px";
+    // close on outside click / Escape
+    setTimeout(function () {
+      var onDoc = function (e) { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener("pointerdown", onDoc, true); } };
+      document.addEventListener("pointerdown", onDoc, true);
+    }, 50);
+    pop.addEventListener("keydown", function (e) { if (e.key === "Escape") pop.remove(); });
+  }
+  // `allColumns` (optional) = the FULL selected set, used for CSV export even when the
+  // view is filtered to non-empty columns. Defaults to `columns` when not passed.
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // The table is never sorted by us: rows are in the order Data Cloud returned them (no ORDER BY) unless the user's SQL has one.
+  var _orderWarnOff = {};   // per object: user dismissed the "empty columns" note
+  // ORDER BY of the user's own SQL -> [{col,dir}] (dir defaults to ASC like SQL). Pure; top-level clause only.
+  function dcParseOrderBy(sql) {
+    var m = /\bORDER\s+BY\s+([\s\S]+?)(?:\s+(?:LIMIT|OFFSET|FETCH)\b|;|$)/i.exec(String(sql || ""));
+    if (!m) return [];
+    var parts = [], depth = 0, cur = "", i, ch, q = false;
+    for (i = 0; i < m[1].length; i++) {
+      ch = m[1].charAt(i);
+      if (ch === '"') q = !q;
+      if (!q && ch === "(") depth++; else if (!q && ch === ")") depth--;
+      if (!q && depth === 0 && ch === ",") { parts.push(cur); cur = ""; } else cur += ch;
+    }
+    if (cur.trim()) parts.push(cur);
+    return parts.map(function (p) {
+      var t = p.trim(), dm = /\s+(ASC|DESC)(?:\s+NULLS\s+(?:FIRST|LAST))?\s*$/i.exec(t), dir = dm ? dm[1].toUpperCase() : "ASC";
+      var col = (dm ? t.slice(0, dm.index) : t).trim();
+      if (/[()]/.test(col)) col = "(expression)"; else col = col.replace(/^"|"$/g, "").replace(/""/g, '"');
+      return { col: col, dir: dir };
+    }).filter(function (o) { return o.col; });
+  }
+  // The query Salesforce's own grid last ran (the template we clone for <=100-row loads) may carry sort settings. We do not
+  // know their key names in every org/release, so report ANY query key that looks like sorting, verbatim. Pure.
+  function dcTemplateSort(tpl) {
+    var q = tpl && tpl.params && tpl.params.query, out = [];
+    if (!q || typeof q !== "object") return out;
+    Object.keys(q).forEach(function (k) {
+      if (/^(columns|objectName|selectedDataSpaceName)$/.test(k) || !/sort|order/i.test(k)) return;
+      var v = q[k]; if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return;
+      var sv; try { sv = typeof v === "string" ? v : JSON.stringify(v); } catch (e) { sv = String(v); }
+      out.push({ key: k, value: sv.slice(0, 120) });
+    });
+    return out;
+  }
+  // What order are these rows in, and could "blank" just mean "the data is further down"? Pure (testable).
+  // Rows are NEVER sorted by us. Order comes from: the user's own SQL ORDER BY; or (<=100-row loads) the Salesforce grid's sort
+  // that rides along in the cloned query; otherwise Data Cloud gives NO ordering guarantee (a reload can return other rows).
+  function dcOrderNote(o) {
+    var rows = o.rows || [], cols = o.columns || [], total = o.total || 0;
+    var ob = o.orderBy || [], ts = o.tplSort || [], order, orderTip = "";
+    if (ob.length) {
+      order = "sorted by " + ob.map(function (x) { return x.col + (x.dir === "DESC" ? " \u2193 descending" : " \u2191 ascending"); }).join(", ") + " (from your SQL)";
+    } else if (o.viaTemplate && ts.length) {
+      var raw = ts.map(function (x) { return x.key + " = " + x.value; }).join("; ");
+      var dirWord = /desc/i.test(raw) ? " (descending)" : (/asc/i.test(raw) ? " (ascending)" : "");
+      order = "follows the sort of Salesforce\u2019s own grid" + dirWord; orderTip = raw;
+    } else {
+      order = (o.fromSql ? "as returned for your SQL" : (o.filtered ? "as returned for your filter" : "as returned by Data Cloud")) + " (no sort \u2014 order is not guaranteed, a reload can show other rows)";
+    }
+    var empty = cols.filter(function (fn) {
+      for (var i = 0; i < rows.length; i++) { var v = rows[i] && rows[i][fn]; if (v !== null && v !== undefined && v !== "") return false; }
+      return rows.length > 0;
+    });
+    var known = total > 0;                       // total unknown (e.g. before Count) -> never claim "every row"
+    var more = !known || total > rows.length;
+    var warn = "", short = "";
+    if (empty.length && more) {     // only when the data COULD be further down; "empty everywhere" is what Hide empty is for
+      short = empty.length + " column" + (empty.length === 1 ? "" : "s") + " empty here \u00B7 may have data further down";
+      warn = empty.length + " of " + cols.length + " shown column" + (cols.length === 1 ? " is" : "s are") + " empty in these " + rows.length.toLocaleString() +
+        " rows \u2014 values may exist further down" + (known ? " (" + total.toLocaleString() + " rows in total)" : " (click Count for the table size)") +
+        ". Use Add condition \u2192 column IS NOT NULL to find them, or tick Hide empty to hide these columns.";
+    }
+    return { order: order, orderTip: orderTip, warn: warn, short: short, emptyCols: empty };
+  }
+  // Hide-empty plan (pure, unit-tested). `full` = the whole selected set; `nonEmpty` = those with a value in
+  // at least one loaded row. `autoColumns` = the reduced list to render when the user's Hide-empty choice is ON
+  // but this render was handed the full set (reload / filter / reopen / new object) — null when nothing to do.
+  // Never hides EVERYTHING (an all-empty result keeps its columns so the table is not blank).
+  // How many loaded rows have NO data in any of the selected columns, and the WHERE that finds rows that do.
+  // Pure. `showPrompt` only when most loaded rows are empty AND more rows exist on the server (so a re-query can help).
+  function dcSparsePlan(cols, rows, serverTotal, totalUnknown) {
+    var n = (rows || []).length, empty = 0;
+    for (var i = 0; i < n; i++) {
+      var r = rows[i], any = false;
+      for (var j = 0; j < cols.length; j++) { var v = r[cols[j]]; if (v !== null && v !== undefined && v !== "") { any = true; break; } }
+      if (!any) empty++;
+    }
+    var moreExist = !!totalUnknown || (serverTotal || 0) > n;
+    return {
+      total: n, emptyRows: empty,
+      showPrompt: n > 0 && cols.length > 0 && empty / n >= 0.5 && moreExist,
+      where: "(" + cols.map(function (c) { return sqlQuoteIdent(c) + " IS NOT NULL"; }).join(" OR ") + ")"
+    };
+  }
+  function dcHideEmptyPlan(columns, rows, allColumns, on) {
+    var full = allColumns || columns, empty = {};
+    full.forEach(function (fn) { empty[fn] = true; });
+    (rows || []).forEach(function (r) { full.forEach(function (fn) { var v = r[fn]; if (v !== null && v !== undefined && v !== "") empty[fn] = false; }); });
+    var nonEmpty = full.filter(function (fn) { return !empty[fn]; });
+    var emptyCount = full.length - nonEmpty.length;
+    var auto = (on && emptyCount > 0 && nonEmpty.length > 0 && columns.length === full.length) ? nonEmpty : null;
+    return { full: full, nonEmpty: nonEmpty, emptyCount: emptyCount, autoColumns: auto, canHide: nonEmpty.length > 0 };
+  }
+  function showAllColumnsTable(objectName, columns, rows, wantRows, allColumns) {
+    // Hide-empty is a remembered choice: honour it on EVERY render, not only right after a click.
+    var _hep = dcHideEmptyPlan(columns, rows, allColumns, !!window.__dcHideEmpty);
+    if (rows && rows.length && _hep.autoColumns) { return showAllColumnsTable(objectName, _hep.autoColumns, rows, wantRows, _hep.full); }
+    // Never open the modal for an empty object — show a FAB-level toast instead.
+    if (!rows || !rows.length) {
+      dcExploreToast((objectName || "This object") + " has no records — nothing to show.");
+      return;
+    }
+    closeAllColumnsTable();
+    // Explorer-private cancel flag for its CSV / Export All (only one export runs at a
+    // time in this table). Kept LOCAL so it can never collide with the Query Editor's
+    // own export cancel — the two features are fully independent.
+    var _explorerExportCancel = false;
+    _explorerCancelFn = function () {
+      _explorerExportCancel = true;
+      // Release the saved Export-All file (up to 500k rows) once this table is gone; a delay lets a just-started download finish.
+      try { var _bu = _exportAllDone && _exportAllDone.blobUrl; if (_bu) { _exportAllDone = null; setTimeout(function () { try { URL.revokeObjectURL(_bu); } catch (e) {} }, 60000); } } catch (e) {}
+    };
+    // Remember everything needed to reopen this exact table later, with no re-query.
+    _lastTableState = { objectName: objectName, columns: columns, rows: rows, wantRows: wantRows, allColumns: allColumns };
+    // Cache the original (unfiltered) rows the FIRST time this object is opened, or when
+    // no filter is active. Used for zero-credit "Back to original" restore.
+    if (!_filterState[objectName] || !_filterState[objectName].active) {
+      _originalRows[objectName] = rows;
+      _originalColumns[objectName] = allColumns || columns;   // the FULL set (Hide empty only trims the view)
+      _originalWantRows[objectName] = wantRows;
+      if (rows.__serverRowCount) _originalTotal[objectName] = rows.__serverRowCount;
+    }
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    // Field label lookup from whatever we discovered (falls back to the api name).
+    const meta = {};
+    const pool = (exploreCache(objectName).allColumns) || [];
+    pool.forEach(c => { if (c && c.fieldName) meta[c.fieldName] = c.label || c.fieldName; });
+
+    const panel = document.createElement("div");
+    allColsTableEl = panel;
+    panel.id = "dc-allcols-table";
+    panel.style.cssText = "position:fixed;top:5vh;left:50%;transform:translateX(-50%);width:min(1400px,96vw);height:min(86vh,900px);z-index:2147483646;background:#fff;border:1px solid #c9cede;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;";
+
+    // header — flex-wrap so the action buttons (Reload/Count/Columns/Edit SQL/CSV/Export/✕)
+    // reflow onto a second line on narrow panels instead of overflowing off the right edge
+    // (they were getting clipped/unreachable on the bookmarklet's default panel width).
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;flex-shrink:0;cursor:move;";
+    const titleWrap = document.createElement("div");
+    titleWrap.style.cssText = "flex:1;user-select:text;cursor:move;";
+    var serverTotal = rows.__serverRowCount || 0;
+    var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
+    var filteredTotal = _filterCount[objectName] || 0;
+    var rowsSubInfo = "<b>" + rows.length.toLocaleString() + "</b> rows" + (isFiltered ? ((_filterState[objectName].fromSql && !_filterState[objectName].where) ? " (query result)" : " (filtered)") : "") + " &times; " + columns.length + " cols";
+    if (isFiltered && filteredTotal > rows.length) {
+      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>" + filteredTotal.toLocaleString() + " total matching</span>" + dcFilteredCsvInfo(filteredTotal).headerNote;
+    } else if (serverTotal > rows.length) {
+      rowsSubInfo += " &bull; <span style='color:#7c3aed;font-weight:700'>Total: " + serverTotal.toLocaleString() + "</span>";
+    }
+    titleWrap.innerHTML = "<div style='font-weight:700;font-size:13px'>" + columns.length + " columns &mdash; " + esc(objectName) + "</div>" +
+      "<div class='dc-ac-sub' style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + rowsSubInfo + "</div>" +
+      "<div class='dc-ac-order' style='font-size:11px;color:#5c6b8a;margin-top:1px'></div>";
+    (function () {
+      var fs0 = _filterState[objectName] || {};
+      var on = dcOrderNote({ rows: rows, columns: columns, total: isFiltered ? filteredTotal : serverTotal, filtered: isFiltered, fromSql: !!(isFiltered && fs0.fromSql && !fs0.where),
+        orderBy: fs0.orderBy || [], tplSort: dcTemplateSort(_auraSniff.template),
+        viaTemplate: !isFiltered && !extBridgePresent() && (wantRows || rows.length) <= 100 });
+      var el = titleWrap.querySelector(".dc-ac-order");
+      el.innerHTML = "\u21C5 Order: <b>" + on.order + "</b>"; if (on.orderTip) el.title = "Sort settings in the Salesforce grid query: " + on.orderTip;
+      if (on.warn && !_orderWarnOff[objectName]) {
+        var chip = document.createElement("span");
+        chip.style.cssText = "margin-left:8px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:1px 4px 1px 8px;white-space:nowrap;cursor:help";
+        chip.title = on.warn;
+        chip.appendChild(document.createTextNode("\u26A0 " + on.short + " "));
+        var x = document.createElement("span"); x.textContent = "\u2715"; x.title = "Hide this note"; x.setAttribute("role", "button");
+        x.style.cssText = "cursor:pointer;padding:0 5px;color:#b45309;font-weight:700";
+        x.onclick = function (ev) { ev.stopPropagation(); _orderWarnOff[objectName] = true; chip.remove(); };
+        chip.appendChild(x); el.appendChild(chip);
+      }
+    })();
+    // Header layout: row 1 = title/info (left) + full-screen & close (always top-right);
+    // row 2 = all the controls in one wrapping group, so nothing is stranded on its own line.
+    titleWrap.style.minWidth = "0";
+    const topBtns = document.createElement("div"); topBtns.style.cssText = "display:flex;align-items:center;gap:6px;flex-shrink:0;align-self:flex-start;";
+    const ctl = document.createElement("div"); ctl.style.cssText = "flex:1 0 100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;";
+    hdr.appendChild(titleWrap); hdr.appendChild(topBtns); hdr.appendChild(ctl);
+
+    // Rows control — request more than the default page (e.g. 2000). We can only honor
+    // ≤100 uses the fast CdpDataView query; >100 switches to the Query Editor's SQL
+    // action (queryDCSql), which honors rowLimit. Both are same-origin /aura — no CORS.
+    const rowsWrap = document.createElement("div");
+    rowsWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;";
+    rowsWrap.innerHTML = "<span>Rows:</span>";
+    const rowsInput = document.createElement("input");
+    rowsInput.type = "number"; rowsInput.min = "1"; rowsInput.max = String(DC_MAX_FETCH_ROWS);
+    rowsInput.value = String(wantRows || rows.length || 1000);
+    rowsInput.style.cssText = "width:78px;border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
+    rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
+    rowsInput.addEventListener("input", function () {
+      var v = parseInt(rowsInput.value, 10);
+      if (!v || v < 1) {
+        rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Minimum is 1";
+      } else if (v > DC_MAX_FETCH_ROWS) {
+        rowsInput.style.borderColor = "#f87171"; rowsInput.title = "Maximum is " + DC_MAX_FETCH_ROWS.toLocaleString();
+        rowsInput.value = String(DC_MAX_FETCH_ROWS);
+      } else {
+        rowsInput.style.borderColor = "#c9d0da"; rowsInput.title = "How many rows to load into this table (1 to " + DC_MAX_FETCH_ROWS.toLocaleString() + "), then click Reload. The server may return fewer in one go for wide tables — the header shows how many actually loaded. The table scrolls through every loaded row; Download CSV saves exactly the loaded rows; Export All downloads up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.";
+      }
+    });
+    const reloadBtn = document.createElement("button");
+    reloadBtn.textContent = "↻ Reload";
+    reloadBtn.title = "Fetch the number of rows in the box above, fresh from Salesforce (uses a query / Data Cloud credits).";
+    reloadBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    reloadBtn.onclick = () => {
+      var raw = parseInt(rowsInput.value, 10) || 1000;
+      var want = Math.max(1, Math.min(DC_MAX_FETCH_ROWS, raw));
+      if (raw > DC_MAX_FETCH_ROWS) rowsInput.value = String(want);
+      // Large loads: ask first. Each query is billed by rows PROCESSED, and loading in several
+      // batches re-reads earlier rows, so the cost can exceed the row count. Also slow in VDI.
+      if (want > DC_WARN_ROWS && !confirm("Load " + want.toLocaleString() + " rows?\n\nLarge loads take longer and use more Data Cloud credits. Credits are billed by rows processed, and rows fetched in several batches may be read more than once.\n\nYou can also use Download CSV to save the rows already loaded, or Export All to save up to the first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows.")) return;
+      reloadBtn.disabled = true; reloadBtn.textContent = "Loading…";
+      showTableSpinner(panel, "Loading " + want + " rows…");
+      const sub = panel.querySelector(".dc-ac-sub");
+      if (sub) sub.textContent = "Loading " + want + " rows…" + (want > DC_WARN_ROWS ? " (large query — this can take a while)" : "");
+      const fail = (err) => {
+        reloadBtn.disabled = false; reloadBtn.textContent = "↻ Reload";
+        hideTableSpinner(panel);
+        const s = panel.querySelector(".dc-ac-sub"); if (s) s.textContent = String(err && err.message || err);
+      };
+      ensureQueryContext(function (ready) {
+        if (!ready) {
+          reloadBtn.disabled = false; reloadBtn.textContent = "↻ Reload";
+          hideTableSpinner(panel);
+          var sub2 = panel.querySelector(".dc-ac-sub");
+          if (sub2) { sub2.textContent = ""; var cw = document.createElement("div"); sub2.appendChild(cw); renderConnectButton(cw, function () { reloadBtn.click(); }); }
+          else { fail(new Error("Session not ready — try scrolling the table, then retry.")); }
+          return;
+        }
+        // force:true — Reload is an explicit action; the user wants CURRENT data, not cache.
+        // Always clear filter state first — Reload fetches unfiltered data, so any active
+        // filter (UI or SQL) would be misleading if left set (#2, #10).
+        var prevFilterState = _filterState[objectName];
+        var prevFilterCount = _filterCount[objectName];
+        _filterState[objectName] = null;
+        _filterCount[objectName] = 0;
+        // Reload the FULL column set — never just the Hide-empty subset, or empty columns would be lost
+        // (and a column that now has data could never come back, and CSV would silently drop them).
+        var _reloadCols = allColumns || columns;
+        loadColumnsDataCached(objectName, _reloadCols, want, true).then((newRows) => {
+          // Update original cache with fresh data so Clear/Back-to-original stays current
+          _originalRows[objectName] = newRows;
+          _originalColumns[objectName] = _reloadCols;
+          _originalWantRows[objectName] = want;
+          showAllColumnsTable(objectName, _reloadCols, newRows, want);
+        }).catch(function(err) {
+          // Restore filter state so the stale-but-visible data still matches the shown filter label
+          _filterState[objectName] = prevFilterState;
+          _filterCount[objectName] = prevFilterCount;
+          fail(err);
+        });
+      });
+    };
+
+    // ── Data Explorer credit env + own count runner (SEPARATE from Query Editor) ──────
+    // Detect Sandbox vs Production from the org host (docs: sandbox URLs contain
+    // ".sandbox."). Rate card: Data Queries = 2 credits/1M rows processed (Prod), 1.6 (Sb).
+    var _dxSandbox = false; try { _dxSandbox = /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) {}
+    var _dxRate = _dxSandbox ? 1.6 : 2, _dxEnv = _dxSandbox ? "Sandbox" : "Production";
+    // Data-Explorer-OWNED credit formatter (independent of Query Editor's qeCreditStr — no
+    // shared code, per the keep-features-separate rule). Graduated precision so tiny costs
+    // stay legible instead of collapsing to "<0.01": whole-ish → 2dp, small → 4dp,
+    // very small → 4 significant digits. rowsProcessed is the billing basis.
+    function _dxCreditStr(rowsProcessed) {
+      var c = (Number(rowsProcessed) / 1000000) * _dxRate;
+      if (!isFinite(c) || c <= 0) return "0";
+      if (c >= 1) return c.toFixed(2);
+      if (c >= 0.0001) return c.toFixed(4);
+      return c.toPrecision(4).replace(/0+$/, "").replace(/\.$/, "");
+    }
+    // Explorer-OWNED count runner: resolves { count, rowsProcessed }. Extension path reuses
+    // the shared runRawSql (clean rows) but can't read rowsProcessed there → null. Bookmarklet
+    // path does its OWN aura call so it can read status.rowsProcessed (the credit basis).
+    // Fully independent of Query Editor's runQeCount — no shared code.
+    function runExploreCount(cSql, ds) {
+      return new Promise(function (resolve, reject) {
+        if (typeof extBridgePresent === "function" && extBridgePresent()) {
+          runRawSql(cSql, ds, 1).then(function (res) {
+            var cnt = 0, cRows = (res && res.rows) || [], gotNum = false;
+            if (cRows.length > 0) { var r0 = cRows[0]; for (var k in r0) { if (Object.prototype.hasOwnProperty.call(r0, k)) { var v = parseInt(r0[k], 10); if (!isNaN(v) && v >= 0) { cnt = v; gotNum = true; break; } } } }
+            if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
+            resolve({ count: cnt, rowsProcessed: null });
+          }).catch(reject);
+          return;
+        }
+        if (!_auraSniff.context || !_auraSniff.token) { reject(new Error("No active session — sort a column on the table first to connect.")); return; }
+        var cands = [ds];
+        if (typeof dataSpaceCandidates === "function") { var fm = cSql.match(/\bFROM\s+["]?([A-Za-z0-9_]+)/i); dataSpaceCandidates(fm ? fm[1] : "").forEach(function (c) { if (cands.indexOf(c) < 0) cands.push(c); }); }
+        function tryDs(i) {
+          var space = cands[i] || "";
+          _auraQid = (_auraQid || 0) + 1;
+          var act = { id: "dxcnt-" + _auraQid + ";a", descriptor: "serviceComponent://ui.cdp.components.controllers.QueryWorkspaceController/ACTION$queryDCSql", callingDescriptor: "UNKNOWN", params: { sql: cSql, rowLimit: 1, dataspace: space } };
+          var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+          fetch("/aura?r=" + _auraQid + "&ui-cdp-components-controllers.QueryWorkspace.queryDCSql=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+            .then(function (r) { return r.text(); }).then(function (txt) {
+              var j; try { j = JSON.parse(txt); } catch (e) { reject(new Error("No active session — sort a column on the table first, then retry.")); return; }
+              var a = j && j.actions && j.actions[0];
+              if (!a || a.state !== "SUCCESS") {
+                var em = ""; try { em = (a.error && a.error[0] && (a.error[0].message || a.error[0].primaryMessage)) || (a && a.state); } catch (e) {}
+                if (/denied authorization|not authorized/i.test(String(em)) && i + 1 < cands.length) { tryDs(i + 1); return; }
+                reject(new Error(String(em) || "Count failed")); return;
+              }
+              dcLearnSpace(space, cSql);
+              var rv = a.returnValue || {};
+              var dr = rv.dataRows || rv.rows || rv.data || [];
+              var firstRow = dr.length ? (dr[0] && dr[0].row ? dr[0].row : dr[0]) : null;
+              var cnt = 0, gotNum = false;
+              if (firstRow != null) {
+                var vals = Array.isArray(firstRow) ? firstRow : (typeof firstRow === "object" ? Object.keys(firstRow).map(function (kk) { return firstRow[kk]; }) : [firstRow]);
+                for (var vi = 0; vi < vals.length; vi++) { var num = parseInt(vals[vi], 10); if (!isNaN(num) && num >= 0) { cnt = num; gotNum = true; break; } }
+              }
+              if (!gotNum) { reject(new Error("Count returned no number")); return; }   // never show a fake 0
+              var _rp = (rv.status && (rv.status.rowsProcessed != null ? rv.status.rowsProcessed : rv.status.rowCount));
+              var rowsProcessed = parseInt(_rp, 10); if (isNaN(rowsProcessed)) rowsProcessed = null;
+              resolve({ count: cnt, rowsProcessed: rowsProcessed });
+            }).catch(function (err) { reject(new Error("Count request failed: " + err)); });
+        }
+        tryDs(0);
+      });
+    }
+
+    // "Count" button — runs COUNT(*) to show the true total records in the DMO/DLO
+    const countBtn = document.createElement("button");
+    countBtn.textContent = "Count";
+    countBtn.style.cssText = "border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    countBtn.title = "Show the TOTAL number of records in this object (or matching the active filter). Runs a COUNT(*) query (uses Data Cloud credits — billed on rows processed).";
+    countBtn.onclick = () => {
+      countBtn.disabled = true; countBtn.textContent = "Counting…";
+      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      // If filter is active, count WITH the filter's WHERE clause
+      var countWhere = "";
+      var fsC = _filterState[objectName];
+      // Use the stored WHERE string directly — handles IS NULL, IS NOT NULL, and fromSql filters
+      if (fsC && fsC.active && fsC.where) {
+        countWhere = " WHERE " + fsC.where;
+      }
+      var cSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + countWhere;
+      ensureQueryContext(function (ready) {
+        if (!ready) { countBtn.disabled = false; countBtn.textContent = "Count"; return; }
+        runExploreCount(cSql, ds).then(function (cr) {
+          var cnt = cr.count || 0;
+          var rowsProcessed = cr.rowsProcessed;
+          countBtn.disabled = false;
+          countBtn.textContent = "Total: " + cnt.toLocaleString();
+          countBtn.style.background = "#059669"; countBtn.style.borderColor = "#059669";
+          // Sync the fresh count into __serverRowCount so the FOOTER hint and the HEADER agree
+          // (previously the footer kept the older count captured at data-load time, so a live-
+          // ingesting stream showed two different "totals" in the same panel). Then refresh
+          // the footer text if the hint updater is available.
+          try {
+            rows.__serverRowCount = cnt;
+            if (!(_filterState[objectName] && _filterState[objectName].active)) _originalTotal[objectName] = cnt;
+            var _hintEl = panel.querySelector(".dc-scroll-hint");
+            if (_hintEl) {
+              var _more = (cnt > rows.length) ? " of " + cnt.toLocaleString() + " total" : "";
+              _hintEl.textContent = rows.length.toLocaleString() + " rows loaded" + _more + " · scroll freely — all rows & columns available, no extra queries.";
+            }
+          } catch (e) {}
+          // Update the subtitle with count info + rows-processed & credit estimate (like SF).
+          var sub = panel.querySelector(".dc-ac-sub");
+          if (sub) {
+            // Live timestamp — this COUNT hits the live query engine, so on an ingesting
+            // stream it reflects rows AT THIS INSTANT (differs from SF's cached Data Stream
+            // page total, which only updates on refresh). Showing the time makes that clear.
+            var _cntTime = "";
+            try { _cntTime = new Date().toLocaleTimeString(); } catch (e) {}
+            var info = "<b>" + rows.length.toLocaleString() + "</b> rows loaded &times; " + columns.length + " cols";
+            info += " &bull; <span style='color:#7c3aed;font-weight:700;'>Total records in object: " + cnt.toLocaleString() + "</span>";
+            if (_cntTime) info += " <span style='font-size:10px;color:#94a3b8;'>(live count as of " + _cntTime + ")</span>";
+            if (cnt > rows.length) info += dcExportCapInfo(cnt).infoSuffix;
+            if (rowsProcessed != null && rowsProcessed > 0) {
+              // Actual billing basis reported by the engine.
+              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: " + rowsProcessed.toLocaleString() + " (≈ " + _dxCreditStr(rowsProcessed) + " credits @ " + _dxRate + "/1M, " + _dxEnv + ")</span>";
+            } else if (cnt > 0) {
+              // Engine reported 0 / no rows-processed for this COUNT (common — COUNT(*) can
+              // be answered from metadata). Show an APPROXIMATE cost based on the row count
+              // so the user still sees a precise-ish credit figure, clearly labelled as an estimate.
+              info += "<br><span style='font-size:10px;color:#94a3b8;'>Rows processed: not reported — est. from " + cnt.toLocaleString() + " rows ≈ " + _dxCreditStr(cnt) + " credits @ " + _dxRate + "/1M, " + _dxEnv + " (approx.)</span>";
+            }
+            sub.innerHTML = info;
+          }
+          // Show Export All button if it was hidden (now we know the total)
+          var eab = panel.querySelector("#dc-export-all-btn");
+          if (eab && cnt > rows.length && !(_filterState[objectName] && _filterState[objectName].active)) {   // a filtered COUNT is not the object total
+            eab.style.display = "";
+            eab.textContent = dcExportCapInfo(cnt).label;
+            eab.title = dcExportCapInfo(cnt).tip;
+            eab.setAttribute("data-total", cnt);
+          }
+        }).catch(function (err) {
+          countBtn.disabled = false; countBtn.textContent = "Count";
+          countBtn.title = "Error: " + (err && err.message || err);
+        });
+      });
+    };
+
+    // "Refresh" — force a fresh query, bypassing the in-memory cache. Use this when
+    rowsWrap.appendChild(rowsInput); rowsWrap.appendChild(reloadBtn); rowsWrap.appendChild(countBtn);
+    ctl.appendChild(rowsWrap);
+
+    // "Hide empty columns" — data is often sparse (many all-null columns), so this
+    // trims the table to only columns that have data in the loaded rows. Pure VIEW
+    // filter: CSV still exports the FULL set. Empties are computed from the FULL column
+    // set (fullCols) against the fetched rows, so the toggle is stable across re-renders.
+    const fullCols = _hep.full;
+    const nonEmptyColumns = _hep.nonEmpty;
+    const emptyCount = _hep.emptyCount;
+    const hideWrap = document.createElement("label");
+    hideWrap.style.cssText = "display:flex;align-items:center;gap:5px;font-size:11px;color:#5c6b8a;cursor:pointer;white-space:nowrap;";
+    const hideCb = document.createElement("input"); hideCb.type = "checkbox";
+    hideCb.checked = columns.length < fullCols.length;   // reflects what is ACTUALLY shown (never a stale flag)
+    hideWrap.appendChild(hideCb);
+    hideWrap.appendChild(document.createTextNode("Hide empty (" + emptyCount + ")"));
+    hideWrap.title = "Show only columns that have data in the loaded rows. CSV still exports all columns.";
+    hideCb.onchange = () => {
+      window.__dcHideEmpty = hideCb.checked;
+      // re-render with the visible column set; always pass the FULL set for CSV + stable recompute.
+      const shown = hideCb.checked ? nonEmptyColumns : fullCols;
+      showAllColumnsTable(objectName, shown, rows, wantRows, fullCols);
+    };
+    if (emptyCount > 0 && _hep.canHide) ctl.appendChild(hideWrap);
+
+    // ── Column visibility toggle ─────────────────────────────────────────────────
+    // Client-side only — hides/shows loaded columns with zero query credits.
+    // Uses CSS nth-child injection (display:none on <col> is Firefox-only).
+    // _hiddenColumns[objectName] persists across re-renders so the choice survives
+    // a filter apply/clear cycle.
+    if (!_hiddenColumns[objectName]) _hiddenColumns[objectName] = {};
+    var _colVizHidden = _hiddenColumns[objectName]; // shorthand reference for this closure
+
+    var colVizBtn = document.createElement("button");
+    colVizBtn.textContent = "Columns ▾";
+    colVizBtn.title = "Show or hide individual columns — no re-query needed.";
+    colVizBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:5px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;position:relative;";
+    ctl.appendChild(colVizBtn);
+
+    // Inject/refresh a <style> block that hides columns via nth-child selectors.
+    // Must live outside openColVizPanel so it can be called at initial render too.
+    // Also manages the "all columns hidden" overlay in the scroll area.
+    function applyColVizCss() {
+      var existing = panel.querySelector("#dc-colviz-style");
+      if (existing) existing.remove();
+      var rules = [];
+      var hiddenCount = 0;
+      columns.forEach(function (fn, i) {
+        if (_colVizHidden[fn]) {
+          hiddenCount++;
+          var n = i + 1;
+          rules.push("#dc-allcols-table th:nth-child(" + n + "),#dc-allcols-table td:not(.dc-sp):nth-child(" + n + "){display:none!important}");   // .dc-sp = scroll spacer cell, must never be hidden
+        }
+      });
+      if (rules.length) {
+        var st = document.createElement("style");
+        st.id = "dc-colviz-style";
+        st.textContent = rules.join("");
+        panel.appendChild(st);
+      }
+      // Show/hide the "all hidden" overlay. Handled here so every code path
+      // that changes visibility (checkbox, Show all, Hide all, initial render) gets it.
+      var allHiddenEl = panel.querySelector("#dc-allcols-hidden-msg");
+      if (hiddenCount >= columns.length) {
+        if (!allHiddenEl) {
+          var msg = document.createElement("div");
+          msg.id = "dc-allcols-hidden-msg";
+          msg.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(255,255,255,.95);z-index:10;font:14px -apple-system,sans-serif;color:#5c6b8a;pointer-events:auto;";
+          msg.innerHTML = "<span style='font-size:28px'>👁</span>" +
+            "<span style='font-weight:600;color:#1e3a5f;'>All columns are hidden</span>" +
+            "<span style='font-size:12px;'>Use <strong>Columns ▾</strong> above to show columns.</span>";
+          var showAllLink = document.createElement("button");
+          showAllLink.textContent = "Show all columns";
+          showAllLink.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:7px 18px;cursor:pointer;font:600 12px -apple-system,sans-serif;";
+          showAllLink.onclick = function () {
+            columns.forEach(function (fn) { delete _colVizHidden[fn]; });
+            applyColVizCss();
+            updateColVizBtn();
+            // Sync checkboxes if the dropdown is open
+            if (colVizPanel && colVizPanel.isConnected) {
+              colVizPanel.querySelectorAll("input[type=checkbox]").forEach(function (cb) { cb.checked = true; });
+            }
+          };
+          msg.appendChild(showAllLink);
+          // Insert into the scroll area so it sits over the table
+          var scrollEl = panel.querySelector("#dc-allcols-scroll");   // the table's own scroll area (NOT the header)
+          if (scrollEl) { scrollEl.style.position = "relative"; scrollEl.appendChild(msg); }
+          else { return; }   // initial call runs before the scroll area exists; it is re-run right after it is added
+        }
+      } else {
+        if (allHiddenEl) allHiddenEl.remove();
+      }
+    }
+
+    var colVizPanel = null;
+    function openColVizPanel() {
+      if (colVizPanel && colVizPanel.isConnected) { colVizPanel.remove(); colVizPanel = null; return; }
+      if (colVizPanel) { colVizPanel = null; }
+      var pop = document.createElement("div");
+      colVizPanel = pop;
+      pop.id = "dc-colviz-panel"; // stable id so closeAllColumnsTable/teardown can remove it
+      pop.style.cssText = "position:fixed;z-index:2147483647;background:#fff;border:1px solid #c9d0da;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px 0;min-width:220px;max-height:60vh;overflow-y:auto;font:12px -apple-system,sans-serif;";
+      // Position below the button
+      var br = colVizBtn.getBoundingClientRect();
+      pop.style.left = Math.min(br.left, window.innerWidth - 240) + "px";
+      pop.style.top = (br.bottom + 4) + "px";
+
+      // Select all / none row
+      var selRow = document.createElement("div");
+      selRow.style.cssText = "display:flex;gap:6px;padding:4px 10px 6px;border-bottom:1px solid #e0e5ee;margin-bottom:4px;";
+      var selAll = document.createElement("button");
+      selAll.textContent = "Show all";
+      selAll.style.cssText = "border:1px solid #c9d0da;background:#f3f6fb;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px -apple-system,sans-serif;color:#1e3a5f;";
+      var selNone = document.createElement("button");
+      selNone.textContent = "Hide all";
+      selNone.style.cssText = "border:1px solid #c9d0da;background:#f3f6fb;border-radius:4px;padding:2px 8px;cursor:pointer;font:11px -apple-system,sans-serif;color:#1e3a5f;";
+      selRow.appendChild(selAll);
+      selRow.appendChild(selNone);
+      pop.appendChild(selRow);
+
+      var colCbs = [];
+      columns.forEach(function (fn, idx) {
+        var row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:center;gap:7px;padding:3px 10px;cursor:pointer;";
+        row.addEventListener("mouseenter", function () { row.style.background = "#f3f6fb"; });
+        row.addEventListener("mouseleave", function () { row.style.background = ""; });
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !_colVizHidden[fn];
+        cb.style.cssText = "cursor:pointer;";
+        var lbl = document.createElement("span");
+        lbl.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        lbl.title = fn;
+        lbl.textContent = (meta[fn] || fn) + (meta[fn] && meta[fn] !== fn ? " (" + fn + ")" : "");
+        row.appendChild(cb);
+        row.appendChild(lbl);
+        pop.appendChild(row);
+        colCbs.push({ cb: cb, fn: fn, idx: idx });
+        cb.addEventListener("change", function () { applyColViz(fn, cb.checked); updateColVizBtn(); });
+      });
+
+      function applyColViz(fn, visible) {
+        if (visible) { delete _colVizHidden[fn]; } else { _colVizHidden[fn] = true; }
+        applyColVizCss();
+      }
+
+      selAll.onclick = function () {
+        colCbs.forEach(function (c) {
+          delete _colVizHidden[c.fn];
+          c.cb.checked = true;
+        });
+        applyColVizCss();
+        updateColVizBtn();
+      };
+      selNone.onclick = function () {
+        colCbs.forEach(function (c) {
+          _colVizHidden[c.fn] = true;
+          c.cb.checked = false;
+        });
+        applyColVizCss();
+        updateColVizBtn();
+      };
+
+      document.body.appendChild(pop);
+      // Click outside closes the panel
+      var closePop = function (e) {
+        if (!pop.contains(e.target) && e.target !== colVizBtn) {
+          pop.remove(); colVizPanel = null;
+          document.removeEventListener("mousedown", closePop, true);
+        }
+      };
+      document.addEventListener("mousedown", closePop, true);
+    }
+
+    function updateColVizBtn() {
+      var hiddenCount = columns.filter(function (fn) { return _colVizHidden[fn]; }).length;
+      colVizBtn.textContent = hiddenCount > 0 ? "Columns ▾ (" + hiddenCount + " hidden)" : "Columns ▾";
+      colVizBtn.style.background = hiddenCount > 0 ? "#fef3c7" : "#fff";
+      colVizBtn.style.borderColor = hiddenCount > 0 ? "#d97706" : "#c9d0da";
+      colVizBtn.style.color = hiddenCount > 0 ? "#92400e" : "#1e3a5f";
+    }
+
+    colVizBtn.onclick = function (e) { e.stopPropagation(); openColVizPanel(); };
+    updateColVizBtn(); // reflect any persisted hidden columns from a previous render
+    applyColVizCss();  // apply CSS for any columns hidden from a prior render
+
+    // Relaunch the SQL editor from the results table (the editor closes on a
+    // successful Run so it doesn't cover the data — this reopens it to edit/re-run).
+    const sqlBtn = document.createElement("button");
+    sqlBtn.textContent = "Edit SQL";
+    sqlBtn.title = "Write or edit the SQL for this table yourself (single-table SELECT). Use it when the filter bar is not flexible enough.";
+    sqlBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+    sqlBtn.onclick = () => {
+      var activeFilter = _filterState[objectName];
+      if (activeFilter && activeFilter.active && !activeFilter.fromSql) {
+        if (!confirm("You have a UI filter active. Opening the SQL editor will reset the filter so they don't conflict.\n\nProceed?")) return;
+        _filterState[objectName] = null;
+      }
+      try { if (typeof _openSoqlEditor === "function") _openSoqlEditor(); } catch (e) {}
+    };
+
+    const csvBtn = document.createElement("button");
+    // FIX 5: Download CSV label shows loaded row count
+    var filterTotal = _filterCount[objectName] || 0;
+    var csvLabel = filterTotal > rows.length
+      ? dcFilteredCsvInfo(filterTotal).label
+      : "⬇ Download CSV (" + rows.length.toLocaleString() + " rows)";
+    csvBtn.textContent = csvLabel;
+    csvBtn.title = dcFilteredCsvInfo(filterTotal > rows.length ? filterTotal : 0).tip;
+    csvBtn.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
+    csvBtn.onclick = () => {
+      // If a batched download is already running, this click cancels it (Explorer-local flag).
+      if (csvBtn.dataset.exporting === "true") {
+        _explorerExportCancel = true;
+        csvBtn.textContent = "Cancelling…"; csvBtn.disabled = true;
+        return;
+      }
+      var fc = _filterCount[objectName] || 0;
+      var fs2 = _filterState[objectName];
+      // If filter active and more rows exist than loaded → paginate to get all (cancellable)
+      if (fs2 && fs2.active && fc > rows.length) {
+        var csvCap = dcFilteredCsvInfo(fc);
+        if (!confirm(csvCap.confirmMsg)) return;
+        _explorerExportCancel = false;
+        csvBtn.dataset.exporting = "true"; csvBtn.disabled = false;
+        csvBtn.textContent = "✕ Cancel export";
+        csvBtn.style.background = "#dc2626"; csvBtn.style.borderColor = "#dc2626";
+        var restoreCsvUi = function () {
+          csvBtn.dataset.exporting = "false"; csvBtn.disabled = false;
+          csvBtn.textContent = csvLabel;
+          csvBtn.style.background = "#0d6efd"; csvBtn.style.borderColor = "#0d6efd";
+        };
+        var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+        var exportCols = fullCols.map(sqlQuoteIdent).join(", ");
+        var wherePart = fs2.where ? " WHERE " + fs2.where : "";
+        var allSql = "SELECT " + exportCols + " FROM " + sqlQuoteIdent(objectName) + wherePart;
+        exportPaginatedCsv(allSql, ds2, function (fetched) {
+          if (_explorerExportCancel) return;
+          csvBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + " rows…)";
+        }, function () { return _explorerExportCancel; }).then(function (res) {
+          restoreCsvUi();
+          if (csvCap.capped) csvBtn.textContent = csvCap.doneLabel(res.totalRows);
+          var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_filtered_" + new Date().toISOString().slice(0, 10) + ".csv";
+          var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+          setTimeout(function () { URL.revokeObjectURL(res.blobUrl); }, 15000);
+        }).catch(function (err) {
+          var wasCancelled = _explorerExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          restoreCsvUi();
+          _explorerExportCancel = false;
+          if (!wasCancelled) alert("Export failed: " + (err && err.message || err));
+        });
+        return;
+      }
+      // Otherwise download from memory (already have all data) — instant, nothing to cancel.
+      downloadRowsCsv(objectName, fullCols, rows);
+    };
+
+    // "Export All" — fetches ALL rows from the server (up to 500k) via paginated query.
+    // Visible when we know total > loaded rows, or after user clicks Count.
+    const exportAllBtn = document.createElement("button");
+    exportAllBtn.id = "dc-export-all-btn";
+    // Export All always shows full object count (not filtered). Use Count button result if available.
+    var isFiltered = !!(_filterState[objectName] && _filterState[objectName].active);
+    var exportAllTotal = isFiltered ? 0 : (serverTotal > rows.length ? serverTotal : 0);
+    exportAllBtn.textContent = dcExportCapInfo(exportAllTotal).label;
+    exportAllBtn.title = dcExportCapInfo(exportAllTotal).tip;
+    exportAllBtn.style.cssText = "border:1px solid #059669;background:#059669;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;";
+    // No records loaded and none reported on the server → nothing to export.
+    if (!rows.length && !serverTotal) {
+      exportAllBtn.disabled = true; exportAllBtn.style.opacity = "0.5"; exportAllBtn.style.cursor = "not-allowed";
+      exportAllBtn.title = "This object has no records — nothing to export.";
+    }
+    // Export All with a working cancel. Cancel uses a GLOBAL window flag that
+    // exportPaginatedCsv actually checks between batches (a function-local var was
+    // out of scope there, so cancel never fired — that bug is fixed here).
+    // Holds the last Export All result so a repeat click re-downloads the SAME file for
+    // free instead of silently re-querying (which would burn credits again).
+    var _exportAllDone = null;   // { blobUrl, filename, rows }
+    exportAllBtn.onclick = function () {
+      // If export is in progress, this click cancels it (Explorer-local flag).
+      if (exportAllBtn.dataset.exporting === "true") {
+        _explorerExportCancel = true;
+        exportAllBtn.textContent = "Cancelling…";
+        exportAllBtn.disabled = true;
+        return;
+      }
+      // Already exported once this session → don't re-query silently. Offer the saved
+      // file (no credits) or an explicit fresh re-export.
+      if (_exportAllDone && _exportAllDone.blobUrl) {
+        var again = confirm("Already exported " + _exportAllDone.rows.toLocaleString() + " rows this session.\n\nOK = re-download the SAME file (no query, no credits)\nCancel = fetch fresh from Salesforce (uses credits)");
+        if (again) {
+          var a0 = document.createElement("a"); a0.href = _exportAllDone.blobUrl; a0.download = _exportAllDone.filename; a0.click();
+          return;
+        }
+        // fall through to a fresh export
+      }
+      // Export All is ALWAYS the unfiltered object, so a filter's row count must never be used here.
+      var btnTotal = isFiltered ? (_originalTotal[objectName] || 0) : (parseInt(exportAllBtn.getAttribute("data-total"), 10) || serverTotal || filteredTotal || 0);
+      var capInfo = dcExportCapInfo(btnTotal);
+      var confirmMsg = capInfo.confirmMsg;
+      if (!confirm(confirmMsg)) return;
+      _explorerExportCancel = false;
+      exportAllBtn.dataset.exporting = "true";
+      exportAllBtn.textContent = "✕ Cancel Export";
+      exportAllBtn.style.background = "#dc2626"; exportAllBtn.style.borderColor = "#dc2626";
+      exportAllBtn.disabled = false; // stays clickable so the user can cancel
+      var originalText = capInfo.label;
+      var restoreBtnUi = function () {
+        exportAllBtn.dataset.exporting = "false";
+        exportAllBtn.disabled = false;
+        exportAllBtn.textContent = originalText;
+        exportAllBtn.style.background = "#059669"; exportAllBtn.style.borderColor = "#059669";
+      };
+      var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      var allCols = fullCols.map(sqlQuoteIdent).join(", ");
+      var exportSql = "SELECT " + allCols + " FROM " + sqlQuoteIdent(objectName);
+      ensureQueryContext(function (ready) {
+        if (!ready) {
+          restoreBtnUi();
+          alert("Session not ready — scroll the Data Explorer table first, then retry.");
+          return;
+        }
+        exportPaginatedCsv(exportSql, ds, function (fetched, total) {
+          if (_explorerExportCancel) return; // don't overwrite the "Cancelling…" label
+          exportAllBtn.textContent = "✕ Cancel (" + fetched.toLocaleString() + (total > fetched ? " / " + total.toLocaleString() : "") + ")";
+        }, function () { return _explorerExportCancel; }).then(function (res) {
+          restoreBtnUi();
+          exportAllBtn.textContent = capInfo.doneLabel(res.totalRows);
+          if (res.totalRows === 0) { exportAllBtn.textContent = "No data"; return; }
+          var fn = objectName.replace(/[^a-zA-Z0-9_]/g, "") + "_ALL_" + new Date().toISOString().slice(0, 10) + ".csv";
+          var a = document.createElement("a"); a.href = res.blobUrl; a.download = fn; a.click();
+          // Keep the blob so a repeat click re-downloads the SAME file for free (no
+          // re-query). Not revoked here; released when the table is closed/rebuilt.
+          _exportAllDone = { blobUrl: res.blobUrl, filename: fn, rows: res.totalRows };
+        }).catch(function (err) {
+          var wasCancelled = _explorerExportCancel || /cancelled by user/i.test(String(err && err.message || err));
+          restoreBtnUi();
+          _explorerExportCancel = false;
+          if (wasCancelled) { exportAllBtn.textContent = originalText; return; }
+          alert("Export failed: " + (err && err.message || err));
+        });
+      });
+    };
+
+    const closeBtn = document.createElement("button");
+    closeBtn.innerHTML = "&#x2715;";
+    closeBtn.title = "Close this table. Your data stays in memory — reopen it free via the launcher's \"Show last results\".";
+    closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:16px;color:#5c6b8a;padding:2px 8px;line-height:1;";
+    closeBtn.onclick = function () { _explorerExportCancel = true; closeAllColumnsTable(); };
+    // "← Columns" — show only when there are more columns available than loaded.
+    // Scenarios:
+    //   • Not all loaded (most common) → show: user can go back and tick more columns.
+    //   • All available columns already loaded → hide: nothing to add.
+    //   • "Hide empty" is on (fewer cols shown) → still compare TOTAL available vs LOADED set.
+    //   • Column visibility toggle hides some → irrelevant (client-side only, not about loaded set).
+    // `pool` = all available columns for this object; `fullCols` = all LOADED column names.
+    var _loadedSet   = (allColumns || columns);  // fullCols if hide-empty is on
+    var _hasMoreCols = pool.length > 0 && _loadedSet.length < pool.length;
+
+    var changeColsBtn = null;
+    if (_hasMoreCols) {
+      changeColsBtn = document.createElement("button");
+      var _remaining = pool.length - _loadedSet.length;
+      changeColsBtn.textContent = "← Columns (" + _remaining + " more)";
+      changeColsBtn.title = _remaining + " column" + (_remaining === 1 ? "" : "s") + " not yet loaded. Click to go back to the column picker and add them — already-loaded columns are reused at zero credits.";
+      changeColsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;white-space:nowrap;";
+      changeColsBtn.onclick = function () {
+        // Persist the currently-loaded columns as lastApplied so the picker re-opens
+        // with exactly these fields pre-checked (not the SF page's 10-col default).
+        try { exploreCache(objectName).lastApplied = (allColumns || columns).slice(); } catch (e) {}
+        // Close THIS results table before opening the picker so it isn't left behind it.
+        try { closeAllColumnsTable(); } catch (e) {}
+        // Force a FRESH picker rebuild: openExploreModal reuses a cached hidden modal for
+        // the same object (just display:flex), which would ignore the lastApplied set above.
+        // Discarding the cached modal makes it rebuild with our loaded columns pre-checked.
+        try { if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; } } catch (e) {}
+        try { openExploreModal(); } catch (e) {}
+      };
+    }
+
+    if (changeColsBtn) ctl.appendChild(changeColsBtn);
+    // Full screen / restore — same idea as the Activation panel's ⛶. Pure layout: it only changes the
+    // panel's size/position (the table re-windows itself via its ResizeObserver); no data is touched.
+    const fsBtn = document.createElement("button");
+    fsBtn.textContent = "⛶";
+    fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+    fsBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 14px -apple-system,sans-serif;color:#1e3a5f;line-height:1;";
+    var _fsOn = false, _fsSaved = null;
+    var _fsProps = ["left", "top", "right", "bottom", "width", "height", "max-width", "transform", "border-radius"];
+    function setFullScreen(on) {
+      if (on === _fsOn) return;
+      if (on) {
+        _fsSaved = _fsProps.map(function (k) { return [k, panel.style.getPropertyValue(k), panel.style.getPropertyPriority(k)]; });
+        panel.style.setProperty("left", "0", "important"); panel.style.setProperty("top", "0", "important");
+        panel.style.setProperty("right", "auto", "important"); panel.style.setProperty("bottom", "auto", "important");
+        panel.style.setProperty("width", "100vw", "important"); panel.style.setProperty("height", "100vh", "important");
+        panel.style.setProperty("max-width", "100vw", "important"); panel.style.setProperty("transform", "none", "important");
+        panel.style.setProperty("border-radius", "0", "important");
+        fsBtn.textContent = "🗗"; fsBtn.title = "Restore the previous size (or press Esc).";
+      } else {
+        _fsProps.forEach(function (k) { panel.style.removeProperty(k); });
+        (_fsSaved || []).forEach(function (t) { if (t[1]) panel.style.setProperty(t[0], t[1], t[2]); });
+        fsBtn.textContent = "⛶"; fsBtn.title = "Full screen — make this table fill the whole window. Click again (or press Esc) to restore.";
+      }
+      _fsOn = on;
+    }
+    fsBtn.onclick = function () { setFullScreen(!_fsOn); };
+    // Esc restores (only while this panel is full screen and nothing inside it is being edited).
+    var _fsEsc = function (ev) {
+      if (!panel.isConnected) { document.removeEventListener("keydown", _fsEsc, true); return; }
+      if (ev.key === "Escape" && _fsOn) { setFullScreen(false); ev.stopPropagation(); }
+    };
+    document.addEventListener("keydown", _fsEsc, true);
+    const xlsxBtn = document.createElement("button");
+    xlsxBtn.textContent = "⬇ Excel";
+    xlsxBtn.title = "Download the loaded rows as a formatted Excel file: JSON-blob columns are expanded into separate columns, numbers stay numbers, header is bold/frozen/filterable.";
+    xlsxBtn.style.cssText = csvBtn.style.cssText.replace(/background:[^;]+;/, "background:#16a34a;").replace(/border:[^;]+;/, "border:1px solid #16a34a;");
+    xlsxBtn.onclick = () => downloadRowsXlsx(objectName, fullCols, rows, xlsxBtn);
+    const wrapBtn = document.createElement("button");
+    wrapBtn.textContent = "↵ Wrap";
+    wrapBtn.title = "Wrap long values onto up to 3 lines per row (rows stay a fixed height so scrolling stays smooth). Hover a cell for the full value, or click it to open the viewer.";
+    wrapBtn.style.cssText = "border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px system-ui;";
+    wrapBtn.onclick = () => { const on = wrapBtn.dataset.on !== "1"; wrapBtn.dataset.on = on ? "1" : "0"; wrapBtn.style.background = on ? "#e0f2fe" : "#fff"; wrapBtn.style.borderColor = on ? "#0284c7" : "#cbd5e1"; if (typeof setWrapMode === "function") setWrapMode(on); };
+    ctl.appendChild(sqlBtn); ctl.appendChild(csvBtn); ctl.appendChild(xlsxBtn); ctl.appendChild(wrapBtn); ctl.appendChild(exportAllBtn); topBtns.appendChild(fsBtn); topBtns.appendChild(closeBtn);
+    panel.appendChild(hdr);
+
+    // ── Type-aware FILTER row ───────────────────────────────────────────────────
+    // Pick a column → the value control adapts to the column's inferred type:
+    //   boolean → true/false dropdown; number → operator + number; date → operator +
+    //   date; text → operator (=, contains, starts) + text. Builds a WHERE and re-runs
+    //   the query server-side via runRawSql. Type is inferred from the loaded values.
+    function inferType(fn) {
+      var seen = 0, numCount = 0, dateCount = 0, boolCount = 0, textCount = 0;
+      for (var i = 0; i < rows.length && seen < 20; i++) {
+        var v = rows[i][fn]; if (v === null || v === undefined || v === "") continue; seen++;
+        if (typeof v === "boolean" || v === "true" || v === "false") { boolCount++; continue; }
+        var s = String(v);
+        if (/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/.test(s)) { dateCount++; continue; }
+        if (/^-?\d+(\.\d+)?$/.test(s) && s.length <= 15) { numCount++; continue; }
+        textCount++;
+      }
+      if (!seen) return "text";
+      if (boolCount === seen) return "bool";
+      if (dateCount === seen) return "date";
+      if (numCount === seen && numCount > 0) return "number";
+      return "text";
+    }
+    const fullColsForFilter = allColumns || columns;
+    // Escape SQL LIKE special characters so user values are treated as literals
+    function escapeLike(s) { return s.replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_"); }
+    // Build one WHERE fragment from a {colSel, opSel, valCtl} condition row.
+    function fragOf(cond) {
+      var fn = cond.colSel.value, op = cond.opSel.value, t = inferType(fn);
+      if (!fn) return null;                 // no column chosen yet → skip this condition
+      var raw = (cond.valCtl && cond.valCtl.value != null) ? String(cond.valCtl.value).trim() : "";
+      var q = '"' + fn.replace(/"/g, '""') + '"';
+      if (op === "IS NULL") return q + " IS NULL";
+      if (op === "IS NOT NULL") return q + " IS NOT NULL";
+      var rawLower = raw.toLowerCase();
+      // completely empty value → IS NULL / IS NOT NULL
+      if (rawLower === "" || rawLower === "null") {
+        if (op === "=" ) return q + " IS NULL";
+        if (op === "!=") return q + " IS NOT NULL";
+        return null;
+      }
+      // user typed '' (SQL empty-string syntax) → pass through as literal empty string
+      if (raw === "''") {
+        if (op === "=" ) return q + " = ''";
+        if (op === "!=") return q + " != ''";
+        return null; // '' doesn't make sense for LIKE / comparison ops
+      }
+      var litStr = "'" + raw.replace(/'/g, "''") + "'";
+      if (t === "bool") return q + " = " + (raw === "true" ? "true" : "false");
+      if (t === "number") return q + " " + op + " " + litStr;
+      if (t === "date") return q + " " + op + " " + litStr;
+      if (op === "contains") return q + " LIKE '%" + escapeLike(raw) + "%' ESCAPE '\\\\'";
+      if (op === "starts with") return q + " LIKE '" + escapeLike(raw) + "%' ESCAPE '\\\\'";
+
+      if (op === "!=") return q + " != " + litStr;
+      return q + " = " + litStr;
+    }
+
+    // ── multi-condition filter bar ──────────────────────────────────────────────
+    const fbar = document.createElement("div");
+    fbar.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:7px 14px;border-bottom:1px solid #e0e5ee;background:#fafbfd;flex-shrink:0;font-size:11px;color:#5c6b8a;";
+    const condsWrap = document.createElement("div");
+    condsWrap.style.cssText = "display:flex;flex-direction:column;gap:5px;";
+    const conditions = [];   // list of {row, colSel, opSel, valCtl}
+
+    // AND/OR joiner between conditions (applies to all — simple & predictable)
+    const joinSel = document.createElement("select");
+    joinSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:3px 5px;font:600 11px -apple-system,sans-serif;color:#16325c;";
+    ["AND", "OR"].forEach(function (j) { var o = document.createElement("option"); o.value = j; o.textContent = j; joinSel.appendChild(o); });
+    joinSel.addEventListener("change", function () { relabelJoiners(); });
+
+    function addCondition(preset) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+      // leading joiner label (AND/OR) for rows after the first
+      const joinCell = document.createElement("span");
+      joinCell.style.cssText = "min-width:38px;text-align:right;font-weight:600;color:#8a94a6;";
+      // Column search — for wide objects (100+ fields) typing filters the dropdown so
+      // you don't scroll a huge list. Matches on both the label and the API name.
+      const colSearch = document.createElement("input");
+      colSearch.type = "text";
+      colSearch.placeholder = "search…";
+      colSearch.title = "Type to filter the column list (matches label or API name)";
+      colSearch.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;width:90px;";
+      const colSel = document.createElement("select");
+      colSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;max-width:220px;";
+      function populateCols(query) {
+        var q = (query || "").trim().toLowerCase();
+        var keep = colSel.value;                    // preserve current selection if still visible
+        colSel.innerHTML = "";
+        // Search-driven: with NO query we show only the prompt (no column list). The user
+        // types in the search box to reveal matching columns, then picks one.
+        var ph = document.createElement("option"); ph.value = ""; ph.disabled = true;
+        ph.textContent = q ? "Select column…" : "Type in search box →";
+        colSel.appendChild(ph);
+        var matched = 0;
+        if (q) {
+          fullColsForFilter.forEach(function (fn) {
+            var label = meta[fn] || fn;
+            if (label.toLowerCase().indexOf(q) < 0 && fn.toLowerCase().indexOf(q) < 0) return;
+            var o = document.createElement("option"); o.value = fn; o.textContent = label; colSel.appendChild(o);
+            matched++;
+          });
+          if (!matched) { var o0 = document.createElement("option"); o0.value = ""; o0.textContent = "(no match)"; o0.disabled = true; colSel.appendChild(o0); }
+        }
+        // Keep prior selection when it still matches; otherwise leave the prompt selected
+        // (never auto-pick a column).
+        if (keep && Array.prototype.some.call(colSel.options, function (o) { return o.value === keep; })) colSel.value = keep;
+        else colSel.value = "";
+      }
+      populateCols("");
+      colSearch.addEventListener("input", function () { populateCols(colSearch.value); });
+      // Restore a saved-filter column: it won't be in the (empty) search list, so add its
+      // option explicitly and pre-fill the search box with its label for clarity.
+      if (preset && preset.col) {
+        var pl = meta[preset.col] || preset.col;
+        var po = document.createElement("option"); po.value = preset.col; po.textContent = pl; colSel.appendChild(po);
+        colSel.value = preset.col;
+        colSearch.value = pl;
+      }
+      const opSel = document.createElement("select");
+      opSel.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;";
+      const valWrap = document.createElement("span");
+      const cond = { row: row, colSel: colSel, opSel: opSel, valCtl: null };
+      function rebuild() {
+        const t = inferType(colSel.value);
+        opSel.innerHTML = "";
+        const ops = t === "bool" ? ["=", "IS NULL", "IS NOT NULL"] :
+                    t === "number" ? ["=", "!=", ">", ">=", "<", "<=", "IS NULL", "IS NOT NULL"] :
+                    t === "date" ? ["=", ">", ">=", "<", "<=", "IS NULL", "IS NOT NULL"] :
+                    ["=", "!=", "contains", "starts with", "IS NULL", "IS NOT NULL"];
+        ops.forEach(function (op) { var o = document.createElement("option"); o.value = op; o.textContent = op; opSel.appendChild(o); });
+        if (preset && preset.op && ops.indexOf(preset.op) >= 0) opSel.value = preset.op;
+        valWrap.innerHTML = "";
+        if (t === "bool") {
+          cond.valCtl = document.createElement("select");
+          ["true", "false"].forEach(function (b) { var o = document.createElement("option"); o.value = b; o.textContent = b; cond.valCtl.appendChild(o); });
+        } else {
+          cond.valCtl = document.createElement("input");
+          cond.valCtl.type = "text";
+          cond.valCtl.placeholder = t === "date" ? "YYYY-MM-DD" : "value";
+        }
+        // Hide value input for IS NULL / IS NOT NULL
+        function toggleValVisibility() {
+          var isNullOp = opSel.value === "IS NULL" || opSel.value === "IS NOT NULL";
+          valWrap.style.display = isNullOp ? "none" : "";
+        }
+        opSel.addEventListener("change", function () { toggleValVisibility(); updateFilterBtnStates(); });
+        toggleValVisibility();
+        cond.valCtl.style.cssText = "border:1px solid #c9d0da;border-radius:5px;padding:4px 6px;font:12px -apple-system,sans-serif;color:#16325c;min-width:120px;";
+        if (preset && preset.val != null) cond.valCtl.value = preset.val;   // restore saved value
+        // FIX 3: Update button states when value changes
+        cond.valCtl.oninput = function () { updateFilterBtnStates(); };
+        cond.valCtl.onchange = function () { updateFilterBtnStates(); };
+        valWrap.appendChild(cond.valCtl);
+      }
+      colSel.onchange = rebuild; rebuild();
+      // once the preset is consumed for this row, clear it so onchange doesn't re-apply
+      var _presetUsed = preset; preset = null;
+      const rm = document.createElement("button");
+      rm.textContent = "×"; rm.title = "Remove this condition";
+      rm.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:2px 8px;cursor:pointer;color:#c0392b;font:700 12px system-ui;";
+      rm.onclick = function () {
+        var idx = conditions.indexOf(cond);
+        if (idx >= 0) conditions.splice(idx, 1);
+        row.remove(); relabelJoiners();
+        updateFilterBtnStates(); // FIX 3: Update button states after removing condition
+      };
+      row.appendChild(joinCell); row.appendChild(colSearch); row.appendChild(colSel); row.appendChild(opSel); row.appendChild(valWrap); row.appendChild(rm);
+      cond.joinCell = joinCell;
+      conditions.push(cond);
+      condsWrap.appendChild(row);
+      relabelJoiners();
+    }
+    function relabelJoiners() {
+      var op = joinSel.value || "AND";
+      conditions.forEach(function (c, i) {
+        if (i === 0) { c.joinCell.textContent = "Where"; }
+        else {
+          c.joinCell.innerHTML = "";
+          if (i === conditions.length - 1) {
+            // Last gap: put the live <select> so user can change AND/OR
+            c.joinCell.appendChild(joinSel);
+          } else {
+            // Middle gaps: static label that mirrors joinSel's current value
+            var lbl = document.createElement("span");
+            lbl.textContent = op;
+            lbl.style.cssText = "font:600 11px -apple-system,sans-serif;color:#0d6efd;padding:0 4px;";
+            c.joinCell.appendChild(lbl);
+          }
+        }
+      });
+    }
+    // combine all conditions into one WHERE (joined by AND/OR)
+    function buildWhere() {
+      var frags = conditions.map(fragOf).filter(Boolean);
+      if (!frags.length) return null;
+      return frags.join(" " + joinSel.value + " ");
+    }
+
+    // controls row: + Add filter | Apply | Clear | status
+    const ctrlRow = document.createElement("div");
+    ctrlRow.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;";
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add condition";
+    addBtn.title = "Add another filter condition (column + operator + value). Multiple conditions combine with the AND/OR selector between them.";
+    addBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    addBtn.onclick = function () {
+      // Warn if SQL filter is active — adding a UI condition will replace it when Apply runs
+      var fs = _filterState[objectName];
+      if (fs && fs.active && fs.fromSql) {
+        if (!confirm("A SQL filter is currently active. Adding a UI condition and clicking Apply will replace the SQL filter.\n\nProceed?")) return;
+      }
+      addCondition();
+      updateFilterBtnStates();
+      // Immediate feedback + bring the new row into view (wide objects have many rows)
+      var lastRow = condsWrap.lastElementChild;
+      if (lastRow && lastRow.scrollIntoView) { try { lastRow.scrollIntoView({ block: "nearest" }); } catch (e) {} }
+      addBtn.style.background = "#eef4ff";
+      setTimeout(function () { addBtn.style.background = "#fff"; }, 150);
+    };
+    const applyF = document.createElement("button");
+    applyF.textContent = "Apply filter";
+    applyF.title = "Run your conditions as a WHERE query on Salesforce and show matching rows (uses a query / Data Cloud credits).";
+    applyF.style.cssText = "border:1px solid #0d6efd;background:#0d6efd;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+    const clearF = document.createElement("button");
+    clearF.textContent = "Clear";
+    clearF.title = "Remove all filter conditions and reload the unfiltered rows.";
+    clearF.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#1e3a5f;";
+    const fStatus = document.createElement("span"); fStatus.style.cssText = "color:#8a94a6;";
+    // Snapshot the current condition rows into plain data (for persistence across re-render).
+    function snapshotConds() {
+      return conditions.map(function (c) {
+        return { col: c.colSel.value, op: c.opSel.value, val: (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value) : "" };
+      });
+    }
+    function runFilter(whereClause) {
+      const cols = (allColumns || columns);
+      const wherePart = whereClause ? " WHERE " + whereClause : "";
+      const dataSql = "SELECT " + cols.map(function (c) { return '"' + c.replace(/"/g, '""') + '"'; }).join(", ") +
+                  " FROM " + sqlQuoteIdent(objectName) + wherePart + " LIMIT " + DC_MAX_FETCH_ROWS;
+      const countSql = "SELECT COUNT(*) FROM " + sqlQuoteIdent(objectName) + wherePart;
+      // capture user's current Rows setting so re-render keeps it
+      var _wantBeforeFilter = parseInt(rowsInput.value, 10) || wantRows || 1000;
+      applyF.disabled = true;
+      var _applyLabel = applyF.textContent;
+      applyF.textContent = whereClause ? "Filtering…" : "Clearing…";
+      fStatus.innerHTML = "<span style='display:inline-block;width:10px;height:10px;border:2px solid #cbd5e1;border-top-color:#0d6efd;border-radius:50%;animation:dc-spin .7s linear infinite;vertical-align:middle;margin-right:6px;'></span>" + (whereClause ? "Applying filter…" : "Clearing filter…");
+      if (!document.getElementById("dc-spin-style")) { var _ss = document.createElement("style"); _ss.id = "dc-spin-style"; _ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}"; document.head.appendChild(_ss); }
+      showTableSpinner(panel, whereClause ? "Applying filter — running query…" : "Clearing filter…");
+      // FIX 8: When UI filter is applied, clear any SQL filter (fromSql flag)
+      _filterState[objectName] = whereClause ? { conds: snapshotConds(), join: joinSel.value, active: true, where: whereClause, fromSql: false } : null;
+      _filterCount[objectName] = 0;
+      try { var _preDs3 = readPageDataSpace(); if (_preDs3 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs3); } } catch (e) {}
+      const ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+      ensureQueryContext(function (ready) {
+        if (!ready) { applyF.disabled = false; applyF.textContent = _applyLabel; fStatus.textContent = "query service unavailable"; hideTableSpinner(panel); return; }
+        var dataResult = null; var countResult = 0; var done = 0; var timedOut = false; var cancelled = false;
+        // Wire Cancel button on the spinner overlay to stop re-render
+        var spinnerEl = panel.querySelector(".dc-table-spinner");
+        var cancelBtnEl = spinnerEl && spinnerEl.querySelector("button");
+        if (cancelBtnEl) {
+          cancelBtnEl.onclick = function () {
+            cancelled = true;
+            timedOut = true; // reuse timedOut to block finish()
+            spinnerEl.style.display = "none";
+            applyF.disabled = false; applyF.textContent = _applyLabel;
+            _filterState[objectName] = null;
+            _filterCount[objectName] = 0;
+            done = 2;
+            // Force-enable Clear so user can dismiss conditions after cancel.
+            // Do NOT call updateFilterBtnStates — it re-disables clearF when _filterState is null.
+            clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
+            fStatus.innerHTML = "<span style='color:#6b7280;'>Cancelled — click Clear to reset or edit conditions</span>";
+          };
+        }
+        var _filterTimeout = setTimeout(function () {
+          timedOut = true;
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>Query timed out — try a narrower filter or fewer columns</span>";
+          hideTableSpinner(panel);
+          _filterState[objectName] = null;
+          done = 2;
+        }, 30000);
+        function finish() {
+          if (timedOut) return;
+          clearTimeout(_filterTimeout);
+          if (++done < 2) return;
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          if (!dataResult) { hideTableSpinner(panel); return; }
+          // Only store count for filtered queries — not for unfiltered (clear)
+          _filterCount[objectName] = whereClause ? countResult : 0;
+          // zero-result filter: keep existing table visible, just update status — do NOT
+          // call showAllColumnsTable (it would hit the empty-object guard and freeze the spinner)
+          if (whereClause && (!dataResult.rows || !dataResult.rows.length)) {
+            hideTableSpinner(panel);
+            _filterCount[objectName] = 0;
+            _filterState[objectName] = null;
+            applyF.disabled = false; applyF.style.opacity = "1"; applyF.style.cursor = "pointer";
+            // Force-enable Clear so user can dismiss conditions and try again.
+            // Do NOT call updateFilterBtnStates here — it would re-disable clearF because
+            // _filterState is null, but we want it enabled so the user can clear conditions.
+            clearF.disabled = false; clearF.style.opacity = "1"; clearF.style.cursor = "pointer";
+            fStatus.innerHTML = "<span style='color:#b45309;font-weight:600;'>No rows match — click Clear to reset</span>";
+            return;
+          }
+          var msg = dataResult.rows.length.toLocaleString() + " rows loaded";
+          if (countResult > dataResult.rows.length) {
+            msg += " of <b>" + countResult.toLocaleString() + "</b> matching";
+            msg += " — Download CSV will fetch all";
+          } else if (countResult > 0) {
+            msg = "<b>" + countResult.toLocaleString() + "</b> rows match";
+          }
+          // stash message so the rebuilt modal can restore it
+          if (_filterState[objectName]) _filterState[objectName]._statusMsg = msg;
+          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + msg + "</span>";
+          // Hide spinner before re-render so it never gets stuck if showAllColumnsTable exits early
+          hideTableSpinner(panel);
+          // pass _wantBeforeFilter so Rows input keeps the user's value, not filtered row count
+          try {
+            showAllColumnsTable(objectName, cols, dataResult.rows, _wantBeforeFilter, cols);
+          } catch (renderErr) {
+            fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>Display error: " + String(renderErr && renderErr.message || renderErr).replace(/</g,"&lt;") + "</span>";
+          }
+          // Note: do NOT call updateFilterBtnStates() here — showAllColumnsTable rebuilds the
+          // panel and its own construction calls updateFilterBtnStates() in the correct closure.
+        }
+        runRawSql(dataSql, ds, DC_MAX_FETCH_ROWS).then(function (res) {
+          dataResult = res;
+          // If COUNT already finished and shows more than data returned,
+          // update __serverRowCount so UI/Download knows there's more
+          if (countResult > res.rows.length) res.rows.__serverRowCount = countResult;
+          finish();
+        }).catch(function (err) {
+          if (timedOut) return; // timeout or cancel already handled
+          applyF.disabled = false; applyF.textContent = _applyLabel;
+          fStatus.innerHTML = "<span style='color:#dc2626;font-weight:600;'>" + String(err && err.message || err).replace(/</g,"&lt;") + "</span>";
+          hideTableSpinner(panel);
+          _filterState[objectName] = null;
+          done = 2; // prevent the pending COUNT from calling finish() and rebuilding
+        });
+        runRawSql(countSql, ds, 1).then(function (cr) {
+          if (cr.rows.length > 0) {
+            var keys = Object.keys(cr.rows[0]);
+            for (var ki = 0; ki < keys.length; ki++) { var v = parseInt(cr.rows[0][keys[ki]], 10); if (!isNaN(v) && v >= 0) { countResult = v; break; } }
+          }
+          finish();
+        }).catch(function () { finish(); });
+      });
+    }
+    // FIX 2 & 3: Button state management
+    function updateFilterBtnStates() {
+      // Disable clearF if no filter is active
+      var isActive = _filterState[objectName] && _filterState[objectName].active;
+      clearF.disabled = !isActive;
+      clearF.style.opacity = isActive ? "1" : "0.5";
+      clearF.style.cursor = isActive ? "pointer" : "not-allowed";
+      // Disable applyF if no condition has a filled value
+      var hasFilledCondition = conditions.some(function (c) {
+        if (!c.colSel.value) return false;   // must have a column chosen
+        var op = c.opSel && c.opSel.value;
+        if (op === "IS NULL" || op === "IS NOT NULL") return true;   // no value needed
+        var val = (c.valCtl && c.valCtl.value != null) ? String(c.valCtl.value).trim() : "";
+        // empty value or "null" with = / != will become IS NULL / IS NOT NULL — counts as filled
+        if (val === "" || val.toLowerCase() === "null") return op === "=" || op === "!=";
+        return val !== "" || inferType(c.colSel.value) === "bool";
+      });
+      applyF.disabled = !hasFilledCondition;
+      applyF.style.opacity = hasFilledCondition ? "1" : "0.5";
+      applyF.style.cursor = hasFilledCondition ? "pointer" : "not-allowed";
+    }
+    applyF.onclick = function () { const w = buildWhere(); if (!w) { fStatus.textContent = "add at least one condition with a value"; return; } runFilter(w); };
+    clearF.onclick = function () {
+      // Allow clear if filter was active OR if conditions are shown after a zero-result run
+      var hasConditions = conditions.length > 0;
+      if ((!_filterState[objectName] || !_filterState[objectName].active) && !hasConditions) return;
+      // Clear condition rows visually
+      while (condsWrap.firstChild) { condsWrap.removeChild(condsWrap.firstChild); }
+      conditions.length = 0;
+      _filterState[objectName] = null;
+      _filterCount[objectName] = 0;
+      // Restore from cache — zero API credits
+      if (_originalRows[objectName] && _originalRows[objectName].length) {
+        fStatus.textContent = "";
+        var origCols = _originalColumns[objectName] || columns;
+        var origWant = _originalWantRows[objectName] || wantRows;
+        if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
+        showAllColumnsTable(objectName, origCols, _originalRows[objectName], origWant, origCols);   // 5th arg = the ORIGINAL full set, never the SQL result's columns
+      } else {
+        // No cache — fall back to re-query
+        runFilter(null);
+      }
+    };
+    ctrlRow.appendChild(addBtn); ctrlRow.appendChild(applyF); ctrlRow.appendChild(clearF); ctrlRow.appendChild(fStatus);
+    // FIX 3: Initial button state
+    updateFilterBtnStates();
+    fbar.appendChild(condsWrap); fbar.appendChild(ctrlRow);
+    // RESTORE persisted conditions (so an applied filter stays visible after re-render).
+    const saved = _filterState[objectName];
+    if (saved && saved.fromSql && saved.active) {
+      // SQL editor result — show "Back to original" instead of condition rows
+      var backBtn = document.createElement("button");
+      backBtn.textContent = "← Back to original";
+      backBtn.title = "Restore the original unfiltered rows — no extra query credits used.";
+      backBtn.style.cssText = "border:1px solid #7c3aed;background:#f5f3ff;color:#7c3aed;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+      backBtn.onclick = function () {
+        _filterState[objectName] = null;
+        _filterCount[objectName] = 0;
+        if (_originalRows[objectName] && _originalRows[objectName].length) {
+          if (_originalTotal[objectName] && !_originalRows[objectName].__serverRowCount) _originalRows[objectName].__serverRowCount = _originalTotal[objectName];
+          showAllColumnsTable(objectName, _originalColumns[objectName] || columns, _originalRows[objectName], _originalWantRows[objectName] || wantRows, _originalColumns[objectName] || allColumns);
+        } else {
+          // No cache — re-query without filter
+          var ds2 = (typeof resolveDataSpace === "function") ? resolveDataSpace(objectName) : "";
+          var resetSql = "SELECT " + (allColumns || columns).map(function(c){ return '"' + c.replace(/"/g,'""') + '"'; }).join(", ") + " FROM " + sqlQuoteIdent(objectName) + " LIMIT " + DC_MAX_FETCH_ROWS;
+          backBtn.disabled = true; backBtn.textContent = "Loading…";
+          showTableSpinner(panel, "Restoring original rows…");
+          ensureQueryContext(function(ready) {
+            if (!ready) { backBtn.disabled = false; backBtn.textContent = "← Back to original"; hideTableSpinner(panel); return; }
+            runRawSql(resetSql, ds2, DC_MAX_FETCH_ROWS).then(function(res) {
+              hideTableSpinner(panel);
+              showAllColumnsTable(objectName, res.columns, res.rows, res.rows.length, res.columns);
+            }).catch(function() { backBtn.disabled = false; backBtn.textContent = "← Back to original"; hideTableSpinner(panel); });
+          });
+        }
+      };
+      ctrlRow.insertBefore(backBtn, clearF);
+      fStatus.innerHTML = "<span style='color:#7c3aed;font-weight:600;'>SQL filter active — showing query results</span>";
+    } else if (saved && saved.conds && saved.conds.length) {
+      saved.conds.forEach(function (c) { addCondition(c); });
+      joinSel.value = saved.join || "AND"; relabelJoiners();
+      if (saved.active) {
+        if (saved._statusMsg) {
+          fStatus.innerHTML = "<span style='color:#059669;font-weight:600;'>" + saved._statusMsg + "</span>";
+        } else {
+          fStatus.textContent = "✓ filter active (" + saved.conds.length + " condition" + (saved.conds.length > 1 ? "s" : "") + ")";
+        }
+      }
+    }
+    // Always re-evaluate button states in the correct closure AFTER conditions are restored
+    updateFilterBtnStates();
+    panel.appendChild(fbar);
+
+    // scroll area + table
+    const scroll = document.createElement("div");
+    scroll.id = "dc-allcols-scroll";
+    // overscroll-behavior:contain stops a left/right overscroll from triggering the
+    // browser's swipe-to-go-back (which was navigating away / "closing" the page when
+    // scrolling back toward the left on wide tables). Also isolates vertical bounce.
+    scroll.style.cssText = "flex:1;overflow:auto;position:relative;overscroll-behavior:contain;";
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:separate;border-spacing:0;font-size:12px;white-space:nowrap;width:100%;table-layout:auto;";
+    // Cap column width so few loaded/visible columns don't stretch across the full panel.
+    // min-width ensures narrow data (booleans, short keys) has enough room to read.
+    var colCapStyle = document.createElement("style");
+    colCapStyle.textContent = "#dc-allcols-table th,#dc-allcols-table td{min-width:80px;max-width:420px;overflow:hidden;text-overflow:ellipsis;}";
+    panel.appendChild(colCapStyle);
+    // header row: one <th> per selected column (no internal Id column — it's the
+    // opaque record key and is empty/meaningless for many objects).
+
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    const thStyle = "position:sticky;top:0;z-index:2;background:#1f3864;color:#fff;font-weight:700;text-align:left;padding:7px 10px;border-right:1px solid #33507f;border-bottom:1px solid #33507f;";
+    // FIX 1: Sort state tracking
+    var _currentSortCol = null;
+    var _currentSortDir = null; // "asc" or "desc"
+    columns.forEach(fn => {
+      const th = document.createElement("th");
+      th.title = "Click to sort · drag right edge to resize";
+      th.innerHTML = "<span class='dc-th-label'>" + esc(meta[fn] || fn) + "<span class='dc-sort-ind'></span></span>" +
+        "<div style='font-weight:400;font-size:9px;color:#b9c6de;font-family:SF Mono,Consolas,monospace'>" + esc(fn) + "</div>";
+      th.style.cssText = thStyle + "min-width:120px;max-width:600px;white-space:normal;cursor:pointer;";
+      // Header copy button — copies this column's API name. Appears on hover; click does
+      // NOT trigger the sort (stopPropagation). Keyed to the field api name `fn`.
+      const thCopy = document.createElement("button");
+      thCopy.textContent = "⧉";
+      thCopy.title = "Copy column API name: " + fn;
+      thCopy.style.cssText = "position:absolute;top:3px;right:9px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
+      thCopy.onclick = function (e) {
+        e.stopPropagation();
+        try { navigator.clipboard.writeText(fn); } catch (ex) {}
+        thCopy.textContent = "✓"; setTimeout(function () { thCopy.textContent = "⧉"; }, 700);
+      };
+      // Distinct-values button (Σ) — lists this column's distinct values + counts with copy, so
+      // you can grab a value for a WHERE clause without hunting through records. Computed from the
+      // loaded rows (no extra query/credits). Appears on hover; doesn't trigger sort.
+      const thDistinct = document.createElement("button");
+      thDistinct.textContent = "Σ";
+      thDistinct.title = "Distinct values of this column (with counts) — copy one into a WHERE clause";
+      thDistinct.style.cssText = "position:absolute;top:3px;right:30px;display:none;border:1px solid #33507f;background:#1f3864;color:#fff;border-radius:3px;font:600 10px system-ui;padding:0 4px;cursor:pointer;z-index:4;";
+      thDistinct.onclick = function (e) {
+        e.stopPropagation();
+        var complete = !(rows.__serverRowCount && rows.__serverRowCount > rows.length) && !rows.__totalUnknown;
+        var rect; try { rect = thDistinct.getBoundingClientRect(); } catch (ex) { rect = { left: 100, top: 60, bottom: 80 }; }
+        dcShowDistinct(fn, meta[fn] || fn, rows, rect, complete);
+      };
+      th.addEventListener("mouseenter", function () { thCopy.style.display = "block"; thDistinct.style.display = "block"; });
+      th.addEventListener("mouseleave", function () { thCopy.style.display = "none"; thDistinct.style.display = "none"; });
+      th.appendChild(thCopy);
+      th.appendChild(thDistinct);
+      // ── Resizable header: drag the right edge to widen/narrow this column ──────
+      const grip = document.createElement("div");
+      grip.style.cssText = "position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;user-select:none;z-index:3;";
+      grip.onclick = function (e) { e.stopPropagation(); };  // don't trigger sort
+      grip.onpointerdown = function (e) {
+        e.preventDefault(); e.stopPropagation();
+        const startX = e.clientX;
+        const startW = th.getBoundingClientRect().width;
+        const move = function (ev) {
+          const w = Math.max(60, startW + (ev.clientX - startX));
+          th.style.minWidth = w + "px"; th.style.maxWidth = w + "px"; th.style.width = w + "px";
+        };
+        const up = function () {
+          window.removeEventListener("pointermove", move, true);
+          window.removeEventListener("pointerup", up, true);
+        };
+        window.addEventListener("pointermove", move, true);
+        window.addEventListener("pointerup", up, true);
+      };
+      th.appendChild(grip);
+      // FIX 1: Add click handler for sort
+      th.onclick = function () {
+        // Toggle sort direction
+        if (_currentSortCol === fn) {
+          _currentSortDir = _currentSortDir === "asc" ? "desc" : "asc";
+        } else {
+          _currentSortCol = fn;
+          _currentSortDir = "asc";
+        }
+        // Sort a COPY so _originalRows / _lastTableState are never mutated
+        var sortedRows = rows.slice().sort(function (a, b) {
+          var va = a[fn];
+          var vb = b[fn];
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          if (typeof va === "number" && typeof vb === "number") {
+            return _currentSortDir === "asc" ? va - vb : vb - va;
+          }
+          var sa = String(va), sb = String(vb);
+          var cmp = sa.localeCompare(sb);
+          return _currentSortDir === "asc" ? cmp : -cmp;
+        });
+        // Re-render from the top with the sorted set; scroll reveals all rows lazily.
+        renderRowsChunked(sortedRows);
+        scroll.scrollTop = 0;
+        // Update header sort indicators (arrow lives in a dedicated span so we never
+        // corrupt the label/api-name markup via string replace).
+        htr.querySelectorAll("th .dc-sort-ind").forEach(function (s) { s.textContent = ""; });
+        var indSpan = th.querySelector(".dc-sort-ind");
+        if (indSpan) indSpan.textContent = _currentSortDir === "asc" ? " ▲" : " ▼";
+      };
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr); table.appendChild(thead);
+    // body — RENDER CAP: only build DOM for the first DC_MAX_RENDER_ROWS rows so a huge
+    // result can't freeze the tab. ALL rows stay in `rows` for CSV export.
+    const tbody = document.createElement("tbody");
+    const fmt = (v) => v == null ? "" : (typeof v === "boolean" ? (v ? "true" : "false") : String(v));
+    // PERF: build LEAN cells — no per-cell buttons or listeners. For a wide table
+    // (117 cols × 2000 rows ≈ 234k cells) attaching Copy/View buttons + 2 listeners per
+    // cell created ~700k nodes/listeners and froze the tab. Instead each cell stores its
+    // column in data-c; ONE delegated set of handlers on the scroll container provides
+    // hover-copy/view. Memory drops from O(cells×widgets) to O(cells) plain <td>.
+    const colByIndex = columns;  // positional map: td index → field name
+    // FIXED row height is REQUIRED for virtual scrolling: the window math converts
+    // scrollTop → row index via ROW_H, so every row must be exactly that tall. We force
+    // it here (height + overflow hidden + nowrap) so a long value can never wrap to two
+    // lines and desync the scroll position from the rendered rows.
+    const TD_CSS = "box-sizing:border-box;height:31px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    // WRAP mode keeps the fixed-row-height contract (so virtual scrolling stays exact): every row is
+    // WRAP_H tall and each cell shows up to 3 wrapped lines inside a clipped box; the full value is in
+    // the tooltip and the cell viewer. (Variable-height rows would desync the scrollbar and freeze VDI.)
+    const WRAP_H = 66;
+    const TD_WRAP_CSS = "box-sizing:border-box;height:" + WRAP_H + "px;padding:6px 10px;border-right:1px solid #eef1f6;border-bottom:1px solid #eef1f6;overflow:hidden;white-space:normal;vertical-align:top;";
+    let _wrapOn = false;
+    function buildRowEl(r, ri) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "height:" + (_wrapOn ? WRAP_H : 31) + "px;background:" + (ri % 2 ? "#f7f9fc" : "#fff") + ";";
+      for (let ci = 0; ci < columns.length; ci++) {
+        const fn = columns[ci];
+        const td = document.createElement("td");
+        const val = fmt(r[fn]);
+        td.style.cssText = _wrapOn ? TD_WRAP_CSS : TD_CSS;
+        if (_wrapOn && val !== "") {
+          const box = document.createElement("div");
+          box.style.cssText = "max-height:" + (WRAP_H - 14) + "px;overflow:hidden;line-height:17px;word-break:break-word;pointer-events:none;";
+          box.textContent = val; td.appendChild(box);
+        } else td.textContent = val;
+        if (val !== "") { td.title = val; td.setAttribute("data-c", ci); }
+        tr.appendChild(td);
+      }
+      return tr;
+    }
+    function setWrapMode(on) {
+      _wrapOn = !!on; ROW_H = on ? WRAP_H : 31; _measured = false;
+      _win.start = _win.end = -1; renderWindow(true);
+    }
+    // VIRTUAL (windowed) RENDER — the DOM holds ONLY the rows near the viewport, no matter
+    // how many rows are loaded. Scrolling up OR down keeps the live DOM at ~one screenful,
+    // so a wide table (117 cols) never accumulates 100k+ cells and never freezes — on local
+    // or VDI/remote-desktop. Zero API calls on any scroll (all data is already in memory).
+    // Space complexity: O(visibleRows × cols) instead of O(totalRows × cols).
+    let _winData = rows;          // current data set (swapped on sort)
+    let ROW_H = 31;               // row height px — measured & corrected after first paint
+    const BUFFER = 12;            // extra rows kept above/below the viewport (smooth scroll)
+    let _win = { start: -1, end: -1 };
+    let _measured = false;        // row-height measured?
+    let _pinned = false;          // column widths pinned + table-layout:fixed?
+    // Spacer rows reserve the scroll height of the un-rendered rows above/below the window,
+    // so the scrollbar length/position stays correct without those rows existing in the DOM.
+    function mkSpacer() {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = columns.length; td.className = "dc-sp"; td.style.cssText = "padding:0;border:none;";
+      tr.appendChild(td);
+      return { tr: tr, td: td };
+    }
+    const topSp = mkSpacer(), botSp = mkSpacer();
+    function updateScrollHint(total) {
+      const hintEl = panel.querySelector(".dc-scroll-hint");
+      if (!hintEl) return;
+      const more = (rows.__serverRowCount && rows.__serverRowCount > total) ? " of " + rows.__serverRowCount.toLocaleString() + " total" : "";
+      hintEl.textContent = total.toLocaleString() + " rows loaded" + (rows.__totalUnknown && !more ? " (more may exist - press Count for the total)" : more) + " · scroll freely — all rows & columns available, no extra queries.";
+    }
+    function renderWindow(force) {
+      if (!panel.isConnected) return;
+      const total = _winData.length;
+      const vpH = scroll.clientHeight || 420;
+      const first = Math.max(0, Math.floor(scroll.scrollTop / ROW_H) - BUFFER);
+      const count = Math.ceil(vpH / ROW_H) + BUFFER * 2;
+      const last = Math.min(total, first + count);
+      if (!force && first === _win.start && last === _win.end) return;   // window unchanged
+      var _ct = panel.querySelector("#dc-cell-tools"); if (_ct) _ct.style.display = "none";   // hide cell Copy/View before recycling rows
+      tbody.innerHTML = "";
+      topSp.td.style.height = (first * ROW_H) + "px";
+      botSp.td.style.height = (Math.max(0, total - last) * ROW_H) + "px";
+      tbody.appendChild(topSp.tr);
+      const frag = document.createDocumentFragment();
+      for (let i = first; i < last; i++) frag.appendChild(buildRowEl(_winData[i], i));
+      tbody.appendChild(frag);
+      tbody.appendChild(botSp.tr);
+      _win.start = first; _win.end = last;
+      // One-time: pin column widths (measured from the natural first paint) and switch to
+      // table-layout:fixed so columns DON'T jitter as different rows swap into the window.
+      if (!_pinned && last > first) {
+        _pinned = true;
+        const ths = htr.querySelectorAll("th");
+        ths.forEach(function (thEl) {
+          let w = Math.round(thEl.getBoundingClientRect().width);
+          if (!w || w < 60) w = 140;   // fallback so table-layout:fixed can't collapse a column
+          thEl.style.width = w + "px"; thEl.style.minWidth = w + "px";
+        });
+        table.style.tableLayout = "fixed";
+      }
+      // One-time: correct the row-height estimate from a real rendered row, then re-window
+      // so spacer heights (and thus the scrollbar) are accurate.
+      if (!_measured && last > first) {
+        const sampleRow = topSp.tr.nextSibling;
+        if (sampleRow && sampleRow.offsetHeight) {
+          _measured = true;
+          const h = sampleRow.offsetHeight;
+          if (Math.abs(h - ROW_H) > 2) { ROW_H = h; _win.start = _win.end = -1; renderWindow(true); return; }
+        }
+      }
+      updateScrollHint(total);
+    }
+    // (Re)start rendering a data set from the top — used on first render and after sort.
+    function renderRowsChunked(dataRows) {
+      var _ct = panel.querySelector("#dc-cell-tools"); if (_ct) _ct.style.display = "none";   // hide cell Copy/View before re-render
+      _winData = dataRows;
+      _win.start = _win.end = -1;
+      scroll.scrollTop = 0;
+      renderWindow(true);
+    }
+    // Throttle scroll → one render per animation frame (cheap, no backlog).
+    let _scrollRAF = 0;
+    scroll.addEventListener("scroll", function () {
+      if (_scrollRAF) return;
+      _scrollRAF = requestAnimationFrame(function () { _scrollRAF = 0; renderWindow(false); });
+    });
+    const renderRows = rows;         // full loaded set — windowing reveals all of it
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    // Zero-record state: the object was queried successfully but has no rows. Show the
+    // table with its column headers (so the user sees the schema) PLUS a clear banner,
+    // instead of a bare empty grid that looks broken. Download CSV is already disabled above.
+    if (!rows.length) {
+      const emptyBanner = document.createElement("div");
+      emptyBanner.style.cssText = "padding:28px 20px;text-align:center;color:#64748b;font:13px -apple-system,sans-serif;";
+      emptyBanner.innerHTML = "<div style='font-size:26px;margin-bottom:8px;'>📭</div>"
+        + "<div style='font-weight:600;color:#475569;margin-bottom:4px;'>No records in " + esc(objectName) + "</div>"
+        + "<div style='font-size:12px;'>This object has <b>0 rows</b>. Columns are shown above; there's no data to display or download.</div>";
+      scroll.appendChild(emptyBanner);
+    }
+    // The first rows Data Cloud returns can all be empty in the chosen columns, which looks like a broken tool.
+    // Offer a one-click re-query for rows that actually have data (server-side WHERE; no sorting of the table).
+    try {
+      var _sp = dcSparsePlan(allColumns || columns, rows, rows.__serverRowCount, rows.__totalUnknown);
+      var _fsA = _filterState[objectName];
+      if (_sp.showPrompt && !(_fsA && _fsA.active)) {
+        var spBar = document.createElement("div");
+        spBar.style.cssText = "flex-shrink:0;display:flex;align-items:center;gap:10px;padding:7px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;color:#92400e;font-size:12px;";
+        var spTxt = document.createElement("span");
+        spTxt.textContent = _sp.emptyRows.toLocaleString() + " of the " + _sp.total.toLocaleString() + " rows loaded have no data in your selected columns. The table has more rows.";
+        var spBtn = document.createElement("button");
+        spBtn.textContent = "Load rows that have data";
+        spBtn.title = "Re-runs the query with WHERE (any selected column) IS NOT NULL. Read-only; uses Data Cloud credits like any load.";
+        spBtn.style.cssText = "border:1px solid #d97706;background:#f59e0b;color:#fff;border-radius:5px;padding:4px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+        spBtn.onclick = function () { spBtn.disabled = true; spBtn.textContent = "Loading…"; runFilter(_sp.where); };
+        spBar.appendChild(spTxt); spBar.appendChild(spBtn);
+        panel.appendChild(spBar);
+      }
+    } catch (e) {}
+    panel.appendChild(scroll);
+    try { applyColVizCss(); } catch (e) {}   // now the scroll area exists: shows the 'all columns hidden' overlay in the right place
+    // Footer hint: reassures the user scrolling is free (no queries) and where the rest is.
+    const scrollHint = document.createElement("div");
+    scrollHint.className = "dc-scroll-hint";
+    scrollHint.style.cssText = "flex-shrink:0;padding:4px 14px;font-size:10px;color:#94a3b8;background:#f8fafc;border-top:1px solid #eef1f6;";
+    panel.appendChild(scrollHint);
+    document.body.appendChild(panel);
+    // Opens at the normal window size (the ⛶ button goes full screen; Esc restores).
+    try { attachInstantTooltips(panel); } catch (e) {}   // fast tooltips for header/filter buttons
+
+    // ── Delegated cell affordances (Copy / View) ────────────────────────────────
+    // ONE reusable tools widget, moved INTO whichever cell is hovered — instead of a
+    // widget + 2 listeners per cell. This is the memory/perf win for wide tables:
+    // 234k cells now carry zero widgets/listeners; the table has exactly 3 handlers.
+    const cellTools = document.createElement("span");
+    // Fixed-position floating widget appended to <body>. High-contrast dark pill so the
+    // Copy/View buttons are clearly readable over any cell content. It STAYS visible while
+    // the pointer is over it (so the buttons are actually clickable) and only moves/hides
+    // when you hover a different cell or leave both.
+    cellTools.id = "dc-cell-tools";
+    cellTools.style.cssText = "position:fixed;display:none;gap:4px;z-index:2147483647;background:#1e293b;border-radius:6px;padding:3px 4px;box-shadow:0 3px 10px rgba(0,0,0,.35);";
+    const mkTool = (label, title) => {
+      const b = document.createElement("button");
+      b.textContent = label; b.title = title;
+      b.style.cssText = "border:none;background:#fff;border-radius:4px;font:700 11px system-ui;padding:3px 9px;cursor:pointer;color:#1e293b;";
+      b.onmouseenter = function () { b.style.background = "#c7d2fe"; };
+      b.onmouseleave = function () { b.style.background = "#fff"; };
+      return b;
+    };
+    const copyToolBtn = mkTool("Copy", "Copy this cell's value");
+    const viewToolBtn = mkTool("View", "View the full value");
+    cellTools.appendChild(copyToolBtn); cellTools.appendChild(viewToolBtn);
+    // Must be on <body>, NOT panel — panel has transform:translateX which breaks position:fixed children
+    document.body.appendChild(cellTools);
+    let _toolsTd = null;                   // the <td> the tools currently belong to
+    let _hideTimer = null;                 // small delay so moving cell→widget doesn't hide
+    const cellInfo = (td) => ({ fn: colByIndex[parseInt(td.getAttribute("data-c"), 10)], val: td.textContent || "" });
+    const positionTools = (td) => {
+      var r = td.getBoundingClientRect();
+      cellTools.style.display = "flex";
+      var w = cellTools.offsetWidth || 90;
+      var h = cellTools.offsetHeight || 24;
+      cellTools.style.top = Math.max(4, r.top + (r.height - h) / 2) + "px";
+      // Place widget just after the cell's text content. For narrow cells, this is near the
+      // right edge (r.right - w - 6). For very wide cells (few columns + width:100%) we cap
+      // at 280px from cell left so it stays near the data rather than floating at screen right.
+      var nearRight = r.right - w - 6;
+      var cappedFromLeft = r.left + Math.min(r.width - w - 6, 260);
+      var idealLeft = Math.min(nearRight, cappedFromLeft);
+      cellTools.style.left = Math.min(window.innerWidth - w - 6, Math.max(r.left + 4, idealLeft)) + "px";
+    };
+    const scheduleHide = () => {
+      if (_hideTimer) clearTimeout(_hideTimer);
+      _hideTimer = setTimeout(function () { cellTools.style.display = "none"; _toolsTd = null; }, 250);
+    };
+    const cancelHide = () => { if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; } };
+    // Show/position when hovering a data cell.
+    tbody.addEventListener("mouseover", (e) => {
+      const td = e.target && e.target.closest ? e.target.closest("td[data-c]") : null;
+      if (!td) return;
+      cancelHide();
+      if (td === _toolsTd && cellTools.style.display !== "none") return;
+      _toolsTd = td;
+      viewToolBtn.style.display = (td.textContent || "").length > 40 ? "" : "none";
+      positionTools(td);
+    });
+    // Leaving the table body starts the hide timer (cancelled if we enter the widget).
+    tbody.addEventListener("mouseleave", scheduleHide);
+    cellTools.addEventListener("mouseenter", cancelHide);
+    cellTools.addEventListener("mouseleave", scheduleHide);
+    // Scrolling hides immediately (fixed coords would drift from the cell).
+    scroll.addEventListener("scroll", function () { cellTools.style.display = "none"; _toolsTd = null; });
+    copyToolBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!_toolsTd) return;
+      try { navigator.clipboard.writeText(cellInfo(_toolsTd).val); } catch (ex) {}
+      copyToolBtn.textContent = "✓"; setTimeout(() => { copyToolBtn.textContent = "Copy"; }, 800);
+    };
+    viewToolBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!_toolsTd) return;
+      const info = cellInfo(_toolsTd);
+      var live = null;
+      try {   // Data Graph row? then offer Real-time + Refresh using the row's lookup key (Id__c)
+        if (/json_blob/i.test(info.fn)) {
+          var trEl = _toolsTd.closest("tr"), gh = [], rowMap = {};
+          if (trEl) trEl.querySelectorAll("td[data-c]").forEach(function (c) {
+            var cn = colByIndex[parseInt(c.getAttribute("data-c"), 10)], tx = (c.textContent || "").trim();
+            if (cn) rowMap[cn] = tx;
+            var gm = dcGraphNameFromCell(tx); if (gm && gh.indexOf(gm) < 0) gh.push(gm);
+          });
+          var pk = dcPickLookupKey(info.val, rowMap);   // the key field + value come from THIS row's own data, not a fixed name
+          if (pk) live = { objectName: objectName, graphHints: gh, dataSpace: resolveDataSpace(objectName) || _auraSniff.dataSpace || "default", keyField: pk.key, keyValue: pk.value };
+        }
+      } catch (ex) { live = null; }
+      showCellValue(info.fn, meta[info.fn] || info.fn, info.val, live);
+    };
+
+    renderRowsChunked(renderRows);
+    // Re-render once the panel is actually laid out in the DOM — on first paint
+    // scroll.clientHeight can be 0, so the initial window may be too small. A rAF pass
+    // after layout recomputes the correct window height. (Also re-measures ROW_H.)
+    requestAnimationFrame(function () { if (panel.isConnected) renderWindow(true); });
+    // Re-window when the panel is resized (taller panel → more visible rows, else blanks).
+    if (typeof ResizeObserver !== "undefined") {
+      try {
+        var _ro = new ResizeObserver(function () { if (panel.isConnected) renderWindow(false); });
+        _ro.observe(scroll);
+      } catch (e) {}
+    }
+    // If the user asked for more rows than actually came back, say so honestly — this
+    // just means the data set has fewer records than requested (not a silent cap).
+    if (wantRows && rows.length < wantRows) {
+      const sub = panel.querySelector(".dc-ac-sub");
+      var _srvTot = rows.__serverRowCount || 0;
+      var _moreOnServer = _srvTot > rows.length;
+      if (sub) sub.innerHTML = rows.length.toLocaleString() + " rows &times; " + columns.length + " columns &bull; " +
+        (_moreOnServer
+          ? "<span style='color:#b8860b'>loaded " + rows.length.toLocaleString() + " of " + _srvTot.toLocaleString() + " in the table — the server returned fewer rows than requested (" + wantRows.toLocaleString() + "). Click Reload to try again, or use Export All (first " + DC_MAX_TOTAL_EXPORT.toLocaleString() + " rows).</span>"
+          : "<span style='color:#b8860b'>requested " + wantRows.toLocaleString() + ", but the table only has " + rows.length.toLocaleString() + " records.</span>");
+    }
+    if (typeof makeDraggable === "function") try { makeDraggable(panel, hdr); } catch (e) {}
+    if (typeof addResizeHandle === "function") try { addResizeHandle(panel, 480, 300); } catch (e) {}
+  }
+
+  // ── Build SOQL from current selection ─────────────────────────────────────
+
+  // ── Column picker modal ───────────────────────────────────────────────────
+  let exploreModalEl = null;
+
+  // True when a pointer event landed on Salesforce's own grid / column header or on our guide's spotlight tag.
+  // Clicking those must NEVER close the Explorer panel (sorting is how the user connects; the panel has to stay open).
+  function dcIsSfGridOrGuideTarget(e) {
+    try {
+      var path = (e.composedPath && e.composedPath()) || [];
+      for (var pi = 0; pi < path.length; pi++) {
+        var n = path[pi];
+        if (!n || n.nodeType !== 1) continue;
+        if (n.hasAttribute && (n.hasAttribute("data-dc-guide-spot") || n.hasAttribute("data-dc-sort-guide"))) return true;
+        var t = (n.tagName || "").toLowerCase();
+        var role = (n.getAttribute && n.getAttribute("role")) || "";
+        var cls = (typeof n.className === "string" ? n.className : (n.className && n.className.baseVal) || "").toLowerCase();
+        if (/cdp|data-view|dataview|record-list|datatable/.test(t) ||
+            role === "columnheader" || role === "grid" || role === "gridcell" ||
+            /slds-th__action|slds-table|slds-is-sortable/.test(cls)) return true;
+      }
+    } catch (ex) {}
+    return false;
+  }
+
+  function closeExploreModal() {
+    if (exploreModalEl) { exploreModalEl.style.display = "none"; }
+    const bar = document.getElementById("dc-bar");
+    if (bar) bar.style.visibility = "";
+    hideBackdrop();
+  }
+
+  function openExploreModal() {
+    // Detect the object CURRENTLY on the page (may have changed since last open).
+    const curRecList = findRecordListEl();
+    const curObject = curRecList ? (curRecList.objectName || "unknown") : null;
+    // Reuse the hidden modal ONLY if it's for the same object the page still shows.
+    if (exploreModalEl && exploreModalEl.isConnected && curObject && exploreModalEl.__dcObject === curObject) {
+      exploreModalEl.style.display = "flex";
+      const bar = document.getElementById("dc-bar");
+      if (bar) bar.style.visibility = "hidden";
+      // Re-register click-outside and Escape listeners
+      var barEl2 = document.getElementById("dc-bar");
+      var onOut2 = function (e) {
+        if (!exploreModalEl || exploreModalEl.style.display === "none") return;
+        var inModal = exploreModalEl.contains(e.target);
+        var inBar = barEl2 && barEl2.contains(e.target);
+        if (!inModal && !inBar && !dcIsSfGridOrGuideTarget(e)) { closeExploreModal(); document.removeEventListener("pointerdown", onOut2, true); }
+      };
+      setTimeout(function () { document.addEventListener("pointerdown", onOut2, true); }, 100);
+      return;
+    }
+    // Object changed (or modal gone) — destroy the stale modal and its data table, rebuild fresh.
+    if (exploreModalEl) { exploreModalEl.remove(); exploreModalEl = null; try { closeAllColumnsTable(); } catch (e) {} }
+    // Guard: no object selected on the page → tell the user instead of doing nothing.
+    const recList = curRecList;
+    if (!recList) { dcExploreToast("Select a Data Cloud object first, then click Columns."); return; }
+    const objectName = recList.objectName || "";
+    if (!objectName || objectName === "unknown") { dcExploreToast("No object detected — open a Data Explorer object (DLO/DMO/CI), then try again."); return; }
+    // No records in SF's own table → nothing to show; block modal and toast immediately.
+    if (!recList.data || !recList.data.length) { dcExploreToast((objectName || "This object") + " has no records — nothing to show."); return; }
+    const bar = document.getElementById("dc-bar");
+    if (bar) bar.style.visibility = "hidden";
+
+    const MODAL_CSS = "position:fixed;top:60px;right:24px;width:420px;max-height:82vh;z-index:2147483645;background:#fff;border:1px solid #d0d5de;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.18);display:flex;flex-direction:column;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#16325c;overflow:hidden;";
+
+    // Always open immediately with whatever columns we have (current SF columns or cache).
+    // If we don't have the full list yet, discover it in background and silently refresh.
+    const _cachedCols = exploreCache(objectName).allColumns;
+    const initialCols = _cachedCols && _cachedCols.length > 0
+      ? _cachedCols
+      : (recList.columns || []).filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
+
+    // Capture the columns CURRENTLY shown in the Explorer table RIGHT NOW, while the
+    // recList is guaranteed populated. We thread this through so the picker always
+    // defaults to "what's on screen" — even after the background field-discovery
+    // re-reads a momentarily-empty recList (which previously fell through to select-all).
+    const initialSelected = getCurrentFields(recList);
+
+    const modal = document.createElement("div");
+    exploreModalEl = modal;
+    modal.id = "dc-explore-modal";
+    modal.__dcObject = objectName;   // remember which object this modal is for
+    modal.style.cssText = MODAL_CSS;
+    document.body.appendChild(modal);
+    try { attachInstantTooltips(modal); } catch (e) {}   // fast tooltips for selector/footer buttons + tabs
+    // No backdrop — user needs to see the SF Data Explorer page behind the modal
+    _buildExploreModal(modal, recList, initialCols, objectName, initialSelected);
+
+    if (!(_cachedCols && _cachedCols.length > 0)) {
+      // First open — discover full field list in background, then silently rebuild modal content
+      discoverAllColumns(recList, (allCols) => {
+        const freshRecList = findRecordListEl() || recList;
+        // Only update if the same modal is still open
+        if (exploreModalEl === modal && modal.isConnected) {
+          _buildExploreModal(modal, freshRecList, allCols, objectName, initialSelected);
+        }
+      });
+    }
+  }
+
+  function _buildExploreModal(modal, recList, allCols, objectName, initialSelected) {
+    modal.innerHTML = ""; // clear any previous build (e.g. background refresh after discoverAllColumns)
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const all = allCols.filter(c => c.fieldName && c.fieldName !== "recordPageUrl");
+    // Prefer the columns captured at open time (what's actually in the table); fall back
+    // to a fresh read only if that wasn't provided. This stops the picker from defaulting
+    // to "select all 59" when a background re-read sees a momentarily-empty recList.
+    const currentFields = (initialSelected && initialSelected.length)
+      ? initialSelected.slice()
+      : getCurrentFields(recList);
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e0e5ee;background:#f3f6fb;border-radius:12px 12px 0 0;flex-shrink:0;cursor:move;user-select:none;";
+    hdr.innerHTML = "<div><div style='font-weight:700;font-size:13px'>Column Selector</div><div style='font-size:11px;color:#5c6b8a;margin-top:1px'>" + esc(objectName) + " &bull; " + all.length + " fields available</div></div>";
+    const closeBtn = document.createElement("button");
+    closeBtn.innerHTML = "&#x2715;";
+    closeBtn.title = "Close the column selector";
+    closeBtn.style.cssText = "border:none;background:none;cursor:pointer;font-size:15px;color:#5c6b8a;padding:2px 6px;border-radius:4px;line-height:1;";
+    closeBtn.onclick = closeExploreModal;
+    hdr.appendChild(closeBtn);
+    modal.appendChild(hdr);
+
+    // ── Toolbar: search + sort + select-all ───────────────────────────────────
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = "padding:8px 16px 6px;border-bottom:1px solid #e0e5ee;flex-shrink:0;display:flex;flex-direction:column;gap:5px;";
+
+    const searchRow = document.createElement("div");
+    searchRow.style.cssText = "display:flex;gap:6px;align-items:center;";
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Search fields…";
+    searchInput.title = "Type to filter the field list by label or API name";
+    searchInput.style.cssText = "flex:1;box-sizing:border-box;border:1px solid #c9d0da;border-radius:6px;padding:5px 10px;font:13px -apple-system,sans-serif;color:#16325c;outline:none;";
+
+    // Sort A→Z / Z→A toggle
+    let sortAsc = true;
+    const sortBtn = document.createElement("button");
+    sortBtn.title = "Sort ALL columns alphabetically (A → Z / Z → A): the list and your selected columns' order";
+    sortBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11px;color:#1e3a5f;white-space:nowrap;flex-shrink:0;";
+    const updateSortLabel = () => { sortBtn.textContent = sortAsc ? "A → Z" : "Z → A"; };
+    updateSortLabel();
+    sortBtn.onclick = () => {
+      sortAsc = !sortAsc; updateSortLabel();
+      // Also put the SELECTED columns in that order (this is the order the data table uses). Explicit click only,
+      // so a hand-dragged order is never touched unless the user presses this button.
+      const lblOf = (fn) => { const c = all.find(x => x.fieldName === fn); return (c && (c.label || c.fieldName)) || fn; };
+      orderedSelected = dcSortByLabel(orderedSelected.filter(fn => checked.has(fn)), sortAsc, lblOf);
+      persistSelection();
+      renderActiveTab();
+    };
+
+    searchRow.appendChild(searchInput);
+    searchRow.appendChild(sortBtn);
+
+    const selRow = document.createElement("div");
+    selRow.style.cssText = "display:flex;gap:5px;align-items:center;font-size:12px;";
+    const countSpan = document.createElement("span");
+    countSpan.style.cssText = "color:#5c6b8a;flex:1;";
+    const selAllBtn = document.createElement("button");
+    selAllBtn.textContent = "Select all";
+    selAllBtn.title = "Select every field in the list (matching the current search)";
+    selAllBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:11px;color:#1e3a5f;";
+    const deselAllBtn = document.createElement("button");
+    deselAllBtn.textContent = "Deselect all";
+    deselAllBtn.title = "Clear all selected fields";
+    deselAllBtn.style.cssText = "border:1px solid #c9d0da;background:#fff;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:11px;color:#1e3a5f;";
+    selRow.appendChild(countSpan);
+    selRow.appendChild(selAllBtn);
+    selRow.appendChild(deselAllBtn);
+    toolbar.appendChild(searchRow);
+    toolbar.appendChild(selRow);
+    modal.appendChild(toolbar);
+
+    // ── Field list (two tabs: Available | Order selected) ─────────────────────
+    // Tab bar
+    const tabBar = document.createElement("div");
+    tabBar.style.cssText = "display:flex;border-bottom:1px solid #e0e5ee;flex-shrink:0;background:#fafbfd;";
+    let activeTab = "available";
+    const mkTab = (id, label) => {
+      const t = document.createElement("button");
+      t.textContent = label;
+      t.dataset.tab = id;
+      t.title = id === "available" ? "Browse and tick the fields you want to see" : "Drag to reorder the fields you've selected";
+      t.style.cssText = "border:none;background:none;padding:7px 16px;font:600 11px -apple-system,sans-serif;cursor:pointer;border-bottom:2px solid transparent;color:#5c6b8a;";
+      t.onclick = () => { activeTab = id; updateTabs(); renderActiveTab(); };
+      return t;
+    };
+    const tabAvail = mkTab("available", "Available");
+    const tabOrder = mkTab("order", "Column Order");
+    tabBar.appendChild(tabAvail);
+    tabBar.appendChild(tabOrder);
+    modal.appendChild(tabBar);
+
+    const updateTabs = () => {
+      [tabAvail, tabOrder].forEach(t => {
+        const active = t.dataset.tab === activeTab;
+        t.style.borderBottomColor = active ? "#0d6efd" : "transparent";
+        t.style.color = active ? "#0d6efd" : "#5c6b8a";
+      });
+      toolbar.style.display = activeTab === "available" ? "flex" : "none";
+    };
+
+    // Checked set — priority: last applied by us > SF's current columns > all fields.
+    // exploreCache survives SF re-rendering the DOM element (unlike storing on recList directly).
+    const _cache = exploreCache(objectName);
+    // DEFAULT selection priority: our LAST-APPLIED set wins when present — this is the
+    // column set the user actually loaded into the results table (and what "← Columns"
+    // writes before reopening), so re-opening the picker shows exactly those pre-checked
+    // and the user just adds more. Only if we've never applied a set do we fall back to
+    // the SF table's current columns, then to all fields.
+    const curValid = currentFields.filter(fn => all.find(c => c.fieldName === fn));
+    const lastApplied = _cache.lastApplied && _cache.lastApplied.length > 0
+      ? _cache.lastApplied.filter(fn => all.find(c => c.fieldName === fn))
+      : null;
+    let initFields = (lastApplied && lastApplied.length)
+      ? lastApplied
+      : (curValid.length > 0 ? curValid : all.map(c => c.fieldName));
+    const checked = new Set(initFields);
+    // orderedSelected: maintains user-defined drag order, same initial order
+    let orderedSelected = initFields.slice();
+
+    const listWrap = document.createElement("div");
+    listWrap.style.cssText = "overflow-y:auto;flex:1;padding:6px 0;";
+    modal.appendChild(listWrap);
+
+    // Auto-persist the selection+order so a tab close never loses the user's setup.
+    // Enabled only after initial build (below) to avoid thrashing storage during setup.
+    let _autosaveOn = false, _autosaveT = null;
+    function persistSelection() {
+      if (!_autosaveOn) return;
+      clearTimeout(_autosaveT);
+      _autosaveT = setTimeout(() => {
+        try {
+          const ordered = orderedSelected.filter(fn => checked.has(fn));
+          const cols = ordered.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn });
+          lsSave(objectName, cols);
+          exploreCache(objectName).lastApplied = ordered.slice();
+        } catch (e) {}
+      }, 250);
+    }
+
+    function updateCount() {
+      countSpan.textContent = checked.size + " of " + all.length + " selected";
+      countSpan.style.color = "#5c6b8a";
+      tabOrder.textContent = "Column Order (" + checked.size + ")";
+      persistSelection();
+    }
+
+    // ── Available tab renderer ─────────────────────────────────────────────────
+    function renderAvailable(filter) {
+      listWrap.innerHTML = "";
+      const q = (filter || "").toLowerCase();
+      let visible = all.filter(col => {
+        const label = col.label || col.fieldName;
+        return !q || label.toLowerCase().includes(q) || col.fieldName.toLowerCase().includes(q);
+      });
+      // Sort: checked fields first (in selection order), then unchecked alphabetically
+      let selectedCount = 0;
+      if (!q) {
+        const selectedInOrder = orderedSelected.filter(fn => checked.has(fn));
+        const unchecked = visible.filter(col => !checked.has(col.fieldName));
+        const uncheckedSorted = dcSortByLabel(unchecked, sortAsc, c => c.label || c.fieldName);
+        const selectedCols = selectedInOrder.map(fn => visible.find(c => c.fieldName === fn)).filter(Boolean);
+        selectedCount = selectedCols.length;
+        visible = [...selectedCols, ...uncheckedSorted];
+        // "SELECTED (n)" header pinned above the selected group
+        if (selectedCount > 0) {
+          const selHdr = document.createElement("div");
+          selHdr.style.cssText = "padding:4px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#0d6efd;background:#eef4ff;border-bottom:1px solid #dbe6fb;";
+          selHdr.textContent = "Selected (" + selectedCount + ")";
+          listWrap.appendChild(selHdr);
+        }
+      } else {
+        visible = dcSortByLabel(visible, sortAsc, c => c.label || c.fieldName);
+      }
+
+      // Divider between selected and unselected (only when no search query)
+      let dividerAdded = false;
+      visible.forEach((col, idx) => {
+        const label = col.label || col.fieldName;
+        const isChecked = checked.has(col.fieldName);
+
+        // Insert divider between selected and unselected sections
+        if (!q && !dividerAdded && !isChecked && selectedCount > 0) {
+          dividerAdded = true;
+          const sep = document.createElement("div");
+          sep.style.cssText = "padding:4px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;background:#f8fafc;border-top:1px solid #e0e5ee;border-bottom:1px solid #e0e5ee;margin-top:2px;";
+          sep.textContent = "Not selected";
+          listWrap.appendChild(sep);
+        }
+
+        const row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 16px;cursor:pointer;transition:background .1s;" +
+          (isChecked ? "background:#f0f5ff;" : "");
+        row.onmouseenter = () => (row.style.background = isChecked ? "#e8f0fe" : "#f3f6fb");
+        row.onmouseleave = () => (row.style.background = isChecked ? "#f0f5ff" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = isChecked;
+        cb.style.cssText = "flex-shrink:0;cursor:pointer;";
+        cb.onchange = () => {
+          if (cb.checked) {
+            checked.add(col.fieldName);
+            if (!orderedSelected.includes(col.fieldName)) orderedSelected.push(col.fieldName);
+          } else {
+            if (checked.size <= 1) { cb.checked = true; return; }
+            checked.delete(col.fieldName);
+            orderedSelected = orderedSelected.filter(fn => fn !== col.fieldName);
+          }
+          updateCount();
+          renderAvailable(filter); // re-render to move item between sections
+        };
+        const nameCol = document.createElement("div");
+        nameCol.style.cssText = "flex:1;min-width:0;";
+        nameCol.innerHTML = "<div style='font-weight:600;color:#16325c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(label) + "</div>" +
+          "<div style='font-size:11px;color:#5c6b8a;font-family:SF Mono,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(col.fieldName) + "</div>";
+        row.appendChild(cb);
+        row.appendChild(nameCol);
+        listWrap.appendChild(row);
+      });
+    }
+
+    // ── Order tab renderer (pointer-based drag-to-reorder; avoids LWC event swallow) ──
+    function renderOrder() {
+      listWrap.innerHTML = "";
+      // Sync orderedSelected: add new checked fields not yet in order list
+      orderedSelected = orderedSelected.filter(fn => checked.has(fn));
+      [...checked].forEach(fn => { if (!orderedSelected.includes(fn)) orderedSelected.push(fn); });
+
+      if (orderedSelected.length === 0) {
+        listWrap.innerHTML = "<div style='padding:20px;text-align:center;color:#5c6b8a;font-size:12px'>No columns selected yet.<br>Go to the Available tab to pick fields.</div>";
+        return;
+      }
+
+      orderedSelected.forEach((fn) => {
+        const col = all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn };
+        const lbl = col.label || col.fieldName;
+        const row = document.createElement("div");
+        row.dataset.fn = fn;
+        row.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:5px;user-select:none;box-sizing:border-box;background:#fff;";
+
+        const handle = document.createElement("span");
+        handle.textContent = "⠿";
+        handle.title = "Drag to reorder this column";
+        handle.style.cssText = "color:#bbb;font-size:16px;flex-shrink:0;cursor:grab;line-height:1;padding:0 2px;";
+
+        const num = document.createElement("span");
+        num.style.cssText = "flex-shrink:0;color:#aab;font-size:11px;min-width:18px;";
+        num.textContent = (orderedSelected.indexOf(fn) + 1) + ".";
+
+        const txt = document.createElement("div");
+        txt.style.cssText = "flex:1;min-width:0;";
+        txt.innerHTML = "<div style='font-weight:600;color:#16325c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px'>" + esc(lbl) + "</div>" +
+          "<div style='font-size:10px;color:#5c6b8a;font-family:SF Mono,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>" + esc(fn) + "</div>";
+
+        const rm = document.createElement("button");
+        rm.innerHTML = "&#x2715;";
+        rm.title = "Remove";
+        rm.style.cssText = "border:none;background:none;color:#ccd;cursor:pointer;font-size:13px;padding:0 3px;flex-shrink:0;";
+        rm.onmouseenter = () => (rm.style.color = "#e00");
+        rm.onmouseleave = () => (rm.style.color = "#ccd");
+        rm.onclick = () => {
+          if (checked.size <= 1) return;
+          checked.delete(fn);
+          orderedSelected = orderedSelected.filter(f => f !== fn);
+          updateCount(); renderOrder();
+        };
+
+        row.appendChild(handle);
+        row.appendChild(num);
+        row.appendChild(txt);
+        row.appendChild(rm);
+        listWrap.appendChild(row);
+
+        // Smooth pointer drag — translate the row visually, commit order on drop only
+        handle.addEventListener("pointerdown", (e) => {
+          e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+          handle.setPointerCapture(e.pointerId);
+
+          const startY  = e.clientY;
+          const rowH    = row.getBoundingClientRect().height;
+          const fromIdx = orderedSelected.indexOf(fn);
+          let   toIdx   = fromIdx;
+
+          // Lift the dragged row above siblings
+          row.style.cssText += ";position:relative;z-index:10;box-shadow:0 4px 16px rgba(0,0,0,.15);background:#e8f0fe;opacity:.95;transition:none;";
+          listWrap.style.userSelect = "none";
+
+          const onMove = (ev) => {
+            const dy    = ev.clientY - startY;
+            row.style.transform = "translateY(" + dy + "px)";
+            // Work out which slot the row is hovering over
+            const hover = Math.round(fromIdx + dy / rowH);
+            toIdx = Math.max(0, Math.min(orderedSelected.length - 1, hover));
+            // Shift other rows out of the way visually
+            const allRows = [...listWrap.querySelectorAll("[data-fn]")];
+            allRows.forEach((r, i) => {
+              if (r === row) return;
+              const origIdx = orderedSelected.indexOf(r.dataset.fn);
+              let shift = 0;
+              if (fromIdx < toIdx && origIdx > fromIdx && origIdx <= toIdx) shift = -rowH;
+              else if (fromIdx > toIdx && origIdx < fromIdx && origIdx >= toIdx) shift = rowH;
+              r.style.transform = "translateY(" + shift + "px)";
+              r.style.transition = "transform .1s";
+            });
+          };
+
+          const onUp = () => {
+            handle.releasePointerCapture(e.pointerId);
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
+            // Commit the reorder
+            if (toIdx !== fromIdx) {
+              orderedSelected.splice(fromIdx, 1);
+              orderedSelected.splice(toIdx, 0, fn);
+            }
+            // Reset all transforms before clean re-render
+            [...listWrap.querySelectorAll("[data-fn]")].forEach(r => { r.style.transform = ""; r.style.transition = ""; });
+            listWrap.style.userSelect = "";
+            renderOrder();
+            persistSelection();   // remember the new order across tab close
+          };
+
+          // The browser can cancel a drag (touch scroll, alt-tab, capture lost): undo the lift WITHOUT reordering.
+          const onCancel = () => {
+            try { handle.releasePointerCapture(e.pointerId); } catch (er) {}
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup",   onUp);
+            handle.removeEventListener("pointercancel", onCancel);
+            [...listWrap.querySelectorAll("[data-fn]")].forEach(r => { r.style.transform = ""; r.style.transition = ""; });
+            listWrap.style.userSelect = "";
+            renderOrder();
+          };
+          handle.addEventListener("pointermove", onMove);
+          handle.addEventListener("pointerup",   onUp);
+          handle.addEventListener("pointercancel", onCancel);
+        });
+      });
+    }
+
+    function renderActiveTab() {
+      if (activeTab === "available") renderAvailable(searchInput.value);
+      else renderOrder();
+    }
+
+    searchInput.oninput = () => { if (activeTab === "available") renderAvailable(searchInput.value); };
+    selAllBtn.onclick = () => {
+      const q = searchInput.value.toLowerCase();
+      all.forEach(c => {
+        if (!q || (c.label||c.fieldName).toLowerCase().includes(q) || c.fieldName.toLowerCase().includes(q)) {
+          if (!checked.has(c.fieldName)) { checked.add(c.fieldName); orderedSelected.push(c.fieldName); }
+        }
+      });
+      renderActiveTab(); updateCount();
+    };
+    deselAllBtn.onclick = () => {
+      const q = searchInput.value.toLowerCase();
+      const visible = all.filter(c => !q || (c.label||c.fieldName).toLowerCase().includes(q) || c.fieldName.toLowerCase().includes(q));
+      visible.forEach(c => { if (checked.size > 1) { checked.delete(c.fieldName); orderedSelected = orderedSelected.filter(fn => fn !== c.fieldName); } });
+      renderActiveTab(); updateCount();
+    };
+
+    updateTabs();
+    renderActiveTab();
+    updateCount();
+
+    // ── SOQL Editor panel ─────────────────────────────────────────────────────
+    let soqlPanelEl = null;
+    // LIKE-escape for the filter fallback below (the sibling copy lives in showAllColumnsTable's scope, not this one).
+    function escapeLike(s) { return s.replace(/'/g, "''").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_"); }
+    let soqlAcDropEl = null;
+    // _savedSoqlText / _savedSoqlRanOk / _savedSoqlObjName are module-scoped (declared above
+    // showAllColumnsTable) so background rebuilds of _buildExploreModal don't reset them.
+    function closeSoqlEditor() {
+      // Save the current SQL only if it ran successfully (no syntax errors)
+      if (soqlPanelEl && _savedSoqlRanOk) {
+        var ta = soqlPanelEl.querySelector("textarea");
+        if (ta && ta.value.trim()) { _savedSoqlText = ta.value; _savedSoqlObjName = objectName; }
+      } else if (!_savedSoqlRanOk) {
+        _savedSoqlText = ""; _savedSoqlObjName = ""; // discard broken SQL so next open gets a fresh build
+      }
+      soqlAcDropEl = null;
+      if (soqlPanelEl)  { soqlPanelEl.remove();  soqlPanelEl = null; }
+      _soqlEditorOpen = false;
+    }
+    _openSoqlEditor = openSoqlEditor;   // expose for external callers (e.g. column picker button)
+    function openSoqlEditor() {
+      if (soqlPanelEl) { closeSoqlEditor(); return; }
+      if (_soqlEditorOpen) return; // another closure already has an editor open — don't duplicate
+      _soqlEditorOpen = true;
+      try {
+
+      // ── Syntax token regexes ──────────────────────────────────────────────
+      const SOQL_KW  = /\b(SELECT|FROM|WHERE|AND|OR|NOT|IN|LIKE|INCLUDES|EXCLUDES|ORDER\s+BY|GROUP\s+BY|HAVING|LIMIT|OFFSET|ASC|DESC|NULLS\s+FIRST|NULLS\s+LAST|NULL|TRUE|FALSE|TODAY|YESTERDAY|TOMORROW|THIS_WEEK|LAST_WEEK|NEXT_WEEK|THIS_MONTH|LAST_MONTH|THIS_QUARTER|LAST_QUARTER|THIS_YEAR|LAST_YEAR|LAST_N_DAYS|NEXT_N_DAYS|LAST_N_MONTHS|NEXT_N_MONTHS)\b/gi;
+      const SOQL_FN  = /\b(COUNT|SUM|AVG|MIN|MAX|COUNT_DISTINCT|CALENDAR_MONTH|CALENDAR_YEAR|FORMAT|FIELDS)\b/gi;
+      const SOQL_STR = /'[^']*'/g;
+      const SOQL_NUM = /\b\d[\d.]*\b/g;
+      const SOQL_CMT = /--[^\n]*/g;
+
+      const allFieldNames = all.map(c => c.fieldName);
+      const allFieldMap   = {};
+      all.forEach(c => { allFieldMap[c.fieldName] = c; });
+
+      // ── Highlighter: mirror technique — textarea is transparent, pre shows colors ──
+      // Built ONCE (longest names first so a long field wins over a shorter prefix), not per keystroke.
+      const _fldRe = allFieldNames.length ? new RegExp("\\b(?:" + allFieldNames.slice().sort((a, b) => b.length - a.length)
+        .map(fn => fn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "g") : null;
+      function highlightSoql(raw) {
+        const escaped = raw.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        const ranges = [];
+        const add = (re, cls) => {
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(escaped)) !== null) {
+            const s = m.index, e = m.index + m[0].length;
+            if (!ranges.some(r => r.s < e && r.e > s)) ranges.push({s, e, cls});
+          }
+        };
+        add(SOQL_CMT, "cmt");
+        add(SOQL_STR, "str");
+        add(SOQL_KW,  "kw");
+        add(SOQL_FN,  "fn");
+        add(SOQL_NUM, "num");
+        if (_fldRe) {
+          _fldRe.lastIndex = 0; let m2;
+          while ((m2 = _fldRe.exec(escaped)) !== null) {
+            const s = m2.index, e = m2.index + m2[0].length;
+            if (!ranges.some(r => r.s < e && r.e > s)) ranges.push({s, e, cls:"fld"});
+            if (m2[0].length === 0) _fldRe.lastIndex++;
+          }
+        }
+        ranges.sort((a,b) => a.s - b.s);
+        // Vibrant palette on dark
+        const C = {
+          kw:  "color:#60a5fa;font-weight:700",   // vivid blue
+          fn:  "color:#f59e0b",                   // amber
+          str: "color:#34d399",                   // emerald green (strings)
+          num: "color:#fb923c",                   // orange (numbers)
+          fld: "color:#e879f9",                   // fuchsia/pink (field names — very distinct)
+          cmt: "color:#64748b;font-style:italic"  // slate (comments)
+        };
+        let out = "", pos = 0;
+        ranges.forEach(r => {
+          if (r.s > pos) out += "<span style='color:#e2e8f0'>" + escaped.slice(pos, r.s) + "</span>";
+          out += "<span style='" + (C[r.cls]||"color:#e2e8f0") + "'>" + escaped.slice(r.s, r.e) + "</span>";
+          pos = r.e;
+        });
+        if (pos < escaped.length) out += "<span style='color:#e2e8f0'>" + escaped.slice(pos) + "</span>";
+        return out;
+      }
+
+      // ── Autocomplete ──────────────────────────────────────────────────────
+      const AC_KEYWORDS = ["SELECT","FROM","WHERE","AND","OR","NOT","IN","LIKE","INCLUDES","EXCLUDES",
+        "ORDER BY","HAVING","LIMIT","OFFSET","ASC","DESC","NULL","TRUE","FALSE",
+        "COUNT","SUM","AVG","MIN","MAX","TODAY","YESTERDAY","THIS_WEEK","LAST_WEEK",
+        "THIS_MONTH","LAST_MONTH","THIS_YEAR","LAST_N_DAYS:","NEXT_N_DAYS:","LAST_N_MONTHS:"];
+
+      function getWordAtCursor(val, pos) {
+        let s = pos;
+        while (s > 0 && /\w/.test(val[s-1])) s--;
+        return { word: val.slice(s, pos), start: s };
+      }
+
+      // ── Build panel ───────────────────────────────────────────────────────
+      soqlPanelEl = document.createElement("div");
+      // overflow:visible is required so the autocomplete dropdown can escape the panel bounds
+      soqlPanelEl.style.cssText = "position:fixed;top:48px;left:50%;transform:translateX(-50%);width:min(760px,96vw);z-index:2147483647;background:#0f172a;border:1px solid #1e293b;border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.7),0 0 0 1px rgba(99,102,241,.15);display:flex;flex-direction:column;font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e2e8f0;overflow:hidden;";
+
+      // ── Header: gradient accent bar + object pill ─────────────────────────
+      const sh = document.createElement("div");
+      sh.style.cssText = "background:linear-gradient(135deg,#1e1b4b 0%,#0f172a 60%);border-bottom:1px solid #1e293b;padding:12px 16px 10px;display:flex;align-items:center;gap:10px;cursor:move;user-select:none;flex-shrink:0;";
+      // colored left accent line
+      const accentLine = document.createElement("div");
+      accentLine.style.cssText = "width:3px;height:28px;background:linear-gradient(180deg,#818cf8,#6366f1);border-radius:2px;flex-shrink:0;";
+      const titleWrap = document.createElement("div");
+      titleWrap.style.cssText = "flex:1;min-width:0;";
+      titleWrap.innerHTML =
+        "<div style='font-weight:700;font-size:13px;color:#e2e8f0;letter-spacing:.01em'>SQL Editor</div>" +
+        "<div style='font-size:10px;color:#6366f1;margin-top:1px;font-weight:600;letter-spacing:.04em;text-transform:uppercase'>" + esc(objectName || recList.objectName || "") + "</div>";
+      const scb = document.createElement("button");
+      scb.innerHTML = "&#x2715;";
+      scb.style.cssText = "border:none;background:rgba(255,255,255,.06);cursor:pointer;font-size:13px;color:#94a3b8;padding:4px 7px;border-radius:6px;line-height:1;flex-shrink:0;transition:background .15s;";
+      scb.onmouseenter = () => (scb.style.background = "rgba(255,255,255,.12)");
+      scb.onmouseleave = () => (scb.style.background = "rgba(255,255,255,.06)");
+      scb.onclick = () => closeSoqlEditor();
+      sh.appendChild(accentLine);
+      sh.appendChild(titleWrap);
+      sh.appendChild(scb);
+      soqlPanelEl.appendChild(sh);
+
+      // ── Editor: highlight layer + transparent textarea ────────────────────
+      const buildInitialSoql = () => {
+        const fields = orderedSelected.filter(fn => checked.has(fn) && fn !== "recordPageUrl");
+        // FROM = EXACTLY the table the user selected (the same name shown in the table header and
+        // used by Count / Export). Never stripped or rewritten, whatever the org or Data Space.
+        var rawObjName = objectName || recList.objectName || "Unknown__c";
+        var from = rawObjName;
+        const fieldStr = fields.length ? fields.map(function(fn){ return '"' + fn.replace(/"/g,'""') + '"'; }).join(", ") : '"Id"';
+        // Include WHERE from active filter (UI or SQL-based)
+        var whereClause = "";
+        // _filterState is keyed by full object name (rawObjName); fall back to stripped name
+        var fs = _filterState[rawObjName] || _filterState[from];
+        if (fs && fs.active) {
+          // Use the stored WHERE string directly — it was already built by fragOf/buildWhere
+          if (fs.where) {
+            whereClause = " WHERE " + fs.where;
+          } else if (fs.conds && fs.conds.length) {
+            // Rebuild from UI conditions (fallback for older saved state)
+            var frags = fs.conds.map(function (c) {
+            if (!c.col) return null;
+            var val = (c.val != null) ? String(c.val) : "";
+            var q = '"' + c.col.replace(/"/g, '""') + '"';
+            // IS NULL / IS NOT NULL ops — no value needed
+            if (c.op === "IS NULL") return q + " IS NULL";
+            if (c.op === "IS NOT NULL") return q + " IS NOT NULL";
+            // empty value or literal "null" → IS NULL / IS NOT NULL
+            var rawLower = val.toLowerCase();
+            if (rawLower === "" || rawLower === "null") {
+              if (c.op === "=" ) return q + " IS NULL";
+              if (c.op === "!=") return q + " IS NOT NULL";
+              return null;
+            }
+            if (c.op === "contains") return q + " LIKE '%" + escapeLike(val) + "%' ESCAPE '\\\\'";
+            if (c.op === "starts with") return q + " LIKE '" + escapeLike(val) + "%' ESCAPE '\\\\'";
+
+            return q + " " + c.op + " '" + val.replace(/'/g, "''") + "'";
+          }).filter(Boolean);
+          if (frags.length) whereClause = " WHERE " + frags.join(" " + (fs.join || "AND") + " ");
+          }
+        }
+        // Use current rowsInput value as the LIMIT (editable by user)
+        var lim = DC_MAX_FETCH_ROWS;
+        try { var ri = soqlPanelEl && soqlPanelEl.querySelector("input[type=number]"); if (ri) lim = parseInt(ri.value, 10) || DC_MAX_FETCH_ROWS; } catch(e){}
+        return "SELECT " + fieldStr + "\nFROM " + sqlQuoteIdent(from) + whereClause + "\nLIMIT " + lim;
+      };
+
+      const editorWrap = document.createElement("div");
+      // overflow:visible so the absolute-positioned acDrop can overflow outside the textarea bounds
+      editorWrap.style.cssText = "position:relative;flex-shrink:0;background:#0a0f1e;";
+
+      // The highlight <pre> sits behind; textarea is on top with color:transparent
+      const hlPre = document.createElement("pre");
+      hlPre.setAttribute("aria-hidden","true");
+      hlPre.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;margin:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;scrollbar-color:transparent transparent;pointer-events:none;z-index:1;box-sizing:border-box;border:0;";
+
+      const textarea = document.createElement("textarea");
+      _savedSoqlRanOk = false; // reset — must run successfully to save on next close
+      // Clear saved SQL if it belongs to a different object
+      var savedSqlForThis = (_savedSoqlObjName === objectName) ? _savedSoqlText : "";
+      textarea.value = savedSqlForThis || buildInitialSoql();
+      textarea.spellcheck = false;
+      textarea.autocomplete = "off";
+      textarea.autocorrect = "off";
+      textarea.autocapitalize = "off";
+      // color:transparent is the key — lets the hlPre colors show through
+      textarea.style.cssText = "position:relative;z-index:2;display:block;width:100%;box-sizing:border-box;height:160px;min-height:80px;resize:vertical;border:0;padding:14px 16px;font:13px/20px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:0;word-spacing:0;text-indent:0;text-transform:none;font-kerning:none;font-variant-ligatures:none;text-rendering:auto;tab-size:2;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;direction:ltr;text-align:left;overflow-x:hidden;overflow-y:scroll;color:transparent;caret-color:#a5b4fc;outline:none;background:transparent;margin:0;";
+
+      const syncHighlight = () => {
+        hlPre.innerHTML = highlightSoql(textarea.value) + "\n ";
+        hlPre.scrollTop  = textarea.scrollTop;
+        hlPre.scrollLeft = textarea.scrollLeft;
+      };
+
+      editorWrap.appendChild(hlPre);
+      editorWrap.appendChild(textarea);
+      soqlPanelEl.appendChild(editorWrap);
+
+      // ── Toolbar ───────────────────────────────────────────────────────────
+      const toolbar = document.createElement("div");
+      toolbar.style.cssText = "display:flex;align-items:center;gap:8px;padding:9px 14px;background:#0f172a;border-bottom:1px solid #1e293b;flex-shrink:0;";
+
+      const statusDot = document.createElement("span");
+      statusDot.style.cssText = "width:6px;height:6px;border-radius:50%;background:#334155;flex-shrink:0;";
+      const statusSpan = document.createElement("span");
+      statusSpan.style.cssText = "flex:1;font-size:11px;color:#64748b;";
+      statusSpan.textContent = "⌘↵ to run  ·  Supports: WHERE, IN, BETWEEN, IS NULL, LIKE, GROUP BY, ORDER BY, aggregate functions  ·  For JOINs use Data Cloud Query Editor";
+
+      const mkB = (label, accent) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        const base = accent
+          ? "background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;border:none;box-shadow:0 2px 8px rgba(99,102,241,.4);"
+          : "background:rgba(255,255,255,.06);color:#94a3b8;border:1px solid #1e293b;";
+        b.style.cssText = "border-radius:7px;padding:5px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;flex-shrink:0;" + base;
+        if (!accent) {
+          b.onmouseenter = () => (b.style.background = "rgba(255,255,255,.1)");
+          b.onmouseleave = () => (b.style.background = "rgba(255,255,255,.06)");
+        }
+        return b;
+      };
+      const runBtn   = mkB("▶  Run", true);
+      runBtn.title = "Run this SQL against Salesforce and show the results in the table (uses a query / Data Cloud credits).";
+      const copyBtn  = mkB("Copy", false);
+      copyBtn.title = "Copy the SQL text to the clipboard";
+      const resetBtn = mkB("Reset", false);
+      resetBtn.title = "Reset the editor back to the generated query for the selected columns";
+
+      function setStatus(msg, type) {
+        const dotColor = type==="ok"?"#4ade80":type==="err"?"#f87171":type==="warn"?"#fbbf24":"#334155";
+        const txtColor = type==="ok"?"#4ade80":type==="err"?"#f87171":type==="warn"?"#fbbf24":"#64748b";
+        statusDot.style.background = dotColor;
+        statusSpan.style.color = txtColor;
+        statusSpan.textContent = msg;
+      }
+
+      // Auto-quote bare SF identifiers (word__c / word__dll etc) in SQL that the user typed
+      // without quotes. Skips already-quoted tokens and SQL keywords/literals.
+      function autoQuoteSql(sql) {
+        var SQL_KW = /^(SELECT|FROM|WHERE|AND|OR|NOT|IN|LIKE|IS|NULL|TRUE|FALSE|AS|BY|ORDER|GROUP|HAVING|LIMIT|OFFSET|ASC|DESC|DISTINCT|COUNT|MIN|MAX|SUM|AVG)$/i;
+        var out = []; var i = 0; var len = sql.length;
+        while (i < len) {
+          var ch = sql[i];
+          // already-quoted identifier — pass through unchanged
+          if (ch === '"') {
+            var j = i + 1;
+            while (j < len) { if (sql[j] === '"') { j++; if (sql[j] === '"') { j++; continue; } break; } j++; }
+            out.push(sql.slice(i, j)); i = j; continue;
+          }
+          // string literal — pass through unchanged
+          if (ch === "'") {
+            var k = i + 1;
+            while (k < len) { if (sql[k] === "'") { k++; if (sql[k] === "'") { k++; continue; } break; } k++; }
+            out.push(sql.slice(i, k)); i = k; continue;
+          }
+          // bare word — check if SF identifier (contains __ or ends __c/__dll/__dlm/__dlo/__dim etc)
+          if (/[A-Za-z_]/.test(ch)) {
+            var m = i;
+            while (m < len && /[A-Za-z0-9_]/.test(sql[m])) m++;
+            var word = sql.slice(i, m);
+            var isSfIdent = /__/.test(word) || /^[A-Za-z][A-Za-z0-9_]*__[a-z]/.test(word);
+            if (isSfIdent && !SQL_KW.test(word)) {
+              out.push('"' + word.replace(/"/g, '""') + '"');
+            } else {
+              out.push(word);
+            }
+            i = m; continue;
+          }
+          out.push(ch); i++;
+        }
+        var result = out.join("");
+        // Rewrite = NULL / != NULL / <> NULL → IS NULL / IS NOT NULL (outside string literals)
+        result = result.replace(/(!= *NULL|<> *NULL)/gi, "IS NOT NULL");
+        result = result.replace(/= *NULL\b/gi, "IS NULL");
+        return result;
+      }
+
+      runBtn.onclick = () => {
+        hideAc();
+        var strippedCols = {}; // tracks columns auto-stripped so far — prevents infinite loops
+        var soql = textarea.value.trim();
+        if (!soql) { setStatus("Query is empty", "err"); return; }
+        // FIX 8: Validate no JOIN or UNION
+        if (/\bJOIN\b/i.test(soql) || /\bUNION\b/i.test(soql)) {
+          setStatus("JOIN / UNION not supported here — use the Salesforce Data Cloud Query Editor for multi-table queries.", "err");
+          return;
+        }
+        // Auto-quote any bare SF identifiers (e.g. phone_cell__c → "phone_cell__c")
+        soql = autoQuoteSql(soql);
+        var selMatch = soql.match(/SELECT\s+([\s\S]+?)\s+FROM\s+/i);
+        if (!selMatch) { setStatus("Missing SELECT … FROM", "err"); return; }
+        var parsedFields = selMatch[1].split(",").map(function (f) { return f.trim().replace(/^"|"$/g, "").replace(/\s+/g, ""); }).filter(function (f) { return f && f !== "*"; });
+        var objName = objectName || (findRecordListEl() && findRecordListEl().objectName) || (recList && recList.objectName) || "";
+        // Run the user's REAL SQL server-side (WHERE / ORDER BY / LIMIT all honored) via
+        // the documented endpoint (extension) or /aura (bookmarklet), then render the
+        // result in OUR own table — the same table with View/Copy/hide-empty features.
+        setStatus("Running query…", "");
+        runBtn.disabled = true; runBtn.style.opacity = ".55";
+        var ds = (typeof resolveDataSpace === "function") ? resolveDataSpace(objName) : "";
+        ensureQueryContext(function (ready) {
+          if (!ready) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            var connectWrap = document.createElement("div");
+            connectWrap.style.cssText = "margin-top:8px;";
+            var statusEl = (soqlPanelEl && soqlPanelEl.querySelector(".dc-soql-status")) || soqlPanelEl;
+            statusEl.textContent = "";
+            statusEl.appendChild(connectWrap);
+            renderConnectButton(connectWrap, function () { runBtn.click(); });
+            return;
+          }
+          // Parse user's LIMIT to request that many rows (default 49999 if no LIMIT)
+          var userLim = soql.match(/\bLIMIT\s+(\d+)/i);
+          var askRows = userLim ? Math.min(parseInt(userLim[1], 10), DC_MAX_FETCH_ROWS) : DC_MAX_FETCH_ROWS;
+          // FIX 7 & 8: Parse WHERE clause and store as filter state
+          var whereMatch = soql.match(/\bWHERE\s+([\s\S]+?)(?:\s+(?:GROUP|ORDER|LIMIT|OFFSET)\b|$)/i);
+          // Extract FROM table from the actual (auto-quoted) SQL so COUNT uses same name as data query
+          var fromMatch = soql.match(/\bFROM\s+("(?:[^"]|"")*"|\S+)/i);
+          var fromTable = fromMatch ? fromMatch[1] : sqlQuoteIdent(objName);
+          // The result is shown, counted and exported AS objName — a different FROM table would be mislabelled and
+          // every follow-up (Count / Export All / filtered CSV) would query the wrong table. Refuse it plainly.
+          if (fromMatch && dcFromTableName(fromMatch[1]).toLowerCase() !== String(objName).toLowerCase()) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            setStatus("This editor works on " + objName + ". FROM " + dcFromTableName(fromMatch[1]) + " is a different table - open that object in Data Explorer and use its editor.", "warn");
+            return;
+          }
+          // Shared success handler (normal run AND the auto-retry after dropping an unknown column).
+          // The previous filter/original state is only replaced HERE, after a query really succeeded,
+          // so a failed/cancelled run can never leave the table and its filter state out of sync.
+          function finishOk(res) {
+            // 0 rows: the table renderer refuses to open an empty result, so do NOT touch the filter state or close the
+            // editor (that left the old table showing with a stale "SQL filter" record). Tell the user instead.
+            if (!res.rows || !res.rows.length) { runBtn.disabled = false; runBtn.style.opacity = "1"; setStatus("Query ran but returned 0 rows - the table is unchanged.", "warn"); return; }
+            // Keep the user's Rows setting — never replace it with how many rows this query returned.
+            var keepWant = _originalWantRows[objName] || res.rows.length;
+            if (whereMatch && whereMatch[1]) {
+              var whereClause2 = whereMatch[1].trim();
+              _filterState[objName] = { active: true, where: whereClause2, conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
+              var countSql2 = "SELECT COUNT(*) FROM " + fromTable + " WHERE " + whereClause2;
+              runRawSql(countSql2, ds, 1).then(function (cntRes) {
+                var cnt = 0;
+                if (cntRes.rows.length > 0) { var fc = cntRes.columns[0] || "count"; cnt = parseInt(cntRes.rows[0][fc], 10) || 0; }
+                _filterCount[objName] = cnt;
+                if (cnt > res.rows.length) res.rows.__serverRowCount = cnt;
+                _savedSoqlRanOk = true;
+                try { closeSoqlEditor(); } catch (e) {}
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
+              }).catch(function () {
+                _savedSoqlRanOk = true;
+                try { closeSoqlEditor(); } catch (e) {}
+                showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
+              });
+            } else {
+              // No WHERE (e.g. a plain LIMIT): still a QUERY RESULT, not the table's original rows —
+              // flag it so it is never cached as "original" and "Back to original" is offered.
+              _filterState[objName] = { active: true, where: "", conds: null, fromSql: true, orderBy: dcParseOrderBy(soql) };
+              _filterCount[objName] = 0;
+              _savedSoqlRanOk = true;
+              try { closeSoqlEditor(); } catch (e) {}
+              showAllColumnsTable(objName, res.columns, res.rows, keepWant, res.columns);
+            }
+          }
+          runRawSql(soql, ds, askRows).then(function (res) {
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            if (!res.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+            finishOk(res);
+          }).catch(function handleSqlErr(err) {
+            var errMsg = String(err && err.message || err);
+            // Unknown column: auto-strip bad SELECT columns one at a time, retrying until
+            // success or no more can be removed. strippedCols tracks which have been tried
+            // so we never loop on the same column twice.
+            var badColMatch = errMsg.match(/unknown column ['"`]?([^'"`\s,)]+)['"`]?/i);
+            if (badColMatch) {
+              var badCol = badColMatch[1].replace(/^"|"$/g, "");
+              // Only auto-retry if this column is in the SELECT list and not yet stripped
+              if (!strippedCols[badCol.toLowerCase()]) {
+                var retrySql = soql;
+                var selFromMatch = soql.match(/^(SELECT\s+)([\s\S]+?)(\s+FROM\b[\s\S]*)$/i);
+                if (selFromMatch) {
+                  var selectKw = selFromMatch[1];
+                  var colsPart  = selFromMatch[2];
+                  var rest      = selFromMatch[3];
+                  // Split on commas that are NOT inside double-quoted identifiers
+                  var colTokens = colsPart.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+                  var inSelect = colTokens.some(function(tok) {
+                    return tok.trim().replace(/^"|"$/g, "").toLowerCase() === badCol.toLowerCase();
+                  });
+                  if (inSelect) {
+                    var filtered = colTokens.filter(function(tok) {
+                      return tok.trim().replace(/^"|"$/g, "").toLowerCase() !== badCol.toLowerCase();
+                    });
+                    if (filtered.length > 0 && filtered.length < colTokens.length) {
+                      retrySql = selectKw + filtered.join(",") + rest;
+                    }
+                  }
+                }
+                if (retrySql !== soql) {
+                  strippedCols[badCol.toLowerCase()] = true;
+                  var stripped = Object.keys(strippedCols);
+                  setStatus("Column\"" + badCol + "\" not found — retrying without it…", "");
+                  soql = retrySql; // update closure var so next catch sees the reduced SQL
+                  runRawSql(retrySql, ds, askRows).then(function(res2) {
+                    runBtn.disabled = false; runBtn.style.opacity = "1";
+                    if (!res2.columns.length) { setStatus("Query ran but returned no columns.", "warn"); return; }
+                    var stripMsg = stripped.length === 1
+                      ? "\"" + stripped[0] + "\" removed (not on this object)"
+                      : stripped.length + " columns removed (not on this object): " + stripped.join(", ");
+                    setStatus(stripMsg + " — showing " + res2.columns.length + " columns.", "warn");
+                    textarea.value = retrySql;
+                    syncHighlight();
+                    finishOk(res2);
+                  }).catch(handleSqlErr); // recurse — strip next bad column if any
+                  return;
+                }
+              }
+              // Column is in WHERE/ORDER BY, or already stripped — can't auto-fix
+              runBtn.disabled = false; runBtn.style.opacity = "1";
+              _savedSoqlRanOk = false;
+              var inSelectList = false;
+              var selM2 = soql.match(/^SELECT\s+([\s\S]+?)\s+FROM\b/i);
+              if (selM2) {
+                var toks2 = selM2[1].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+                inSelectList = toks2.some(function(t){ return t.trim().replace(/^"|"$/g,"").toLowerCase() === badCol.toLowerCase(); });
+              }
+              if (!inSelectList) {
+                setStatus(errMsg + " — This column is not in the SELECT list. Check the field API name in your WHERE / ORDER BY clause.", "err");
+              } else {
+                setStatus(errMsg + " — Check the column name in your query; it may be misspelled or not exist on this object.", "err");
+              }
+              return;
+            }
+            runBtn.disabled = false; runBtn.style.opacity = "1";
+            _savedSoqlRanOk = false;
+            setStatus(errMsg, "err");
+          });
+        });
+      };
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(textarea.value)
+          .then(()=>{ copyBtn.textContent="✓ Copied"; setTimeout(()=>{copyBtn.textContent="Copy";},2000); })
+          .catch(()=>{ textarea.select(); document.execCommand("copy"); });
+      };
+      resetBtn.onclick = () => { textarea.value=buildInitialSoql(); syncHighlight(); setStatus("⌘↵ to run  ·  Supports: WHERE, IN, BETWEEN, IS NULL, LIKE, GROUP BY, ORDER BY, aggregate functions  ·  For JOINs use Data Cloud Query Editor",""); hideAc(); };
+
+      toolbar.appendChild(runBtn);
+      toolbar.appendChild(copyBtn);
+      toolbar.appendChild(resetBtn);
+      toolbar.appendChild(statusDot);
+      toolbar.appendChild(statusSpan);
+
+      // Inline suggestion list — sits between the textarea and the toolbar inside the flex column.
+      const acDrop = document.createElement("div");
+      acDrop.style.cssText = "display:none;background:#0f172a;border-top:1px solid #1e293b;border-bottom:1px solid #1e293b;max-height:224px;overflow-y:auto;flex-shrink:0;";
+      soqlAcDropEl = acDrop;
+      soqlPanelEl.appendChild(acDrop);   // between textarea and toolbar
+      soqlPanelEl.appendChild(toolbar);
+      let acItems = [], acIdx = -1;
+
+      function hideAc() { acDrop.style.display="none"; acItems=[]; acIdx=-1; }
+      function highlightAcRow() {
+        [...acDrop.children].forEach((r,i) => {
+          r.style.background = i===acIdx ? "rgba(99,102,241,.2)" : "transparent";
+        });
+      }
+      function showAc(items, word) {
+        if (!items.length) { hideAc(); return; }
+        acItems = items; acIdx = 0;
+        acDrop.innerHTML = "";
+        // Header label
+        const hd = document.createElement("div");
+        hd.style.cssText = "padding:4px 14px 2px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#475569;";
+        hd.textContent = "Suggestions — Tab to insert";
+        acDrop.appendChild(hd);
+        items.slice(0,12).forEach((item, i) => {
+          const isField = !!allFieldMap[item];
+          const col     = isField ? allFieldMap[item] : null;
+          const nameColor = isField ? "#e879f9" : "#60a5fa";
+          const badgeBg   = isField ? "rgba(232,121,249,.12)" : "rgba(96,165,250,.12)";
+          const badgeFg   = isField ? "#c084fc" : "#60a5fa";
+          const badge     = isField ? (col.type || "field") : "keyword";
+          // Highlight the matching part of the item name
+          const wl = word.toLowerCase();
+          const matchIdx = item.toLowerCase().indexOf(wl);
+          let nameHtml;
+          if (matchIdx >= 0 && wl.length > 0) {
+            nameHtml = esc(item.slice(0, matchIdx)) +
+              "<span style='background:rgba(99,102,241,.35);border-radius:2px'>" + esc(item.slice(matchIdx, matchIdx + wl.length)) + "</span>" +
+              esc(item.slice(matchIdx + wl.length));
+          } else {
+            nameHtml = esc(item);
+          }
+          const row = document.createElement("div");
+          row.style.cssText = "padding:5px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;border-radius:0;" +
+            (i===0 ? "background:rgba(99,102,241,.2);" : "");
+          row.innerHTML =
+            "<span style='font:13px/1.4 SF Mono,Menlo,monospace;color:" + nameColor + ";flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" + nameHtml + "</span>" +
+            "<span style='font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:1px 6px;border-radius:3px;background:" + badgeBg + ";color:" + badgeFg + ";flex-shrink:0'>" + esc(badge) + "</span>";
+          row.onmouseenter = () => { acIdx = i; highlightAcRow(); };
+          row.onclick      = () => insertAcItem(item, word);
+          acDrop.appendChild(row);
+        });
+        acDrop.style.display = "block";
+      }
+      function insertAcItem(item, typedWord) {
+        const val = textarea.value, pos = textarea.selectionStart;
+        const start = pos - typedWord.length;
+        textarea.value = val.slice(0, start) + item + val.slice(pos);
+        textarea.selectionStart = textarea.selectionEnd = start + item.length;
+        hideAc(); textarea.focus(); syncHighlight();
+      }
+      function triggerAc() {
+        setTimeout(() => {
+          const val = textarea.value, pos = textarea.selectionStart;
+          const {word} = getWordAtCursor(val, pos);
+          if (word.length < 1 || /^\d+$/.test(word)) { hideAc(); return; }
+          const wl = word.toLowerCase();
+          // Match fields that CONTAIN the typed word anywhere (not just starts-with)
+          const fieldMatches = allFieldNames.filter(fn => fn.toLowerCase().includes(wl));
+          // Sort: starts-with first, then contains
+          fieldMatches.sort((a, b) => {
+            const as = a.toLowerCase().startsWith(wl), bs = b.toLowerCase().startsWith(wl);
+            if (as && !bs) return -1; if (!as && bs) return 1;
+            return a.localeCompare(b);
+          });
+          const kwMatches = AC_KEYWORDS.filter(k => k.toLowerCase().startsWith(wl) && k.toLowerCase() !== wl);
+          const items = [...fieldMatches.slice(0, 10), ...kwMatches.slice(0, 4)];
+          if (!items.length) { hideAc(); return; }
+          showAc(items, word);
+        }, 0);
+      }
+
+      // ── Hint strip — tiny, one line, not overwhelming ─────────────────────
+      const hintBar = document.createElement("div");
+      hintBar.style.cssText = "padding:6px 16px;background:#0a0f1e;font-size:10px;color:#334155;display:flex;gap:14px;align-items:center;flex-shrink:0;border-top:1px solid #1e293b;";
+      const hint = (k,v) => {
+        const s = document.createElement("span");
+        s.innerHTML = "<kbd style='background:#1e293b;color:#64748b;border:1px solid #334155;border-radius:3px;padding:0 4px;font:10px SF Mono,Menlo,monospace'>" + k + "</kbd> <span style='color:#475569'>" + v + "</span>";
+        return s;
+      };
+      hintBar.appendChild(hint("⌘↵","Run"));
+      hintBar.appendChild(hint("Tab","Accept suggestion"));
+      hintBar.appendChild(hint("Esc","Close suggestion"));
+      hintBar.appendChild(hint("⌘Z","Undo"));
+      // Color legend — tiny dots
+      const legend = document.createElement("span");
+      legend.style.cssText = "margin-left:auto;display:flex;gap:8px;align-items:center;";
+      [["#60a5fa","keyword"],["#e879f9","field"],["#34d399","string"],["#fb923c","number"]].forEach(([c,l]) => {
+        const s = document.createElement("span");
+        s.style.cssText = "display:flex;align-items:center;gap:3px;";
+        s.innerHTML = "<span style='width:7px;height:7px;border-radius:50%;background:"+c+";flex-shrink:0'></span><span style='color:#475569;font-size:9px'>"+l+"</span>";
+        legend.appendChild(s);
+      });
+      hintBar.appendChild(legend);
+      soqlPanelEl.appendChild(hintBar);
+
+      // ── Events ────────────────────────────────────────────────────────────
+      textarea.addEventListener("input", () => { syncHighlight(); triggerAc(); });
+      textarea.addEventListener("scroll", () => { hlPre.scrollTop=textarea.scrollTop; hlPre.scrollLeft=textarea.scrollLeft; });
+      textarea.addEventListener("keydown", (e) => {
+        if (acDrop.style.display !== "none") {
+          if (e.key==="ArrowDown") { e.preventDefault(); acIdx=Math.min(acIdx+1,acItems.length-1); highlightAcRow(); return; }
+          if (e.key==="ArrowUp")   { e.preventDefault(); acIdx=Math.max(acIdx-1,0); highlightAcRow(); return; }
+          // Only TAB accepts a suggestion (as the hint bar says). Enter always inserts a normal new line.
+          if (e.key==="Tab" && acIdx>=0 && acItems[acIdx]) {
+            e.preventDefault();
+            insertAcItem(acItems[acIdx], getWordAtCursor(textarea.value,textarea.selectionStart).word);
+            return;
+          }
+          if (e.key==="Escape") { e.preventDefault(); hideAc(); return; }
+        }
+        if ((e.ctrlKey||e.metaKey) && e.key==="Enter") { e.preventDefault(); e.stopPropagation(); runBtn.click(); }
+      });
+      textarea.addEventListener("blur", () => setTimeout(hideAc, 150));
+      // Any caret move that is NOT typing closes the list, so it can never act on a stale position
+      // (this was why Enter/Tab/arrows edited the wrong place after clicking elsewhere).
+      textarea.addEventListener("mousedown", hideAc);
+      textarea.addEventListener("keyup", (e) => {
+        if (["ArrowLeft","ArrowRight","Home","End","PageUp","PageDown"].indexOf(e.key) >= 0) hideAc();
+      });
+
+      makeDraggable(soqlPanelEl, sh);
+      addResizeHandle(soqlPanelEl, 460, 240);
+      document.body.appendChild(soqlPanelEl);
+      try { attachInstantTooltips(soqlPanelEl); } catch (e) {}   // fast tooltips for Run/Copy/Reset
+      syncHighlight();
+      textarea.focus();
+      } catch(e) {
+        // If editor failed to build, release the lock so it can be retried
+        if (!soqlPanelEl) _soqlEditorOpen = false;
+        throw e;
+      }
+    }
+
+    // ── Footer ────────────────────────────────────────────────────────────────
+    const footer = document.createElement("div");
+    footer.style.cssText = "padding:8px 14px;border-top:1px solid #e0e5ee;flex-shrink:0;display:flex;flex-direction:column;gap:6px;background:#f9fafc;border-radius:0 0 12px 12px;";
+
+    // LIMIT used only in SOQL editor — keep a hidden ref for openSoqlEditor
+    const limitInputEl = document.createElement("input");
+    limitInputEl.type = "number"; limitInputEl.value = "2000"; limitInputEl.style.display = "none";
+    footer.appendChild(limitInputEl);
+
+    const savedNote = document.createElement("div");
+    savedNote.style.cssText = "font-size:11px;color:#5c6b8a;min-height:14px;";
+    const savedColObjs = lsLoad(objectName);
+    const savedNames = savedColObjs ? savedColObjs.map(c => c.fieldName || c).filter(Boolean) : null;
+    if (savedNames) savedNote.textContent = "Saved set: " + savedNames.length + " fields";
+    // Action-oriented callout for the "Data Space couldn't be determined" case: amber box, numbered
+    // steps, the exact next click highlighted. `again` = the button name to press afterwards.
+    var _sortGuide = null;
+    // `detail` = the REAL error from the failed load. Without it the user just saw the same card again with no clue
+    // why (the guide only explains how to connect, but the failure may be something else entirely).
+    function showSortHelp(again, detail) {
+      if (_sortGuide && _sortGuide.dcStop) _sortGuide.dcStop();   // never stack two guides / two locks
+      savedNote.innerHTML = "";
+      var det = null;
+      if (detail) {
+        det = document.createElement("div");
+        det.style.cssText = "margin-bottom:6px;padding:7px 9px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:11px;line-height:1.45;user-select:text;word-break:break-word;";
+        // Not an error the user can act on: keep it out of sight (collapsed) - the guide is the only visible step.
+        det.style.cssText = "margin-bottom:6px;font-size:10px;color:#6b7280;user-select:text;word-break:break-word;";
+        var dsum = document.createElement("details");
+        var dsm = document.createElement("summary"); dsm.textContent = "Technical details"; dsm.style.cssText = "cursor:pointer;";
+        dsum.appendChild(dsm); dsum.appendChild(document.createTextNode(String(detail).slice(0, 700)));
+        det.appendChild(dsum);
+        savedNote.appendChild(det);
+      }
+      _sortGuide = dcBuildSortGuide({ lockBtn: again === "Restore saved" ? restoreBtn : viewAllBtn, onReady: function () { if (det && det.parentNode) det.parentNode.removeChild(det); } });
+      savedNote.appendChild(_sortGuide);
+    }
+
+    footer.appendChild(savedNote);
+
+    // Data Explorer credit-awareness note (self-contained — separate from Query Editor).
+    // "Show data", Reload, Count, Export CSV and Export All each run a Data Cloud query
+    // (usage type "Data Queries"): 2 credits / 1M rows PROCESSED in Production, 1.6 in
+    // Sandbox, billed on rows scanned (not returned). Cached re-open, in-memory CSV,
+    // scroll & sort are free. Collapsible so it doesn't crowd the modal.
+    // Detect Sandbox vs Production from the org host (docs: sandbox URLs contain
+    // ".sandbox."/"--"). Explorer-local — no dependency on Query Editor's copy.
+    var _exSandbox = false; try { _exSandbox = /\.sandbox\./.test(location.hostname.toLowerCase()); } catch (e) {}
+    var _exRate = _exSandbox ? 1.6 : 2, _exEnv = _exSandbox ? "Sandbox" : "Production";
+    const creditNoteEx = document.createElement("details");
+    creditNoteEx.style.cssText = "font-size:10.5px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 9px;line-height:1.5;";
+    creditNoteEx.innerHTML = "<summary style='cursor:pointer;font-weight:600;color:#92400e;'>💳 How this uses Data Cloud credits</summary>"
+      + "<div style='margin-top:5px;'>Loading data (<b>Show data</b>, <b>Reload</b>, <b>Count</b>, <b>Export CSV / Export All</b>) runs a query — usage type <b>Data Queries</b>.<br>"
+      + "Rate (Aug-2025 card): <b>" + _exRate + " credits / 1M rows processed</b> (this <b>" + _exEnv + "</b> org) · " + (_exSandbox ? "2 in Production" : "1.6 in Sandbox") + ".<br>"
+      + "Billed on rows <b>processed</b> (scanned), not returned. Reopening cached results, in-memory CSV, scrolling &amp; sorting are <b>free</b>.<br>"
+      + "<span style='color:#b45309;'>Charged to Data Services or Flex credits per your org; min 1 credit/month. Track in Digital Wallet.</span></div>";
+    footer.appendChild(creditNoteEx);
+
+    const mkFootBtn = (label, primary, icon, tip) => {
+      const b = document.createElement("button");
+      b.textContent = icon ? icon + " " + label : label;
+      if (tip) b.title = tip;
+      b.style.cssText = "flex:1 1 auto;border-radius:6px;padding:7px 10px;cursor:pointer;font:600 11px -apple-system,sans-serif;white-space:nowrap;border:1px solid " +
+        (primary ? "#0d6efd;background:#0d6efd;color:#fff;" : "#c9d0da;background:#fff;color:#1e3a5f;");
+      if (!primary) { b.onmouseenter = () => (b.style.background = "#f3f6fb"); b.onmouseleave = () => (b.style.background = "#fff"); }
+      return b;
+    };
+    const viewAllBtn = mkFootBtn("Show selected columns' data", true, null, "Load and display the data for all the columns you've ticked, in one scrollable table (runs a query / uses Data Cloud credits).");
+    // Check if connection is ready — if not, show instruction and poll
+    var _connectionReady = !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent());
+    var _connHint = null;
+    if (!_connectionReady) {
+      _connectingInProgress = true;
+      // The guide locks the ORIGINAL button (no second button) and unlocks it when the page has run a query
+      _connHint = dcBuildSortGuide({
+        lockBtn: viewAllBtn,
+        isReady: function () { return !!(primeCredsFromAura() || haveCredsOnly() || extBridgePresent()); }
+      });
+      footer.insertBefore(_connHint, footer.firstChild);
+      var _connPoll = setInterval(function () {
+        if (primeCredsFromAura() || haveCredsOnly() || extBridgePresent()) {
+          _connectionReady = true;
+          _connectingInProgress = false;
+          clearInterval(_connPoll);
+          if (_connHint && _connHint.dcForceReady) _connHint.dcForceReady();
+        }
+      }, 300);
+      // After 30s release the button anyway (it will explain itself if it fails); the guide keeps watching.
+      setTimeout(function () {
+        clearInterval(_connPoll);
+        if (!_connectionReady) {
+          _connectingInProgress = false;
+          if (_connHint && _connHint.dcUnlock) _connHint.dcUnlock();
+        }
+      }, 30000);
+    }
+    const saveBtn    = mkFootBtn("Save set", false, null, "Save the currently ticked columns (and their order) so you can reuse this selection later on this object.");
+    const restoreBtn = mkFootBtn("Restore saved", false, null, "Re-apply the column set you previously saved for this object.");
+    const clearBtn   = mkFootBtn("Clear saved", false, null, "Delete the saved column set for this object.");
+    const exportBtn  = mkFootBtn("Export CSV", false, null, "Download the selected columns' data as a CSV file (runs a query / uses Data Cloud credits).");
+    const soqlEdBtn  = mkFootBtn("Edit SQL", false, null, "Open the SQL editor, pre-filled with a SELECT for the columns you ticked. Edit it and press Run (⌘/Ctrl + Enter) — single table only; uses Data Cloud credits.");
+
+    // Grey out restore if nothing saved
+    if (!savedColObjs || !savedColObjs.length) {
+      restoreBtn.disabled = true;
+      restoreBtn.style.opacity = "0.4";
+      restoreBtn.style.cursor = "not-allowed";
+    }
+
+    // Row 1: "Show selected columns' data" (full width, primary)
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;";
+    // Row 2: secondary buttons
+    const btnRow2 = document.createElement("div");
+    btnRow2.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
+
+    // Spinner overlay — shown during apply so user knows work is happening
+    const spinnerEl = document.createElement("div");
+    spinnerEl.style.cssText = "display:none;position:absolute;inset:0;background:rgba(255,255,255,.75);z-index:10;align-items:center;justify-content:center;flex-direction:column;gap:8px;border-radius:12px;font:13px -apple-system,sans-serif;color:#1e3a5f;";
+    spinnerEl.innerHTML = "<div style='width:28px;height:28px;border:3px solid #d0d5de;border-top-color:#0d6efd;border-radius:50%;animation:dc-spin 0.7s linear infinite'></div><span>Applying columns…</span>";
+    if (!document.getElementById("dc-spin-style")) {
+      const ss = document.createElement("style"); ss.id = "dc-spin-style";
+      ss.textContent = "@keyframes dc-spin{to{transform:rotate(360deg)}}";
+      document.head.appendChild(ss);
+    }
+    modal.style.position = "fixed"; // ensure spinner positions correctly
+    modal.appendChild(spinnerEl);
+
+    let applyInProgress = false;
+    const showSpinner = (msg) => { applyInProgress = true; spinnerEl.style.display = "flex"; spinnerEl.querySelector("span").textContent = msg || "Applying columns…"; };
+    const hideSpinner = () => { applyInProgress = false; spinnerEl.style.display = "none"; };
+
+    // ── "Show selected columns' data" — one read-only Aura query, our own table ─────
+    // Shows every SELECTED column's data at once (removing SF's 10-col display cap) in
+    // our own scrollable table. "ALL columns" = all the columns you've selected (which
+    // defaults to the current table's columns; tick more in the picker to add them).
+    // Auto-persists the selection so a tab close never loses the setup.
+    viewAllBtn.onclick = () => {
+      const cols = orderedSelected.filter(fn => checked.has(fn));
+      if (!cols.length) { savedNote.innerHTML = "<span style='color:#dc2626;font-weight:600'>Select at least one column above first.</span>"; return; }
+      // Persist immediately so the work survives a tab close, even before viewing.
+      try { lsSave(objectName, cols.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn })); } catch (e) {}
+      exploreCache(objectName).lastApplied = cols.slice();
+
+      // ── Incremental fetch: reuse already-loaded rows, query only NEW columns ──────
+      // If ALL selected columns are already in the in-memory cache (_originalRows),
+      // just re-render from cache — zero credits. If SOME are new, fetch only those
+      // new columns (SELECT newcol1,newcol2 FROM ... LIMIT <already-loaded count>),
+      // merge by row index, update the cache, then render. Full re-fetch only when
+      // there is no cache at all (first load, or after Reload cleared the cache).
+      // _originalColumns stores field name STRINGS (same type as `cols`).
+      var cachedRows   = _originalRows[objectName];
+      var loadedFns    = _originalColumns[objectName] || [];  // array of strings
+      var cachedWant   = _originalWantRows[objectName];
+      var newCols      = cols.filter(function (fn) { return loadedFns.indexOf(fn) === -1; });
+      var allCached    = cachedRows && cachedRows.length > 0 && newCols.length === 0;
+      var partialCache = cachedRows && cachedRows.length > 0 && newCols.length > 0;
+
+      if (allCached) {
+        // Every selected column is already in memory — render immediately, no query.
+        savedNote.textContent = "Showing " + cachedRows.length + " cached rows × " + cols.length + " columns (no query used — columns were already loaded).";
+        // cols is already an array of field name strings — pass directly
+        showAllColumnsTable(objectName, cols, cachedRows, cachedWant || cachedRows.length);
+        return;
+      }
+
+      // Pre-flight: read the page's dataspace dropdown RIGHT NOW before doing anything.
+      try {
+        var _preDs = readPageDataSpace();
+        if (_preDs && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs); }
+      } catch (e) {}
+      viewAllBtn.disabled = true;
+      var wantRows = (cachedRows && cachedRows.length > 0) ? cachedRows.length : 1000;
+
+      if (partialCache) {
+        // Some new columns — fetch only those, then merge into cached rows by index.
+        showSpinner("Fetching " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + " (reusing " + loadedFns.length + " cached)…");
+        ensureQueryContext(function (ready) {
+          if (!ready) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = "";
+            var connectWrap2 = document.createElement("div");
+            savedNote.appendChild(connectWrap2);
+            renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
+            return;
+          }
+          loadColumnsDataCached(objectName, newCols, wantRows, true).then(function (newRows) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            // Merge new column values into cached rows by position index
+            var mergedRows = cachedRows.map(function (row, i) {
+              var extra = newRows[i] || {};
+              return Object.assign({}, row, extra);
+            });
+            if (newRows.__serverRowCount) mergedRows.__serverRowCount = newRows.__serverRowCount;
+            // Expand the field-name string cache so future re-selections also hit cache
+            var mergedFns = loadedFns.slice();
+            newCols.forEach(function (fn) { if (mergedFns.indexOf(fn) === -1) mergedFns.push(fn); });
+            _originalRows[objectName]    = mergedRows;
+            _originalColumns[objectName] = mergedFns;
+            _originalWantRows[objectName] = cachedWant || mergedRows.length;
+            // Also add new col objects to exploreCache so labels show correctly
+            var ec = exploreCache(objectName);
+            if (ec.allColumns) {
+              newCols.forEach(function (fn) {
+                if (!ec.allColumns.find(function (c) { return c.fieldName === fn; })) {
+                  ec.allColumns.push(all.find(function (c) { return c.fieldName === fn; }) || { fieldName: fn, label: fn });
+                }
+              });
+            }
+            savedNote.textContent = "Fetched " + newCols.length + " new column" + (newCols.length > 1 ? "s" : "") + "; reused " + loadedFns.length + " cached — " + mergedRows.length + " rows total.";
+            // cols is field name strings — pass directly
+            showAllColumnsTable(objectName, cols, mergedRows, cachedWant || mergedRows.length);
+          }).catch(function (err) {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = String(err && err.message || err);
+          });
+        });
+        return;
+      }
+
+      // Full fetch (no cache yet, or cache was cleared by Reload)
+      showSpinner("Loading " + cols.length + " columns…");
+      // Make sure we have live query credentials first (bootstraps invisibly if the
+      // page hasn't fired a query since the tool loaded), THEN run the one-shot query.
+      ensureQueryContext(function (ready) {
+        if (!ready) {
+          hideSpinner(); viewAllBtn.disabled = false;
+          savedNote.textContent = "";
+          var connectWrap2 = document.createElement("div");
+          savedNote.appendChild(connectWrap2);
+          renderConnectButton(connectWrap2, function () { viewAllBtn.click(); });
+          return;
+        }
+        // Auto-establish the dataspace first (clicks the page's sort so SF fires its own
+        // query and we capture selectedDataSpaceName) — removes the manual "sort first" step
+        // on orgs where the object lives in a non-default dataspace.
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, cols, 1000, false).then((rows) => {
+            hideSpinner(); viewAllBtn.disabled = false;
+            savedNote.textContent = "Loaded " + rows.length + " rows × " + cols.length + " columns." + (rows.__fromCache ? " (from cache — no query used)" : "");
+            showAllColumnsTable(objectName, cols, rows);
+          }).catch((err) => {
+            hideSpinner(); viewAllBtn.disabled = false;
+            var msg = String(err && err.message || err);
+            // We already auto-tried to establish the dataspace. If it STILL failed, the
+            // object likely isn't queryable from any detectable dataspace — give a clear,
+            // action-oriented message instead of the raw SQL error.
+            if (/dataspace="?"?\s*(?:,|\])/.test(msg) || /tried.*dataspace/i.test(msg) || /does not exist|INVALID_ARGUMENT/i.test(msg)) {
+              showSortHelp("Show selected columns' data", msg); return;
+            }
+            savedNote.textContent = msg;
+          });
+        });
+      });
+    };
+
+    saveBtn.onclick = () => {
+      const ordered = orderedSelected.filter(fn => checked.has(fn));
+      const savedCols = ordered.map(fn => all.find(c => c.fieldName === fn) || { fieldName: fn, label: fn });
+      lsSave(objectName, savedCols);
+      // Reset session guard so next page load auto-applies the NEW saved set
+      // Enable restore button now that we have a saved set
+      restoreBtn.disabled = false;
+      restoreBtn.style.opacity = "1";
+      restoreBtn.style.cursor = "pointer";
+      savedNote.textContent = "✓ Saved " + savedCols.length + " fields";
+    };
+    restoreBtn.onclick = () => {
+      const latest = lsLoad(objectName);
+      if (!latest || !latest.length) { savedNote.textContent = "No saved set found"; return; }
+      const fns = latest.map(c => c.fieldName || c).filter(Boolean);
+      checked.clear();
+      fns.forEach(fn => checked.add(fn));
+      orderedSelected = fns.slice();
+      latest.forEach(saved => {
+        if (!saved.fieldName) return;
+        if (!all.find(c => c.fieldName === saved.fieldName)) all.push(saved);
+        const ac = exploreCache(objectName).allColumns;
+        if (ac && !ac.find(c => c.fieldName === saved.fieldName)) ac.push(saved);
+      });
+      renderActiveTab();
+      updateCount();
+      exploreCache(objectName).lastApplied = fns.slice();
+      // Restore = repopulate the picker AND open the full-columns table for the saved
+      // set (via the one-shot query) — no blank writes to SF's native table.
+      showSpinner("Restoring + loading " + fns.length + " saved columns…");
+      try { var _preDs2 = readPageDataSpace(); if (_preDs2 && _pageDsAuth) { dcAdoptPageDs(objectName, _preDs2); } } catch (e) {}
+      ensureQueryContext(function (ready) {
+        if (!ready) { hideSpinner(); showSortHelp("Restore saved"); return; }
+        // Same auto-dataspace step as "Show selected columns' data" so Restore works on
+        // non-default-dataspace orgs too (consistency — was missing, causing a dataspace error).
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, fns, 1000, false).then((rows) => {
+            hideSpinner();
+            savedNote.textContent = "✓ Restored " + fns.length + " fields — " + rows.length + " rows loaded." + (rows.__fromCache ? " (from cache — no query used)" : "");
+            showAllColumnsTable(objectName, fns, rows);
+          }).catch((err) => {
+            hideSpinner();
+            var rmsg = String(err && err.message || err);
+            if (/dataspace="?"?\s*(?:,|\])/.test(rmsg) || /tried.*dataspace/i.test(rmsg) || /does not exist|INVALID_ARGUMENT/i.test(rmsg)) {
+              showSortHelp("Restore saved", rmsg); return;
+            }
+            savedNote.textContent = rmsg;
+          });
+        });
+      });
+    };
+    clearBtn.onclick = () => {
+      lsClear(objectName);
+      restoreBtn.disabled = true;
+      restoreBtn.style.opacity = "0.4";
+      restoreBtn.style.cursor = "not-allowed";
+      savedNote.textContent = "Cleared saved set";
+    };
+    exportBtn.onclick = () => {
+      const ordered = orderedSelected.filter(fn => checked.has(fn));
+      if (!ordered.length) { savedNote.textContent = "Select at least one field first."; return; }
+      exportBtn.disabled = true;
+      savedNote.textContent = "Exporting all " + ordered.length + " columns…";
+      // Export via the SAME one-shot query as the full-table view, so ALL selected
+      // columns land in the CSV with real data — not just SF's 10.
+      ensureQueryContext(function () {
+        // Auto-establish dataspace first (same as Show data / Restore) so Export works on
+        // non-default-dataspace orgs instead of erroring / falling back to SF's 10 columns.
+        establishDataSpace(objectName, function () {
+          loadColumnsDataCached(objectName, ordered, 1000, false).then((rows) => {
+            exportBtn.disabled = false;
+            downloadRowsCsv(objectName, ordered, rows);
+            savedNote.textContent = "Exported " + rows.length + " rows × " + ordered.length + " columns." + (rows.__fromCache ? " (from cache)" : "");
+          }).catch((err) => {
+            // Fallback to SF's ≤10-column data if the query path isn't ready.
+            exportBtn.disabled = false;
+            savedNote.textContent = String(err && err.message || err) + " — exporting visible columns instead.";
+            const rl = findRecordListEl(); if (rl) exportExploreCsv(rl);
+          });
+        });
+      });
+    };
+    soqlEdBtn.onclick = openSoqlEditor;
+
+    // Row 1: the headline "Show selected columns' data" (primary, full width).
+    viewAllBtn.style.flex = "1";
+    btnRow.appendChild(viewAllBtn);
+    // Row 2: everything else, secondary.
+    btnRow2.appendChild(soqlEdBtn);
+    btnRow2.appendChild(saveBtn);
+    btnRow2.appendChild(restoreBtn);
+    btnRow2.appendChild(clearBtn);
+    btnRow2.appendChild(exportBtn);
+    footer.appendChild(btnRow);
+    footer.appendChild(btnRow2);
+    modal.appendChild(footer);
+
+    makeDraggable(modal, hdr);
+    addResizeHandle(modal, 360, 320);
+
+    // The picker DEFAULTS to the columns currently in the SF table (initFields above)
+    // — that's what the user expects to see selected. We do NOT auto-force a stale
+    // saved set here (that caused the picker to show old, unrelated fields). Instead,
+    // just merge any saved field metadata into `all` so the "Restore saved" button can
+    // repopulate them on demand, and note that a saved set exists.
+    if (savedColObjs && savedColObjs.length > 0) {
+      const savedFns = savedColObjs.map(c => c.fieldName || c).filter(Boolean);
+      if (savedFns.length > 0) {
+        savedColObjs.forEach(saved => {
+          if (!saved.fieldName) return;
+          if (!all.find(c => c.fieldName === saved.fieldName)) all.push(saved);
+          const ac2 = exploreCache(objectName).allColumns;
+          if (ac2 && !ac2.find(c => c.fieldName === saved.fieldName)) ac2.push(saved);
+        });
+        savedNote.textContent = "Showing current table columns. (Saved set of " + savedFns.length + " available — click \"Restore saved\".)";
+      }
+    }
+
+    // Initial setup is done — from here, every selection/order change auto-saves so a
+    // tab close never loses the user's work.
+    _autosaveOn = true;
+
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        if (soqlPanelEl) { closeSoqlEditor(); }
+        else { closeExploreModal(); }
+        document.removeEventListener("keydown", onEsc, true);
+      }
+    };
+    document.addEventListener("keydown", onEsc, true);
+    const barEl = document.getElementById("dc-bar");
+    const onOut = (e) => {
+      if (!exploreModalEl) return;
+      if (applyInProgress) return;
+      if (_connectingInProgress) return;
+      const inModal  = exploreModalEl.contains(e.target);
+      const inSoql   = soqlPanelEl && soqlPanelEl.contains(e.target);
+      const inAcDrop = soqlAcDropEl && soqlAcDropEl.contains(e.target);
+      const inBar    = barEl && barEl.contains(e.target);
+      // Don't close when the user clicks the SF Data Explorer grid itself (e.g. sorting a
+      // column to establish the dataspace). The grid is in shadow DOM, so e.target is the
+      // shadow host — use composedPath() to see the real element chain and detect any CDP /
+      // data-view / datatable / column-header node. This lets users sort WITHOUT losing the
+      // open picker (previously any outside click closed it, forcing a reopen).
+      var inSfGrid = dcIsSfGridOrGuideTarget(e);
+      if (!inModal && !inSoql && !inAcDrop && !inBar && !inSfGrid) { closeExploreModal(); closeSoqlEditor(); document.removeEventListener("pointerdown", onOut, true); }
+    };
+    setTimeout(() => document.addEventListener("pointerdown", onOut, true), 100);
+  }
+
+
+  // ── Object-change watcher ─────────────────────────────────────────────────
+  // PERF: this used to run findRecordListEl() (a full recursive shadow-DOM walk of the
+  // whole page) on a 1200ms setInterval FOREVER — pure wasted work that caused lag,
+  // and its body did nothing (it only tracked a name it never used). Removed the timer.
+  // The cache is read fresh each time the Column Selector opens (keyed by objectName),
+  // so no background watcher is needed — object changes are handled on demand.
+  function watchExploreObjectChange() { /* no-op: was a costly idle poll; removed for perf */ }
+
+  /* [in-development features removed from public build] */
+
+  // ── Data Explore launcher (FAB) ───────────────────────────────────────────
+  function ensureExploreLauncher() {
+    // Begin passively capturing the page's own Data Cloud query credentials so the
+    // "Show selected columns' data" query can reuse them (no dialog, no re-auth).
+    try { installAuraSniffer(); } catch (e) {}
+    // Proactively warm up credentials NOW (direct framework read, or one background
+    // query) so the first click always works — no "sort a column first" hit-and-trial.
+    try { warmUpQueryContext(); } catch (e) {}
+    if (document.getElementById("dc-bar")) return;
+    const wrap = document.createElement("div");
+    wrap.id = "dc-bar";
+    wrap.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2147483646;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none";
+
+    const menu = document.createElement("div");
+    menu.id = "dc-fab-menu";
+    menu.style.cssText = "position:relative;width:220px;background:#111827;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08);overflow:hidden;padding:8px;pointer-events:none;transition:opacity .2s cubic-bezier(.34,1.56,.64,1),transform .2s cubic-bezier(.34,1.56,.64,1);opacity:0;transform:translateY(12px) scale(.95);";
+    menu.setAttribute("aria-hidden", "true");
+
+    const colIconSvg    = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><rect x='1' y='1' width='4' height='14' rx='1'/><rect x='6' y='1' width='4' height='14' rx='1'/><rect x='11' y='1' width='4' height='14' rx='1'/></svg>";
+    const exportIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M8 1v9M4 6l4 4 4-4'/><rect x='2' y='13' width='12' height='2' rx='1'/></svg>";
+
+    const mkBtn = (id, label, title, iconGrad, iconSvg, subtitle) => {
+      const b = document.createElement("button");
+      b.id = id;
+      b.title = title;
+      b.style.cssText = "display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;cursor:pointer;border:none;background:#111827;color:#fff;text-align:left;transition:background .12s;";
+      b.onmouseenter = () => { b.style.background = "rgba(255,255,255,.07)"; };
+      b.onmouseleave = () => { b.style.background = "#111827"; };
+      const iconBox = "<div style='flex-shrink:0;width:32px;height:32px;border-radius:10px;background:" + iconGrad + ";display:flex;align-items:center;justify-content:center;'>" + iconSvg + "</div>";
+      const textCol = "<div style='display:flex;flex-direction:column;gap:1px;'><span style='font:600 13px/1.2 -apple-system,sans-serif;color:#fff;'>" + label + "</span><span style='font:400 11px/1.3 -apple-system,sans-serif;color:#94a3b8;'>" + subtitle + "</span></div>";
+      b.innerHTML = iconBox + textCol;
+      return b;
+    };
+
+    const colBtn    = mkBtn("dc-explore-cols-btn",   "Columns",    "Pick which fields to show (beyond Salesforce's 10-column display limit), reorder & save the set, then view all their data in one table.",   "linear-gradient(135deg,#6366f1,#4f46e5)", colIconSvg,    "Pick & reorder fields");
+    const exportBtn = mkBtn("dc-explore-export-btn", "Export CSV", "Download the rows currently shown in Salesforce's own Data Explorer table as a CSV file.", "linear-gradient(135deg,#10b981,#059669)", exportIconSvg, "Download visible rows");
+    const reopenIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 8a6 6 0 1 1 1.8 4.3'/><path d='M2 12v-3h3'/></svg>";
+    const reopenBtn = mkBtn("dc-explore-reopen-btn", "Show last results", "Reopen the last results table you closed — same rows & columns, no new query", "linear-gradient(135deg,#0ea5e9,#0369a1)", reopenIconSvg, "No new query / no credits");
+
+    const menuCloseX = dcMakeMenuCloseX(function () { closeMenu(); });
+
+    colBtn.onclick    = (e) => { e.stopPropagation(); openExploreModal(); };
+    exportBtn.onclick = (e) => {
+      e.stopPropagation();
+      const rl = findRecordListEl();
+      if (!rl) { dcExploreToast("Select a Data Cloud object first, then click Export CSV."); return; }
+      if (!rl.objectName || rl.objectName === "unknown") { dcExploreToast("No object detected — open a Data Explorer object, then try again."); return; }
+      exportExploreCsv(rl);
+    };
+    reopenBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (!reopenLastTable()) {
+        alert("No results to reopen yet. Use Columns → \"Show selected columns' data\" first.");
+      }
+    };
+
+    menu.appendChild(menuCloseX);
+    menu.appendChild(colBtn);
+    menu.appendChild(exportBtn);
+    const cmpIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='1.6'><path d='M2 5h10M9 2l3 3-3 3M14 11H4m3 3l-3-3 3-3'/></svg>";
+    const cmpRow = mkBtn("dc-explore-cmp-btn", "Compare CSVs", "Compare two downloaded CSV files (older vs newer): added / removed / changed rows", "linear-gradient(135deg,#6366f1,#4338ca)", cmpIconSvg, "Diff two CSV exports");
+    cmpRow.onclick = (e) => { e.stopPropagation(); closeMenu(); try { openQeCsvCompare(); } catch (err) { dcExploreToast("Compare CSVs is unavailable here."); } };
+    menu.appendChild(reopenBtn);
+    menu.appendChild(cmpRow);
+
+    const fab = document.createElement("button");
+    fab.id = "dc-fab";
+    fab.title = "Data 360 Inspector — click for Data Explorer tools (pick columns, view all data, export CSV, reopen last results)";
+    fab.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'><circle cx='12' cy='12' r='10' stroke='#fff' stroke-width='1.5'/><circle cx='12' cy='4' r='1.2' fill='#fff'/><circle cx='17.7' cy='6.3' r='1.2' fill='#fff'/><circle cx='20' cy='12' r='1.2' fill='#fff'/><circle cx='17.7' cy='17.7' r='1.2' fill='#fff'/><circle cx='12' cy='20' r='1.2' fill='#fff'/><circle cx='6.3' cy='17.7' r='1.2' fill='#fff'/><circle cx='4' cy='12' r='1.2' fill='#fff'/><circle cx='6.3' cy='6.3' r='1.2' fill='#fff'/><circle cx='12' cy='9.5' r='2.5' fill='#fff'/><path d='M8 16.5c0-2.2 1.8-4 4-4s4 1.8 4 4' stroke='#fff' stroke-width='1.5' stroke-linecap='round'/></svg>";
+    fab.style.cssText = "width:44px;height:44px;border-radius:50%;border:none;cursor:pointer;pointer-events:auto;background:linear-gradient(135deg,#2d2b55 0%,#5b4f9e 100%);box-shadow:0 4px 18px rgba(91,79,158,.5);display:flex;align-items:center;justify-content:center;transition:box-shadow .15s,transform .12s;flex-shrink:0;";
+    fab.onmouseenter = () => { fab.style.boxShadow = "0 6px 24px rgba(91,79,158,.65)"; fab.style.transform = "scale(1.07)"; };
+    fab.onmouseleave = () => { fab.style.boxShadow = "0 4px 18px rgba(91,79,158,.5)"; fab.style.transform = "scale(1)"; };
+
+    let menuOpen = false;
+    const openMenu = () => { menuOpen = true; menu.style.opacity = "1"; menu.style.transform = "translateY(0) scale(1)"; menu.setAttribute("aria-hidden", "false"); menu.style.pointerEvents = "auto"; };
+    const closeMenu = () => { menuOpen = false; menu.style.opacity = "0"; menu.style.transform = "translateY(12px) scale(.95)"; menu.setAttribute("aria-hidden", "true"); menu.style.pointerEvents = "none"; };
+    fab.onclick = (e) => { e.stopPropagation(); menuOpen ? closeMenu() : openMenu(); };
+    document.addEventListener("pointerdown", (e) => { if (menuOpen && !wrap.contains(e.target)) closeMenu(); }, true);
+
+    let fabDragMoved = false;
+    fab.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      const startX = e.clientX, startY = e.clientY;
+      fabDragMoved = false;
+      const r0 = wrap.getBoundingClientRect();
+      let ox = r0.left, oy = r0.top;
+      const mv = (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!fabDragMoved && Math.sqrt(dx*dx+dy*dy) > 5) {
+          fabDragMoved = true; fab.releasePointerCapture(e.pointerId);
+          wrap.style.right = "auto"; wrap.style.bottom = "auto";
+          wrap.style.left = ox + "px"; wrap.style.top = oy + "px";
+        }
+        if (!fabDragMoved) return;
+        wrap.style.left = Math.max(4, Math.min(ox+dx, window.innerWidth-54)) + "px";
+        wrap.style.top  = Math.max(4, Math.min(oy+dy, window.innerHeight-54)) + "px";
+      };
+      const up = () => { window.removeEventListener("pointermove", mv, true); window.removeEventListener("pointerup", up, true); if (fabDragMoved) setTimeout(() => { fabDragMoved = false; }, 10); };
+      window.addEventListener("pointermove", mv, true);
+      window.addEventListener("pointerup", up, true);
+    }, true);
+    fab.addEventListener("click", (e) => { if (fabDragMoved) { e.stopImmediatePropagation(); fabDragMoved = false; } }, true);
+
+    wrap.appendChild(menu);
+    wrap.appendChild(fab);
+    addFabResizeGuard(wrap);
+    document.body.appendChild(wrap);
+
+    watchExploreObjectChange();
+  }
+  // (end of Data Explorer / Segment export region)
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // Activation Export feature (extension-only)
@@ -3013,6 +12918,9 @@
     return result;
   }
 
+  // Declared here (hoisted, unassigned) so reads are safe in the PUBLIC build, where the dev block that
+  // assigns them is stripped. Previously an unguarded read threw ReferenceError there.
+  var _auraSniff, _dcBridgeSeq;
   function fetchActivationViaAura(activationId) {
     return new Promise(function(resolve, reject) {
       // Capture Aura token by intercepting XHR (same approach as our successful probes)
@@ -4163,7 +14071,36 @@ processJSON();
       menu.appendChild(exportRow);
     }
 
-    /* [in-development features removed from public build] */
+    /* (released to public) 
+     * Dev-only "Document Activation" row — DOM-only (bookmarklet-safe, no bridge/API).
+     * Reads the activation straight from the page and opens a Salesforce-styled export
+     * modal with API names inline + CSV/Excel. Gated on the exporter fn (dev build only).
+     * This is the one that works where the extension is banned by org policy. */
+    if (typeof window.__dcDocActivation === "function") {
+      var docIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='none'><path d='M4 2h5l3 3v9H4z' stroke='white' stroke-width='1.3' stroke-linejoin='round'/><path d='M9 2v3h3M6 8h4M6 10.5h4' stroke='white' stroke-width='1.1' stroke-linecap='round'/></svg>";
+      var docRow = mkBtn("dc-act-doc-row", "Activation Blueprint", "Read the whole activation from the page (no API) — overview, attributes, filters, limits, join paths — and export it with API names to CSV / Excel.", "linear-gradient(135deg,#0176d3,#032d60)", docIconSvg, "Full spec with API names → CSV / Excel");
+      docRow.onclick = function (e) { e.stopPropagation(); try { window.__dcDocActivation(); } catch (err) {} };
+      menu.appendChild(docRow);
+    }
+
+    /* Dev-only "API names" ON/OFF toggle row (same as segment). Gated on the toggle fn
+     * (dev build only) AND on the WIZARD page — the /view detail page has no attribute rows
+     * to decorate, so the toggle would do nothing there (keep Export, drop this). */
+    var apiRow = null;
+    if (typeof window.__dcToggleSegApi === "function" && isActivationWizardPage()) {
+      var apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
+      var onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
+      apiRow = mkBtn("dc-act-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
+      var apiSub = apiRow.querySelector("span:last-child");
+      apiRow.onclick = function (e) {
+        e.stopPropagation();
+        var on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
+        if (apiSub) apiSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+        window.__dcPaintOn(apiRow, on);
+      };
+      window.__dcPaintOn(apiRow, onNow);
+      menu.appendChild(apiRow);
+    }
 
     // Nothing to show (no bridge AND no dev toggle) → don't render an empty FAB.
     if (!menu.childElementCount) return;
@@ -4979,7 +14916,7 @@ processJSON();
     // Dataspace priority: the LIVE dropdown selection wins (what the user currently has
     // chosen), THEN the value captured at XHR time, THEN cached data. Previously the
     // captured value won — so after the first load the label stayed stuck on that
-    // dataspace (e.g. "TDI") even after switching the dropdown to "default".
+    // dataspace even after switching the dropdown to "default".
     var dsName = "";
     (function findDs(root, depth) {
       if (depth > 8 || dsName) return;
@@ -5688,7 +15625,555 @@ processJSON();
     watchNavigation();
   }
 
-  /* [in-development features removed from public build] */
+  /*
+   * ── "Open in new tab" for Data Cloud LIST rows (generic engine) ──────────────────
+   * Problem: DC list rows (DMO, DLO, CI, Segments, Data Streams, …) aren't real links —
+   * the clickable label is a custom-event cell (href="javascript:void(0)"), so right-click
+   * → open in new tab fails and you must duplicate the tab.
+   * Mechanism (proven, not guessed): every DC list is the SAME component
+   * runtime_cdp-custom-datatable; each data row renders (in shadow) as
+   *   <tr role="row" data-row-key-value="<the keyField value>" data-row-number="N">
+   * (DOM Probe v15–v20). So the per-row key is read straight off the row's
+   * data-row-key-value — truncation-proof + unambiguous (visible labels are truncated AND
+   * duplicated). What differs PER LIST is only (a) how to detect the page and (b) the
+   * detail-URL template. Those live in DC_LIST_TYPES; adding a new list = one entry, each
+   * confirmed via probe (never guessed). We overlay ONE shared ⧉ button (appended to body,
+   * never mutating SF's datatable) next to the hovered row's name cell.
+   *
+   * COVERS ALL DATA CLOUD LISTS — without guessing any URL. KEY INSIGHT: on every DC list
+   * EXCEPT the Data Model list, each row's name cell renders a REAL Salesforce link
+   * (<a href="/lightning/r/<Object>/<id>/view"> or an /lightning/n/... link). So for those we
+   * read the row's OWN href straight from the DOM — correct by construction, never fabricated.
+   * The Data Model list is the one exception (SF renders NO link there — that's the whole
+   * reason it needed this feature), so it keeps the PROVEN c__objectApiName template.
+   *
+   * So the active-list check is now generic: a page is a "DC list" if it's a standard DC list
+   * route and currently shows the shared datatable. Per row we resolve the destination by:
+   *   1) the row's own real <a href> (works for DLO, Data Stream, CI, Segment, Activation, …)
+   *   2) else, if it's the Data Model list, the proven DMO template from the row key.
+   * If neither yields a URL, no ⧉ is shown (we never guess). */
+  // Detail-URL template for the Data Model list ONLY (the one list with no per-row link).
+  function dcDmoListUrl(key) { return location.origin + "/lightning/n/standard-DataModel?c__objectApiName=" + encodeURIComponent(key); }
+  // The DMO LIST is /lightning/n/standard-DataModel with NO c__objectApiName. A URL WITH
+  // c__objectApiName is a single DMO's DETAIL page — whose Fields tab is a sub-table of FIELD
+  // rows (ssot__X__c), NOT records to open. Treating it as the list stamped a bogus ⧉ on every
+  // field (the reported bug). So the list check requires the param to be ABSENT.
+  function dcIsDmoListPage(h) { return /standard-DataModel/i.test(h) && !/c__objectApiName=/i.test(h) && !/\/r\/DataModelObject\//i.test(h) && !/displayType=graph|c__displayType=graph/i.test(h); }
+  // A page qualifies as a "DC list" for the ⧉ if it's a Data Cloud route AND the shared
+  // datatable is on screen. This covers DLO / Data Stream / CI / Segment / Activation / DMO
+  // list routes under both the new /lightning/n/standard-* nav and classic object-home routes.
+  // CHEAP, URL-ONLY check (runs on every mouseover — must not scan the DOM). Returns a type
+  // object if the current page is a Data Cloud route where a list COULD be shown, else null.
+  // Whether a datatable is actually present is decided implicitly + cheaply by the per-row
+  // climb (dcRowKeyFrom): if the hovered element isn't inside a keyed <tr>, nothing shows.
+  // That keeps the hover path O(ancestors), never a full-document scan (VDI-safe).
+  function dcActiveListType() {
+    var h = ""; try { h = location.href; } catch (e) { return null; }
+    if (!/\/lightning\//i.test(h)) return null;
+    // The DMO LIST is the one case SF renders with NO per-row link → it NEEDS our ⧉.
+    if (dcIsDmoListPage(h)) return { id: "dmo", isDmoList: true };
+    // Otherwise ONLY treat genuine LIST routes as lists — NOT record/detail pages (whose
+    // tabs are sub-tables of fields, e.g. a DMO detail Fields tab = the reported bug). SF
+    // list routes are object home / list-view routes:  /lightning/o/<Obj>/home ,
+    // /lightning/o/<Obj>/list , or /lightning/n/<...>  (nav item landing on a list). A single
+    // record is /lightning/r/<Obj>/<id>/view — explicitly excluded. These other lists already
+    // have REAL <a href> rows (right-click→new-tab works natively), so our ⧉ is a convenience
+    // only and must never appear on a detail page's field/related sub-tables.
+    if (/\/lightning\/r\//i.test(h)) return null;                                  // any record detail page
+    if (/displayType=graph|c__displayType=graph/i.test(h)) return null;            // ERD graph
+    if (/DataQueryWorkspace|DataExplore|CdpDataView/i.test(h)) return null;         // own-launcher workspaces
+    if (/c__objectApiName=/i.test(h)) return null;                                 // a specific object's detail
+    // Any OTHER Lightning page is a CANDIDATE list. We do NOT require a narrow /o/<Obj>/home URL
+    // anymore — Data Cloud object lists (Data Streams, IDR, Segment, Activation, DLO, DSO, BDT, …)
+    // live under assorted routes (/lightning/o/*/home, /lightning/n/*, app/SPA routes). What
+    // actually decides whether the ⧉ shows is the PER-ROW check: a ⧉ appears only when the
+    // hovered row contains a real record link (dcRowRealHref). So a non-list page simply yields
+    // no matching row → no ⧉, with no false positives, and every object list is covered.
+    return { id: "generic", isDmoList: false };
+  }
+  // From a hovered node, climb to the <tr> and resolve BOTH a row key and a destination href.
+  // Returns {key,row,href} or null. Handles BOTH DC row shapes:
+  //  (A) CUSTOM datatable (DMO/Data Model list): rows carry data-row-key-value=<api> and have
+  //      NO <a> link → we build the proven DMO detail URL from the key.
+  //  (B) STANDARD Lightning list (Data Stream, DLO, CI, Segment, …): rows have NO
+  //      data-row-key-value but DO contain a real <a href="/lightning/r/<Obj>/<id>/view"> in the
+  //      name cell → we read that link directly. (Right-click→new-tab already works on these; the
+  //      ⧉ is a one-click convenience the user asked for.)
+  // Either way the destination is REAL (read from the DOM or the proven DMO template) — never
+  // fabricated. keyOk filters the "HEADER" row.
+  // The record id for a <tr>, in PRIORITY order (proven from live diagnostics across list types):
+  //   1) data-row-key-value attribute        — Data Graph etc.: key = 0g7Kh… (the record's id)
+  //   2) tr._data.record.Id                   — old Aura uiVirtualDataTable (CI): the CI's own id
+  //   3) tr._data.record.id / tr.recordId     — other shapes
+  // The row's <a> links are NOT used for the id — they're often a Data Space LOOKUP to a DIFFERENT
+  // record (that was the whole "opens Data Space" bug). Returns "" if no id found.
+  function dcRowRecordId(tr) {
+    if (!tr) return "";
+    function isId(v) { return typeof v === "string" && (v.length === 15 || v.length === 18) && /^[A-Za-z0-9]+$/.test(v); }
+    try { var k = tr.getAttribute && tr.getAttribute("data-row-key-value"); if (k && k !== "HEADER" && isId(k)) return k; } catch (e) {}
+    try { if (tr._data && tr._data.record) { var r = tr._data.record; if (isId(r.Id)) return r.Id; if (isId(r.id)) return r.id; } } catch (e) {}
+    try { if (isId(tr.recordId)) return tr.recordId; } catch (e) {}
+    return "";
+  }
+  function dcRowKeyFrom(node, type) {
+    for (var h = 0; h < 12 && node && node.nodeType === 1; h++) {
+      try {
+        if ((node.tagName || "").toLowerCase() === "tr") {
+          var k = (node.getAttribute && node.getAttribute("data-row-key-value")) || "";
+          if (k === "HEADER") { /* skip header row */ }
+          else {
+            // (A) DMO (Data Model) list: key ends __dlm/__dll/__c → c__objectApiName template.
+            if (type && type.isDmoList && /__(?:dlm|dll|c)$/i.test(k)) {
+              var tHref = dcDmoListUrl(k);
+              if (tHref) return { key: k, row: node, href: tHref };
+            }
+            // (B) KEY/JS-DATA RECORD ID is authoritative — build the URL from the row's OWN id and
+            // IGNORE its <a> links (which may be a Data Space lookup to another record). Covers
+            // Data Graph (data-row-key-value) AND Calculated Insights (tr._data.record.Id).
+            var rid = dcRowRecordId(node);
+            if (rid) {
+              var lo = (typeof dcListObject === "function") ? dcListObject() : "";
+              var keyHref = location.origin + "/lightning/r/" + (lo ? lo + "/" : "") + encodeURIComponent(rid) + "/view";
+              return { key: rid, row: node, href: keyHref };
+            }
+            // (C) No id on the row → fall back to the row's own real record link (standard lists
+            // like Data Streams whose NAME cell IS a real link; lookups are excluded in dcRowRealHref).
+            var href = dcRowRealHref(node);
+            if (href) { var key2 = ""; try { key2 = node.getAttribute("data-row-key-value") || node.getAttribute("data-recordid") || ""; } catch (e) {} return { key: key2, row: node, href: href }; }
+          }
+        }
+      } catch (e) {}
+      // Climb, crossing shadow boundaries: at a shadow root parentElement is null, so hop to
+      // the root's host. Standard Lightning list rows live inside lightning-datatable shadow
+      // roots, so a parentElement-only climb never reaches the <tr> (that was part of why the
+      // ⧉ didn't appear on those lists).
+      var next = node.parentElement;
+      if (!next) { var rt = null; try { rt = node.getRootNode && node.getRootNode(); } catch (e) {} next = (rt && rt.host) ? rt.host : null; }
+      node = next;
+    }
+    return null;
+  }
+  // Read a row's OWN rendered record link (never fabricated). The record's primary link lives
+  // in the row's NAME cell (the rowheader / first cell), so we scan THAT first and only fall
+  // back to "first Lightning link anywhere in the row" if the name cell has none. This avoids
+  // grabbing an unrelated link in a later column (e.g. an owner/related-object link). Crosses
+  // shadow DOM. Returns an absolute URL or "".
+  // A real Salesforce RECORD link, in EITHER of the two forms SF renders:
+  //   /lightning/r/<Object>/<id>/view   (classic object lists)
+  //   /lightning/r/<id>/view            (Data Cloud lists — NO object segment; proven from the
+  //                                       live Data Streams list: …/lightning/r/1dsKh…/view)
+  // Requiring the <Object> segment (the old regex) was why the ⧉ never appeared on ANY Data
+  // Cloud object list (Data Streams, IDR, Segment, Activation, DLO, DSO, BDT, …) — their links
+  // omit it. We still exclude field/app routes (/n/, /o/) so a DMO Fields tab gets no ⧉.
+  // Record link with its OBJECT captured: /lightning/r/<Object>/<id>/view. The object segment is
+  // the reliable discriminator (proven via DOM Probe on the live org): on the Calculated Insights
+  // list the row's own link is .../r/MktCalculatedInsight/<id>/view, while the "Data Space" column
+  // is a LOOKUP to a DIFFERENT object .../r/DataSpace/<id>/view. So we pick by OBJECT, not by
+  // geometry (which was fragile). Group 1 = object (may be absent on the Data-Cloud short form
+  // /lightning/r/<id>/view, which has no lookup-column ambiguity anyway).
+  var DC_RECORD_LINK_RE = /\/lightning\/r\/(?:[A-Za-z0-9_]+\/)?[A-Za-z0-9]{15,18}\/view/i;
+  var DC_RECORD_LINK_OBJ_RE = /\/lightning\/r\/([A-Za-z0-9_]+)\/[A-Za-z0-9]{15,18}\/view/i;
+  // The object the CURRENT list is OF, from the list route /lightning/o/<Object>/(home|list).
+  // "" if not an object-list route (then we can't object-match and fall back to left-most).
+  function dcListObject() {
+    var h = ""; try { h = location.href; } catch (e) { return ""; }
+    var m = h.match(/\/lightning\/o\/([A-Za-z0-9_]+)\/(?:home|list)/i);
+    return m ? m[1] : "";
+  }
+  function dcRowRealHref(tr) {
+    // Collect EVERY record-link anchor in the row (crossing shadow DOM), each with its OBJECT
+    // type and on-screen X. A row can have MORE THAN ONE record link — the row's own record AND
+    // lookup columns to OTHER objects (e.g. Calculated Insights row → a "Data Space" lookup).
+    function collectRecordLinks(root) {
+      var out = [];
+      function scan(node) {
+        if (!node) return;
+        var as = null; try { as = node.querySelectorAll ? node.querySelectorAll("a[href]") : null; } catch (e) {}
+        if (as) {
+          for (var i = 0; i < as.length; i++) {
+            var hv = as[i].getAttribute("href") || "";
+            if (!DC_RECORD_LINK_RE.test(hv)) continue;
+            // SKIP LOOKUP-COLUMN links. Proven via the live CI row (DOM diagnostic): the row's
+            // NAME is a javascript:void(0) anchor, and the ONLY real /lightning/r/ link is a
+            // "Data Space" LOOKUP column rendered as <a class="outputLookupLink"> inside a
+            // forceOutputLookup cell → it points at a DIFFERENT record (the Data Space), not the
+            // row. Opening it was the reported "CI/Data-Graph opens Data Space" bug. A lookup
+            // column is never the row's own record, so exclude it outright.
+            var isLookup = false;
+            try {
+              var cl = (as[i].getAttribute("class") || "");
+              if (/outputLookupLink/i.test(cl)) isLookup = true;
+              if (!isLookup) { var p = as[i], g = 0; while (p && g++ < 5) { var pc = (p.getAttribute && p.getAttribute("class")) || ""; var pa = (p.getAttribute && p.getAttribute("data-aura-class")) || ""; if (/forceOutputLookup|outputLookupLink/i.test(pc + " " + pa)) { isLookup = true; break; } p = p.parentElement; } }
+            } catch (e) {}
+            if (isLookup) continue;
+            var abs; try { abs = as[i].href || (location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv)); }
+            catch (e) { abs = location.origin + (hv.charAt(0) === "/" ? hv : "/" + hv); }
+            var om = hv.match(DC_RECORD_LINK_OBJ_RE); var obj = om ? om[1] : "";
+            var x = Infinity; try { var r = as[i].getBoundingClientRect(); if (r && (r.width || r.height)) x = r.left; } catch (e) {}
+            out.push({ href: abs, obj: obj, x: x });
+          }
+        }
+        var all = null; try { all = node.querySelectorAll ? node.querySelectorAll("*") : null; } catch (e) {}
+        if (all) { for (var j = 0; j < all.length; j++) { var sr = null; try { sr = all[j].shadowRoot; } catch (e) {} if (sr) scan(sr); } }
+      }
+      try { scan(root); } catch (e) {}
+      return out;
+    }
+    var links = collectRecordLinks(tr);
+    if (!links.length) return "";
+    var listObj = dcListObject();
+    function leftMost(arr) { var b = arr[0]; for (var a = 1; a < arr.length; a++) if (arr[a].x < b.x) b = arr[a]; return b.href; }
+    if (listObj) {
+      var lo = listObj.toLowerCase();
+      // 1) EXACT object match wins (the row's own record, full-form link).
+      var sameObj = links.filter(function (l) { return l.obj && l.obj.toLowerCase() === lo; });
+      if (sameObj.length) return leftMost(sameObj);
+      // 2) No exact match (the row's own record is a SHORT-FORM /r/<id>/view link with no object
+      //    segment — common on Data Cloud). The bug: a lookup column (e.g. Data Space →
+      //    /r/DataSpace/<id>/view) is a DIFFERENT, KNOWN object and must be EXCLUDED. Drop every
+      //    link that names a different object; from the rest (short-form + any same-object) take
+      //    the left-most. This fixes "CI/Data-Graph row opened the Data Space" for all link-form
+      //    combinations — we never open a link that explicitly names another object.
+      var notOtherObj = links.filter(function (l) { return !l.obj || l.obj.toLowerCase() === lo; });
+      if (notOtherObj.length) return leftMost(notOtherObj);
+      // 3) ONLY other-object (lookup) links exist → the row's own record isn't linked here.
+      //    Don't open a lookup to the wrong object.
+      return "";
+    }
+    // Non-object route (e.g. nav landing): no list object to match against → left-most.
+    return leftMost(links);
+  }
+  // ONE shared floating ⧉ for whatever list is active. Body-overlay; never mutates SF's
+  // datatable (virtual scroll undisturbed). Anchored to the row's NAME cell. Listeners live
+  // on `document` (survives SPA nav) and install ONCE per document; the button self-heals via
+  // dcGetListBtn() after teardown's "[id^='dc-']" sweep. One bookmarklet click → works across
+  // navigation without re-clicking.
+  // One-time heads-up shown when a ⧉ opens a NEW TAB in BOOKMARKLET mode. A bookmarklet can't
+  // auto-run in the new tab (no background/content-script — browser only runs it on click), so
+  // the new tab won't have the tool until the user clicks the bookmark there. We can't change
+  // that, but we can make it non-confusing: a brief, ONCE-PER-SESSION note. In EXTENSION mode
+  // the new tab auto-loads, so we show nothing. Not a nag — fires at most once per tab session.
+  // (No-op) The old "opened in a new tab — click the bookmark there too" black-box toast was
+  // removed with the welcome toast (user feedback: intrusive, unread). The ⧉ button now carries a
+  // hover tooltip instead, and opening a new tab is self-evident. Kept as a no-op so the two ⧉
+  // click handlers that call it stay simple.
+  function dcNewTabHint() { /* intentionally does nothing — discoverability is on the ⧉ tooltip */ }
+  var dcListHideT = null;
+  function dcListHideSoon() { if (dcListHideT) return; dcListHideT = setTimeout(function () { dcListHideT = null; var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, 250); }
+  function dcGetListBtn() {
+    var btn = document.getElementById("dc-list-newtab");
+    if (btn) return btn;
+    btn = document.createElement("a");
+    btn.id = "dc-list-newtab";
+    btn.target = "_blank"; btn.rel = "noopener";
+    btn.textContent = "⧉";
+    btn.title = "Open this record in a new tab";
+    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:24px;height:24px;line-height:22px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 14px/22px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
+    btn.addEventListener("mouseenter", function () { if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; } });
+    btn.addEventListener("mouseleave", function () { dcListHideSoon(); });
+    return (document.body || document.documentElement).appendChild(btn), btn;
+  }
+  function dcInstallListNewTabButton() {
+    if (window.__dcListNewTabInstalled) return;   // once-per-document (survives teardown + re-runs)
+    window.__dcListNewTabInstalled = true;
+    document.addEventListener("mouseover", function (e) {
+      if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-list-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
+      var type = dcActiveListType();
+      if (!type) { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; return; }
+      var hit = dcRowKeyFrom(e.target, type);
+      if (!hit && e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 12 && !hit; i++) hit = dcRowKeyFrom(p[i], type); }
+      if (!hit) return;
+      if (dcListHideT) { clearTimeout(dcListHideT); dcListHideT = null; }
+      var href = hit.href || "";
+      if (!href) return;
+      var btn = dcGetListBtn();
+      btn.href = href;
+      btn.title = hit.key ? ("Open " + hit.key + " in a new tab") : "Open this record in a new tab";
+      var cell = null;
+      try { cell = hit.row.querySelector('[role="rowheader"]') || hit.row.querySelector('th') || hit.row.querySelector('td'); } catch (er) {}
+      var anchor = cell || hit.row;
+      var r; try { r = anchor.getBoundingClientRect(); } catch (er) { return; }
+      if (!r || !r.height) return;
+      btn.style.top = Math.round(r.top + r.height / 2 - 12) + "px";
+      btn.style.left = Math.round(Math.min(r.right - 26, window.innerWidth - 30)) + "px";
+      btn.style.display = "flex";
+    }, true);
+    document.addEventListener("mouseout", function (e) {
+      var btn = document.getElementById("dc-list-newtab");
+      if (btn && e.relatedTarget === btn) return;
+      var type = dcActiveListType();
+      if (!type || !dcRowKeyFrom(e.relatedTarget, type)) dcListHideSoon();
+    }, true);
+    window.addEventListener("scroll", function () { var b = document.getElementById("dc-list-newtab"); if (b) b.style.display = "none"; }, true);
+  }
+  // Install once (listeners persist on document). Set the toast-guard flag whenever a
+  // supported list is active now. (The mouseover handler re-checks dcActiveListType per
+  // event, so it correctly lights up only on list pages even after SPA nav.)
+  try { dcInstallListNewTabButton(); } catch (e) {}
+  if (dcActiveListType()) { try { window.__dcDmoNewTabActive = true; if (typeof watchNavigation === "function") watchNavigation(); } catch (e) {} }
+
+  /* ── LEFT NAV "open in new tab" ──────────────────────────────────────────────────
+   * The Data Cloud LEFT vertical nav (becoming the default) renders items as
+   * <a role="button" href=""> — empty href, so right-click → new tab fails. SF navigates
+   * via a JS handler; there's no URL to grab. Fix: map each item BY LABEL to its standard
+   * Salesforce route (captured from the TOP nav bar's REAL hrefs on tdidev — DOM Probe v13;
+   * these are standard-object routes, identical across orgs, not guessed) and overlay a ⧉
+   * that opens <origin> + route in a new tab. We attach to the item's own <a>/aria-label.
+   * Matches both the left vertical nav AND the top nav (harmless there — those already work,
+   * but a ⧉ is still a convenient explicit new-tab affordance). Pure body-overlay, no DOM
+   * mutation. */
+  var DC_NAV_ROUTES = {
+    "Data Streams": "/lightning/o/DataStream/home",
+    "Data Lake Objects": "/lightning/o/DataLakeObjectInstance/home",
+    "Data Transforms": "/lightning/o/MktDataTransform/home",
+    "Data Model": "/lightning/n/standard-DataModel",
+    "Identity Resolution": "/lightning/o/IdentityResolution/home",
+    "Data Spaces": "/lightning/o/DataSpace/home",
+    "Data Governance": "/lightning/n/standard-DataGovernance",
+    "Search Indexes": "/lightning/o/DataSemanticSearch/home",
+    "Query Editor": "/lightning/o/DataQueryWorkspace/home",
+    "Data Explorer": "/one/one.app#eyJjb21wb25lbnREZWYiOiJydW50aW1lX2NkcDpkYXRhVmlld1RhYiIsImF0dHJpYnV0ZXMiOnt9LCJzdGF0ZSI6e319",
+    "Data Graphs": "/lightning/o/DataGraph/home",
+    // These 3 are LEFT-nav-only (empty href) + live under one base route with a #verticalNav
+    // sub-view token (proven from the address bar; base64 decodes to {"verticalNav":"…"}).
+    "Intelligent Context": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6ImNvbnRlbnRMZW5zIn0=",      // contentLens
+    "Document AI": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6ImlkcCJ9",                           // idp
+    "Knowledge Harmonization": "/lightning/n/standard-UnstructuredData#eyJ2ZXJ0aWNhbE5hdiI6Imhhcm1vbml6YXRpb24ifQ=="  // harmonization
+  };
+  // ── Auto-captured nav routes (zero-maintenance, no guessing) ─────────────────────────
+  // A hardcoded map can never keep up with SF (Data Clean Room, Einstein Studio, …). So we
+  // LEARN routes from reality: a left-nav item has an empty href, but the moment you CLICK
+  // it the address bar becomes the real URL. We watch the URL and record it against the
+  // nav item that is now marked ACTIVE (slds-is-active / aria-current / .non-active absent),
+  // persisted in localStorage. After one visit, that item's ⧉ works forever — including
+  // future items. Only ever stores a REAL observed URL; never fabricated. Seeds above make
+  // the common items work before you've visited them (hybrid).
+  var DC_NAV_LS = "dc_nav_routes_learned_v1";
+  function dcLoadLearnedRoutes() { try { return JSON.parse(localStorage.getItem(DC_NAV_LS) || "{}") || {}; } catch (e) { return {}; } }
+  function dcSaveLearnedRoute(label, path) {
+    if (!label || !path) return;
+    try { var m = dcLoadLearnedRoutes(); if (m[label] === path) return; m[label] = path; localStorage.setItem(DC_NAV_LS, JSON.stringify(m)); } catch (e) {}
+  }
+  // ── Live route HARVEST from the top nav bar (the big win) ────────────────────────────
+  // DOM Probe v26 proved: EVERY Data Cloud nav item (28+ and growing — Segments, Clean
+  // Rooms, Calculated Insights, AI Models, Semantic Layer, …) is ALSO rendered on the top
+  // nav bar as <a class="slds-context-bar__label-action" title="<label>" href="/lightning/…">
+  // — a REAL href, present in the DOM even when that bar is visually hidden. The LEFT nav's
+  // own anchors have empty hrefs, so we harvest label→href from the top-nav anchors instead.
+  // This is zero-maintenance (covers every current + future item, no hardcoding) and never
+  // guessed (we read SF's own href). Cached briefly; refreshed on demand.
+  var _dcHarvest = null, _dcHarvestAt = 0;
+  function dcHarvestNavRoutes() {
+    var now = 0; try { now = (performance && performance.now) ? performance.now() : 0; } catch (e) {}
+    if (_dcHarvest && (now - _dcHarvestAt) < 3000) return _dcHarvest;
+    var map = {};
+    try {
+      (function walk(root, d) {
+        if (d > 14) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length; i++) {
+          var el = q[i], tag = (el.tagName || "").toLowerCase();
+          if (tag === "a") {
+            var cls = ""; try { cls = el.getAttribute("class") || ""; } catch (e) {}
+            if (/slds-context-bar__label-action/.test(cls)) {
+              var href = ""; try { href = el.getAttribute("href") || ""; } catch (e) {}
+              var lbl = ""; try { lbl = (el.getAttribute("title") || el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {}
+              if (lbl && href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/)/i.test(href) && !map[lbl]) map[lbl] = href;
+            }
+          }
+          if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+        }
+      })(document, 0);
+    } catch (e) {}
+    _dcHarvest = map; _dcHarvestAt = now;
+    return map;
+  }
+  // The route for a label, in order: harvested-from-top-nav (authoritative, live) → learned
+  // (observed on click) → seed map. "" if unknown (never fabricated).
+  function dcRouteForLabel(label) {
+    if (!label) return "";
+    var harvested = dcHarvestNavRoutes();
+    if (harvested[label]) return harvested[label];
+    var learned = dcLoadLearnedRoutes();
+    if (learned[label]) return learned[label];
+    return DC_NAV_ROUTES[label] || "";
+  }
+  // Find the currently-ACTIVE left-nav item's label (the page we're on right now).
+  // The active item drops the "non-active" class / gains slds-is-active or aria-current.
+  function dcActiveNavLabel() {
+    var best = "";
+    try {
+      var els = document.querySelectorAll ? [] : [];
+      // walk shadow DOM for nav action anchors
+      (function walk(root, d) {
+        if (d > 14 || best) return;
+        var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+        for (var i = 0; i < q.length && !best; i++) {
+          var el = q[i], cls = "";
+          try { cls = (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) {}
+          var cur = ""; try { cur = (el.getAttribute && el.getAttribute("aria-current")) || ""; } catch (e) {}
+          var isNavAction = /slds-nav-vertical__action/.test(cls) && !/category-header/.test(cls);   // skip group headers
+          if (isNavAction && (cur === "page" || cur === "true" || (!/non-active/.test(cls) && /slds-is-active|active/.test(cls)))) {
+            var lbl = dcNavLabelOf(el); if (lbl) { best = lbl; break; }
+          }
+          if (el.shadowRoot) walk(el.shadowRoot, d + 1);
+        }
+      })(document, 0);
+    } catch (e) {}
+    return best;
+  }
+  // Capture: record the CURRENT url path against the active nav label. Called on load and
+  // whenever the URL changes (SPA nav). Stores path+hash+search exactly as the browser has it.
+  function dcCaptureCurrentNavRoute() {
+    try {
+      var label = dcActiveNavLabel();
+      if (!label) return;
+      var path = location.pathname + location.search + location.hash;
+      if (path && path.length > 1) dcSaveLearnedRoute(label, path);
+    } catch (e) {}
+  }
+  // The label of a nav item from its aria-label or its own text.
+  function dcNavLabelOf(el) {
+    var lbl = "";
+    try { lbl = (el.getAttribute && el.getAttribute("aria-label")) || ""; } catch (e) {}
+    if (!lbl) { try { lbl = (el.getAttribute && el.getAttribute("title")) || ""; } catch (e) {} }
+    if (!lbl) { try { lbl = (el.textContent || "").replace(/\s+/g, " ").trim(); } catch (e) {} }
+    return lbl;
+  }
+  // From a hovered node, climb to a nav-item anchor and resolve its destination.
+  // Priority (proven via DOM Probe v25/v26 — the page has BOTH navs):
+  //   1) the anchor's OWN non-empty href (TOP nav items carry a real /lightning/… href), else
+  //   2) label → route via dcRouteForLabel = HARVESTED from the top nav bar's real hrefs
+  //      (every item incl. future ones, zero map) → learned-on-click → seed map. This is how
+  //      LEFT-nav items (empty href) resolve: we look their label up in the top nav's hrefs.
+  // Only matches real nav anchors (a / role=button|link / slds-nav-vertical__action /
+  // slds-context-bar__label-action / navItem). CATEGORY HEADERS (e.g. "Segment & Act",
+  // "Analyze & Predict") are expandable GROUPS, not destinations — class category-header —
+  // so we skip them (they have no page to open).
+  // Is this element a genuine Data Cloud NAV item (left vertical nav or top nav bar) — as
+  // opposed to any random record/user/lookup link that also starts with /lightning/? The ⧉
+  // must ONLY decorate nav items; previously ANY <a href="/lightning/…"> matched, so a
+  // "Created By" user link, a lookup, or a table record link wrongly got the "open nav item
+  // in new tab" chip (confusing, and the wording was wrong for a record). We require the
+  // anchor itself OR a near ancestor to carry a nav marker class/container.
+  function dcIsNavAnchor(el) {
+    var n = el;
+    for (var i = 0; i < 4 && n && n.nodeType === 1; i++) {
+      var c = ""; try { c = (n.getAttribute && n.getAttribute("class")) || ""; } catch (e) {}
+      var tg = (n.tagName || "").toLowerCase();
+      if (/slds-nav-vertical__action|slds-context-bar__label-action|navItem|slds-context-bar__item/.test(c)) return true;
+      if (/one-app-nav-bar-item|desktop-vertical-navigation|lightning-vertical-navigation/.test(tg)) return true;
+      n = n.parentElement;
+    }
+    return false;
+  }
+  // Is THIS element (no climbing) a real Data Cloud nav ANCHOR, and if so what does it open?
+  // Proven by DOM Probe v30 on the new Data Cloud nav: every nav destination is an <a> whose
+  // class is `slds-context-bar__label-action` (carries a REAL href) or `slds-nav-vertical__action`
+  // (left vertical nav; usually empty href → resolve by label via the harvested top-bar hrefs).
+  // We match the anchor DIRECTLY (no parentElement climb) because the left nav is nested several
+  // shadow roots deep — a parentElement climb dies at each boundary, which is why left-nav items
+  // were hit-or-miss. The caller scans composedPath() (already flattened across shadow) so the
+  // anchor is always reachable. Returns {label,route,el,abs} or null.
+  function dcNavAnchorToItem(el) {
+    if (!el || el.nodeType !== 1) return null;
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag !== "a") return null;
+    var cls = ""; try { cls = (el.getAttribute && el.getAttribute("class")) || ""; } catch (e) {}
+    if (/category-header/.test(cls)) return null;                       // expandable group, not a page
+    if (!/slds-context-bar__label-action|slds-nav-vertical__action/.test(cls)) return null;
+    var lbl = dcNavLabelOf(el);
+    if (!lbl || /show more navigation|more$/i.test(lbl)) return null;   // the "More" overflow toggle
+    // 1) the anchor's OWN real href (top-bar / label-action items carry it directly)
+    var href = ""; try { href = (el.getAttribute && el.getAttribute("href")) || ""; } catch (e) {}
+    if (href && href !== "#" && !/^javascript:/i.test(href) && /^(\/lightning\/|\/one\/|https?:)/i.test(href)) {
+      return { label: lbl, route: href, el: el, abs: /^https?:/i.test(href) };
+    }
+    // 2) empty-href left-nav item → label → harvested top-bar href / learned / seed. Covers
+    //    every item (incl. future ones) with no hardcoding; never fabricated.
+    var mapped = dcRouteForLabel(lbl);
+    if (mapped) return { label: lbl, route: mapped, el: el };
+    return null;
+  }
+  // Fallback for the e.target path (when composedPath isn't available): climb a few hops,
+  // crossing shadow boundaries (parentElement is null at a shadow root → hop to its host).
+  function dcNavItemFrom(node) {
+    for (var h = 0; h < 8 && node && node.nodeType === 1; h++) {
+      var hit = dcNavAnchorToItem(node);
+      if (hit) return hit;
+      var next = node.parentElement;
+      if (!next) { var rt = null; try { rt = node.getRootNode && node.getRootNode(); } catch (e) {} next = (rt && rt.host) ? rt.host : null; }
+      node = next;
+    }
+    return null;
+  }
+  // Persistent nav ⧉. The mouseover/out/scroll listeners live on `document`, which SURVIVES
+  // Lightning SPA navigation — so we install them ONCE per document (window-flag guarded) and
+  // they keep working across page changes WITHOUT re-clicking the bookmarklet. teardown()'s
+  // nuclear "[id^='dc-']" sweep removes the button element on nav, so we LAZILY (re)create it
+  // via getNavBtn() on each hover — the listeners persist, the button self-heals. Net: one
+  // bookmarklet click, then the nav ⧉ works forever as you navigate.
+  function dcGetNavBtn() {
+    var btn = document.getElementById("dc-nav-newtab");
+    if (btn) return btn;
+    btn = document.createElement("a");
+    btn.id = "dc-nav-newtab";
+    btn.target = "_blank"; btn.rel = "noopener";
+    btn.textContent = "⧉";
+    btn.title = "Open in a new tab";
+    btn.style.cssText = "position:fixed;z-index:2147483646;display:none;align-items:center;justify-content:center;width:22px;height:22px;line-height:20px;text-align:center;border-radius:5px;background:#4338ca;color:#fff;font:600 13px/20px system-ui;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;";
+    btn.addEventListener("click", function (ev) { ev.stopPropagation(); dcNewTabHint(); }, true);
+    btn.addEventListener("mouseenter", function () { if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; } });
+    btn.addEventListener("mouseleave", function () { dcNavHideSoon(); });
+    (document.body || document.documentElement).appendChild(btn);
+    return btn;
+  }
+  var dcNavHideT = null;
+  function dcNavHideSoon() { if (dcNavHideT) return; dcNavHideT = setTimeout(function () { dcNavHideT = null; var b = document.getElementById("dc-nav-newtab"); if (b) b.style.display = "none"; }, 250); }
+  function dcInstallNavNewTabButton() {
+    if (window.__dcNavNewTabInstalled) return;   // once-per-document: listeners survive teardown + re-runs
+    window.__dcNavNewTabInstalled = true;
+    document.addEventListener("mouseover", function (e) {
+      if (!dcNewTabEnabled()) { var bo = document.getElementById("dc-nav-newtab"); if (bo) bo.style.display = "none"; return; }   // tool off OR ⧉ disabled
+      // PREFER composedPath: it's flattened across ALL shadow roots, so the deeply-nested
+      // left-nav <a> is always in it. Match the anchor DIRECTLY (dcNavAnchorToItem, no climb).
+      var hit = null;
+      if (e.composedPath) { var p = e.composedPath(); for (var i = 0; i < p.length && i < 20 && !hit; i++) hit = dcNavAnchorToItem(p[i]); }
+      if (!hit) hit = dcNavItemFrom(e.target);   // fallback (no composedPath / older browsers)
+      if (!hit) return;
+      if (dcNavHideT) { clearTimeout(dcNavHideT); dcNavHideT = null; }
+      var btn = dcGetNavBtn();
+      try { btn.href = hit.abs ? hit.route : (location.origin + hit.route); } catch (er) { return; }
+      btn.title = "Open " + hit.label + " in a new tab";
+      var r; try { r = hit.el.getBoundingClientRect(); } catch (er) { return; }
+      if (!r || !r.height) return;
+      btn.style.top = Math.round(r.top + r.height / 2 - 11) + "px";
+      btn.style.left = Math.round(Math.min(r.right - 24, window.innerWidth - 28)) + "px";
+      btn.style.display = "flex";
+    }, true);
+    document.addEventListener("mouseout", function (e) {
+      var btn = document.getElementById("dc-nav-newtab");
+      if (btn && e.relatedTarget === btn) return;
+      if (!dcNavItemFrom(e.relatedTarget)) dcNavHideSoon();
+    }, true);
+    window.addEventListener("scroll", function () { var b = document.getElementById("dc-nav-newtab"); if (b) b.style.display = "none"; }, true);
+  }
+  try { dcInstallNavNewTabButton(); } catch (e) {}
+  // Learn the active nav item's route from the real URL — now and whenever the SPA URL
+  // changes (clicking a left-nav item makes its empty-href destination real). A tiny poll
+  // is simplest + reliable across SF's history pushes. Also capture a moment after load
+  // (the active-item class/aria settles slightly after first paint).
+  try {
+    dcCaptureCurrentNavRoute();
+    setTimeout(dcCaptureCurrentNavRoute, 1500);
+    if (!window.__dcNavCapturePoll) {   // once-per-document (survives teardown + re-runs; no stacked pollers)
+      var _dcNavUrl = location.href;
+      window.__dcNavCapturePoll = setInterval(function () {
+        if (location.href !== _dcNavUrl) { _dcNavUrl = location.href; setTimeout(dcCaptureCurrentNavRoute, 600); }
+      }, 1000);
+    }
+  } catch (e) {}
 
   // Query Editor RETRY — the Query Editor page (/r/DataQueryWorkspace/<id>/view) is a
   // Lightning SPA: when the tool injects, the URL/route may not be final yet, so the
@@ -5709,15 +16194,2374 @@ processJSON();
     }, 1000);
   }
 
-  /* [in-development features removed from public build] */
+  /* (released to public) 
+   * SEGMENT + ACTIVATION API-NAME DECORATOR (dev-only until approved for public).
+   * Shows the real API name of each attribute on the Segment builder AND the Activation
+   * wizard — left palette (runtime_cdp-attribute-row / -attribute-group-row), used rules
+   * (simple/aggregation/rank-limit conditions), activation drag chips (runtime_cdp-drag-
+   * item.details), and the activation attribute table (runtime_cdp-activation-attribute-
+   * datatable, resolved by uid against activation-summary.includedAttributes). Reads the
+   * API name DIRECTLY off the element's LWC property (proven via DOM Probe v2–v5 — see
+   * memory data360-segment-builder-dom): no API call, no label-matching, no guessing.
+   *   • Hover (toggle): a floating chip with object · field [· PK] [type].
+   *   • Click a row (while on): copies its API name. No modal/panel.
+   * Zero mutation of SF's shadow DOM → survives re-renders, can't break the page.
+   * NOTE: for Activation, only the WIZARD page has attribute rows — the /view detail page
+   * has nothing to decorate, so we skip it there (the toggle/decorator would be a no-op). */
+  // The API-name hover DECORATOR is meaningful only on the Segment builder and the Activation
+  // WIZARD (where attribute rows render). The DOM-only "Document Activation" exporter, however,
+  // should be available on ANY activation page (the /view detail page too) — it reads whatever
+  // summary/attribute/channel DOM is present and honestly reports what isn't. So we enter this
+  // block on any activation page, and gate only the decorator's hover wiring on the wizard.
+  if (detailPageType === "Segment" || detailPageType === "Activation") {
+    (function segApiNameFeature() {
+      var _segDecoratorActive = (detailPageType === "Segment") || isActivationWizardPage();
+      function segSafeGet(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+      // ── Container Path: READ VERBATIM from the open edit panel (never reconstructed) ──
+      // SF shows a "Container Path" breadcrumb ONLY when a related/aggregation container
+      // has >1 way back to the segment-on entity AND the container is OPEN in edit mode
+      // (builderState.inFilterEditMode === true). Proven via DOM Probe v11: the open
+      // canvas-item's rendered innerText literally contains
+      //   "…\n*Container Path\n<the path>\nMeasurement\n…"
+      // e.g. "Insurance Policy.Insurance Account Number > TDI Insurance Account.Insurance
+      //       Account Primary Insured > Unified Individual TDI.Unified Individual Id".
+      // We extract that line AS-IS (read, not derive). It is NOT on the collapsed card and
+      // NOT on any condition prop, so a single-path or collapsed container shows nothing —
+      // which exactly matches SF. We earlier reconstructed it from displayPaths and removed
+      // that (derived != read); this reader shows only the real on-screen string.
+      // Returns "" when no Container Path is rendered in the given subtree.
+      function segReadRenderedContainerPath(el) {
+        if (!el) return "";
+        var t = "";
+        try { t = el.innerText || el.textContent || ""; } catch (e) { return ""; }
+        if (!t || t.indexOf("Container Path") < 0) return "";
+        // Normalise, then take the line directly AFTER the "*Container Path" / "Container
+        // Path" label line, up to the next field label (Measurement / Operator / Object / …).
+        var lines = t.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length; });
+        for (var i = 0; i < lines.length - 1; i++) {
+          if (/^\*?\s*Container Path$/i.test(lines[i])) {
+            var val = lines[i + 1];
+            // sanity: a path has the " > " hop separator and a "." (object.field). Guard
+            // against grabbing a stray label — if it doesn't look like a path, show nothing.
+            if (val && val.indexOf(" > ") >= 0 && val.indexOf(".") >= 0) return val;
+            // single-hop paths (no " > ") are still valid: object.field form
+            if (val && /\S\.\S/.test(val) && !/^(Measurement|Operator|Object|Attribute|Value|Lower Bound|Upper Bound)$/i.test(val)) return val;
+            return "";
+          }
+        }
+        return "";
+      }
+      // Find the open-in-edit container element whose rendered text we can read the path
+      // from. The edit panel lives on a runtime_cdp-canvas-item whose builderState has
+      // inFilterEditMode === true; we match by the container object api when we can, else
+      // fall back to the single element currently in edit mode.
+      function segFindOpenPathFor(objectApi) {
+        var best = "";
+        var els = collectRaw();
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if ((el.tagName || "").toLowerCase() !== "runtime_cdp-canvas-item") continue;
+          var bs = segSafeGet(el, "builderState");
+          if (!bs || bs.inFilterEditMode !== true) continue;
+          // prefer the one whose container object matches this condition's object
+          var inObj = bs.inFilterEditModeContainerObjectApiName || "";
+          var path = segReadRenderedContainerPath(el);
+          if (!path) continue;
+          if (objectApi && inObj && inObj === objectApi) return path;   // exact match wins
+          if (!best) best = path;                                       // first open path as fallback
+        }
+        return best;
+      }
+
+      // Classify a segment element and extract its API-name info, or null. Reads the
+      // element's own LWC prop directly — the authoritative source, no guessing.
+      function segApiInfo(el) {
+        if (!el) return null;
+        var an = segSafeGet(el, "attributeNode");
+        if (an && (an.fieldApiName || an.objectApiName)) {
+          return { kind: "attribute", label: an.label || "", fieldApi: an.fieldApiName || "", objectApi: an.objectApiName || "", isPk: !!an.isPrimaryKey, fieldType: an.fieldType || "" };
+        }
+        var gn = segSafeGet(el, "groupNode");
+        if (gn && gn.objectApiName) {
+          return { kind: "group", label: gn.label || gn.fullLabel || "", fieldApi: "", objectApi: gn.objectApiName || "", pkApi: gn.primaryKeyFieldApiName || "", fieldType: "" };
+        }
+        // Aggregation container header (Count / Sum / Average / …). The header names the
+        // RELATED OBJECT + the aggregate function; it owns NO field of its own unless the
+        // aggregate itself targets one (Sum/Average), and it has NO container path. We read
+        // ONLY the aggregation's own subject — we NEVER descend into .filter / .conditions,
+        // because those are the MEMBER conditions nested inside the container (each decorates
+        // on its own hover). Descending would surface a member's field on the header, e.g. a
+        // bare "Count At Least 1" wrongly showing DaystoExpiration__c (SF's edit view for a
+        // Count has only Container Object Name + the Container Path).
+        var aggC = segSafeGet(el, "aggregationCondition");
+        if (aggC && typeof aggC === "object") {
+          var aSub = aggC.subject || {};
+          var aObj = aSub.objectApiName || aggC.objectApiName || aggC.selectedObjectApiName || aggC.containerObjectApiName || "";
+          var aFld = aSub.fieldApiName || "";   // empty for a bare Count — never fabricated from nested members
+          // Container Path shown VERBATIM only if this container is currently open in edit
+          // mode (that's the only time SF renders it). "" otherwise — never reconstructed.
+          var aPath = ""; try { aPath = segFindOpenPathFor(aObj); } catch (e) {}
+          if (aObj || aFld) return { kind: "rule", label: aggC.label || "", fieldApi: aFld, objectApi: aObj, fieldType: "", isAggregate: true, containerPath: aPath };
+        }
+        // Simple / calculated-insight / rank-limit conditions. All share the
+        // {subject:{fieldApiName,objectApiName}} shape (proven for simpleCondition; the
+        // others reuse it). Rank & Limit keeps its ranked field in .conditions[0].subject.
+        var CONDITION_PROPS = ["simpleCondition", "calculatedInsightCondition",
+          "groupRankLimitCondition", "rankLimitCondition", "rankAndLimitCondition", "condition"];
+        for (var ci = 0; ci < CONDITION_PROPS.length; ci++) {
+          var cProp = CONDITION_PROPS[ci];
+          var c = segSafeGet(el, cProp);
+          if (!c || typeof c !== "object") continue;
+          var subj = c.subject || {};
+          var f = subj.fieldApiName || c.fieldApiName || c.attributeName || "";
+          var o = subj.objectApiName || c.objectApiName || c.selectedObjectApiName || "";
+          // Rank & Limit ONLY: the ranked field lives in .conditions[0].subject (proven
+          // v10), NOT on the top-level prop. Restrict this descent to the rank props — a
+          // general .conditions[] descent would pull a nested member's field onto a header.
+          if (!f && /rank/i.test(cProp) && c.conditions && c.conditions.length) { var rc = c.conditions[0] || {}; var rs = rc.subject || {}; f = rs.fieldApiName || rc.attributeName || ""; o = o || rs.objectApiName || ""; }
+          // Container Path shown VERBATIM only if this condition's container is open in edit
+          // mode (read off the rendered edit panel; "" otherwise — never reconstructed).
+          var cPath = ""; try { cPath = segFindOpenPathFor(o); } catch (e) {}
+          if (f || o) return { kind: "rule", label: c.label || "", fieldApi: f, objectApi: o, fieldType: "", containerPath: cPath };
+        }
+        // ACTIVATION "related attribute limit" (Sort By) → .relatedAttributesLimit.attributeName
+        var ral = segSafeGet(el, "relatedAttributesLimit");
+        if (ral && (ral.attributeName)) {
+          return { kind: "rule", label: "Sort By", fieldApi: ral.attributeName || "", objectApi: segSafeGet(el, "activationEntityName") || "", fieldType: "" };
+        }
+        // ACTIVATION drag chip / quick-attribute row → API name on .details
+        var dt = segSafeGet(el, "details");
+        if (dt && typeof dt === "object") {
+          var ds = dt.subject || (dt.filter && dt.filter.subject) || {};
+          var df = ds.fieldApiName || dt.fieldApiName || dt.targetFieldName || dt.attributeName || "";
+          var dobj = ds.objectApiName || dt.targetObjectName || dt.primaryObjectName || dt.objectApiName || dt.containerObjectApiName || "";
+          if (df || dobj) return { kind: "rule", label: dt.label || dt.name || "", fieldApi: df, objectApi: dobj, fieldType: "" };
+        }
+        // ACTIVATION main attribute-table cell → only {rowUid,name}; join by uid to the
+        // datatable .data[] (label/output/object) + activation-summary.includedAttributes[]
+        // (the field api). Field api is NOT fabricated for related rows that lack it.
+        var rowUid = segSafeGet(el, "rowUid");
+        if (rowUid) {
+          var r = segResolveUid(rowUid);
+          if (r && (r.fieldApi || r.objectApi)) return { kind: "activationAttr", label: r.label || segSafeGet(el, "name") || "", fieldApi: r.fieldApi || "", objectApi: r.objectApi || "", outputName: r.outputName || "", fieldType: "" };
+        }
+        return null;
+      }
+      // Build/refresh a uid → {label,fieldApi,objectApi,outputName} map by scanning the
+      // activation datatables (.data[]) and the activation-summary (.includedAttributes[]).
+      // Rebuilt on demand (cheap) so it reflects the current attribute set.
+      function segBuildUidResolver() {
+        var byUid = {};
+        collectRaw().forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-attribute-datatable") {
+            var data = segSafeGet(el, "data");
+            if (data && data.length) for (var i = 0; i < data.length; i++) {
+              var d = data[i]; if (!d || !d.uid) continue;
+              if (!byUid[d.uid]) byUid[d.uid] = { label: "", fieldApi: "", objectApi: "", outputName: "" };
+              byUid[d.uid].label = byUid[d.uid].label || d.name || "";
+              byUid[d.uid].outputName = byUid[d.uid].outputName || d.defaultOutputName || d.preferredName || "";
+              byUid[d.uid].objectApi = byUid[d.uid].objectApi || d.entityName || "";
+            }
+          } else if (tag === "runtime_cdp-activation-summary") {
+            var inc = segSafeGet(el, "includedAttributes");
+            if (inc && inc.length) for (var j = 0; j < inc.length; j++) {
+              var a = inc[j]; if (!a || !a.uid) continue;
+              if (!byUid[a.uid]) byUid[a.uid] = { label: "", fieldApi: "", objectApi: "", outputName: "" };
+              byUid[a.uid].fieldApi = a.attributeName || byUid[a.uid].fieldApi;
+              byUid[a.uid].objectApi = byUid[a.uid].objectApi || a.entityName || "";
+              byUid[a.uid].label = byUid[a.uid].label || a.label || "";
+            }
+          }
+        });
+        return byUid;
+      }
+      var _segUidMap = null, _segUidAt = 0;
+      function segResolveUid(uid) {
+        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
+        if (!_segUidMap || (now - _segUidAt) > 1500) { _segUidMap = segBuildUidResolver(); _segUidAt = now; }
+        return _segUidMap[uid] || null;
+      }
+      function segChipText(info) {
+        if (!info) return "";
+        if (info.kind === "group") return info.objectApi;
+        if (!info.fieldApi) return info.objectApi || "";
+        return info.fieldApi;
+      }
+      function segTooltip(info) {
+        if (!info) return "";
+        if (info.kind === "group") return "DMO: " + info.objectApi + (info.pkApi ? "  (PK: " + info.pkApi + ")" : "");
+        var parts = [];
+        if (info.objectApi) parts.push(info.objectApi);
+        if (info.fieldApi) parts.push(info.fieldApi);
+        var s = parts.join(" · ");
+        if (info.isPk) s += "  • PK";
+        if (info.fieldType) s += "  [" + info.fieldType + "]";
+        if (info.ambiguous) s += "  (?)";   // label matched >1 API name — don't claim certainty
+        // Container Path is the LITERAL string SF renders in the open edit panel (read, not
+        // reconstructed). Only present when the container is in edit mode + multi-path.
+        if (info.containerPath) s += "\nContainer Path: " + info.containerPath;
+        return s;
+      }
+      var SEG_TAGS = {
+        "runtime_cdp-attribute-row": 1, "runtime_cdp-attribute-group-row": 1,
+        "runtime_cdp-segment-builder-simple-condition": 1,
+        "runtime_cdp-segment-builder-aggregation-condition": 1,
+        "runtime_cdp-segment-builder-calculated-insight-condition": 1,
+        "runtime_cdp-segment-builder-group-rank-limit-condition": 1,
+        // ACTIVATION
+        "runtime_cdp-drag-item": 1,
+        "runtime_cdp-activation-attribute-datatable-attribute-column": 1,
+        "runtime_cdp-activation-related-attribute-limit": 1
+      };
+      // Walk ALL elements through shadow DOM once (used by the uid resolver, which needs
+      // the datatable + summary elements that aren't in SEG_TAGS).
+      function collectRaw() {
+        var out = [];
+        (function walk(root, depth) {
+          if (depth > 14) return;
+          var all; try { all = root.querySelectorAll("*"); } catch (e) { return; }
+          for (var i = 0; i < all.length; i++) { var el = all[i]; out.push(el); if (el.shadowRoot) walk(el.shadowRoot, depth + 1); }
+        })(document, 0);
+        return out;
+      }
+      // Collect every decoratable (hover-target) element currently in the (shadow) DOM.
+      function collectSegEls() {
+        return collectRaw().filter(function (el) { return SEG_TAGS[(el.tagName || "").toLowerCase()]; });
+      }
+
+      // Small "copied" toast (self-contained; no dependency on other features).
+      function segToast(msg) {
+        var t = document.createElement("div");
+        t.textContent = msg;
+        t.style.cssText = "position:fixed;bottom:84px;right:24px;z-index:2147483647;background:#059669;color:#fff;font:600 12px system-ui;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transition:opacity .15s;";
+        document.body.appendChild(t);
+        requestAnimationFrame(function () { t.style.opacity = "1"; });
+        setTimeout(function () { t.style.opacity = "0"; setTimeout(function () { t.remove(); }, 200); }, 1400);
+      }
+      function segCopy(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { segToast("Copied " + text); }, function () { segToast("Copy blocked"); });
+        else { try { var ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.top = "-1000px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); segToast("Copied " + text); } catch (e) { segToast("Copy blocked"); } }
+      }
+
+      // ── Hover chip (overlay — never mutates SF's shadow DOM) ────────────────────
+      // OFF by default. Turned on from the launcher menu ("API names: On/Off"). While ON:
+      // hovering any attribute/rule/group row shows its API name. To COPY, press "c" while
+      // hovering (we do NOT hijack row clicks — SF's edit/drill-in/select stay fully normal).
+      var segOn = false;         // feature toggle
+      var hoverInfo = null;      // info under the cursor right now (for copy-on-"c")
+      var tip = null;
+      function ensureTip() {
+        if (tip) return tip;
+        tip = document.createElement("div");
+        tip.id = "dc-seg-api-tip";
+        // pointer-events:none is CRITICAL — the overlay must never intercept clicks meant
+        // for SF controls underneath it. white-space:pre-wrap renders the Path on its own line.
+        tip.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#111827;color:#fff;font:600 11px/1.5 SFMono-Regular,Menlo,monospace;padding:6px 10px;border-radius:7px;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:520px;white-space:pre-wrap;word-break:break-word;opacity:0;transition:opacity .1s;";
+        document.body.appendChild(tip);
+        return tip;
+      }
+      function showTip(info, x, y) {
+        var t = ensureTip();
+        // hint that pressing "c" copies — no click hijacking
+        t.textContent = segTooltip(info) + "\n⌨ press C to copy";
+        t.style.left = Math.min(x + 14, (window.innerWidth || 1200) - 540) + "px";
+        t.style.top = (y + 16) + "px";
+        t.style.opacity = "1";
+      }
+      function hideTip() { if (tip) tip.style.opacity = "0"; }
+
+      // ── Label → API-name index (for chips / summary lines that carry no prop) ────
+      // Built ONLY from authoritative props already in the DOM (attributeNode / groupNode
+      // / drag-item.details / datatable.data[] / summary.includedAttributes[]). This is
+      // NOT blind label-matching against a fetched schema — every entry came from a real
+      // element's own data on THIS page. If one label maps to >1 distinct field API
+      // (collision across DMOs), it's marked ambiguous so we never show a wrong one.
+      function segBuildLabelIndex() {
+        var idx = {};
+        function add(label, fieldApi, objectApi) {
+          var l = String(label == null ? "" : label).trim().toLowerCase();
+          if (!l || (!fieldApi && !objectApi)) return;
+          var cur = idx[l];
+          if (!cur) { idx[l] = { label: label, fieldApi: fieldApi || "", objectApi: objectApi || "", ambiguous: false }; return; }
+          if (fieldApi && cur.fieldApi && fieldApi !== cur.fieldApi) cur.ambiguous = true;
+          if (!cur.fieldApi && fieldApi) cur.fieldApi = fieldApi;
+          if (!cur.objectApi && objectApi) cur.objectApi = objectApi;
+        }
+        collectRaw().forEach(function (el) {
+          var an = segSafeGet(el, "attributeNode");
+          if (an && an.label) add(an.label, an.fieldApiName, an.objectApiName);
+          var gn = segSafeGet(el, "groupNode");
+          if (gn && (gn.label || gn.fullLabel)) {
+            add(gn.label || gn.fullLabel, "", gn.objectApiName);
+            var ch = gn.children; if (ch && ch.length) for (var k = 0; k < ch.length; k++) { var cf = ch[k]; if (cf && cf.label) add(cf.label, cf.fieldApiName, cf.objectApiName); }
+          }
+          var dt = segSafeGet(el, "details");
+          if (dt && (dt.label || dt.name)) add(dt.label || dt.name, (dt.subject && dt.subject.fieldApiName) || dt.fieldApiName || dt.targetFieldName, (dt.subject && dt.subject.objectApiName) || dt.targetObjectName || dt.primaryObjectName);
+          var data = segSafeGet(el, "data");
+          if (data && data.length) for (var i = 0; i < data.length; i++) { var d = data[i]; if (d && d.name) add(d.name, "", d.entityName); }
+          var inc = segSafeGet(el, "includedAttributes");
+          if (inc && inc.length) for (var j = 0; j < inc.length; j++) { var a = inc[j]; if (a && a.label) add(a.label, a.attributeName, a.entityName); }
+        });
+        return idx;
+      }
+      var _segLblMap = null, _segLblAt = 0;
+      function segLabelLookup(text) {
+        var raw = String(text == null ? "" : text).trim();
+        // strip a trailing remove-"×"/"x" and surrounding whitespace, and a leading "N. " index
+        raw = raw.replace(/\s*[×✕✖xX]\s*$/, "").replace(/^\s*\d+\.\s*/, "").trim();
+        if (!raw || raw.length > 60) return null;
+        var now = 0; try { now = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0; } catch (e) {}
+        if (!_segLblMap || (now - _segLblAt) > 1500) { _segLblMap = segBuildLabelIndex(); _segLblAt = now; }
+        var hit = _segLblMap[raw.toLowerCase()];
+        if (!hit) return null;
+        return { kind: "label", label: hit.label, fieldApi: hit.fieldApi, objectApi: hit.objectApi, ambiguous: hit.ambiguous, fieldType: "" };
+      }
+
+      function infoFromEvent(e) {
+        var path = (e.composedPath && e.composedPath()) || [];
+        // 1) exact element match (attribute rows, conditions, drag chips, table cells)
+        for (var i = 0; i < path.length; i++) {
+          var el = path[i];
+          if (el && el.tagName && SEG_TAGS[el.tagName.toLowerCase()]) {
+            var info = segApiInfo(el);
+            if (info && (info.fieldApi || info.objectApi)) return info;
+          }
+        }
+        // 2) fallback for chips / summary lines with no prop: match the innermost leaf's
+        //    own text against the label index. Walk innermost→outward, take the first
+        //    element whose SHORT text resolves to a known attribute.
+        for (var j = 0; j < path.length && j < 6; j++) {
+          var le = path[j];
+          if (!le || !le.getAttribute) continue;
+          var t = ""; try { t = dcCleanUiText((le.textContent || "").trim()); } catch (e2) {}
+          if (!t || t.length > 60) continue;
+          var hit = segLabelLookup(t);
+          if (hit && (hit.fieldApi || hit.objectApi)) return hit;
+        }
+        return null;
+      }
+      // One delegated mousemove handles ALL rows (works through shadow DOM via composedPath).
+      // Native-tooltip suppression: SF puts a browser `title=` on many rows, which pops up
+      // its own grey tooltip ON TOP of ours. While the feature is ON and we're showing our
+      // chip for a row, we temporarily MOVE the title into data-dc-title (removing title so
+      // the native tooltip can't fire), and restore it the moment we leave / toggle off.
+      // Non-destructive: the original value is always put back.
+      var _titleStash = [];   // [{el, val}] elements we stripped title from this hover
+      function restoreTitles() {
+        for (var i = 0; i < _titleStash.length; i++) {
+          var s = _titleStash[i];
+          try { if (s.el && !s.el.getAttribute("title") && s.el.getAttribute("data-dc-title") != null) { s.el.setAttribute("title", s.val); s.el.removeAttribute("data-dc-title"); } } catch (e) {}
+        }
+        _titleStash = [];
+      }
+      function suppressTitles(path) {
+        for (var i = 0; i < path.length && i < 8; i++) {
+          var el = path[i];
+          if (!el || !el.getAttribute || !el.hasAttribute) continue;
+          try {
+            var tv = el.getAttribute("title");
+            if (tv != null && tv !== "") { el.setAttribute("data-dc-title", tv); el.removeAttribute("title"); _titleStash.push({ el: el, val: tv }); }
+          } catch (e) {}
+        }
+      }
+      function onMove(e) {
+        if (!segOn) { if (_titleStash.length) restoreTitles(); return; }
+        var info = infoFromEvent(e);
+        hoverInfo = info;
+        // restore any titles from the previous row, then (if on a decoratable row) suppress
+        // the native title on THIS row's path so only our chip shows.
+        restoreTitles();
+        if (info && (info.fieldApi || info.objectApi)) {
+          var path = (e.composedPath && e.composedPath()) || [];
+          suppressTitles(path);
+          showTip(info, e.clientX, e.clientY);
+        } else hideTip();
+      }
+      // Copy by pressing "c" while hovering a row (feature ON). We DELIBERATELY do NOT
+      // listen for row clicks — hijacking clicks broke SF's own edit / drill-into-related /
+      // select interactions (they'd trigger a copy instead of the real action). Keyboard
+      // copy is unambiguous and leaves every mouse interaction untouched.
+      function onKey(e) {
+        if (!segOn || !hoverInfo) return;
+        if (e.key !== "c" && e.key !== "C") return;
+        // ignore when typing in an input/textarea/contenteditable (don't steal real typing)
+        var ae = document.activeElement, tn = ae && ae.tagName ? ae.tagName.toLowerCase() : "";
+        if (tn === "input" || tn === "textarea" || (ae && ae.isContentEditable)) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;   // let real Cmd/Ctrl+C work normally
+        var info = hoverInfo;
+        var api = (info.kind === "group") ? info.objectApi : (info.fieldApi || info.objectApi);
+        if (api) { segCopy(api); e.preventDefault(); }
+      }
+      // Only attach the hover/copy decorator where there are rows to decorate (Segment builder
+      // or the Activation wizard). On the Activation /view detail page there's nothing to hover,
+      // so we skip the listeners — but STILL define the Document Activation exporter below.
+      if (_segDecoratorActive) {
+        document.addEventListener("mousemove", onMove, true);
+        document.addEventListener("keydown", onKey, true);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // DOM-ONLY "Document Activation" export (bookmarklet-safe — no bridge/API).
+      // The existing "Export Activation" is extension/bridge-only (Connect API). The
+      // client's org bans the extension, so this reads the SAME information straight
+      // from the LWC props already on the page. Proven DOM shape (DOM Probe v56):
+      //   runtime_cdp-activation-summary  → the WHOLE activation (identical on every
+      //     wizard step): selectedDataSpace / selectedSegment / selectedTarget /
+      //     includedAttributes[] (uid,label,attributeName=fieldApi,category,
+      //     entityName=objectApi). ONE element = the core doc, NO step traversal.
+      //   runtime_cdp-activation-attribute-datatable .data[]  → output names + join
+      //     paths + static values, but ONLY while the Attributes step is visible.
+      //   runtime_cdp-activation-channel-wizard  → contact points, ONLY on that step.
+      // We NEVER auto-navigate the wizard (it can Save/Publish). We read the current
+      // step and ACCUMULATE step-specific extras as the user naturally visits them,
+      // and honestly label what hasn't been captured yet.
+      // ───────────────────────────────────────────────────────────────────────────
+
+      // Per-activation accumulator so re-opening the panel after visiting more steps
+      // keeps the contact points / static values gathered on earlier steps.
+      // Accumulator lives on WINDOW, not in this IIFE — the bookmarklet re-runs on every
+      // step navigation (Lightning SPA + watchNavigation tears the FAB down), which would
+      // otherwise reset an IIFE-local object to {} and WIPE everything captured on earlier
+      // steps. Persisting on window.__dcDocActAccum means each step the user visits FOLDS
+      // its extras into the SAME per-activation store, so the final modal shows everything
+      // seen so far. Cleared only on a full page reload (fresh window).
+      var _docActAccum = (function () {
+        try { if (!window.__dcDocActAccum) window.__dcDocActAccum = {}; return window.__dcDocActAccum; }
+        catch (e) { return {}; }   // paranoid fallback (sandboxed window) — still works within one run
+      })();
+
+      function docActRecordId() {
+        try { return getActivationIdFromUrl() || "current"; } catch (e) { return "current"; }
+      }
+      function docActAccumFor(id) {
+        if (!_docActAccum[id]) _docActAccum[id] = { outputByUid: {}, staticRows: [], contactPoint: null, pathByUid: {}, lastSeen: {}, filterGroups: {}, filterConditions: {}, refreshType: "", detailsSection: null, limits: {}, pathChoices: {}, showPathsOn: null, membership: null, groupSection: {}, provLimit: null, provSection: false, provRank: [] };
+        // Back-fill fields added in later versions: the accumulator lives on window and survives
+        // a bookmarklet re-run, so an object created by an OLDER build lacks them (→ TypeError).
+        var a = _docActAccum[id];
+        if (!a.limits) a.limits = {};
+        if (!a.pathChoices) a.pathChoices = {};
+        if (a.showPathsOn === undefined) a.showPathsOn = null; if (a.membership === undefined) a.membership = null; if (!a.groupSection) a.groupSection = {}; if (a.provLimit === undefined) a.provLimit = null; if (a.provSection === undefined) a.provSection = false; if (!a.provRank) a.provRank = [];
+        return a;
+      }
+
+      // queryPathString is a JSON array of hop pairs {objectApiName,fieldApiName}.
+      function docActParsePath(s) {
+        if (!s) return [];
+        try { var p = JSON.parse(s); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+      }
+      function docActPathText(hops) {
+        if (!hops || !hops.length) return "";
+        return hops.map(function (h) {
+          var o = (h.objectApiName || h.objectName || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+          var f = h.fieldApiName || h.fieldName || "";
+          return f ? (o + "." + f) : o;
+        }).filter(Boolean).join(" → ");
+      }
+
+      // A contact-point prop in the DOM can be a plain string OR a config object
+      // (which previously rendered as "[object Object]"). Normalize either into a
+      // display-safe shape: { present, value, fieldApi, entityApi, path, dump }.
+      // We read the KNOWN Salesforce contact-point keys first (same shape the
+      // API-fed renderer uses), and if none match we fall back to a readable
+      // key:value dump of the object's own scalars — never "[object Object]".
+      function docActCpStr(v) { return (v == null) ? "" : (typeof v === "object" ? "" : String(v)); }
+      function docActCpFirst(obj, keys) {
+        for (var i = 0; i < keys.length; i++) {
+          var val = obj[keys[i]];
+          if (val != null && typeof val !== "object" && String(val).length) return String(val);
+        }
+        return "";
+      }
+      // Turn an array of hop objects into "Obj.field → Obj.field" text.
+      function docActHopsText(qp) {
+        if (!qp || !qp.length) return "";
+        return qp.map(function (s) {
+          if (!s || typeof s !== "object") return "";
+          var o = (s.objectApiName || s.objectName || s.entityName || s.objectLabel || "").replace(/__dlm$|__cio$|__dll$|__dls$/g, "");
+          var f = s.fieldApiName || s.fieldName || s.fieldLabel || s.name || "";
+          return f ? (o + "." + f) : o;
+        }).filter(Boolean).join(" → ");
+      }
+      // Does this array look like a path (array of {object*,field*} hop objects)?
+      function docActLooksLikeHops(arr) {
+        return Array.isArray(arr) && arr.length > 0 && arr.every(function (s) {
+          return s && typeof s === "object" && (s.objectApiName || s.objectName || s.entityName || s.fieldApiName || s.fieldName);
+        });
+      }
+      // Build "obj.field" path text from the SF contact-point path config, covering the known
+      // shapes AND falling back to a bounded deep-scan for any nested hop array (the live DOM
+      // key names are inferred, so the deep-scan makes path capture robust to key differences).
+      function docActCpPath(obj) {
+        try {
+          // 0) the Email/Phone/etc Address Path combobox: pathComboboxOptions[pathIndex].label
+          // is the exact text shown in the "Email Address Path" field on the Contact Points
+          // step (confirmed against the live DOM) — check this first, it's the most direct shape.
+          if (obj.pathComboboxOptions && obj.pathComboboxOptions.length && obj.pathIndex != null) {
+            var idx = parseInt(obj.pathIndex, 10);
+            var opt = obj.pathComboboxOptions[idx];
+            if (opt && opt.label) return opt.label;
+          }
+          // 1) known nested config: queryPathConfig.configs[].queryPath|path
+          var cfgs = (obj.queryPathConfig && obj.queryPathConfig.configs) || obj.configs;
+          if (cfgs && cfgs.length) {
+            for (var i = 0; i < cfgs.length; i++) {
+              var qp = cfgs[i] && (cfgs[i].queryPath || cfgs[i].path || cfgs[i].hops);
+              var t = docActHopsText(qp);
+              if (t) return t;
+            }
+          }
+          // 2) hop array carried directly on the object under a few known keys
+          var direct = obj.queryPath || obj.path || obj.hops || obj.joinPath;
+          var dt = docActHopsText(direct);
+          if (dt) return dt;
+          // 3) stringified JSON hop array
+          if (obj.queryPathString) { var st = docActPathText(docActParsePath(obj.queryPathString)); if (st) return st; }
+          // 4) bounded deep-scan: find the first nested array that looks like hops (robust to
+          //    unknown key names). Depth-limited so it can never run away on a big LWC object.
+          var found = "";
+          (function scan(node, depth) {
+            if (found || !node || typeof node !== "object" || depth > 4) return;
+            if (docActLooksLikeHops(node)) { found = docActHopsText(node); return; }
+            var keys = Object.keys(node);
+            for (var k = 0; k < keys.length && !found; k++) {
+              var v = node[keys[k]];
+              if (v && typeof v === "object") scan(v, depth + 1);
+            }
+          })(obj, 0);
+          if (found) return found;
+        } catch (e) {}
+        return "";
+      }
+      // Readable "key: value" dump of an object's scalar fields (fallback only).
+      // UI-state-only keys that mean nothing to a reader (dropdown/index plumbing for an
+      // UNCONFIGURED channel) — never shown as if they were the channel's configured value.
+      var DOCACT_CP_NOISE_KEYS = { disablePathDropdown: 1, pathIndex: 1, disabled: 1, readOnly: 1, isLoading: 1 };
+      function docActCpDump(obj) {
+        try {
+          return Object.keys(obj).filter(function (k) {
+            var val = obj[k];
+            return !DOCACT_CP_NOISE_KEYS[k] && val != null && typeof val !== "object" && typeof val !== "function" && String(val).length;
+          }).map(function (k) { return k + ": " + String(obj[k]); }).join(", ");
+        } catch (e) { return ""; }
+      }
+      function docActCpExtract(v) {
+        if (v == null || v === "") return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
+        if (typeof v !== "object") return { present: true, value: String(v), fieldApi: String(v), entityApi: "", path: "", dump: "" };
+        // It's an object. Pull the field api, entity, and a human-readable value.
+        var fieldApi = docActCpFirst(v, ["fieldApiName", "name", "contactPointFieldName", "fieldName", "developerName"]);
+        var entityApi = docActCpFirst(v, ["contactPointEntityName", "entityName", "objectApiName", "objectName", "dmoApiName"]);
+        var label = docActCpFirst(v, ["label", "fieldLabel", "masterLabel", "displayName"]);
+        // Some shapes nest the single selected field under fieldConfig.contactPointFields[0].
+        if (!fieldApi && v.fieldConfig && v.fieldConfig.contactPointFields && v.fieldConfig.contactPointFields.length) {
+          var f0 = v.fieldConfig.contactPointFields[0] || {};
+          fieldApi = f0.name || f0.fieldApiName || "";
+          label = label || f0.label || "";
+        }
+        var path = docActCpPath(v);
+        var value = label || fieldApi || "";
+        var dump = (value || path || entityApi) ? "" : docActCpDump(v);   // only dump when we got nothing useful
+        // A channel the user never configured carries
+        // only UI-state plumbing and nothing meaningful — treat it as NOT present, not as noise.
+        if (!value && !path && !entityApi && !dump) return { present: false, value: "", fieldApi: "", entityApi: "", path: "", dump: "" };
+        return { present: true, value: value, fieldApi: fieldApi, entityApi: entityApi, path: path, dump: dump };
+      }
+      // Render a normalized CP value for the modal (never "[object Object]").
+      function docActCpHtml(cpv) {
+        if (!cpv || !cpv.present) return "";
+        var parts = [];
+        if (cpv.value) parts.push("<span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(cpv.value) + "</span>");
+        if (cpv.fieldApi && cpv.fieldApi !== cpv.value) parts.push(docActApiChip(cpv.fieldApi));
+        if (cpv.entityApi) parts.push(docActApiChip(cpv.entityApi));
+        if (cpv.path) parts.push("<span style='font:500 11px system-ui;color:#475569;'>" + docActEsc(cpv.path) + "</span>");
+        if (!parts.length && cpv.dump) parts.push("<span style='font:400 11px system-ui;color:#64748b;'>" + docActEsc(cpv.dump) + "</span>");
+        if (!parts.length) parts.push("<span style='font:500 12px system-ui;color:#116149;'>Configured</span>");
+        return parts.join(" ");
+      }
+      // Flatten a normalized CP value to one string for CSV/Excel.
+      function docActCpText(cpv) {
+        if (!cpv || !cpv.present) return "";
+        var bits = [];
+        if (cpv.value) bits.push(cpv.value);
+        if (cpv.fieldApi && cpv.fieldApi !== cpv.value) bits.push(cpv.fieldApi);
+        if (cpv.entityApi) bits.push(cpv.entityApi);
+        if (cpv.path) bits.push(cpv.path);
+        if (!bits.length && cpv.dump) bits.push(cpv.dump);
+        if (!bits.length) bits.push("Configured");
+        return bits.join(" · ");
+      }
+
+      // Applied filters, read ONLY if the DOM exposes them (segment-level criteria or
+      // activation filter config). Returns [] when nothing is found → the UI hides the
+      // section rather than showing an empty/fabricated one. Each entry: {label, text}.
+      // Refresh Type has NO structured getter anywhere on the summary element (confirmed via
+      // live probe: searching all 278 getters for refresh/schedule-related names found none).
+      // CORRECTION (live probe v9, real org): "Publish Schedule:Don't refresh" on the Contact
+      // Points step is the SEGMENT's publish schedule, NOT the activation's own Refresh Type —
+      // reading it there produced a wrong value. The activation's actual Refresh Type is its
+      // own record-detail field, rendered label-then-value with NO separator: literal text
+      // "Activation Refresh TypeFull Refresh" on a small leaf (label+value, no colon). Scan for
+      // the SMALLEST such leaf (children.length<=2, length<60) to avoid matching the page's big
+      // text-dump wrappers that also happen to contain the same substring.
+      function docActReadRefreshType(raw) {
+        var best = "";
+        for (var i = 0; i < raw.length; i++) {
+          var el = raw[i];
+          var txt = "";
+          try { txt = (el.children && el.children.length <= 2) ? (el.textContent || "").trim() : ""; } catch (e) {}
+          if (/^Activation Refresh Type\S/.test(txt) && txt.length < 60 && (!best || txt.length < best.length)) {
+            best = txt;
+          }
+        }
+        return best ? best.replace(/^Activation Refresh Type\s*/i, "").trim() : "";
+      }
+
+      // The "Add a name and description" step (runtime_cdp-activation-details-section) exposes
+      // Refresh Type + the two exclude-records options as REAL structured props — found via
+      // live probe, confirmed on a real activation (activationRefreshType: "INCREMENTAL",
+      // excludeUpdates/excludeDeletes: booleans). Superior to the Contact-Points sidebar-text
+      // reader (docActReadRefreshType) above, which only gives the enum's plain-English phrase
+      // with no structured exclude-flags. Labels are read from the sibling lightning-radio-group/
+      // lightning-checkbox-group `options[]` (never hardcoded "Full Refresh"/"Incremental Refresh"
+      // text) so this stays correct even if SF changes the wording or the org is localized.
+      function docActOptionLabel(options, value) {
+        if (!Array.isArray(options) || value == null) return "";
+        var hit = options.filter(function (o) { return o && o.value === value; })[0];
+        return hit ? (hit.label || "") : "";
+      }
+      function docActReadDetailsSection(raw) {
+        var sectionEl = null, radioEl = null, checkboxEl = null;
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-details-section") sectionEl = sectionEl || el;
+          else if (tag === "lightning-radio-group" && segSafeGet(el, "name") === "refreshTypeRadioButton") radioEl = radioEl || el;
+          else if (tag === "lightning-checkbox-group" && segSafeGet(el, "name") === "incrementalOptInOptions") checkboxEl = checkboxEl || el;
+        });
+        if (!sectionEl) return null;
+        var refreshType = segSafeGet(sectionEl, "activationRefreshType") || "";
+        var excludeUpdates = !!segSafeGet(sectionEl, "excludeUpdates");
+        var excludeDeletes = !!segSafeGet(sectionEl, "excludeDeletes");
+        var radioOptions = radioEl ? (segSafeGet(radioEl, "options") || []) : [];
+        var checkboxOptions = checkboxEl ? (segSafeGet(checkboxEl, "options") || []) : [];
+        var excludeLabels = [];
+        if (excludeUpdates) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_UPDATES") || "Exclude records modified since the last refresh");
+        if (excludeDeletes) excludeLabels.push(docActOptionLabel(checkboxOptions, "EXCLUDE_DELETES") || "Exclude records removed since the last refresh");
+        return {
+          refreshType: refreshType,
+          refreshTypeLabel: docActOptionLabel(radioOptions, refreshType) || refreshType,
+          excludeUpdates: excludeUpdates, excludeDeletes: excludeDeletes, excludeLabels: excludeLabels
+        };
+      }
+
+      // Provisional Audience Limiting + Show Paths (live-probed v17/v18 on a real activation).
+      // Limiting: one runtime_cdp-activation-related-attribute-limit per RELATED object, sitting
+      // next to a <header> "Object Label (N)". Its @api relatedAttributesLimit =
+      // {attributeName, maxNumberOfValues, order, orderByDataType}; disableRelatedAttributesLimit
+      // = SF fixed it at 1 (one-to-one object). Display labels (sort field / order) are read from
+      // the limit's own comboboxes' options[] — never hardcoded, so locale/org wording is respected.
+      // Show Paths: lightning-input "Show Paths" toggle + one lightning-combobox "Path" per related
+      // object; the selected option's label is the readable join path. Owner = object label after
+      // the last ">" (before the first "."). Pure read — never clicks.
+      function docActDeepFind(root, tag, out) {
+        out = out || [];
+        if (!root || !root.querySelectorAll) return out;
+        var list = []; try { list = root.querySelectorAll(tag); } catch (e) {}
+        for (var i = 0; i < list.length; i++) out.push(list[i]);
+        var all = []; try { all = root.querySelectorAll("*"); } catch (e) {}
+        for (var j = 0; j < all.length; j++) if (all[j].shadowRoot) docActDeepFind(all[j].shadowRoot, tag, out);
+        return out;
+      }
+      function docActStripCount(t) { return String(t || "").replace(/\s*\(\d+\)\s*$/, "").trim(); }
+      function docActOwnerHeader(limitEl) {
+        var p = limitEl && limitEl.parentNode, kids = (p && p.children) || [];
+        for (var i = 0; i < kids.length; i++) {
+          if ((kids[i].tagName || "").toLowerCase() === "header") return docActStripCount(dcCleanUiText(kids[i].textContent));
+        }
+        return "";
+      }
+      function docActPathOwner(pathText) {
+        var seg = String(pathText || "").split(">").pop() || "";
+        var dot = seg.indexOf(".");
+        return (dot >= 0 ? seg.slice(0, dot) : seg).trim();
+      }
+      function docActReadLimits(raw) {
+        var limits = [], paths = [], showOn = null, provLimit = null;
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-related-attribute-limit") {
+            var lim = segSafeGet(el, "relatedAttributesLimit");
+            var owner = docActOwnerHeader(el);
+            if (!lim || !owner) return;
+            var combos = docActDeepFind(el.shadowRoot, "lightning-combobox");
+            function labelFor(value) {
+              for (var i = 0; i < combos.length; i++) {
+                var l = docActOptionLabel(segSafeGet(combos[i], "options"), value);
+                if (l && segSafeGet(combos[i], "value") === value) return l;
+              }
+              return "";
+            }
+            limits.push({
+              owner: owner,
+              sortField: lim.attributeName || "",
+              sortLabel: labelFor(lim.attributeName) || lim.attributeName || "",
+              order: lim.order || "",
+              orderLabel: labelFor(lim.order) || lim.order || "",
+              maxValues: lim.maxNumberOfValues != null ? String(lim.maxNumberOfValues) : "",
+              fixed: !!segSafeGet(el, "disableRelatedAttributesLimit")
+            });
+          } else if (tag === "lightning-input" && /^\*?\s*Limit$/i.test(String(segSafeGet(el, "label") || "").trim())) {
+            var lv = segSafeGet(el, "value"); provLimit = (lv == null ? "" : String(lv));
+          } else if (tag === "lightning-input" && segSafeGet(el, "label") === "Show Paths") {
+            showOn = !!segSafeGet(el, "checked");
+          } else if (tag === "lightning-combobox" && /^Path\b/i.test(String(segSafeGet(el, "label") || ""))) {
+            var txt = docActOptionLabel(segSafeGet(el, "options"), segSafeGet(el, "value"));
+            if (!txt) {
+              try { var c = el.shadowRoot && el.shadowRoot.querySelector(".slds-combobox"); txt = c ? dcCleanUiText(String(c.textContent || "")) : ""; } catch (e) {}
+            }
+            var po = docActPathOwner(txt);
+            if (txt && po) paths.push({ owner: po, text: txt });
+          }
+        });
+        return { limits: limits, paths: paths, showOn: showOn, provLimit: provLimit };
+      }
+
+      function docActReadFilters(summaryEl, seg) {
+        var out = [];
+        function pushText(label, raw) {
+          if (raw == null) return;
+          var t = (typeof raw === "object") ? docActCpDump(raw) : String(raw);
+          if (t && t.length) out.push({ label: label, text: t });
+        }
+        try {
+          // 1) Segment-level filter/criteria sometimes ride on selectedSegment.
+          if (seg) {
+            if (seg.filterLabel || seg.filterText || seg.criteriaText) pushText("Segment filter", seg.filterText || seg.criteriaText || seg.filterLabel);
+            if (Array.isArray(seg.filters)) seg.filters.forEach(function (f, i) {
+              var lbl = (f && (f.label || f.name)) ? (f.label || f.name) : ("Filter " + (i + 1));
+              pushText(lbl, f && (f.text || f.filterExpression || f.expression || f.displayText || f));
+            });
+          }
+          // 2) Activation-level DMO filters exposed on the summary element, if any.
+          ["relatedDmoFilters", "directDmoFilters", "dmoFilters", "activationFilters", "filters"].forEach(function (k) {
+            var v = summaryEl && segSafeGet(summaryEl, k);
+            if (Array.isArray(v)) v.forEach(function (f, i) {
+              var txt = f && (f.filterExpression || f.expression || f.label || f.displayText);
+              pushText((f && f.entityName ? f.entityName.replace(/__dlm$/, "") + " filter" : k + " " + (i + 1)), txt || f);
+            });
+          });
+        } catch (e) {}
+        return out;
+      }
+
+      // The Attributes-step wizard renders each group header as "<Group Label> (N)" followed
+      // immediately by an "Add Filters" (no filter yet) or "Edit Filters" (filter applied)
+      // button — readable from plain innerText with the filter panel CLOSED (confirmed on the
+      // live DOM). This is the "filter exists" badge; it carries no condition detail.
+      function docActParseFilterBadges(wizardText) {
+        var out = {};
+        if (!wizardText) return out;
+        var re = /([A-Za-z0-9 _.]+?)\s*\((\d+)\)\s*\n\s*(Add Filters|Edit Filters)/g;
+        var m;
+        while ((m = re.exec(wizardText))) {
+          out[m[1].trim()] = { count: parseInt(m[2], 10), hasFilter: m[3] === "Edit Filters" };
+        }
+        return out;
+      }
+      // Which Salesforce SECTION owns each "Label (N)" group — taken from the wizard's own text order
+      // (Activation Membership → Contact Point → Attributes → Campaign Data → Provisional Audience
+      // Limiting), never guessed from object names.
+      function docActParseGroupSections(wizardText) {
+        var out = {}; if (!wizardText) return out;
+        var lines = String(wizardText).split(/\n/).map(function (x) { return x.trim(); }).filter(Boolean);
+        var heads = { "Activation Membership": 1, "Contact Point": 1, "Attributes": 1, "Campaign Data": 1, "Provisional Audience Limiting": 1 };
+        var cur = "";
+        for (var i = 0; i < lines.length; i++) {
+          var L = lines[i];
+          if (heads[L]) {
+            // "Attributes" is also a column header inside the Provisional table — only a section when a "(N)" group follows.
+            if (L === "Attributes" && !/\(\d+\)$/.test(lines[i + 1] || "")) continue;
+            cur = L; continue;
+          }
+          var m = /^(.+?)\s*\((\d+)\)$/.exec(L);
+          if (m && cur) out[m[1].trim()] = cur;
+        }
+        return out;
+      }
+      // "Activation Membership" block: header, the segment-on object label, then Add/Edit Filters
+      // (no "(N)" count here, so the generic badge regex never sees it).
+      function docActParseMembership(wizardText) {
+        if (!wizardText) return null;
+        var m = /Activation Membership\s*\n\s*([^\n]+?)\s*\n\s*(Add Filters|Edit Filters)/.exec(wizardText);
+        return m ? { label: m[1].trim(), hasFilter: m[2] === "Edit Filters" } : null;
+      }
+      // Known SF filter-condition operator phrases, used only to SPLIT the dialog's plain
+      // innerText into {field, operator} — never to fabricate a condition that isn't in the text.
+      var DOCACT_FILTER_OPS = ["Has Value", "Is Null", "Is Not Null", "Does Not Contain", "Not Equal To",
+        "Not Equal", "Starts With", "Ends With", "Greater Than Or Equal", "Less Than Or Equal",
+        "Greater Than", "Less Than", "Not In", "Contains", "Equals", "Between", "In"];
+      // The "Edit/Add Filters" dialog renders (read ONLY when the panel is open): a title
+      // `Filter "<Entity Label>" Attributes`, the join Path text, then each applied condition as
+      // plain "<Field Label> <Operator Phrase>" between "Drag and drop" and "Add another
+      // Attribute here". Multiple conditions concatenate in that same span.
+      function docActParseFilterDialog(dialogText) {
+        if (!dialogText) return null;
+        // Normalize: the real DOM renders this dialog with a newline between every short
+        // text node (confirmed via live probe), not spaces — collapse all whitespace
+        // (incl. \n) to single spaces BEFORE matching, so "." in the patterns below (which
+        // doesn't span newlines) sees the same single-line text our fixtures use.
+        var flat = dialogText.replace(/\s+/g, " ").trim();
+        var titleM = /Filter "([^"]+)" Attributes/.exec(flat);
+        var pathM = /\bPath\s+(.+?)\s+Attributes\s*\(\d+\)/.exec(flat);
+        // Condition span = text between the start marker and "...another Attribute here".
+        // Start marker: "Drag and drop" (older layout) OR the "<Entity Label>:" sub-heading
+        // (layout seen when the editor is a full page). End marker accepts Add/Drag/Drop wording.
+        var END = "(?:Add |Drag |Drop )?another Attribute here";
+        var spanM = new RegExp("Drag and drop\\s+(.+?)\\s+" + END).exec(flat);
+        if (!spanM && titleM) {
+          var ent = titleM[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          spanM = new RegExp(ent + ":\\s+(.+?)\\s+" + END).exec(flat);
+        }
+        var conditions = [];
+        if (spanM && spanM[1]) {
+          var span = spanM[1].trim();
+          // Salesforce puts an instruction sentence before the first condition, e.g.
+          // "Drag and drop … then use the Up and Down arrow keys to move it. <Field> <Operator>".
+          // Drop everything up to and including that sentence so it never ends up in a field name.
+          var mv = span.lastIndexOf("to move it.");
+          if (mv >= 0) span = span.slice(mv + "to move it.".length).trim();
+          var opAlt = DOCACT_FILTER_OPS.map(function (o) { return o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|");
+          var condRe = new RegExp("([A-Za-z0-9 _.]+?)\\s+(" + opAlt + ")(?=\\s+[A-Z]|$)", "g");
+          var cm;
+          while ((cm = condRe.exec(span))) conditions.push({ field: cm[1].trim(), operator: cm[2].trim() });
+          if (!conditions.length) conditions.push({ field: "", operator: "", text: span });
+        }
+        if (!titleM && !conditions.length) return null;
+        return { entityLabel: titleM ? titleM[1] : "", path: pathM ? pathM[1].trim() : "", conditions: conditions };
+      }
+
+      // Read the whole activation from the DOM. Returns a plain object the renderer +
+      // CSV + Excel all consume. Pure read — never clicks, never mutates.
+      function docActScrape() {
+        var id = docActRecordId();
+        var acc = docActAccumFor(id);
+        var raw = collectRaw();
+
+        var summaryEl = null, attrTables = [], channelEl = null, wizardEl = null, staticTables = [];
+        var attrWizardEl = null, filterDialogEl = null;
+        var filterFallbackEls = [];
+        raw.forEach(function (el) {
+          var tag = (el.tagName || "").toLowerCase();
+          if (tag === "runtime_cdp-activation-summary") summaryEl = summaryEl || el;
+          else if (tag === "runtime_cdp-activation-attribute-datatable") attrTables.push(el);
+          else if (tag === "runtime_cdp-activation-channel-wizard") channelEl = channelEl || el;
+          else if (tag === "runtime_cdp-market-segment-activation-wizard") wizardEl = wizardEl || el;
+          else if (tag === "runtime_cdp-activation-attribute-wizard") attrWizardEl = attrWizardEl || el;
+          else if (tag === "runtime_cdp-activation-related-attributes-filter-dialog") filterDialogEl = filterDialogEl || el;
+          else if (!filterDialogEl && /^runtime_cdp-/.test(tag) && /filter/.test(tag) && /activation|attribute/.test(tag) && !/badge|condition-row/.test(tag)) filterFallbackEls.push(el);
+        });
+        // Fallback: if the exact dialog tag isn't present (Salesforce renamed/relocated it, or the editor opens as a
+        // full page), accept any activation filter component whose text is the "Filter "<x>" Attributes" editor.
+        if (!filterDialogEl) {
+          for (var fi = 0; fi < filterFallbackEls.length; fi++) {
+            var ft = ""; try { ft = filterFallbackEls[fi].innerText || filterFallbackEls[fi].textContent || ""; } catch (e) {}
+            if (/Filter\s+"[^"]+"\s+Attributes/.test(ft)) { filterDialogEl = filterFallbackEls[fi]; break; }
+          }
+        }
+
+        // Filter-exists badges (Edit Filters vs Add Filters, read closed) — accumulate like
+        // output names/paths since this step tears down on navigation.
+        if (attrWizardEl) {
+          var wizText = ""; try { wizText = dcCleanUiText(attrWizardEl.innerText || attrWizardEl.textContent || ""); } catch (e) {}
+          var badges = docActParseFilterBadges(wizText);
+          Object.keys(badges).forEach(function (k) { acc.filterGroups[k] = badges[k]; });
+          var mem = docActParseMembership(wizText);
+          if (mem) acc.membership = mem;
+          if (/Provisional Audience Limiting/.test(wizText)) acc.provSection = true;
+          var gs = docActParseGroupSections(wizText);
+          Object.keys(gs).forEach(function (k) { acc.groupSection[k] = gs[k]; });
+        }
+        // Applied filter condition content — read ONLY while the "Edit/Add Filters" dialog
+        // is actually open (per user constraint: never auto-open it).
+        if (filterDialogEl) {
+          var dlgText = ""; try { dlgText = filterDialogEl.innerText || filterDialogEl.textContent || ""; } catch (e) {}
+          var parsed = docActParseFilterDialog(dlgText);
+          // "Last known GOOD value wins" — the dialog's closing animation renders a
+          // transition frame where the title matches but the condition span is cut off
+          // (empty conditions), which would otherwise silently overwrite a previously
+          // captured real condition with nothing the instant the user closes the dialog
+          // (user-reported: filter disappears from the export as soon as the dialog closes).
+          // Only accept a parse that actually found a condition, or when nothing was
+          // captured for this label yet.
+          if (parsed && parsed.entityLabel && (parsed.conditions.length || !acc.filterConditions[parsed.entityLabel])) {
+            acc.filterConditions[parsed.entityLabel] = parsed;
+          }
+        }
+
+        // Refresh Type — only rendered as sidebar text on the Contact Points step, so
+        // accumulate it like everything else that's step-specific (persists once seen).
+        var sidebarRefresh = docActReadRefreshType(raw);
+        if (sidebarRefresh) acc.refreshType = sidebarRefresh;
+
+        // "Add a name and description" step — structured Refresh Type + exclude-records
+        // options (persists once seen, same step-specific accumulation pattern as everything
+        // else above; this step tears down like any other on navigation).
+        var detailsNow = docActReadDetailsSection(raw);
+        if (detailsNow) acc.detailsSection = detailsNow;
+
+        // Limiting + Show Paths (accumulate by owner label — these steps tear down on navigation).
+        var lp = { limits: [], paths: [], showOn: null };
+        try { lp = docActReadLimits(raw); } catch (e) {}   // additive reader: must NEVER block the modal
+        lp.limits.forEach(function (l) { acc.limits[l.owner] = l; });
+        lp.paths.forEach(function (pc) { acc.pathChoices[pc.owner] = pc; });
+        if (lp.showOn != null) acc.showPathsOn = lp.showOn;
+        if (lp.provLimit != null) { acc.provLimit = lp.provLimit; acc.provSection = true; }
+
+        var out = {
+          recordId: id,
+          found: !!summaryEl,
+          overview: {}, attributes: [], contactPoints: [], staticRows: [], waterfall: null,
+          filterGroups: [], filterConditions: [],
+          captured: { attributes: false, outputNames: false, contactPoints: false, staticValues: false, filterGroups: false }
+        };
+
+        if (summaryEl) {
+          var ds = segSafeGet(summaryEl, "selectedDataSpace") || {};
+          var seg = segSafeGet(summaryEl, "selectedSegment") || {};
+          var tgt = segSafeGet(summaryEl, "selectedTarget") || {};
+          out.overview = {
+            dataSpace: ds.label || ds.value || "",
+            dataSpaceApi: ds.value || "",
+            segment: seg.name || "",
+            segmentApi: seg.segmentOnDeveloperName || seg.segmentApiName || "",
+            segmentOn: seg.segmentOnLabel || "",
+            segmentOnApi: seg.segmentOnDeveloperName || "",
+            segmentCount: (seg.count != null ? seg.count : ""),
+            publishType: seg.segmentPublishType || "",
+            target: tgt.name || "",
+            connectionType: tgt.connectionTypeLabel || tgt.connectionType || "",
+            platform: tgt.platformName || segSafeGet(summaryEl, "selectedPlatformName") || "",
+            businessUnits: (tgt.businessUnits && tgt.businessUnits.slice ? tgt.businessUnits.slice() : []),
+            eventType: segSafeGet(summaryEl, "selectedEventType") || "",
+            isWaterfall: !!segSafeGet(summaryEl, "isSelectedSegmentWaterfall"),
+            // Only populated if the DOM actually exposes them — read conditionally, never fabricated.
+            // No getter property for this exists anywhere on the summary element (live-probed:
+            // 278 getters, zero refresh-related) — acc.refreshType is the sidebar-text capture
+            // (docActReadRefreshType), which persists once seen on the Contact Points step.
+            // acc.detailsSection (from the "Add a name and description" step) is the
+            // STRUCTURED reader (live-probed real props) and wins when it's been seen,
+            // since its label is read from the live radio-group options (never hardcoded).
+            refreshType: (acc.detailsSection && acc.detailsSection.refreshTypeLabel) || acc.refreshType ||
+                         docActCpStr(segSafeGet(summaryEl, "refreshType") || segSafeGet(summaryEl, "activationRefreshType") ||
+                                     seg.refreshType || seg.activationRefreshType || tgt.refreshType),
+            // Only populated once the "Add a name and description" step has been visited —
+            // never fabricated for activations where it hasn't been captured yet.
+            excludeOptions: (acc.detailsSection && acc.detailsSection.excludeLabels) || [],
+            processingType: docActCpStr(segSafeGet(summaryEl, "processingType") || seg.processingType),
+            // seg.segmentSchedule is a raw enum ("TWENTY_FOUR"); seg.segmentScheduleLabel is
+            // the human text SF itself renders ("24 hours") — live-probed on a real waterfall
+            // activation. Prefer the label, fall back to the enum only if the label is absent.
+            schedule: seg.segmentScheduleLabel || seg.segmentSchedule || seg.schedule || seg.publishSchedule || "",
+            filters: docActReadFilters(summaryEl, seg)
+          };
+          if (out.overview.isWaterfall) {
+            // selectedWaterfallSubsegments is an array of {id,name,isChecked} objects
+            // (live-probed), not strings — map to the name so the export shows readable
+            // segment names instead of "[object Object]".
+            var subs = segSafeGet(summaryEl, "selectedWaterfallSubsegments");
+            out.waterfall = (subs && subs.map) ? subs.map(function (s) { return (s && (s.name || s.label)) || ""; }).filter(Boolean) : [];
+          }
+          // includedAttributes[] is the authoritative list of what the activation sends.
+          var inc = segSafeGet(summaryEl, "includedAttributes") || [];
+          out.captured.attributes = inc.length > 0;
+          inc.forEach(function (a) {
+            if (!a) return;
+            out.attributes.push({
+              uid: a.uid || "", label: a.label || "", fieldApi: a.attributeName || "",
+              objectApi: a.entityName || "", category: a.category || "", outputName: "", path: "", source: "INCLUDED"
+            });
+          });
+          // Waterfall activations add two system fields (SubSegmentId, SubSegmentName) that
+          // identify which tier a record matched — SF adds these itself, they're not in
+          // includedAttributes[] (confirmed via live probe: 12 real DMO fields, no subsegment
+          // rows) and have no DMO/field API since they're synthetic, not sourced from a DMO.
+          if (out.overview.isWaterfall) {
+            out.attributes.push({ uid: "", label: "SubSegmentId", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+            out.attributes.push({ uid: "", label: "SubSegmentName", fieldApi: "", objectApi: "", category: "System", outputName: "", path: "", source: "SYSTEM" });
+          }
+        }
+
+        // Attributes step: fold datatable .data[] into the accumulator (output names,
+        // join paths) and capture any static-value tables. Only present on that step.
+        var staticNow = [];   // Campaign Data rows visible in THIS read are authoritative
+        var rankSeen = false, rankNow = [];
+        attrTables.forEach(function (el) {
+          var data = segSafeGet(el, "data");
+          // Provisional Audience Limiting "Rank Attributes" table: columns Rank Order / Attributes / Sort By
+          // (fieldNames adhocrankorder / attributeLabel / adhocsortby — confirmed in the activation probe).
+          var cols = segSafeGet(el, "columns");
+          if (cols && cols.some && cols.some(function (c) { return c && c.fieldName === "adhocrankorder"; })) {
+            rankSeen = true;
+            (data || []).forEach(function (r, i) {
+              if (!r) return;
+              var at = r.attributeLabel || r.name || r.attributeName || "";
+              if (!at && r.adhocrankorder == null) return;
+              rankNow.push({ order: r.adhocrankorder != null && r.adhocrankorder !== "" ? String(r.adhocrankorder) : String(i + 1), attribute: String(at), sortBy: String(r.adhocsortby || "") });
+            });
+            return;
+          }
+          if (!data || !data.length) return;
+          data.forEach(function (d) {
+            if (!d) return;
+            if (d.staticAttributeName != null || d.staticAttributeValue != null) {
+              var srow = {
+                name: d.staticAttributeName || d.name || "",
+                value: (d.staticAttributeValue != null ? String(d.staticAttributeValue) : ""),
+                objectApi: d.entityName || ""
+              };
+              // de-dupe by full content: the accumulator persists on window, so re-scraping the
+              // Attributes step (every bookmarklet re-run) would otherwise append the same rows again
+              // (the "Static Values (12)" = 3 unique × 4 re-runs bug). Same name+value+object = same row.
+              var sKey = srow.name + "" + srow.value + "" + srow.objectApi;
+              if (!staticNow.some(function (x) { return (x.name + "" + x.value + "" + x.objectApi) === sKey; })) staticNow.push(srow);
+              return;
+            }
+            if (!d.uid) return;
+            var outName = d.defaultOutputName || d.preferredName || "";
+            if (outName) acc.outputByUid[d.uid] = outName;
+            var hops = docActParsePath(d.queryPathString);
+            if (hops.length) acc.pathByUid[d.uid] = docActPathText(hops);
+          });
+        });
+
+        // Contact Points step — there is only ONE real config (one channel wizard per
+        // activation), so this merges onto a single stored object (field-by-field, "last
+        // known good value wins") rather than appending snapshots to a list. Appending used
+        // to let a stale/incomplete capture (e.g. an unconfigured channel's noise, read before
+        // the user finished configuring, or before this noise-filter existed) sit alongside a
+        // later good one forever, rendering both as if they were two separate contact points.
+        if (channelEl) {
+          var cp = {
+            platform: docActCpStr(segSafeGet(channelEl, "selectedPlatform")),
+            connectionType: docActCpStr(segSafeGet(channelEl, "targetConnectionType")),
+            email: docActCpExtract(segSafeGet(channelEl, "contactPointEmail")),
+            phone: docActCpExtract(segSafeGet(channelEl, "contactPointPhone")),
+            push: docActCpExtract(segSafeGet(channelEl, "contactPointPush")),
+            whatsApp: docActCpExtract(segSafeGet(channelEl, "contactPointWhatsApp")),
+            address: docActCpExtract(segSafeGet(channelEl, "contactPointAddress"))
+          };
+          var hasAny = ["email", "phone", "push", "whatsApp", "address"].some(function (k) { return cp[k] && cp[k].present; });
+          if (hasAny) {
+            if (!acc.contactPoint) {
+              acc.contactPoint = cp;
+            } else {
+              if (cp.platform) acc.contactPoint.platform = cp.platform;
+              if (cp.connectionType) acc.contactPoint.connectionType = cp.connectionType;
+              ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
+                if (cp[k] && cp[k].present) acc.contactPoint[k] = cp[k];
+              });
+            }
+          }
+        }
+
+        if (rankSeen) { acc.provRank = rankNow; acc.provSection = true; }   // live table: what the page shows now
+        // Campaign Data is a live table: what the page shows NOW replaces rows left by an earlier read, an edited/removed
+        // row, or another activation (otherwise old rows pile up and never go away).
+        if (staticNow.length || attrTables.length) acc.staticRows = staticNow;   // Attributes step visible + no Campaign rows = none configured
+
+        // Merge accumulated extras onto the attribute rows.
+        out.attributes.forEach(function (row) {
+          if (row.uid && acc.outputByUid[row.uid]) { row.outputName = acc.outputByUid[row.uid]; }
+          if (row.uid && acc.pathByUid[row.uid]) { row.path = acc.pathByUid[row.uid]; }
+        });
+        out.captured.outputNames = Object.keys(acc.outputByUid).length > 0;
+        out.staticRows = acc.staticRows.slice();
+        out.captured.staticValues = acc.staticRows.length > 0;
+        out.contactPoints = acc.contactPoint ? [acc.contactPoint] : [];
+        out.captured.contactPoints = !!acc.contactPoint;
+
+        // Filter badges + any condition content captured while its dialog was open, joined
+        // by group/entity label (same label SF shows on both the closed row and the dialog title).
+        out.filterGroups = Object.keys(acc.filterGroups).map(function (label) {
+          var g = acc.filterGroups[label];
+          var cond = acc.filterConditions[label];
+          return { label: label, count: g.count, hasFilter: g.hasFilter, conditions: cond ? cond.conditions : [], path: cond ? cond.path : "" };
+        });
+        out.membership = acc.membership || null;
+        out.groupSection = acc.groupSection || {};
+        out.provisional = acc.provSection ? { limit: acc.provLimit == null ? "" : acc.provLimit, rank: (acc.provRank || []).slice() } : null;
+        out.captured.filterGroups = out.filterGroups.length > 0;
+
+        out.captured.limits = Object.keys(acc.limits).length > 0;
+        out.captured.paths = Object.keys(acc.pathChoices).length > 0;
+        out.limits = Object.keys(acc.limits).map(function (k) { return acc.limits[k]; });
+        out.pathChoices = acc.showPathsOn === false ? [] : Object.keys(acc.pathChoices).map(function (k) { return acc.pathChoices[k]; });
+
+        return out;
+      }
+
+      // PASSIVE capture, ALWAYS-ON (not gated on any one dialog/step): docActScrape() only
+      // normally runs the instant the user clicks "Document Activation", by which point
+      // whatever step/dialog had the data on screen may already be gone — the filter dialog
+      // closes, the user navigates off the Contact Points step, etc. User explicitly asked:
+      // "if you are picking anything from anywhere, just show" — i.e. capture continuously
+      // as the user naturally visits/opens things, not only at export time. This silently
+      // re-runs docActScrape() (discarding the result; it's a pure read+accumulate, same
+      // no-click/no-nav guarantee as the export itself) on every tick, regardless of which
+      // step or dialog happens to be open — docActScrape() itself only reads whatever tags
+      // are currently present, so a tick where nothing relevant is on screen is a no-op.
+      // Guarded on window (not an IIFE-local), same reasoning as window.__dcNavCapturePoll
+      // elsewhere: this whole module body re-executes on every bookmarklet re-run (per-step
+      // nav), so a plain local-scoped setInterval would stack a new poller on every step.
+      function docActPassiveScan() {
+        try { docActScrape(); } catch (e) {}
+      }
+      if (!window.__dcDocActFilterPoll) {
+        window.__dcDocActFilterPoll = setInterval(docActPassiveScan, 800);
+      }
+
+      function docActEsc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+      function docActObjKind(api) {
+        var a = String(api || "").toLowerCase();
+        if (/__dlm$/.test(a)) return "DMO";
+        if (/__(dll|dls)$/.test(a)) return "DLO";
+        if (/__cio$/.test(a)) return "CI";
+        return "";
+      }
+      // Salesforce-style "API" chip reused everywhere so API names look native (SLDS-like).
+      function docActApiChip(api) {
+        if (!api) return "";
+        return "<code style='font:500 10px/1.4 SFMono-Regular,Menlo,Consolas,monospace;color:#0b5cab;background:#eef4fb;border:1px solid #d6e3f3;border-radius:4px;padding:1px 5px;white-space:nowrap;'>" + docActEsc(api) + "</code>";
+      }
+      // CSS-only "?" info icon — appears INSTANTLY on hover via :hover (no JS listeners, no
+      // mandatory OS delay like the native title= attribute has).
+      function docActInfoIcon(tipText) {
+        if (!tipText) return "";
+        return "<span style='position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#e2e8f0;color:#475569;font:700 10px system-ui;cursor:default;margin-left:6px;vertical-align:middle;' class='dc-info-ic' tabindex='0'>i"
+          + "<span class='dc-info-tip' style='display:none;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#16325c;color:#fff;font:500 11px/1.4 system-ui;padding:7px 10px;border-radius:6px;white-space:normal;width:260px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:999;transition:opacity .08s;'>" + docActEsc(tipText) + "</span></span>";
+      }
+
+      // The CSV: ATTRIBUTES ONLY — one row per included attribute (per user: the CSV
+      // should carry the attribute list, not the whole activation; Excel keeps the rest).
+      function docActCsv(data) {
+        function q(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+        var lines = [];
+        lines.push(["Label", "Field API", "Object / DMO API", "Output Name", "Category"].map(q).join(","));
+        data.attributes.forEach(function (a) {
+          lines.push([a.label, a.fieldApi, a.objectApi, a.outputName, a.category].map(q).join(","));
+        });
+        return lines.join("\r\n");
+      }
+
+      function docActDownload(name, mime, blobParts) {
+        var blob = new Blob(blobParts, { type: mime });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) {} }, 1500);
+      }
+
+      // Excel (.xlsx) via the bundled MiniXLSX — reachable DOM-only in the dev/full build.
+      // Word has no CSS grid/flex/tooltips: turn the modal's section HTML into Word-safe HTML that keeps the same
+      // order, headings, tables, API-name chips and badges (inline styles are kept; layout containers become blocks/tables).
+      function docActWordHtml(inner) {
+        var h = String(inner || "");
+        h = h.replace(/<span style='position:relative[^']*' class='dc-info-ic'[^>]*>[\s\S]*?<\/span><\/span>/g, "");   // drop "i" tooltip bubbles
+        h = h.replace(/display:grid;grid-template-columns:[^;]*;gap:[^;]*;/g, "");
+        h = h.replace(/display:flex;[^'"]*?(?=['"])/g, function (m) { return m.replace(/display:flex;|flex-wrap:wrap;|align-items:[^;]*;|gap:[^;]*;|flex-direction:[^;]*;|flex-shrink:0;|flex:1;/g, ""); });
+        h = h.replace(/<(div|span)([^>]*)\bmin-width:\d+px;/g, "<$1$2");
+        h = h.replace(/overflow-x:auto;|overflow:auto;|word-break:break-word;|table-layout:fixed;/g, "");
+        h = h.replace(/box-shadow:[^;']*;?/g, "");
+        return h;
+      }
+      // Overview as a real 2-column table (Word renders this like the modal's detail grid).
+      function docActOvTable(data) {
+        var e = docActEsc, rows = docActOvRows(data).filter(function (r) { return r[1] || r[2]; });
+        if (!rows.length) return "";
+        return "<h2 style='color:#032d60;font:700 15px Segoe UI,Arial;margin:18px 0 6px;border-left:4px solid #0176d3;padding-left:8px;'>Overview</h2><table><tbody>"
+          + rows.map(function (r) { return "<tr><th style='width:30%;'>" + e(r[0]) + "</th><td>" + e(r[1]) + (r[2] ? " <code>" + e(r[2]) + "</code>" : "") + "</td></tr>"; }).join("") + "</tbody></table>";
+      }
+
+      // Overview rows shared by Excel and the Doc export: [label, value, api].
+      function docActOvRows(data) {
+        var ov = data.overview;
+        var rows = [
+          ["Data Space", ov.dataSpace, ov.dataSpaceApi],
+          ["Segment", ov.segment, ov.segmentApi],
+          ["Segment On", ov.segmentOn, ov.segmentOnApi],
+          ["Segment Membership (as shown)", (ov.segmentCount === "" ? "" : String(ov.segmentCount)), ""],
+          ["Target", ov.target, ""],
+          ["Platform", ov.platform, ""],
+          ["Connection Type", ov.connectionType, ""],
+          ["Business Units", (ov.businessUnits || []).join("; "), ""],
+          ["Publish Type", ov.publishType, ""],
+          ["Refresh Type", ov.refreshType, ""],
+          ["Exclude Options", (ov.excludeOptions || []).join("; "), ""],
+          ["Processing Type", ov.processingType, ""],
+          ["Schedule", ov.schedule, ""],
+          ["Waterfall", ov.isWaterfall ? ((data.waterfall || []).join(", ") || "Yes") : "No", ""]
+        ].concat((ov.filters || []).map(function (f) { return ["Filter — " + f.label, f.text, ""]; }))
+         .concat((data.filterGroups || []).map(function (g) {
+           var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+           return ["Attribute Filter — " + g.label, g.hasFilter ? (condTxt || "Filtered") : "No filter", ""];
+         }))
+        if (data.membership) rows.push(["Activation Membership", data.membership.label + (data.membership.hasFilter ? " — Filtered" : " — No filter"), ""]);
+        if (data.provisional) rows.push(["Provisional Audience Limiting — Limit", String(data.provisional.limit || "") || "Not set", ""]);
+        return rows;
+      }
+
+      // One row per object/group, joined by SF label: [section, object, maxValues, sortBy, sortApi, order, filter, conditions, path].
+      // Same data the modal's per-object panel shows (Excel "Object Settings" sheet).
+      function docActObjSettings(data) {
+        function nk(x) { return String(x || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+        var m = {}, order = [];
+        function row(label) { var k = nk(label); if (!k) return null; if (!m[k]) { m[k] = { section: "", object: label, max: "", sortBy: "", sortApi: "", ord: "", filter: "", cond: "", path: "" }; order.push(k); } return m[k]; }
+        var gs = data.groupSection || {};
+        Object.keys(gs).forEach(function (l) { var r = row(l); if (r) r.section = gs[l]; });
+        (data.limits || []).forEach(function (l) { var r = row(l.owner); if (r) { r.max = l.maxValues; r.sortBy = l.sortLabel; r.sortApi = l.sortField; r.ord = l.orderLabel; } });
+        (data.filterGroups || []).forEach(function (g) {
+          var r = row(g.label); if (!r) return;
+          r.filter = g.hasFilter ? "Filtered" : "No filter";
+          r.cond = (g.conditions || []).map(function (c, i) { return (i + 1) + ". " + (c.text ? c.text : (c.field + " " + c.operator)); }).join("; ");
+        });
+        (data.pathChoices || []).forEach(function (pc) { var r = row(pc.owner); if (r) r.path = pc.text; });
+        // Contact Point path is chosen on the Contact Points step — attach it to its channel's group.
+        (data.contactPoints || []).forEach(function (cp) {
+          [["email", "email"], ["phone", "phone"], ["push", "push"], ["whatsApp", "whatsapp"], ["address", "address"]].forEach(function (c) {
+            var v = cp[c[0]]; if (!v || !v.path) return;
+            order.forEach(function (k) { var r = m[k]; if (!r.path && r.section === "Contact Point" && nk(r.object).indexOf("contactpoint" + c[1]) > -1) r.path = v.path; });
+          });
+        });
+        if (data.membership) { var rm = row(data.membership.label); if (rm) { rm.section = "Activation Membership"; rm.filter = data.membership.hasFilter ? "Filtered" : "No filter"; } }
+        var rank = { "Activation Membership": 0, "Contact Point": 1, "Attributes": 2, "Campaign Data": 3, "Provisional Audience Limiting": 4 };
+        return order.map(function (k) { return m[k]; }).sort(function (a, b) { return (rank[a.section] == null ? 9 : rank[a.section]) - (rank[b.section] == null ? 9 : rank[b.section]); });
+      }
+
+
+      // Native Word document (.docx = OOXML zip) built straight from the captured data — no HTML-in-.doc.
+      function docActDocx(data) {
+        var M = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+        if (!M || !M.zipStore) return null;
+        function x(t) { return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ""); }
+        function run(t, o) {
+          o = o || {};
+          return "<w:r><w:rPr>" + (o.mono ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>' : "") + (o.b ? "<w:b/>" : "") + (o.color ? '<w:color w:val="' + o.color + '"/>' : "") + (o.sz ? '<w:sz w:val="' + o.sz + '"/>' : "") + '</w:rPr><w:t xml:space="preserve">' + x(t) + "</w:t></w:r>";
+        }
+        function para(t, o) { o = o || {}; return "<w:p><w:pPr><w:spacing w:before=\"" + (o.before || 0) + "\" w:after=\"" + (o.after == null ? 80 : o.after) + "\"/></w:pPr>" + (Array.isArray(t) ? t.join("") : run(t, o)) + "</w:p>"; }
+        function h1(t) { return para(t, { b: 1, sz: 40, color: "032D60", after: 60 }); }
+        function h2(t) { return para(t, { b: 1, sz: 28, color: "032D60", before: 280, after: 100 }); }
+        function h3(t) { return para(t, { b: 1, sz: 22, before: 160, after: 60 }); }
+        function cell(t, w, hdr) {
+          var runs = Array.isArray(t) ? t.join("") : run(t, hdr ? { b: 1, color: "FFFFFF", sz: 20 } : { sz: 20 });
+          return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (hdr ? '<w:shd w:val="clear" w:color="auto" w:fill="0176D3"/>' : "") + "</w:tcPr><w:p><w:pPr><w:spacing w:before=\"20\" w:after=\"20\"/></w:pPr>" + runs + "</w:p></w:tc>";
+        }
+        function table(headers, rows, widths) {
+          var b = '<w:tblBorders>' + ["top", "left", "bottom", "right", "insideH", "insideV"].map(function (k) { return '<w:' + k + ' w:val="single" w:sz="4" w:space="0" w:color="D8DDE6"/>'; }).join("") + "</w:tblBorders>";
+          var out = '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>' + b + '<w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>' + widths.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join("") + "</w:tblGrid>";
+          if (headers) out += '<w:tr><w:trPr><w:tblHeader/></w:trPr>' + headers.map(function (h, i) { return cell(h, widths[i], true); }).join("") + "</w:tr>";
+          rows.forEach(function (r) { out += "<w:tr>" + r.map(function (c, i) { return cell(c, widths[i]); }).join("") + "</w:tr>"; });
+          return out + "</w:tbl>" + para("", { after: 60 });
+        }
+        var ov = data.overview || {}, body = "";
+        body += h1(ov.target || ov.segment || "Activation");
+        body += para("Activation Blueprint · generated " + new Date().toISOString().slice(0, 10) + " · read from the Salesforce page", { color: "5C5C5C", sz: 20 });
+        var ovr = docActOvRows(data).filter(function (r) { return r[1] || r[2]; });
+        if (ovr.length) { body += h2("Overview"); body += table(null, ovr.map(function (r) { return [[run(r[0], { b: 1, sz: 20 })], [run(r[1], { sz: 20 })].concat(r[2] ? [run("  " + r[2], { mono: 1, sz: 18, color: "0B5CAB" })] : [])]; }), [3000, 6400]); }
+        if (data.membership) body += h2("Activation Membership") + para(data.membership.label + " — " + (data.membership.hasFilter ? "Filtered" : "No filter"));
+        var cpRows = [];
+        (data.contactPoints || []).forEach(function (cp) { [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) { var v = p[1]; if (!v || !v.present) return; cpRows.push([p[0], v.value || v.dump || "Configured", (v.fieldApi && v.fieldApi !== v.value) ? v.fieldApi : "", v.path || ""]); }); });
+        if (cpRows.length) body += h2("Contact Points") + table(["Channel", "Value", "Field API", "Path"], cpRows, [1300, 2800, 2600, 2700]);
+        var attrs = data.attributes || [];
+        if (attrs.length) {
+          body += h2("Attributes");
+          var groups = [], gi = {};
+          attrs.forEach(function (a) { var k = a.objectApi || "\u0000sys"; if (!(k in gi)) { gi[k] = groups.length; groups.push({ obj: a.objectApi || "", rows: [] }); } groups[gi[k]].rows.push(a); });
+          groups.forEach(function (g) {
+            if (g.obj) body += h3(g.obj + " (" + g.rows.length + ")");
+            body += table(["#", "Attribute", "Field API", "Output Name"], g.rows.map(function (a, i) { return [String(i + 1), a.label || a.fieldApi || "", a.fieldApi || "", a.outputName || ""]; }), [500, 3200, 3000, 2700]);
+          });
+        }
+        var os = docActObjSettings(data);
+        if (os.length) {
+          body += h2("Object Settings");
+          os.forEach(function (r) {
+            body += h3(r.object + (r.section ? "  ·  " + r.section : ""));
+            var rows = [];
+            if (r.max || r.sortBy || r.ord) rows.push(["Limit", [run("Max. # of Attribute Values: " + (r.max || "") + "   Sort By: " + (r.sortBy || ""), { sz: 20 })].concat(r.sortApi ? [run("  " + r.sortApi, { mono: 1, sz: 18, color: "0B5CAB" })] : []).concat([run("   Order: " + (r.ord || ""), { sz: 20 })])]);
+            if (r.filter) {
+              var cs = (r.cond || "").split("; ").filter(Boolean);
+              rows.push(["Filters", r.filter + (cs.length ? " · " + cs.length + (cs.length === 1 ? " condition" : " conditions") : "") + (cs.length ? ":  " + cs.map(function (c) { return c.replace(/^\d+\.\s*/, ""); }).join("  |  ") : "")]);
+            }
+            if (r.path) rows.push(["Path", r.path.split(/\s>\s/).filter(Boolean).map(function (st, i) { return "Step " + (i + 1) + ": " + st; }).join("\n")]);
+            if (rows.length) body += table(null, rows.map(function (rw) { return [[run(rw[0], { b: 1, sz: 20 })], Array.isArray(rw[1]) ? rw[1] : String(rw[1]).split("\n").map(function (ln) { return run(ln, { sz: 20 }) + "<w:r><w:br/></w:r>"; }).slice(0)]; }), [1500, 7900]);
+          });
+        }
+        if ((data.staticRows || []).length) { body += h2("Campaign Data") + table(["Name", "Value", "Object API"], data.staticRows.map(function (s) { return [s.name || "", s.value || "", s.objectApi || ""]; }), [3000, 3600, 2800]); }
+        if (data.provisional) {
+          body += h2("Provisional Audience Limiting") + para("Limit: " + (String(data.provisional.limit || "") || "Not set"));
+          var rk = data.provisional.rank || [];
+          body += rk.length ? table(["Rank Order", "Attribute", "Sort By"], rk.map(function (r) { return [String(r.order || ""), r.attribute || "", r.sortBy || ""]; }), [1500, 5000, 2900]) : para("No ranking attributes set");
+        }
+        var W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+        var doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ' + W + "><w:body>" + body + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1000" w:right="1000" w:bottom="1000" w:left="1000" w:header="500" w:footer="500" w:gutter="0"/></w:sectPr></w:body></w:document>';
+        var hdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+        return M.zipStore([
+          { name: "[Content_Types].xml", data: M.utf8(hdr + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>') },
+          { name: "_rels/.rels", data: M.utf8(hdr + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>') },
+          { name: "word/document.xml", data: M.utf8(doc) }
+        ]);
+      }
+
+      function docActExcel(data) {
+        var _MiniXLSX = (typeof SEGX !== "undefined" && SEGX && SEGX.MiniXLSX) ? SEGX.MiniXLSX : (typeof MiniXLSX !== "undefined" ? MiniXLSX : null);
+        if (!_MiniXLSX) { segToast("Excel builder not available in this build"); return; }
+        var wb = new _MiniXLSX.Workbook();
+        var hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0176D3" } };
+        var hdrFont = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        var boldFont = { bold: true, size: 11 };
+        var ov = data.overview;
+
+        var ws1 = wb.addWorksheet("Overview");
+        ws1.getColumn(1).width = 24; ws1.getColumn(2).width = 48; ws1.getColumn(3).width = 36;
+        ws1.getCell(1, 1).value = "ACTIVATION — " + (ov.target || ov.segment || ""); ws1.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0176D3" } };
+        ws1.getRow(1).height = 22;
+        ["Field", "Value", "API Name"].forEach(function (h, i) { ws1.getCell(2, i + 1).value = h; ws1.getCell(2, i + 1).font = hdrFont; ws1.getCell(2, i + 1).fill = hdrFill; });
+        var ovRows = docActOvRows(data);
+        var r1 = 3;
+        ovRows.forEach(function (row) {
+          if (!row[1] && !row[2]) return;
+          ws1.getCell(r1, 1).value = row[0]; ws1.getCell(r1, 1).font = boldFont;
+          ws1.getCell(r1, 2).value = String(row[1] || "");
+          if (row[2]) ws1.getCell(r1, 3).value = String(row[2]);
+          r1++;
+        });
+
+        var ws2 = wb.addWorksheet("Attributes");
+        ws2.getColumn(1).width = 5; ws2.getColumn(2).width = 30; ws2.getColumn(3).width = 30; ws2.getColumn(4).width = 32; ws2.getColumn(5).width = 30; ws2.getColumn(6).width = 16; ws2.getColumn(7).width = 90;
+        ["#", "Label", "Field API", "Object / DMO API", "Output Name", "Category"].forEach(function (h, i) { ws2.getCell(1, i + 1).value = h; ws2.getCell(1, i + 1).font = hdrFont; ws2.getCell(1, i + 1).fill = hdrFill; });
+        data.attributes.forEach(function (a, i) {
+          var r = i + 2;
+          ws2.getCell(r, 1).value = i + 1;
+          ws2.getCell(r, 2).value = a.label || "";
+          ws2.getCell(r, 3).value = a.fieldApi || "";
+          ws2.getCell(r, 4).value = a.objectApi || "";
+          ws2.getCell(r, 5).value = a.outputName || "";
+          ws2.getCell(r, 6).value = a.category || "";
+        });
+
+        var ws3 = wb.addWorksheet("Contact Points");
+        ws3.getColumn(1).width = 14; ws3.getColumn(2).width = 44; ws3.getColumn(3).width = 30; ws3.getColumn(4).width = 36; ws3.getColumn(5).width = 20;
+        ["Channel", "Value", "Field API", "Path", "Platform"].forEach(function (h, i) { ws3.getCell(1, i + 1).value = h; ws3.getCell(1, i + 1).font = hdrFont; ws3.getCell(1, i + 1).fill = hdrFill; });
+        var r3 = 2;
+        data.contactPoints.forEach(function (cp) {
+          [["Email", cp.email], ["Phone", cp.phone], ["Push", cp.push], ["WhatsApp", cp.whatsApp], ["Address", cp.address]].forEach(function (p) {
+            var v = p[1];
+            if (!v || !v.present) return;
+            ws3.getCell(r3, 1).value = p[0];
+            ws3.getCell(r3, 2).value = v.value || v.dump || "Configured";
+            ws3.getCell(r3, 3).value = (v.fieldApi && v.fieldApi !== v.value) ? v.fieldApi : "";
+            ws3.getCell(r3, 4).value = v.path || "";
+            ws3.getCell(r3, 5).value = cp.platform || "";
+            r3++;
+          });
+        });
+
+        var ws4 = wb.addWorksheet("Campaign Data");
+        ws4.getColumn(1).width = 30; ws4.getColumn(2).width = 40; ws4.getColumn(3).width = 30;
+        ["Name", "Value", "Object API"].forEach(function (h, i) { ws4.getCell(1, i + 1).value = h; ws4.getCell(1, i + 1).font = hdrFont; ws4.getCell(1, i + 1).fill = hdrFill; });
+        data.staticRows.forEach(function (s, i) { ws4.getCell(i + 2, 1).value = s.name || ""; ws4.getCell(i + 2, 2).value = s.value || ""; ws4.getCell(i + 2, 3).value = s.objectApi || ""; });
+
+        if (data.provisional) {
+          var wsP = wb.addWorksheet("Provisional Limiting");
+          [18, 44, 26].forEach(function (w, i) { wsP.getColumn(i + 1).width = w; });
+          wsP.getCell(1, 1).value = "Limit"; wsP.getCell(1, 1).font = boldFont; wsP.getCell(1, 2).value = String(data.provisional.limit || "") || "Not set";
+          ["Rank Order", "Attribute", "Sort By"].forEach(function (h, i) { wsP.getCell(3, i + 1).value = h; wsP.getCell(3, i + 1).font = hdrFont; wsP.getCell(3, i + 1).fill = hdrFill; });
+          (data.provisional.rank || []).forEach(function (r, i) { wsP.getCell(i + 4, 1).value = r.order; wsP.getCell(i + 4, 2).value = r.attribute; wsP.getCell(i + 4, 3).value = r.sortBy; });
+        }
+        var os = docActObjSettings(data);
+        if (os.length) {
+          var wsO = wb.addWorksheet("Object Settings");
+          [24, 38, 18, 26, 28, 16, 12, 50, 110].forEach(function (w, i) { wsO.getColumn(i + 1).width = w; });
+          ["Section", "Object", "Max # of Attribute Values", "Sort By", "Sort By API", "Order", "Filters", "Filter Conditions", "Path"].forEach(function (h, i) { wsO.getCell(1, i + 1).value = h; wsO.getCell(1, i + 1).font = hdrFont; wsO.getCell(1, i + 1).fill = hdrFill; });
+          os.forEach(function (r, i) { [r.section, r.object, r.max, r.sortBy, r.sortApi, r.ord, r.filter, r.cond, r.path].forEach(function (v, c) { wsO.getCell(i + 2, c + 1).value = v || ""; }); });
+        }
+        if ((data.limits || []).length) {
+          var ws5 = wb.addWorksheet("Related Attribute Limits");
+          ws5.getColumn(1).width = 34; ws5.getColumn(2).width = 14; ws5.getColumn(3).width = 30; ws5.getColumn(4).width = 30; ws5.getColumn(5).width = 20;
+          ["Related Object", "Max # of Attribute Values", "Sort By", "Sort By API", "Order"].forEach(function (h, i) { ws5.getCell(1, i + 1).value = h; ws5.getCell(1, i + 1).font = hdrFont; ws5.getCell(1, i + 1).fill = hdrFill; });
+          data.limits.forEach(function (l, i) {
+            ws5.getCell(i + 2, 1).value = l.owner;
+            ws5.getCell(i + 2, 2).value = l.maxValues;
+            ws5.getCell(i + 2, 3).value = l.sortLabel;
+            ws5.getCell(i + 2, 4).value = l.sortField;
+            ws5.getCell(i + 2, 5).value = l.orderLabel;
+          });
+        }
+        if ((data.pathChoices || []).length) {
+          var ws6 = wb.addWorksheet("Show Paths");
+          ws6.getColumn(1).width = 34; ws6.getColumn(2).width = 110;
+          ["Related Object", "Path"].forEach(function (h, i) { ws6.getCell(1, i + 1).value = h; ws6.getCell(1, i + 1).font = hdrFont; ws6.getCell(1, i + 1).fill = hdrFill; });
+          data.pathChoices.forEach(function (pc, i) { ws6.getCell(i + 2, 1).value = pc.owner; ws6.getCell(i + 2, 2).value = pc.text; });
+        }
+
+        wb.xlsx.writeBuffer().then(function (buf) {
+          var fn = "activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".xlsx";
+          docActDownload(fn, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", [buf]);
+        });
+      }
+
+      // The cosmetic modal — laid out like the Salesforce activation review screen, with
+      // API names shown inline on every field/object (the user's explicit request).
+      function docActShowModal() {
+        var data = docActScrape();
+        var existing = document.getElementById("dc-docact-modal");
+        if (existing) existing.remove();
+        var e = docActEsc, ov = data.overview;
+
+        var modal = document.createElement("div");
+        modal.id = "dc-docact-modal";
+        modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.18);pointer-events:none;display:flex;align-items:center;justify-content:center;padding:28px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;";
+        modal.addEventListener("click", function (ev) { if (ev.target === modal) modal.remove(); });
+
+        var style = document.createElement("style");
+        style.textContent = ".dc-info-ic:hover{background:#cbd5e1!important;}";
+        modal.appendChild(style);
+        // Floating tooltip: one position:fixed bubble placed from the icon's screen rect, so the scrolling/overflow-hidden
+        // modal can never clip it (the old in-flow bubble was cut off, esp. for the first section).
+        var tipBubble = document.createElement("div");
+        tipBubble.style.cssText = "position:fixed;display:none;max-width:300px;background:#16325c;color:#fff;font:500 12px/1.45 system-ui;padding:8px 11px;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:2147483647;pointer-events:none;";
+        modal.appendChild(tipBubble);
+        function dcTipShow(ic) {
+          var src = ic.querySelector && ic.querySelector(".dc-info-tip"); if (!src) return;
+          tipBubble.textContent = src.textContent; tipBubble.style.display = "block";
+          var r = ic.getBoundingClientRect(), bw = tipBubble.offsetWidth || 280, bh = tipBubble.offsetHeight || 60;
+          var left = Math.max(8, Math.min(r.left + r.width / 2 - bw / 2, window.innerWidth - bw - 8));
+          var top = r.top - bh - 8; if (top < 8) top = r.bottom + 8;
+          tipBubble.style.left = left + "px"; tipBubble.style.top = top + "px";
+        }
+        function dcTipHide() { tipBubble.style.display = "none"; }
+        modal.addEventListener("mouseover", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipShow(ic); });
+        modal.addEventListener("mouseout", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipHide(); });
+        modal.addEventListener("focusin", function (ev) { var ic = ev.target && ev.target.closest && ev.target.closest(".dc-info-ic"); if (ic) dcTipShow(ic); });
+        modal.addEventListener("focusout", dcTipHide);
+
+        var box = document.createElement("div");
+        box.style.cssText = "pointer-events:auto;background:#f3f3f3;width:min(1040px,96vw);max-height:92vh;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.45);";
+
+        // ── Header bar (SLDS-ish dark-blue) ──
+        var hdr = document.createElement("div");
+        hdr.style.cssText = "flex-shrink:0;background:linear-gradient(135deg,#032d60,#0176d3);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;";
+        hdr.innerHTML =
+          "<div style='width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0;'>"
+          + "<svg width='18' height='18' viewBox='0 0 24 24' fill='none'><path d='M4 5h16M4 12h16M4 19h10' stroke='#fff' stroke-width='2' stroke-linecap='round'/></svg></div>"
+          + "<div style='flex:1;min-width:0;'><div style='font:700 15px/1.2 inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>" + e(ov.target || ov.segment || "Activation") + "</div>"
+          + "<div style='font:400 11px/1.3 inherit;opacity:.85;'>Activation Blueprint · read from the page · API names included</div></div>";
+
+        var btnCss = "border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font:600 11px -apple-system,sans-serif;";
+        var csvBtn = document.createElement("button"); csvBtn.textContent = "⬇ CSV"; csvBtn.style.cssText = btnCss; csvBtn.title = "Download the attribute list as CSV (Label · Field API · Object/DMO API · Output Name · Category)";
+        var xlsBtn = document.createElement("button"); xlsBtn.textContent = "⬇ Excel"; xlsBtn.style.cssText = btnCss; xlsBtn.title = "Download a multi-sheet .xlsx (Overview · Attributes · Contact Points · Campaign Data)";
+        var xBtn = document.createElement("button"); xBtn.textContent = "✕"; xBtn.style.cssText = "border:none;background:none;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;";
+        xBtn.onclick = function () { modal.remove(); };
+        csvBtn.onclick = function () { docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + "-attributes.csv", "text/csv;charset=utf-8", ["﻿" + docActCsv(data)]); };
+        xlsBtn.onclick = function () { docActExcel(data); };
+        var docBtn = document.createElement("button"); docBtn.textContent = "⬇ Doc"; docBtn.style.cssText = btnCss; docBtn.title = "Download a Word (.docx) document of the whole activation";
+        docBtn.onclick = function () {
+          var bytes = docActDocx(data);
+          if (!bytes) { segToast("Word builder not available in this build"); return; }
+          docActDownload("activation-" + String(ov.target || ov.segment || "doc").replace(/[^a-zA-Z0-9]/g, "-") + ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", [bytes]);
+        };
+        hdr.appendChild(csvBtn); hdr.appendChild(xlsBtn); hdr.appendChild(docBtn); hdr.appendChild(xBtn);
+
+        // ── Body ──
+        var body = document.createElement("div");
+        body.style.cssText = "flex:1;overflow:auto;padding:18px 20px;";
+
+        if (!data.found) {
+          body.innerHTML = "<div style='text-align:center;padding:40px 20px;color:#64748b;'><div style='font:600 15px system-ui;color:#334155;margin-bottom:6px;'>No activation summary found on this page</div><div style='font:400 13px system-ui;'>Open an activation (the wizard or its review step) and try again — this tool reads the live page, it doesn't call any API.</div></div>";
+        } else {
+          var card = "background:#fff;border:1px solid #e5e7eb;border-left:3px solid #0176d3;border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);";
+          var secTitle = "font:700 13px system-ui;color:#032d60;margin:0 0 12px;display:flex;align-items:center;gap:8px;letter-spacing:.01em;";
+
+          // Section help — wording paraphrased from Salesforce Help ("Create an Activation…", "Add Filters to the Activation
+          // Membership", "Add Filters to Contact Points in Activation", "Considerations for Selecting Related Attributes").
+          var TIP = {
+            membership: "Activation Membership is the data model object (DMO) whose records are activated. Add filters to refine which of those records are included. Related attributes can be reached up to two relationships away, along a single path.",
+            contact: "Contact points are the channels (email, phone, etc.) the audience is reached on. Max # of Attribute Values is 1 because one value is sent per contact point channel; Sort By decides which value wins. Filters here use the contact point DMO and consent DMOs.",
+            attributes: "The attributes sent for each activated profile, grouped by the object they come from. For related objects, Max # of Attribute Values (up to 25) says how many related records are sent and Sort By says which ones. Output Name is the column name in the activation output.",
+            campaign: "Campaign Data adds fixed, campaign-specific values (up to 20) such as Activation Name, Activation ID, Segment Name, Segment ID or custom values. Each one becomes a new column in the activation output.",
+            provisional: "Provisional Audience Limiting lets you reuse one audience for several fixed-size campaigns with different budgets. Limit (1–10,000) caps the audience, picked randomly; if attributes are ranked (up to three, ascending or descending), the audience is prioritised by that ranking.",
+            overview: "Where this activation reads from and publishes to: data space, segment, activation target, platform, schedule and refresh settings."
+          };
+          // Overview as SLDS-style record detail grid.
+          function ovItem(lbl, val, api) {
+            if (!val && !api) return "";
+            return "<div style='min-width:0;'><div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;'>" + e(lbl) + "</div>"
+              + "<div style='font:500 13px system-ui;color:#181818;word-break:break-word;'>" + e(val || "—") + (api ? " " + docActApiChip(api) : "") + "</div></div>";
+          }
+          var ovGrid = "<div style='" + card + "'><div style='" + secTitle + "'>Overview" + docActInfoIcon(TIP.overview) + "</div>"
+            + "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px 22px;'>"
+            + ovItem("Data Space", ov.dataSpace, ov.dataSpaceApi)
+            + ovItem("Segment", ov.segment, ov.segmentApi)
+            + ovItem("Segment On", ov.segmentOn, ov.segmentOnApi)
+            + ovItem("Target", ov.target, "")
+            + ovItem("Platform", ov.platform, "")
+            + ovItem("Connection Type", ov.connectionType, "")
+            + ovItem("Business Units", (ov.businessUnits || []).join(", "), "")
+            + ovItem("Publish Type", ov.publishType, "")
+            + ovItem("Refresh Type", ov.refreshType, "")
+            + ((ov.excludeOptions || []).length ? ovItem("Exclude Options", ov.excludeOptions.join(", "), "") : "")
+            + ovItem("Processing Type", ov.processingType, "")
+            + ovItem("Schedule", ov.schedule, "")
+            + ovItem("Segment Membership", (ov.segmentCount === "" ? "" : Number(ov.segmentCount).toLocaleString() + " (as shown)"), "")
+            + (ov.isWaterfall ? ovItem("Waterfall", (data.waterfall || []).join(", ") || "Yes", "") : "")
+            + "</div></div>";
+
+          // What's captured vs not (honest status banner).
+          var caps = data.captured;
+          // Every pill explains itself: green = found on the page; otherwise WHY it is not green.
+          // `optional` items (an activation may simply not use them) show neutral grey, not a warning.
+          function pill(ok, label, tipOk, tipNo, optional) {
+            var bad = optional ? { c: "#475569", bg: "#f1f5f9", bd: "#dbe3ec" } : { c: "#8a6d00", bg: "#fef6dd", bd: "#f1dca0" };
+            return "<span style='display:inline-flex;align-items:center;gap:5px;font:600 11px system-ui;color:" + (ok ? "#116149" : bad.c) + ";background:" + (ok ? "#e3f6ec" : bad.bg) + ";border:1px solid " + (ok ? "#b6e6cd" : bad.bd) + ";border-radius:12px;padding:3px 6px 3px 10px;'>" + (ok ? "✓" : "○") + " " + e(label) + docActInfoIcon(ok ? tipOk : tipNo) + "</span>";
+          }
+          var status = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>"
+            + pill(caps.attributes, "Attributes (" + data.attributes.length + ")",
+                "Green: the attributes included in this activation were read from the page.",
+                "Not green: no included attributes were found on the page yet. Open the activation (wizard or review step) so its attribute list is visible, then reopen this panel.")
+            + pill(caps.outputNames, "Output names",
+                "Green: the output (column) names were read. They appear on the Attributes step.",
+                "Not green: output names are shown only on the Attributes step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.contactPoints, "Contact points",
+                "Green: the contact point (channel, e.g. email or phone) configuration was read. It appears on the Contact Point step.",
+                "Not green: contact points are shown only on the Contact Point step of the wizard. Visit that step once, then reopen this panel.")
+            + pill(caps.staticValues, "Campaign Data",
+                "Green: the fixed Campaign Data values configured on this activation were read.",
+                "Not green does not mean an error. Either no Campaign Data is configured on this activation (so there is nothing to show), or the Attributes step where it is listed has not been on screen yet. If you expect values, open the Attributes step once and reopen this panel.", true)
+            + pill(caps.limits, "Related-object limits",
+                "Green: Max # of Attribute Values and Sort By were read for the related objects.",
+                "Not green does not mean an error. Activations that use only attributes of the main object have no related-object limits. If this one uses related attributes, scroll to them on the Attributes step once so they are on screen, then reopen this panel.", true)
+            + pill(caps.paths, "Show Paths",
+                "Green: the join path for each related object was read.",
+                "Not green does not mean an error. Paths exist only for related objects. If this activation uses them, click Add Attributes on the Attributes step and turn on Show Paths once, then reopen this panel.", true)
+            + "</div>";
+          // How to capture the two Attributes-step extras (read only while visible, then remembered).
+          if (!caps.limits || !caps.paths) {
+            status += "<div style='font:400 11px/1.6 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:12px;'>"
+              + "<b>If this activation uses related attributes</b>, these are read from the screen and remembered, so open them once:"
+              + (!caps.limits ? "<br>• <b>Max # of Attribute Values / Sort By</b> — shown inside each related object on the Attributes (and Contact Point) step; scroll so they are on screen once." : "")
+              + (!caps.paths ? "<br>• <b>Show Paths</b> — on the Attributes step click <b>Add Attributes</b> and turn on <b>Show Paths</b> (the Path for each object appears)." : "")
+              + "<br>Then reopen this panel. (It never clicks or navigates for you.)</div>";
+          }
+          // Captures PERSIST across wizard steps (stored on the window per activation), so this
+          // panel shows everything seen so far. Prompt the user honestly: either export now, or
+          // visit the remaining step(s) first — we never navigate the Save/Publish wizard for them.
+          var missing = (!caps.outputNames || !caps.contactPoints);
+          if (!missing) {
+            status += "<div style='font:500 12px/1.5 system-ui;color:#116149;background:#e9f9f0;border:1px solid #b6e6cd;border-radius:8px;padding:9px 13px;margin-bottom:16px;display:flex;align-items:center;gap:8px;'>"
+              + "<span style='font-size:14px;'>✓</span><span>All steps captured. Ready to export — click <b>⬇ CSV</b> (attributes) or <b>⬇ Excel</b> (full documentation) above.</span></div>";
+          } else {
+            status += "<div style='font:400 11px/1.5 system-ui;color:#8a6d00;background:#fffaf0;border:1px solid #f1dca0;border-radius:8px;padding:8px 12px;margin-bottom:16px;'>○ Output names and contact points each appear only on their own wizard step. This panel <b>accumulates</b> what you've seen (it persists as you move between steps). Visit the "
+              + (!caps.outputNames ? "<b>Attributes</b>" : "") + (!caps.outputNames && !caps.contactPoints ? " and " : "") + (!caps.contactPoints ? "<b>Contact Points</b>" : "")
+              + " step, then reopen this panel to capture the rest — then export. (It never navigates for you.)</div>";
+          }
+
+          // Attributes grouped by object, in Salesforce's own order. Each object's group carries ITS OWN
+          // "Max # of Attribute Values / Sort By / Order" (the related-attribute limit), its "Show Paths"
+          // path and its filter badge — exactly where the wizard shows them. Nothing floats elsewhere.
+          function normLbl(x) { return String(x || "").toLowerCase().replace(/__(dlm|cio|dll|dls)$/, "").replace(/^ssot__/, "").replace(/[^a-z0-9]/g, ""); }
+          // Salesforce shows a LABEL ("Contact Point Email", "Unified Individual TDI"); the attribute rows carry the
+          // OBJECT API name (TDI_ContactPointEmail__dlm, TDI_UnifiedIndividualTdi__dlm). Match by word-sets, never by position.
+          function toks(x) {
+            return String(x || "").replace(/__(dlm|cio|dll|dls)$/i, "").replace(/^ssot__/i, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+              .toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).filter(function (t, i, a) { return a.indexOf(t) === i; });
+          }
+          function sameObj(label, api) {
+            var a = toks(label), b = toks(api); if (!a.length || !b.length) return false;
+            var inB = a.every(function (t) { return b.indexOf(t) > -1; }), inA = b.every(function (t) { return a.indexOf(t) > -1; });
+            return inB || inA;
+          }
+          function pickBy(map, api) {          // map keyed by SF label → entry; exact word-set first, else subset
+            var best = null, bestScore = -1;
+            Object.keys(map).forEach(function (lab) {
+              if (!sameObj(lab, api)) return;
+              var a = toks(lab), b = toks(api), score = (a.length === b.length ? 100 : 0) + Math.min(a.length, b.length);
+              if (score > bestScore) { bestScore = score; best = { key: lab, v: map[lab] }; }
+            });
+            return best;
+          }
+          var limByObj = {}, pathByObj = {}, fltByObj = {}, usedLim = {}, usedFlt = {};
+          (data.limits || []).forEach(function (l) { limByObj[l.owner] = l; });
+          (data.pathChoices || []).forEach(function (pc) { pathByObj[pc.owner] = pc; });
+          (data.filterGroups || []).forEach(function (g) { fltByObj[g.label] = g; });
+          var lblTxt = "font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;letter-spacing:.04em;";
+          function limLine(l) {
+            return "<div style='display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;background:#f7f9fb;border:1px solid #e5e7eb;border-radius:6px;padding:7px 10px;margin:0 0 6px;'>"
+              + "<span><span style='" + lblTxt + "'>Max # of Attribute Values</span> <b style='font:700 12px system-ui;'>" + docActEsc(l.maxValues) + "</b>" + "</span>"
+              + "<span><span style='" + lblTxt + "'>Sort By</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.sortLabel) + "</span> " + docActApiChip(l.sortField) + "</span>"
+              + "<span><span style='" + lblTxt + "'>Order</span> <span style='font:500 12px system-ui;'>" + docActEsc(l.orderLabel) + "</span></span></div>";
+          }
+          function fltBadge(g) {
+            if (!g) return "";
+            var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+            return "<div style='margin:0 0 6px;'><span style='" + lblTxt + "'>Filters</span> "
+              + (g.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>")
+              + (condTxt ? " <span style='font:500 12px system-ui;color:#181818;'>" + docActEsc(condTxt) + "</span>" : "") + "</div>";
+          }
+          // One labelled settings panel per object: Limit / Filters / Path rows (table → also valid in Word).
+          // Salesforce shows Max # of Attribute Values / Sort By (+ order) as labelled fields ABOVE the table: label over value.
+          function limBox(lim) {
+            if (!lim) return "";
+            var cell = "padding:8px 14px;vertical-align:top;border-right:1px solid #e5e7eb;";
+            var lab = "display:block;font:600 11px system-ui;color:#5c5c5c;margin:0 0 3px;";
+            var val = "font:600 13px system-ui;color:#181818;";
+            return "<table style='width:100%;border-collapse:collapse;background:#f7f9fb;border:1px solid #e5e7eb;margin:0 0 8px;'><tbody><tr>"
+              + "<td style='" + cell + "width:24%;'><span style='" + lab + "'>Max. # of Attribute Values</span><span style='" + val + "'>" + docActEsc(lim.maxValues) + "</span>" + "</td>"
+              + "<td style='" + cell + "'><span style='" + lab + "'>Sort By</span><span style='" + val + "'>" + docActEsc(lim.sortLabel) + "</span> " + docActApiChip(lim.sortField) + "</td>"
+              + "<td style='" + cell + "width:22%;border-right:0;'><span style='" + lab + "'>Order</span><span style='" + val + "'>" + docActEsc(lim.orderLabel) + "</span></td>"
+              + "</tr></tbody></table>";
+          }
+          // Below the table: Filters (numbered conditions) and Path (numbered steps).
+          function metaBox(flt, pth, hint) {
+            var th = "padding:12px 14px;width:84px;vertical-align:top;white-space:nowrap;border-bottom:1px solid #eef0f2;" + lblTxt;
+            var td = "padding:12px 14px;vertical-align:top;border-bottom:1px solid #eef0f2;font:500 12px/1.6 system-ui;color:#181818;";
+            var chip = "display:inline-block;margin:0 6px 4px 0;padding:2px 8px;border:1px solid #d8dde3;border-radius:5px;background:#fff;";
+            var rows = "";
+            if (flt) {
+              var conds = (flt.conditions || []).filter(function (c) { return c.text || c.field; });
+              var fb = flt.hasFilter ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;margin-right:8px;'>Filtered" + (conds.length ? " &middot; " + conds.length + (conds.length === 1 ? " condition" : " conditions") : "") + "</span><br>" : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
+              var cc = conds.map(function (c, i) {
+                return "<span style='" + chip + "'>" + (c.text ? docActEsc(c.text) : "<b>" + docActEsc(c.field) + "</b> <span style='color:#0b5cab;'>" + docActEsc(c.operator) + "</span>") + "</span>";
+              }).join("");
+              var note = (flt.hasFilter && !conds.length) ? "<span style='font:500 11px system-ui;color:#8a6d00;'>conditions not captured — open this object's Edit Filters once, then re-run</span>" : "";
+              rows += "<tr><th style='" + th + "'>Filters</th><td style='" + td + "'>" + fb + cc + note + "</td></tr>";
+            }
+            if (pth && pth.text) {
+              var steps = String(pth.text).split(/\s>\s/).filter(Boolean);
+              var pc = steps.map(function (st, i) {
+                var parts = st.split(/,\s/).filter(Boolean);
+                return "<div style='margin:0 0 5px;'><span style='display:inline-block;min-width:48px;font:600 11px system-ui;color:#8a8a8a;'>Step " + (i + 1) + "</span><span style='" + chip + "background:#f7f9fb;'>" + parts.map(docActEsc).join("<br>") + "</span></div>";
+              }).join("");
+              rows += "<tr><th style='" + th + "'>Path</th><td style='" + td + "'>" + pc + "</td></tr>";
+            }
+            if (hint) rows += "<tr><th style='" + th + "'>Path</th><td style='" + td + "font-size:11px;color:#8a6d00;'>" + hint + "</td></tr>";
+            return rows ? "<table style='width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;background:#fbfcfd;margin:0 0 10px;'><tbody>" + rows + "</tbody></table>" : "";
+          }
+          var attrHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Attributes" + docActInfoIcon(TIP.attributes) + "</div>";
+          function renderGroup(en, rows, titleOverride) {
+            var gh = "";
+            var kind = docActObjKind(en);
+            var kindStyle = kind === "DMO" ? "background:#e0f2fe;color:#0369a1;" : kind === "CI" ? "background:#f3e8ff;color:#6b21a8;" : kind === "DLO" ? "background:#dcfce7;color:#166534;" : "background:#f1f5f9;color:#475569;";
+            var isSysGroup = !!titleOverride || !/__(dlm|cio|dll|dls)$/.test(en);
+            if (titleOverride) kind = "";
+            var pl = pickBy(limByObj, en), pp = pickBy(pathByObj, en), pf = pickBy(fltByObj, en);
+            var lim = pl && pl.v, pth = pp && pp.v, flt = pf && pf.v;
+            if (!pth) {   // the group's own datatable rows carry queryPathString (the join path SF shows under Show Paths)
+              var rp = rows.filter(function (r) { return r.path; }).map(function (r) { return r.path; });
+              if (rp.length) pth = { text: rp[0] };
+            }
+            if (!pth) {   // contact-point objects: path captured at the Contact Points step (same object as this group)
+              (data.contactPoints || []).forEach(function (cp) { ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) {
+                var v = cp[k]; if (pth || !v || !v.path) return;
+                var chan = k === "whatsApp" ? "whatsapp" : k;   // channel keyword in the object name (…ContactPointEmail__dlm)
+                if ((v.entityApi && sameObj(v.entityApi, en)) || (isCpObj(en) && new RegExp("contact\\s*point\\s*" + chan, "i").test(String(en).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ")))) pth = { text: v.path };
+              }); });
+            }
+            if (pl) usedLim[pl.key] = 1; if (pf) usedFlt[pf.key] = 1;
+            gh += "<div style='margin:0 0 16px;'>"
+              + "<div style='display:flex;align-items:center;gap:8px;margin:0 0 8px;'><span style='font:700 12px system-ui;color:#181818;'>" + e(titleOverride ? titleOverride : pl ? pl.key : (pf ? pf.key : (pp ? pp.key : (pickBy(gsecM, en) ? pickBy(gsecM, en).key : en.replace(/__dlm$|__cio$|__dll$|__dls$/g, ""))))) + "</span>"
+              + (isSysGroup ? "" : docActApiChip(en)) + (kind ? "<span style='font:700 9px system-ui;padding:2px 6px;border-radius:4px;" + kindStyle + "'>" + kind + "</span>" : "") + (rows.length ? "<span style='font:500 11px system-ui;color:#5c5c5c;'>(" + rows.filter(function (r) { return r.objectApi; }).length + ")</span>" : "") + "</div>"
+              + "";
+            var limHtml = limBox(lim);
+            var metaHtml = metaBox(flt, pth, (!pth && isCpObj(en) && !(data.contactPoints || []).length) ? "Set on the Contact Points step — open that step once, then re-run to capture it." : "");
+            if (!rows.length) return gh + limHtml + "<div style='font:500 11px system-ui;color:#8a6d00;margin:0 0 6px;'>Attribute rows for this object were not captured — scroll that section into view in Salesforce, then re-run.</div>" + metaHtml + "</div>";
+            gh += limHtml + "<div style='overflow-x:auto;'><table style='width:100%;border-collapse:collapse;table-layout:fixed;font:12px system-ui;'><colgroup><col style='width:5%'><col style='width:35%'><col style='width:32%'><col style='width:28%'></colgroup><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 6px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>#</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Field API</th>"
+              + "<th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Output Name</th>"
+              + "</tr></thead><tbody>";
+            rows.forEach(function (a, ri) {
+              gh += "<tr><td style='padding:6px 6px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + (ri + 1) + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(a.label || a.fieldApi || "") + (a.objectApi && docActObjKind(a.objectApi) === "CI" ? "<div style='margin-top:3px;'>" + docActApiChip(a.objectApi) + "</div>" : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.fieldApi ? docActApiChip(a.fieldApi) : "") + "</td>"
+                + "<td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;'>" + (a.outputName ? docActApiChip(a.outputName) : "") + "</td>"
+                + "</tr>";
+            });
+            gh += "</tbody></table></div>" + metaHtml + "</div>";
+          return gh; }
+          // Contact Point groups are the standard contact-point objects (from the Contact Points step, or
+          // ssot__ContactPoint*); everything else is an Attributes group. Salesforce shows them in separate sections.
+          var cpSet = {};
+          (data.contactPoints || []).forEach(function (cp) { ["email", "phone", "push", "whatsApp", "address"].forEach(function (k) { if (cp[k] && cp[k].entityApi) cpSet[normLbl(cp[k].entityApi)] = 1; }); });
+          var gsecM = data.groupSection || {};
+          // Section comes from the wizard's own DOM order; only if that was never seen do we fall back to the contact-point objects.
+          function isCpObj(en) { var d = pickBy(gsecM, en); return d ? d.v === "Contact Point" : !!cpSet[normLbl(en)]; }
+          var cpGroupsHtml = "", attrCount = 0;
+          var ordered = byEntityOrder(data.attributes);
+          // SubSegmentId / SubSegmentName are part of Salesforce's "Attributes Included" list, so they are plain rows of the
+          // first Attributes group (no separate section).
+          var sysRows = (data.attributes || []).filter(function (a) { return !a.objectApi && a.source === "SYSTEM"; });
+                    // Salesforce: the Attributes card is ONE primary table (DMO + calculated-insight rows together, numbered);
+          // related objects (those with Max # / Sort By) are separate cards after it.
+          var relHtml = "", primRows = [], primEn = "";
+          Object.keys(ordered).forEach(function (en) {
+            if (isCpObj(en)) { cpGroupsHtml += renderGroup(en, ordered[en]); return; }
+            if (pickBy(limByObj, en)) { relHtml += "<div style='" + card + "'>" + renderGroup(en, ordered[en]) + "</div>"; attrCount += ordered[en].length; return; }
+            if (!primEn) primEn = en;
+            primRows = primRows.concat(ordered[en]);
+          });
+          // Filters / limits / paths whose object has no captured attribute rows still belong to THEIR section.
+          var orphan = {};
+          [limByObj, pathByObj, fltByObj].forEach(function (m) { Object.keys(m).forEach(function (lab) { orphan[lab] = 1; }); });
+          Object.keys(orphan).forEach(function (lab) {
+            var claimed = Object.keys(ordered).some(function (en) { return sameObj(lab, en); });
+            if (claimed) return;
+            if (isCpObj(lab)) cpGroupsHtml += renderGroup(lab, []);
+            else relHtml += "<div style='" + card + "'>" + renderGroup(lab, []) + "</div>";
+          });
+          if (sysRows.length) primRows = sysRows.concat(primRows);
+          if (primRows.length) { attrCount += primRows.length; attrHtml += renderGroup(primEn || "Attributes", primRows, (data.membership && data.membership.label) || ((data.overview || {}).segmentOn) || ""); }
+          attrHtml += "</div>";
+          // Group order: primary object first (Salesforce order = as captured), system fields last.
+          function byEntityOrder(list) {
+            if (byEntityOrder._c && byEntityOrder._l === list) return byEntityOrder._c;
+            var m = {}, keys = [];
+            list.forEach(function (a) { if (!a.objectApi && a.source === "SYSTEM") return; var en = a.objectApi || "Other"; if (!m[en]) { m[en] = []; keys.push(en); } m[en].push(a); });
+            var out = {};
+            keys.forEach(function (k) { out[k] = m[k]; });
+            byEntityOrder._c = out; byEntityOrder._l = list; return out;
+          }
+
+          // Activation Membership — first section of the Attributes step in Salesforce.
+          var memHtml = "";
+          if (data.membership) {
+            memHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Activation Membership" + docActInfoIcon(TIP.membership) + "</div>"
+              + "<div style='font:700 12px system-ui;color:#181818;margin:0 0 6px;'>" + docActEsc(data.membership.label) + "</div>"
+              + fltBadge({ hasFilter: data.membership.hasFilter, conditions: [] })
+              + "</div>";
+          }
+          // Provisional Audience Limiting — its own section after Campaign Data (Limit; Rank Attributes table).
+          var pvHtml = "";
+          if (data.provisional) {
+            var lv = String(data.provisional.limit || "");
+            pvHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Provisional Audience Limiting" + docActInfoIcon(TIP.provisional) + "</div>"
+              + "<div style='margin:0 0 8px;'><span style='" + lblTxt + "'>Limit</span> "
+              + (lv ? "<b style='font:700 13px system-ui;'>" + docActEsc(Number(lv).toLocaleString ? Number(lv).toLocaleString() : lv) + "</b>" : "<span style='font:500 12px system-ui;color:#5c5c5c;'>Not set</span>") + "</div>"
+              + "<div style='font:700 11px system-ui;color:#5c5c5c;margin:6px 0 4px;'>Rank Attributes</div>"
+              + ((data.provisional.rank || []).length
+                ? "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;width:14%;'>Rank Order</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Attribute</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;width:26%;'>Sort By</th></tr></thead><tbody>"
+                  + data.provisional.rank.map(function (r) { return "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#8a8a8a;'>" + e(r.order) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(r.attribute) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(r.sortBy) + "</td></tr>"; }).join("")
+                  + "</tbody></table>"
+                : "<div style='font:500 12px system-ui;color:#5c5c5c;'>No ranking attributes set</div>")
+              + "</div>";
+          }
+
+          // Contact points — each channel shows its value + field/entity API + path.
+          var cpHtml = "";
+          if (cpGroupsHtml) {
+            cpHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Contact Point" + docActInfoIcon(TIP.contact) + "</div>" + cpGroupsHtml;
+            cpHtml += "</div>";
+          }
+
+          // Applied filters (only shown when the DOM actually exposed them).
+          var flHtml = "";
+          if (ov.filters && ov.filters.length) {
+            flHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Applied Filters <span style='color:#5c5c5c;font-weight:500;'>(" + ov.filters.length + ")</span></div>";
+            ov.filters.forEach(function (f) {
+              flHtml += "<div style='display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid #f1f1f1;'>"
+                + "<div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;min-width:110px;'>" + e(f.label) + "</div>"
+                + "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + e(f.text) + "</div></div>";
+            });
+            flHtml += "</div>";
+          }
+
+          // Attribute filters (from the Attributes-step "Edit/Add Filters" rows). Badge is
+          // readable even with the panel closed; condition text only when it was opened once.
+          var afHtml = "";
+          var restFlt = (data.filterGroups || []).filter(function (g) { return !usedFlt[g.label]; });
+          if (restFlt.length) {
+            afHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Filters <span style='color:#5c5c5c;font-weight:500;'>(" + restFlt.length + ")</span></div>";
+            restFlt.forEach(function (g) {
+              var badge = g.hasFilter
+                ? "<span style='font:700 10px system-ui;color:#116149;background:#dcfce7;border-radius:4px;padding:2px 7px;'>Filtered</span>"
+                : "<span style='font:700 10px system-ui;color:#5c5c5c;background:#f1f1f1;border-radius:4px;padding:2px 7px;'>No filter</span>";
+              var condTxt = (g.conditions || []).map(function (c) { return c.text ? c.text : (c.field + " " + c.operator); }).filter(Boolean).join("; ");
+              afHtml += "<div style='display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid #f1f1f1;'>"
+                + "<div style='font:700 10px system-ui;color:#5c5c5c;text-transform:uppercase;min-width:140px;'>" + e(g.label) + "</div>"
+                + badge
+                + (condTxt ? "<div style='font:500 12px/1.5 system-ui;color:#181818;word-break:break-word;'>" + e(condTxt) + "</div>" : "")
+                + "</div>";
+            });
+            afHtml += "</div>";
+          }
+
+          var lpHtml = "", pcHtml = "";
+
+          // Campaign Data — this is the exact field-group label Salesforce itself uses on the
+          // Attributes step (confirmed via live DOM probe: "Campaign Data / Campaign Attributes
+          // (N) / Add Campaign Attribute"), NOT an invented name. (Only shown when present.)
+          var stHtml = "";
+          if (data.staticRows.length) {
+            var stTip = "A fixed constant value sent on every activated record — not read from a field. " +
+              "Used to tag the audience, e.g. a campaign ID or a source label, so the destination platform can identify where the records came from.";
+            // CSS-only hover tooltip (not the native title= attribute): title= has a
+            // mandatory OS-level hover delay before it appears (user-reported: "tool tips
+            // does not show info immediately") that JS can't shorten. A nested span shown
+            // via :hover has zero delay.
+            stHtml = "<div style='" + card + "'><div style='" + secTitle + "'>Campaign Data <span style='color:#5c5c5c;font-weight:500;'>(" + data.staticRows.length + ")</span>"
+              + docActInfoIcon(TIP.campaign) + "</div>";
+            stHtml += "<table style='width:100%;border-collapse:collapse;font:12px system-ui;'><thead><tr style='background:#fafafa;'><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Name</th><th style='text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7eb;font:700 11px system-ui;color:#5c5c5c;'>Value</th></tr></thead><tbody>";
+            data.staticRows.forEach(function (s) { stHtml += "<tr><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;color:#181818;'>" + e(s.name) + "</td><td style='padding:6px 10px;border-bottom:1px solid #f1f1f1;font:500 12px SFMono-Regular,monospace;color:#0b5cab;'>" + e(s.value) + "</td></tr>"; });
+            stHtml += "</tbody></table></div>";
+          }
+
+          // Wizard order: Overview → Membership/filters → Contact Point → Attributes (limits, paths, filters inline) → Campaign Data.
+          var docSections = ovGrid + flHtml + memHtml + cpHtml + attrHtml + relHtml + stHtml + pvHtml + afHtml;
+          var sections = status + docSections;
+          body.innerHTML = sections;
+          modal.__docSections = docSections;
+          modal.__docSectionsNoOv = flHtml + memHtml + cpHtml + attrHtml + relHtml + stHtml + pvHtml + afHtml;   // all interpolated values escaped via e()/docActEsc above
+        }
+
+        box.appendChild(hdr); box.appendChild(body);
+
+        // ── Resizable + responsive ──
+        // Corner/edge drag handles resize the (centred) box; double-click the header or use the
+        // maximise button to toggle full-screen; size is remembered. Narrow viewports go full-screen
+        // via CSS, tables scroll horizontally instead of overflowing.
+        box.style.position = "relative";
+        box.style.maxWidth = "100vw"; box.style.maxHeight = "100vh";
+        box.style.minWidth = "min(360px,100vw)"; box.style.minHeight = "240px";
+        var SZ_KEY = "dcDocActSize", maxed = false;
+        function clampSz(w, h) {
+          return { w: Math.max(360, Math.min(window.innerWidth, w)), h: Math.max(240, Math.min(window.innerHeight, h)) };
+        }
+        function applySz(w, h) { var c = clampSz(w, h); box.style.width = c.w + "px"; box.style.height = c.h + "px"; box.style.maxHeight = "100vh"; }
+        try {
+          var sv = JSON.parse(localStorage.getItem(SZ_KEY) || "null");
+          if (sv && sv.w && sv.h) applySz(sv.w, sv.h);
+        } catch (e1) {}
+        function saveSz() { try { localStorage.setItem(SZ_KEY, JSON.stringify({ w: box.offsetWidth, h: box.offsetHeight })); } catch (e2) {} }
+        function mkHandle(css, cursor, dx, dy) {
+          var hd = document.createElement("div");
+          hd.style.cssText = "position:absolute;z-index:5;" + css + "cursor:" + cursor + ";";
+          hd.addEventListener("mousedown", function (ev) {
+            ev.preventDefault(); ev.stopPropagation();
+            var sx = ev.clientX, sy = ev.clientY, sw = box.offsetWidth, sh = box.offsetHeight;
+            maxed = false;
+            function mv(m) {
+              // box is centred, so each pixel of drag changes the size by 2px to keep the edge under the cursor
+              var k = (box.style.position === "fixed") ? 1 : 2; applySz(dx ? sw + dx * (m.clientX - sx) * k : sw, dy ? sh + dy * (m.clientY - sy) * k : sh);
+            }
+            function up() { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); saveSz(); }
+            document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
+          });
+          box.appendChild(hd);
+          return hd;
+        }
+        mkHandle("right:0;top:12px;bottom:12px;width:6px;", "ew-resize", 1, 0);
+        mkHandle("left:0;top:12px;bottom:12px;width:6px;", "ew-resize", -1, 0);
+        mkHandle("left:12px;right:12px;bottom:0;height:6px;", "ns-resize", 0, 1);
+        var corner = mkHandle("right:0;bottom:0;width:16px;height:16px;", "nwse-resize", 1, 1);
+        corner.title = "Drag to resize";
+        corner.innerHTML = "<svg width='16' height='16' viewBox='0 0 16 16'><path d='M14 6L6 14M14 10l-4 4M14 2L2 14' stroke='#9aa4b2' stroke-width='1.5' stroke-linecap='round'/></svg>";
+        var maxBtn = document.createElement("button");
+        maxBtn.textContent = "⛶"; maxBtn.title = "Maximise / restore"; maxBtn.style.cssText = "border:none;background:none;color:#fff;font-size:16px;cursor:pointer;padding:2px 8px;";
+        function toggleMax() {
+          if (maxed) { maxed = false; try { var r = JSON.parse(localStorage.getItem(SZ_KEY) || "null"); if (r) applySz(r.w, r.h); else { box.style.width = "min(1040px,96vw)"; box.style.height = ""; } } catch (e3) {} }
+          else { maxed = true; applySz(window.innerWidth, window.innerHeight); if (box.style.position === "fixed") { box.style.left = "0px"; box.style.top = "0px"; } }
+        }
+        maxBtn.onclick = toggleMax;
+        hdr.insertBefore(maxBtn, xBtn);
+        hdr.addEventListener("dblclick", function (ev) { if (!ev.target.closest("button")) toggleMax(); });
+        window.addEventListener("resize", function onRs() {
+          if (!document.body.contains(modal)) { window.removeEventListener("resize", onRs); return; }
+          if (maxed) applySz(window.innerWidth, window.innerHeight);
+          else if (box.style.width && /px$/.test(box.style.width)) applySz(box.offsetWidth, box.offsetHeight);
+        });
+        style.textContent += "#dc-docact-modal table{min-width:460px;}"
+          + "#dc-docact-modal .dc-docact-hdr{flex-wrap:wrap;}"
+          + "@media (max-width:700px){#dc-docact-modal{padding:0 !important;}#dc-docact-modal > div{width:100vw !important;height:100vh !important;border-radius:0 !important;}}";
+        hdr.classList.add("dc-docact-hdr");
+
+        // ── Draggable (drag the header; buttons stay clickable) ──
+        (function () {
+          hdr.style.cursor = "move";
+          hdr.addEventListener("mousedown", function (ev) {
+            if (ev.target.closest && ev.target.closest("button")) return;
+            if (maxed) return;
+            ev.preventDefault();
+            var rect = box.getBoundingClientRect ? box.getBoundingClientRect() : { left: 0, top: 0 };
+            var sx = ev.clientX, sy = ev.clientY, ox = rect.left, oy = rect.top;
+            box.style.position = "fixed"; box.style.left = ox + "px"; box.style.top = oy + "px"; box.style.margin = "0";
+            function mv(m) {
+              var nx = Math.max(-box.offsetWidth + 80, Math.min(window.innerWidth - 80, ox + m.clientX - sx));
+              var ny = Math.max(0, Math.min(window.innerHeight - 40, oy + m.clientY - sy));
+              box.style.left = nx + "px"; box.style.top = ny + "px";
+            }
+            function up() { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); }
+            document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
+          });
+        })();
+        modal.appendChild(box);
+        document.body.appendChild(modal);
+      }
+
+      // Expose the DOM-only exporter so the Activation launcher can add a row for it
+      // (dev-gated there via `typeof window.__dcDocActivation === "function"`).
+      try { window.__dcDocActivation = docActShowModal; } catch (e) {}
+
+      // Toggle entry point for the launcher. Returns the new state (true = on).
+      function toggleSegApi(force) {
+        segOn = (typeof force === "boolean") ? force : !segOn;
+        if (!segOn) { hideTip(); restoreTitles(); }   // put SF's native tooltips back
+        segToast(segOn ? "API names ON — hover a row, press C to copy" : "API names OFF");
+        return segOn;
+      }
+      function segApiIsOn() { return segOn; }
+
+      // Expose so the EXISTING segment launcher menu can toggle it (dev-gated there via
+      // `typeof window.__dcToggleSegApi === "function"`). No separate button, no modal.
+      try { window.__dcToggleSegApi = toggleSegApi; } catch (e) {}
+      try { window.__dcSegApiIsOn = segApiIsOn; } catch (e) {}
+      try { window.__dcSegApiInfo = segApiInfo; } catch (e) {}
+      // On the Activation page the launcher already ran (before this block registered
+      // __dcDocActivation / __dcToggleSegApi), so the dev-only rows were skipped. Re-run
+      // with rebuild=true so it tears down and re-renders WITH those rows.
+      if (detailPageType === "Activation" && typeof ensureActivationLauncher === "function") {
+        try { ensureActivationLauncher(true); } catch (e) {}
+      }
+    })();
+  }
 
   /* [in-development features removed from public build] */
 
   /* [in-development features removed from public build] */
 
-  /* [in-development features removed from public build] */
+  /* (released to public) 
+   * ── DATA STREAM / DLO: hover the Formula-column checkmark to see & copy its formula (dev-only) ─
+   * The Fields table shows a Formula column as a CHECKMARK only — the actual expression is never on
+   * the page (you must open our export modal). This shows it in a hover popover with a Copy button.
+   * PROVEN DOM (DOM Probe v38 on the live org):
+   *   <runtime_cdp-custom-datatable>.data[] = { fieldLabel, fieldName:"X__c", isFormulaField:"true",
+   *                                              formula:"if(ISEMPTY(...)) {…}", … }
+   *   Rendered <tr> count === data.length on the visible table → data[j] ↔ row j by INDEX.
+   * DESIGN (addresses the reported row-resize + VDI cost of the first cut): FULLY ON-DEMAND.
+   *   • We INJECT NOTHING into the table — no badge, no title — so row height/width never change.
+   *   • NO MutationObserver and NO interval — zero idle/background work (the old 700ms shadow crawl
+   *     was the VDI weight). Instead ONE delegated pointerover listener (capture) that cheaply
+   *     no-ops unless the feature is ON and the pointer is on a Formula-column checkmark cell.
+   *   • On such a hover we read the row's formula live from data[] and show a popover anchored to
+   *     the cell. Toggle on/off from the FAB; default OFF. Read-only.
+   */
+  (function dcDsFormulaModule() {
+    // Only on a Data Stream detail page. DLOs were proven (DOM Probe v40) to NOT carry the formula
+    // expression — their field table has no Formula column and every row is isFormulaField:false
+    // (the formula is applied at ingestion; the DLO stores only the materialized value). So the
+    // feature can never show anything on a DLO → don't even run there.
+    try {
+      if (!/\/r\/DataStream\/[a-zA-Z0-9]{15,18}\//i.test(location.href)) return;
+    } catch (e) { return; }
 
-  /* [in-development features removed from public build] */
+    var FM_ON = false;
+    function fmSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+    function fmTruthy(v) { return String(v == null ? "" : v).toLowerCase() === "true"; }
+
+    // A field datatable = columns include headerLabel + fieldLabel (NOT the refresh-history table).
+    // Same identifier the export uses (readDsFields).
+    function fmIsFieldTable(dt) {
+      try {
+        var cols = fmSafe(dt, "columns"); if (!Array.isArray(cols)) return false;
+        var names = cols.map(function (c) { return fmSafe(c, "fieldName") || ""; });
+        return names.indexOf("headerLabel") >= 0 && names.indexOf("fieldLabel") >= 0;
+      } catch (e) { return false; }
+    }
+    // The rendered data <tr>s of a datatable (those with a th/td cell), in render order.
+    function fmDataRows(dt) {
+      var sr = dt.shadowRoot || dt, trs = [], out = [];
+      try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
+      for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) out.push(trs[i]); }
+      return out;
+    }
+
+    // Is this cell the FORMULA column? Lightning's datatable primitive stamps each data cell with
+    // data-label = the column's label (used for SLDS responsive stacking) — the formula column's
+    // label contains "Formula" ("Formula Field"). That's the primary signal. FALLBACK (in case
+    // this custom datatable doesn't stamp data-label): the formula column renders a CHECK icon
+    // (isFormulaFieldIcon = "utility:check" per probe v38) — so a cell containing a check icon on a
+    // formula row is the formula cell. Either way we only ever act on a confirmed formula ROW
+    // (fmFormulaForCell gates that), so the worst case is simply not triggering — never wrong data.
+    function fmCellLabel(cell) {
+      try { return (cell.getAttribute && (cell.getAttribute("data-label") || cell.getAttribute("aria-label"))) || ""; } catch (e) { return ""; }
+    }
+    function fmCellHasCheckIcon(cell) {
+      try {
+        var ic = cell.querySelector && cell.querySelector("lightning-icon,lightning-primitive-icon,svg,use");
+        if (!ic) return false;
+        var s = ""; try { s = (ic.getAttribute && (ic.getAttribute("icon-name") || ic.getAttribute("href") || ic.getAttribute("xlink:href"))) || ""; } catch (e) {}
+        if (/check/i.test(s)) return true;
+        // the primitive-icon nests a <use xlink:href="…#check">
+        var u = cell.querySelector && cell.querySelector("use");
+        if (u) { var h = ""; try { h = u.getAttribute("xlink:href") || u.getAttribute("href") || ""; } catch (e) {} if (/check/i.test(h)) return true; }
+        return false;
+      } catch (e) { return false; }
+    }
+    function fmIsFormulaCell(cell) { return /formula/i.test(fmCellLabel(cell)) || fmCellHasCheckIcon(cell); }
+
+    // Climb from an event target (crossing shadow via getRootNode().host) to the nearest matching
+    // ancestor: {cell, row, table}. Stops at the datatable. No polling — only runs on a hover.
+    function fmClimb(start) {
+      var n = start, cell = null, row = null, table = null;
+      var hops = 0;
+      while (n && hops++ < 60) {
+        var t = ""; try { t = (n.tagName || "").toLowerCase(); } catch (e) {}
+        if (!cell && (t === "td" || t === "th")) cell = n;
+        if (!row && t === "tr") row = n;
+        if (t === "runtime_cdp-custom-datatable") { table = n; break; }
+        n = n.parentElement || (n.getRootNode && n.getRootNode() && n.getRootNode().host) || null;
+      }
+      return { cell: cell, row: row, table: table };
+    }
+
+    // ── one shared popover (built once, only when first needed) ───────────────────────
+    var _fmPop = null, _fmPopFor = null, _fmHideT = null, _fmRaw = "", _fmSelecting = false, _fmBridge = null;
+    function fmBuildPopover() {
+      if (_fmPop) return _fmPop;
+      var p = document.createElement("div");
+      p.id = "dc-fm-pop";
+      p.style.cssText = "position:fixed;display:none;z-index:2147483647;max-width:420px;min-width:200px;background:#0b1020;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:0;font:12px/1.5 -apple-system,sans-serif;";
+      var head = document.createElement("div");
+      head.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-bottom:1px solid #243049;";
+      var ttl = document.createElement("span"); ttl.id = "dc-fm-ttl"; ttl.style.cssText = "font:600 12px/1.3 -apple-system,sans-serif;color:#9fb0c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      var copy = document.createElement("button"); copy.id = "dc-fm-copy"; copy.textContent = "Copy";
+      copy.style.cssText = "flex-shrink:0;border:1px solid #3b82f6;background:#1d4ed8;color:#fff;border-radius:6px;padding:3px 10px;font:600 11px/1 -apple-system,sans-serif;cursor:pointer;";
+      head.appendChild(ttl); head.appendChild(copy);
+      var body = document.createElement("pre"); body.id = "dc-fm-body";
+      body.style.cssText = "margin:0;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:11px/1.5 'SF Mono',Menlo,Consolas,monospace;color:#e5edff;";
+      // Invisible hover BRIDGE spanning the gap between the cell and the popover, so moving the
+      // pointer from the cell onto the popover never crosses dead space (that gap used to close it).
+      var br = document.createElement("div"); br.id = "dc-fm-bridge";
+      br.style.cssText = "position:absolute;left:0;right:0;height:10px;background:transparent;";
+      p.appendChild(br); _fmBridge = br;
+      p.appendChild(head); p.appendChild(body);
+      // keep open while the pointer is over the popover (so you can click Copy / select text)
+      p.addEventListener("pointerenter", function () { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
+      p.addEventListener("pointerleave", function () { fmScheduleHide(); });
+      // A press inside the popover = the user is selecting/copying: never auto-hide until release.
+      p.addEventListener("pointerdown", function () { _fmSelecting = true; if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } });
+      copy.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var txt = _fmRaw || body.textContent || "";   // the exact stored formula, not re-read from the DOM
+        function flash() { copy.textContent = "✓ Copied"; setTimeout(function () { copy.textContent = "Copy"; }, 900); }
+        try { navigator.clipboard.writeText(txt).then(flash, function () { try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch (e2) {} flash(); }); }
+        catch (e3) { flash(); }
+      });
+      document.body.appendChild(p);
+      _fmPop = p;
+      return p;
+    }
+    function fmHideNow() { if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; } if (_fmPop) _fmPop.style.display = "none"; _fmPopFor = null; _fmSelecting = false; }
+    function fmScheduleHide() {
+      if (_fmHideT) clearTimeout(_fmHideT);
+      _fmHideT = setTimeout(function () {
+        _fmHideT = null;
+        if (_fmSelecting) return;                       // mid-selection / mid-click: stay open
+        if (_fmPop && _fmPop.matches && _fmPop.matches(":hover")) return;   // pointer is on the popover
+        fmHideNow();
+      }, 300);
+    }
+    function fmShowPopover(anchorRect, label, formula) {
+      var p = fmBuildPopover();
+      p.querySelector("#dc-fm-ttl").textContent = "ƒ " + (label || "Formula");
+      p.querySelector("#dc-fm-body").textContent = formula;
+      p.style.display = "block";
+      var pw = Math.min(420, Math.max(200, p.offsetWidth || 300));
+      var left = Math.max(8, Math.min(anchorRect.left, (window.innerWidth || 1200) - pw - 8));
+      var top = anchorRect.bottom + 6;
+      var ph = p.offsetHeight || 120;
+      if (top + ph > (window.innerHeight || 800) - 8) top = Math.max(8, anchorRect.top - ph - 6);
+      p.style.left = left + "px"; p.style.top = top + "px";
+      _fmRaw = String(formula);
+      // bridge sits on whichever edge faces the cell
+      if (_fmBridge) { var above = top < anchorRect.top; _fmBridge.style.top = above ? "" : "-10px"; _fmBridge.style.bottom = above ? "-10px" : ""; }
+    }
+
+    // Build {label,formula} from a data record IF it's a formula field with a formula, else null.
+    function fmRecFormula(rec) {
+      if (!rec || !fmTruthy(fmSafe(rec, "isFormulaField"))) return null;
+      var formula = fmSafe(rec, "formula"); if (formula == null || formula === "") return null;
+      var label = fmSafe(rec, "fieldLabel") || fmSafe(rec, "label") || fmSafe(rec, "fieldName") || "Formula";
+      return { label: String(label), formula: String(formula) };
+    }
+    // The datatable's unique row key (Lightning datatable `keyField`, default "id").
+    function fmKeyField(table) { var k = fmSafe(table, "keyField"); return (typeof k === "string" && k) ? k : "id"; }
+    // The key value a rendered <tr> carries. Proven (probe v15-v20, DMO new-tab work): the row key
+    // is on data-row-key-value; also check a couple of known fallbacks.
+    function fmRowKey(row) {
+      try {
+        var k = row.getAttribute && (row.getAttribute("data-row-key-value") || row.getAttribute("data-row-key") || row.getAttribute("data-key-value"));
+        if (k) return k;
+      } catch (e) {}
+      return null;
+    }
+
+    // Given a hovered Formula cell, find its row's formula from data[]. PRIMARY: match by row KEY
+    // (data-row-key-value ↔ data[].<keyField>) so it works even when the table is VIRTUALIZED
+    // (rendered rows < data length — the reported "sometimes shows, sometimes not" on long SFTP
+    // streams). FALLBACK: index alignment when counts happen to match. We INJECT NOTHING.
+    function fmFormulaForCell(cell, row, table) {
+      try {
+        if (!fmIsFieldTable(table)) return null;
+        var data = fmSafe(table, "data"); if (!Array.isArray(data) || !data.length) return null;
+        // PRIMARY — by key (virtualization-proof)
+        var key = fmRowKey(row);
+        if (key != null) {
+          var kf = fmKeyField(table);
+          for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && String(fmSafe(r, kf)) === String(key)) return fmRecFormula(r); }
+        }
+        // FALLBACK — by index, only when fully aligned
+        var rows = fmDataRows(table);
+        if (rows.length === data.length) {
+          var idx = rows.indexOf(row);
+          if (idx >= 0) return fmRecFormula(data[idx]);
+        }
+        return null;
+      } catch (e) { return null; }
+    }
+
+    // THE only always-on cost: one delegated pointerover listener (capture). It returns in a few
+    // cheap checks unless the feature is ON and the pointer is on a Formula-column cell. No
+    // observer, no interval, no injected DOM → nothing changes row size and nothing runs idle.
+    var _fmWired = false;
+    function fmOnOver(e) {
+      if (!FM_ON) return;
+      var cell = null, climbed;
+      try {
+        var tgt = (e.composedPath && e.composedPath()[0]) || e.target;
+        climbed = fmClimb(tgt);
+      } catch (er) { return; }
+      cell = climbed && climbed.cell;
+      if (!cell || !climbed.row || !climbed.table) return;
+      if (!fmIsFormulaCell(cell)) { if (_fmPopFor) fmScheduleHide(); return; }   // not the formula column
+      var info = fmFormulaForCell(cell, climbed.row, climbed.table);
+      if (!info) { if (_fmPopFor) fmScheduleHide(); return; }
+      if (_fmHideT) { clearTimeout(_fmHideT); _fmHideT = null; }
+      _fmPopFor = cell;
+      var rect; try { rect = cell.getBoundingClientRect(); } catch (er2) { return; }
+      fmShowPopover(rect, info.label, info.formula);
+    }
+    function fmOnOut(e) {
+      if (!FM_ON || !_fmPopFor) return;
+      // hide when leaving the formula cell (unless moving onto the popover, handled by its own enter)
+      try { var climbed = fmClimb((e.composedPath && e.composedPath()[0]) || e.target); if (climbed.cell === _fmPopFor) fmScheduleHide(); } catch (er) {}
+    }
+    function fmWire() {
+      if (_fmWired) return;
+      _fmWired = true;
+      try { document.addEventListener("pointerover", fmOnOver, true); } catch (e) {}
+      try { document.addEventListener("pointerout", fmOnOut, true); } catch (e) {}
+      // selection ends on release anywhere; Esc and a click outside close the popover
+      try { document.addEventListener("pointerup", function () { if (_fmSelecting) { _fmSelecting = false; if (_fmPop && _fmPop.style.display !== "none" && !(_fmPop.matches && _fmPop.matches(":hover"))) fmScheduleHide(); } }, true); } catch (e) {}
+      try { document.addEventListener("keydown", function (e) { if (e.key === "Escape" && _fmPop && _fmPop.style.display !== "none") fmHideNow(); }, true); } catch (e) {}
+      try { document.addEventListener("pointerdown", function (e) {
+        if (!_fmPop || _fmPop.style.display === "none") return;
+        var path = (e.composedPath && e.composedPath()) || [];
+        if (path.indexOf(_fmPop) >= 0) return;
+        var c = fmClimb(path[0] || e.target); if (c && c.cell && c.cell === _fmPopFor) return;
+        fmHideNow();
+      }, true); } catch (e) {}
+    }
+
+    try {
+      window.__dcToggleDsFormula = function () { FM_ON = !FM_ON; if (FM_ON) fmWire(); else { fmHideNow(); } return FM_ON; };
+      window.__dcDsFormulaIsOn = function () { return FM_ON; };
+      // how many formula fields exist (so the launcher only OFFERS the toggle when there are any).
+      // Read on demand (menu open) — not polled.
+      window.__dcDsFormulaCount = function () {
+        var n = 0;
+        try { findVisibleByTag("runtime_cdp-custom-datatable").filter(fmIsFieldTable).forEach(function (dt) { var data = fmSafe(dt, "data"); if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && fmTruthy(fmSafe(r, "isFormulaField")) && r.formula) n++; } }); } catch (e) {}
+        return n;
+      };
+    } catch (e) {}
+  })();
+
+  /* (released to public) 
+   * ── DMO detail: badge each field as Standard / Custom / System (dev-only) ───────────────────
+   * The Fields tab never tells you whether a field is product-given or hand-created. SF's own
+   * component data carries it per field as `creationType` — exactly the value our export already
+   * writes as the "Creation Type" column. This surfaces it on-screen as a small badge so you can
+   * verify origin without exporting. Three real values exist (probe v51 on the live org):
+   *   Standard = product-given · Custom = manually created · System = internal/managed.
+   * PROVEN DOM (DOM Probe v51):
+   *   <runtime_cdp-custom-datatable> whose columns include "isMapped" is the DMO field table.
+   *     .keyField = "name"   .data[] = { name:"X__c", label, creationType:"Standard"|"Custom"|"System", … }
+   *     rendered <tr> carries data-row-key-value = the field's `name` (the keyField value).
+   *   So we map name→creationType and anchor each badge by the row's OWN key — exact, dup-label-
+   *   proof, and virtualization-safe (never align blindly by index → never a wrong badge).
+   * VDI-safe (same shape as the IR module): default OFF; ONE shadow crawl per pass; signature
+   * dirty-check skips no-op redraws; observer DISCONNECTS while writing + debounced; injected
+   * badges tracked by reference (unstackable); decorate only visible rows; teardown clears all.
+   */
+  (function dcDmoOriginModule() {
+    try { if (!/c__objectApiName=[a-zA-Z0-9_]+/i.test(location.href) || !/standard-DataModel/i.test(location.href)) return; } catch (e) { return; }
+    var DO_ON = false;
+    function doSafe(o, k) { try { return o[k]; } catch (e) { return undefined; } }
+
+    // Visual language for the three origins. Custom (hand-made) is the one you usually want to
+    // spot, so it gets the warm/standout color; Standard is neutral; System is a muted purple.
+    function doStyleFor(ct) {
+      var c = String(ct || "").toLowerCase();
+      if (c === "custom") return { label: "Custom", bg: "#fff7ed", fg: "#c2410c", bd: "#fed7aa", tip: "Custom — created manually in this org" };
+      if (c === "standard") return { label: "Standard", bg: "#eef2f8", fg: "#5f6b85", bd: "#dfe5ef", tip: "Standard — product-given field" };
+      if (c === "system") return { label: "System", bg: "#f3e8ff", fg: "#7e22ce", bd: "#e9d5ff", tip: "System — internal / managed field" };
+      if (!c) return null;                                   // blank → show nothing (never guess)
+      // any other value SF might add later: show it verbatim, neutral styling (forward-safe)
+      return { label: String(ct), bg: "#eef2f8", fg: "#5f6b85", bd: "#dfe5ef", tip: String(ct) };
+    }
+
+    var _doSpans = [];
+    // Reference-only clear (VDI: doRun already crawls once via doCollect — no second full sweep here).
+    function doClear() { for (var i = 0; i < _doSpans.length; i++) { try { _doSpans[i].remove(); } catch (e) {} } _doSpans = []; }
+    function doInject(host, ct) {
+      var st = doStyleFor(ct); if (!host || !st) return;
+      try {
+        var sp = document.createElement("span");
+        sp.className = "dc-do-badge";
+        var s = function (p, v) { try { sp.style.setProperty(p, v, "important"); } catch (e) {} };
+        s("display", "inline-block"); s("margin-left", "8px"); s("vertical-align", "baseline");
+        s("font", "600 10px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif");
+        s("color", st.fg); s("background", st.bg); s("border", "1px solid " + st.bd);
+        s("border-radius", "9px"); s("padding", "0 7px"); s("white-space", "nowrap");
+        s("letter-spacing", ".2px"); s("vertical-align", "middle");
+        sp.textContent = st.label;
+        try { sp.setAttribute("title", st.tip); } catch (e) {}
+        host.appendChild(sp); _doSpans.push(sp);
+      } catch (e) {}
+    }
+
+    // The DMO field table (columns include "isMapped"), its keyField, and name→creationType map.
+    function doIsFieldTable(dt) {
+      try { var cols = doSafe(dt, "columns"); if (!Array.isArray(cols)) return false; return cols.some(function (c) { return doSafe(c, "fieldName") === "isMapped"; }); } catch (e) { return false; }
+    }
+    function doKeyField(dt) { var k = doSafe(dt, "keyField"); return (typeof k === "string" && k) ? k : "name"; }
+    // Rendered data <tr>s (those with a th/td cell), in render order.
+    function doDataRows(dt) {
+      var sr = dt.shadowRoot || dt, trs = [], out = [];
+      try { var tb = sr.querySelector("tbody"); trs = (tb || sr).querySelectorAll("tr"); } catch (e) {}
+      for (var i = 0; i < trs.length; i++) { var has = false; try { has = !!trs[i].querySelector("th,td"); } catch (e) {} if (has) out.push(trs[i]); }
+      return out;
+    }
+    function doRowKey(row) { try { return row.getAttribute && (row.getAttribute("data-row-key-value") || row.getAttribute("data-row-key") || row.getAttribute("data-key-value")); } catch (e) { return null; } }
+    // The "Field Label" cell of a row (anchor the badge there); fall back to the first cell.
+    function doLabelCell(row) {
+      try {
+        var cs = row.querySelectorAll("th,td");
+        for (var i = 0; i < cs.length; i++) { var dl = ""; try { dl = cs[i].getAttribute("data-label") || ""; } catch (e) {} if (/field label/i.test(dl)) return cs[i]; }
+        return cs[0] || null;
+      } catch (e) { return null; }
+    }
+
+    // ONE crawl per pass → the field table(s). (Usually one; handle more defensively.)
+    var _doTables = [];
+    function doCollect() {
+      // VDI FAST PATH: the full-document shadow crawl is the single most expensive op here, and the
+      // page-wide observer would otherwise trigger it on every Salesforce re-render. If we already
+      // found the field table(s) and they're STILL in the DOM, reuse them — no re-crawl. We only pay
+      // the full crawl on the first pass and after the table is actually removed/replaced (nav).
+      if (_doTables.length) {
+        var allLive = true;
+        for (var j = 0; j < _doTables.length; j++) { try { if (!_doTables[j].isConnected) { allLive = false; break; } } catch (e) { allLive = false; break; } }
+        if (allLive) { try { if (window.__dcPerf) window.__dcPerf.crawl("dmo-origin", 0); } catch (e) {} return; }  // 0 nodes = reused cache
+      }
+      var out = [];
+      var visited = 0;   // VDI perf: nodes walked this crawl (guarded report below)
+      try {
+        (function walk(root, d) {
+          if (!root || d > 25) return;
+          var q; try { q = root.querySelectorAll("*"); } catch (e) { return; }
+          for (var i = 0; i < q.length; i++) {
+            visited++;
+            var t = ""; try { t = (q[i].tagName || "").toLowerCase(); } catch (e) {}
+            if (t === "runtime_cdp-custom-datatable" && doIsFieldTable(q[i])) out.push(q[i]);
+            var sr = null; try { sr = q[i].shadowRoot; } catch (e) {}
+            if (sr) walk(sr, d + 1);
+          }
+        })(document, 0);
+      } catch (e) {}
+      _doTables = out;
+      try { if (window.__dcPerf) window.__dcPerf.crawl("dmo-origin", visited); } catch (e) {}
+    }
+    function doDecorate() {
+      _doTables.forEach(function (dt) {
+        if (!isVisible(dt)) return;
+        var data = doSafe(dt, "data"); if (!Array.isArray(data) || !data.length) return;
+        var kf = doKeyField(dt);
+        // map the row key (data[].<keyField>) → its creationType — exact per-field, no index guess
+        var map = {};
+        for (var i = 0; i < data.length; i++) { var r = data[i]; if (r) { var k = doSafe(r, kf); if (k != null) map[String(k)] = doSafe(r, "creationType"); } }
+        doDataRows(dt).forEach(function (row) {
+          if (!isVisible(row)) return;
+          var key = doRowKey(row); if (key == null) return;         // no key → skip (never guess the row)
+          if (!Object.prototype.hasOwnProperty.call(map, String(key))) return;
+          var cell = doLabelCell(row); if (!cell) return;
+          doInject(cell, map[String(key)]);
+        });
+      });
+    }
+    // signature = visible row keys + their origin → skip redraw when nothing changed (no churn)
+    function doSignature() {
+      var parts = [];
+      try {
+        _doTables.forEach(function (dt) {
+          if (!isVisible(dt)) return;
+          var data = doSafe(dt, "data"); var kf = doKeyField(dt); var map = {};
+          if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r) { var k = doSafe(r, kf); if (k != null) map[String(k)] = doSafe(r, "creationType"); } }
+          doDataRows(dt).forEach(function (row) { if (!isVisible(row)) return; var key = doRowKey(row); if (key != null && map.hasOwnProperty(String(key))) parts.push(key + "=" + map[String(key)]); });
+        });
+      } catch (e) {}
+      return parts.join("|");
+    }
+    var _doSig = null, _doObs = null, _doT = null, _doWriting = false;
+    function doRun(force) {
+      if (!DO_ON) return;
+      doCollect();
+      var sig = doSignature();
+      if (!force && sig === _doSig && _doSpans.length) return;
+      _doSig = sig;
+      _doWriting = true;
+      try { if (_doObs) _doObs.disconnect(); } catch (e) {}
+      try { if (window.__dcPerf) window.__dcPerf.pass("dmo-origin", function () { doClear(); doDecorate(); }); else { doClear(); doDecorate(); } } catch (e) {}
+      try { if (_doObs && DO_ON) _doObs.observe(document.documentElement, { subtree: true, childList: true }); } catch (e) {}
+      _doWriting = false;
+    }
+    // DEBOUNCED: virtual-scroll row swaps / search fire bursts of childList mutations → collapse to one.
+    function doSchedule() { if (_doWriting || _doT) return; _doT = setTimeout(function () { _doT = null; doRun(false); }, 300); }
+    function doStart() {
+      DO_ON = true;
+      if (!_doObs) { try { _doObs = new MutationObserver(doSchedule); } catch (e) {} }
+      doRun(true);
+    }
+    function doStop() { DO_ON = false; try { if (_doObs) _doObs.disconnect(); } catch (e) {} _doSig = null; doClear(); }
+    try {
+      window.__dcToggleDmoOrigin = function () { if (DO_ON) doStop(); else doStart(); return DO_ON; };
+      window.__dcDmoOriginIsOn = function () { return DO_ON; };
+      // How many fields carry an origin (so the FAB offers the toggle only when there's data).
+      // Read on demand (menu open) — one crawl, not polled.
+      window.__dcDmoOriginCount = function () {
+        var n = 0;
+        try { findVisibleByTag("runtime_cdp-custom-datatable").filter(doIsFieldTable).forEach(function (dt) { var data = doSafe(dt, "data"); if (Array.isArray(data)) for (var i = 0; i < data.length; i++) { var r = data[i]; if (r && doStyleFor(doSafe(r, "creationType"))) n++; } }); } catch (e) {}
+        return n;
+      };
+    } catch (e) {}
+
+    // One-time cleanup on load: a prior build/instance may have left .dc-do-badge spans — sweep
+    // them once so a re-toggle/reload never shows two badges per field (not a per-pass crawl).
+    try { eachElement(document, function (el) { if (el.classList && el.classList.contains("dc-do-badge")) { try { el.remove(); } catch (e) {} } }); } catch (e) {}
+  })();
 
   /* [in-development features removed from public build] */
 
@@ -5767,12 +18611,13 @@ processJSON();
       if (isSegment && typeof window.__dcToggleSegApi === "function") {
         const apiIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><path d='M4.5 3L2 8l2.5 5M11.5 3L14 8l-2.5 5' stroke='white' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>";
         const onNow = (typeof window.__dcSegApiIsOn === "function") && window.__dcSegApiIsOn();
-        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to enable hover");
+        segApiRow = mkBtn("dc-seg-api-row", "API names", "Toggle API-name hints: hover any attribute/rule to see its API name, then press C to copy (clicks are left alone)", "linear-gradient(135deg,#6366f1,#4338ca)", apiIconSvg, onNow ? "On — hover a row, press C to copy" : "Off — click to turn on, then hover the ✓");
         const segSub = segApiRow.querySelector("span:last-child");
         segApiRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleSegApi(); } catch (err) {}
           if (segSub) segSub.textContent = on ? "On — hover a row, press C to copy" : "Off — click to enable hover";
+          window.__dcPaintOn(segApiRow, on);
           // leave the menu open so the user sees the state flip; closes on outside click
         };
       }
@@ -5786,13 +18631,15 @@ processJSON();
           typeof window.__dcDsFormulaCount === "function" && window.__dcDsFormulaCount() > 0) {
         const fxIconSvg = "<svg width='14' height='14' viewBox='0 0 16 16' fill='white'><text x='3' y='12' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='13'>ƒ</text></svg>";
         const fxOnNow = (typeof window.__dcDsFormulaIsOn === "function") && window.__dcDsFormulaIsOn();
-        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Toggle formula hints: hover a formula field to see its formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover a formula field" : "Off — click to enable hover");
+        fmRow = mkBtn("dc-ds-formula-row", "Show formulas", "Turn on, then hover the ✓ checkmark in the Formula column to see that field's formula and copy it (only formula fields react)", "linear-gradient(135deg,#6366f1,#4338ca)", fxIconSvg, fxOnNow ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓");
         const fxSub = fmRow.querySelector("span:last-child");
         fmRow.onclick = (e) => {
           e.stopPropagation();
           let on = false; try { on = window.__dcToggleDsFormula(); } catch (err) {}
-          if (fxSub) fxSub.textContent = on ? "On — hover a formula field" : "Off — click to enable hover";
+          if (fxSub) fxSub.textContent = on ? "On — hover the ✓ in the Formula column" : "Off — click to turn on, then hover the ✓";
+          window.__dcPaintOn(fmRow, on);
         };
+        window.__dcPaintOn(fmRow, fxOnNow);
       }
 
       // DMO-only "Field origin" entry — TOGGLES the Standard/Custom/System badges (no panel).
@@ -5957,8 +18804,7 @@ processJSON();
    * hostname, no PII, no page data), the tool version, the page TYPE bucket (e.g. "DMO"/"Segment")
    * and the build tag — never a record id or URL. Throttled to ONCE PER DAY per browser via
    * localStorage. Uses sendBeacon/no-cors so it can't read any response. Fully fire-and-forget.
-   * USER CONTROL: a one-time disclosure notice + opt-out (__dcUsageOptOut()); opted-out browsers
-   * never ping. Disclosed on the install page too.
+   * DISCLOSURE: described on the install page's Privacy section. No in-tool opt-out (product decision).
    */
   (function dcUsagePingModule() {
     // SILENT AUTO-CAPTURE via FIRESTORE (the breakthrough, proven 2026-10-30):
@@ -5976,9 +18822,8 @@ processJSON();
     // tab to this worker's /beacon (top-level navigation crosses where a background fetch can't); the
     // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
-    var BEACON_BASE = "https://d360-usage.ljoshi30-d360.workers.dev/beacon";
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.719"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.720"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";
@@ -5986,17 +18831,7 @@ processJSON();
     var LS_ID    = "dc_usage_iid";   // random per-browser install id (anonymous)
     var LS_LAST  = "dc_usage_last";  // last-sent day stamp (throttle) — set ONLY after a confirmed HTTP success
     var _inFlight = {};              // per-feature in-flight guard (prevents duplicate concurrent sends)
-    var LS_OPTOUT = "dc_usage_optout"; // GATE 3: user opt-out — "1" = never ping (user choice honored)
-    var LS_NOTICE = "dc_usage_noticed"; // "1" = the one-time disclosure notice has been shown
 
-    // GATE 3 — the user's choice always wins, even when the tool is fully live.
-    function optedOut() { try { return localStorage.getItem(LS_OPTOUT) === "1"; } catch (e) { return false; } }
-    // public controls so a user (or the install page) can opt out / back in and check state.
-    try {
-      window.__dcUsageOptOut = function () { try { localStorage.setItem(LS_OPTOUT, "1"); } catch (e) {} return true; };
-      window.__dcUsageOptIn  = function () { try { localStorage.removeItem(LS_OPTOUT); } catch (e) {} return false; };
-      window.__dcUsageIsOptedOut = function () { return optedOut(); };
-    } catch (e) {}
 
     // Coarse feature/page bucket — NEVER a record id or full URL. Covers EVERY surface the tool
     // supports so the ping always reports which feature was used (Query Editor, Activation, Mapping
@@ -6062,100 +18897,18 @@ processJSON();
       try { localStorage.setItem(k, "1"); } catch (e) { _memSent[k] = true; }
     }
 
-    // ── Per-ORG "silent write is blocked here" memory (the learn-then-adapt core) ─────────────────
-    // We only open a tab (beacon) in orgs we KNOW block the silent fetch — so permissive orgs never
-    // flash a tab. The flag is namespaced per org host so moving between orgs re-learns correctly.
-    var _memBlocked = {}, _memBeaconDead = {}, _beaconConfirmed = {};
+    // Per-org memory that the silent write is blocked (kept only so we stop retrying every click).
+    // There is NO fallback window/tab: tracking is silent-only. Orgs that block it are simply not measured.
+    var _memBlocked = {};
     function orgHost() { try { return String(location.hostname || "").slice(0, 80); } catch (e) { return ""; } }
     function blockedKey() { return "dc_usage_blocked::" + orgHost(); }
-    function beaconDeadKey() { return "dc_usage_beacon_dead::" + orgHost(); }
     function orgKnownBlocked() {
       try { return localStorage.getItem(blockedKey()) === "1"; } catch (e) { return _memBlocked[blockedKey()] === true; }
     }
     function markOrgBlocked() {
       try { localStorage.setItem(blockedKey(), "1"); } catch (e) { _memBlocked[blockedKey()] = true; }
     }
-    // Beacon "dead" for this org — set when a beacon tab was opened but NEVER confirmed back (i.e. the
-    // destination is blocked by a corporate web filter / shows a block page). Once dead, we stop opening
-    // tabs here entirely, so a user sees the filter's "Unauthorized Access" flash AT MOST ONCE per org.
-    function beaconDead() {
-      try { return localStorage.getItem(beaconDeadKey()) === "1"; } catch (e) { return _memBeaconDead[beaconDeadKey()] === true; }
-    }
-    function markBeaconDead() {
-      try { localStorage.setItem(beaconDeadKey(), "1"); } catch (e) { _memBeaconDead[beaconDeadKey()] = true; }
-    }
-    // Listen ONCE for the /beacon page's confirmation. If it arrives, the beacon truly reached our worker
-    // → clear any "dead" flag and remember it works. (Bound once per page via a window flag.)
-    try {
-      if (!window.__dcBeaconMsgBound) {
-        window.__dcBeaconMsgBound = true;
-        window.addEventListener("message", function (ev) {
-          try {
-            if (ev && ev.data && ev.data.__dcBeacon === "ok") {
-              _beaconConfirmed[orgHost()] = true;
-              try { localStorage.removeItem(beaconDeadKey()); } catch (e) {}
-            }
-          } catch (e) {}
-        }, false);
-      }
-    } catch (e) {}
-    // Build the beacon URL carrying the same anonymous fields as the direct ping.
-    function beaconUrl(feature) {
-      var qs = "?iid=" + encodeURIComponent(installId()) +
-               "&v=" + encodeURIComponent(String(PING_VERSION)) +
-               "&page=" + encodeURIComponent(feature) +
-               "&day=" + encodeURIComponent(todayStamp()) +
-               "&build=" + encodeURIComponent(String(PING_BUILD)) +
-               "&org=" + encodeURIComponent(orgHost().replace(/\.lightning\.force\.com$|\.my\.salesforce\.com$/i, ""));
-      return BEACON_BASE + qs;
-    }
-    // Open the beacon tab SYNCHRONOUSLY (must be inside the click gesture or the popup blocker kills it).
-    // The worker writes the doc server-side and the page auto-closes (~400ms). Returns true if a window
-    // handle came back (best-effort — we can't read the cross-origin result, so we mark-sent optimistically).
-    function beaconOpen(feature) {
-      try {
-        _beaconConfirmed[orgHost()] = false;   // reset; the /beacon page will flip this via postMessage
-        var w = window.open(beaconUrl(feature), "dc_usage_beacon", "width=360,height=140,left=" + (screen.width - 380) + ",top=" + (screen.height - 220));
-        if (w) {
-          // If the worker's /beacon page doesn't confirm within 4s, the destination was blocked (corporate
-          // web filter / block page) → mark the beacon dead for this org so we NEVER flash a tab here again.
-          try {
-            setTimeout(function () {
-              if (!_beaconConfirmed[orgHost()]) markBeaconDead();
-            }, 4000);
-          } catch (e) {}
-          return true;
-        }
-      } catch (e) {}
-      return false;
-    }
 
-
-    // ONE-TIME disclosure notice — honest + respectful. Shown only when the ping is actually LIVE
-    // (no point disclosing something that's off), only once (LS_NOTICE), and never if already
-    // opted out. A small dismissible banner with a one-click "Turn off" (opt-out). Zero cost today
-    // because PING_ENABLED is false → this never renders in the shipped build.
-    function showDisclosureOnce() {
-      try {
-        if (!FS_URL) return;                                // no receiver → nothing to disclose
-        if (optedOut()) return;                             // respect an existing opt-out
-        if (localStorage.getItem(LS_NOTICE) === "1") return; // already shown
-        if (!document.body) { return; }
-        var bar = document.createElement("div");
-        bar.id = "dc-usage-notice";
-        bar.style.cssText = "position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:2147483647;max-width:480px;background:#111827;color:#e5edff;border:1px solid #334;border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.5);padding:12px 14px;font:12px/1.5 -apple-system,sans-serif;";
-        bar.innerHTML = "<div style='display:flex;gap:10px;align-items:flex-start;'>" +
-          "<span style='font-size:15px;'>&#9432;</span><div>" +
-          "<b>Data 360 Inspector</b> records an <b>anonymous</b> usage count about once a day (a random id + tool version + page type only — no record, field, personal, or org data) so the team can measure adoption. It's silent — nothing opens. " +
-          "<a href='#' id='dc-usage-off' style='color:#5eead4;'>Turn off</a> &middot; " +
-          "<a href='#' id='dc-usage-ok' style='color:#94a3b8;'>OK</a></div></div>";
-        document.body.appendChild(bar);
-        var done = function () { try { localStorage.setItem(LS_NOTICE, "1"); } catch (e) {} try { bar.remove(); } catch (e) {} };
-        var off = bar.querySelector("#dc-usage-off"), okb = bar.querySelector("#dc-usage-ok");
-        if (off) off.onclick = function (e) { e.preventDefault(); try { window.__dcUsageOptOut(); } catch (er) {} done(); };
-        if (okb) okb.onclick = function (e) { e.preventDefault(); done(); };
-      } catch (e) {}
-    }
 
     // ── SILENT usage capture — NO tab, NO navigation, fully automatic ─────────────────────────
     // Our own domain is CSP-blocked on every transport, and window.open always opens a visible tab.
@@ -6164,13 +18917,12 @@ processJSON();
     // don't read the response. Respects opt-out + per-feature/day throttle.
     // Fire one usage ping. Returns a Promise<bool> that resolves TRUE only on a confirmed HTTP success.
     // CRITICAL: the day/feature throttle (markSent) is set ONLY after the write actually succeeds — so a
-    // request that fails (e.g. CSP-blocked on a strict page) does NOT burn the throttle, and the user can
+    // request that fails does NOT burn the throttle, and the user can
     // still be captured later the same day on a page where the write is allowed. (Previously markSent ran
     // unconditionally right after firing the fetch, so one CSP-blocked attempt silently locked the user
     // out for the rest of the day — the "new user never captured" bug.)
     function reportUsage() {
       if (!PING_ENABLED) return Promise.resolve(false);   // master kill-switch (documented gate — now ENFORCED)
-      if (optedOut()) return Promise.resolve(false);
       if (!FS_URL) return Promise.resolve(false);
       var feature;
       try {
@@ -6209,33 +18961,14 @@ processJSON();
       } catch (e) { if (feature) _inFlight[feature] = false; return Promise.resolve(false); }
     }
 
-    // Auto-capture on FAB open — at most ONCE PER FEATURE PER DAY. LEARN-THEN-ADAPT:
-    //   • Org NOT known-blocked → try the SILENT Firestore write (no tab). Most users, permissive orgs.
-    //   • Org KNOWN-blocked (we learned the silent write fails here) → open the BEACON TAB synchronously
-    //     on THIS click gesture (the only way to capture in a CSP/CASB-locked org). Brief flash, once/day.
-    // The very FIRST click in a locked org loses its capture to the silent attempt (which then learns the
-    // block) — every subsequent click that day uses the beacon. Net: permissive orgs never flash a tab;
-    // locked orgs flash ~once/feature/day and ARE captured.
+    // Auto-capture on FAB open — at most ONCE PER FEATURE PER DAY, SILENT only (background fetch; no tab,
+    // no window, no navigation). If the org blocks the silent write we remember that and stop trying.
     function maybeReportOnFabOpen() {
       try {
-        if (optedOut()) return false;              // user choice wins
         var feature = pingPageType();
-        if (sentToday(feature)) {                  // THIS feature already captured today
-          return false;
-        }
-        if (orgKnownBlocked()) {
-          // locked org. If the beacon was already proven DEAD here (corporate filter blocks the
-          // destination), do NOT open a tab — the user would just get a scary "Unauthorized Access"
-          // flash with no capture. Give up silently (this org simply can't be measured externally).
-          if (beaconDead()) {
-            return false;
-          }
-          // beacon not yet known-dead → try it ONCE (synchronous, inside the click gesture). If it turns
-          // out blocked (no confirmation in 4s), beaconOpen marks it dead so this is the last flash here.
-          if (beaconOpen(feature)) { try { markSent(feature); } catch (e) {} return true; }
-          return false;                            // popup blocked → not marked, retry next click
-        }
-        return reportUsage();                      // silent write (may learn-and-block for next time)
+        if (sentToday(feature)) return false;      // THIS feature already captured today
+        if (orgKnownBlocked()) return false;       // this org blocks it — never open any window as a fallback
+        return reportUsage();
       } catch (e) { return false; }
     }
 
@@ -6285,9 +19018,8 @@ processJSON();
     } catch (e) {}
 
     // On load: NO in-tool disclosure popup (per decision — silent in-tool). Disclosure instead lives
-    // on the install page's Privacy section, and __dcUsageOptOut() remains available as the opt-out.
+    // on the install page's Privacy section.
     // The capture fires on the first FAB-open per feature per day (silent Firestore write).
-    // (showDisclosureOnce is retained but intentionally NOT called here.)
   })();
 
   // SAFETY NET: start the SPA navigation watcher unconditionally, regardless of which

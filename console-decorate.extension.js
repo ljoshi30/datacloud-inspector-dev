@@ -7117,6 +7117,84 @@
       })(j, "", 0);
     } catch (e) {}
   }
+  // ── Workspace data space, EXACT (no guessing). Proven on the live page: the workspace header shows only the LABEL, but the
+  // workspace is a DataQueryWorkspace record whose field "DataSpace" holds the API name. The record id is on
+  // <runtime_cdp-query-workspace>.recordId (and in the URL). Source 1: Salesforce's own cached list view / record data in the DOM
+  // (recordData / records / data carry DataSpace.value). Source 2: ask Salesforce for that one field of that one record (read-only).
+  var _wsSpaceByRecord = {}, _wsSpaceInflight = {}, _wsSpaceErr = "";
+  function qeWorkspaceRecordId() {
+    var rid = "";
+    try {
+      eachElement(document, function (el) {
+        if (String(el.tagName || "").toLowerCase() !== "runtime_cdp-query-workspace") return;
+        var v = ""; try { v = String(el.recordId || ""); } catch (e) {}
+        if (!/^[A-Za-z0-9]{15,18}$/.test(v)) return;
+        var vis = false; try { vis = !!(el.getClientRects && el.getClientRects().length); } catch (e) { vis = true; }
+        if (!rid || vis) rid = v;   // a visible workspace wins over a hidden (kept-alive) one
+      });
+    } catch (e) {}
+    if (!rid) { try { var m = String(location.pathname).match(/\/DataQueryWorkspace\/([A-Za-z0-9]{15,18})(?:\/|$)/); if (m) rid = m[1]; } catch (e) {} }
+    return rid;
+  }
+  function qeSpaceFromDomRecords(rid) {
+    var found = "";
+    function fromList(arr) {
+      if (!Array.isArray(arr)) return;
+      for (var i = 0; i < arr.length && !found; i++) {
+        var r = arr[i]; if (!r || typeof r !== "object") continue;
+        var f = r.fields, v = null;
+        if (f && f.Id && f.Id.value === rid && f.DataSpace) v = f.DataSpace.value;          // lst-common-list-internal.records
+        else if ((r.id === rid || r["__v.Id"] === rid) && r.DataSpace) v = r.DataSpace.value; // list datatable .data / recordData
+        if (typeof v === "string" && /^[A-Za-z0-9_]{1,80}$/.test(v)) found = v;
+      }
+    }
+    try {
+      eachElement(document, function (el) {
+        if (found) return;
+        var t = String(el.tagName || "").toLowerCase();
+        if (!/^(lst-|lightning-datatable|runtime_cdp-)/.test(t)) return;
+        ["recordData", "records", "data"].forEach(function (p) { if (found) return; var x; try { x = el[p]; } catch (e) { return; } fromList(x); });
+      });
+    } catch (e) {}
+    return found;
+  }
+  function qeCachedWorkspaceSpace() {
+    var rid = qeWorkspaceRecordId(); if (!rid) return "";
+    if (_wsSpaceByRecord[rid]) return _wsSpaceByRecord[rid];
+    var d = qeSpaceFromDomRecords(rid); if (d) _wsSpaceByRecord[rid] = d;
+    return d;
+  }
+  function qeFindDataSpaceValue(v, depth) {
+    if (!v || typeof v !== "object" || depth > 8) return "";
+    if (v.DataSpace && typeof v.DataSpace === "object" && typeof v.DataSpace.value === "string") return v.DataSpace.value;
+    var ks = Object.keys(v);
+    for (var i = 0; i < ks.length; i++) { var r = qeFindDataSpaceValue(v[ks[i]], depth + 1); if (r) return r; }
+    return "";
+  }
+  // Calls cb() when done (never rejects, never blocks longer than the request). Result lands in _wsSpaceByRecord.
+  function qePrimeWorkspaceSpace(cb) {
+    var done = false; function fin() { if (done) return; done = true; try { cb(); } catch (e) {} }
+    try {
+      var rid = qeWorkspaceRecordId();
+      if (!rid || qeCachedWorkspaceSpace() || !haveCredsOnly() || typeof fetch !== "function") { fin(); return; }
+      if (_wsSpaceInflight[rid]) { _wsSpaceInflight[rid].push(fin); return; }
+      _wsSpaceInflight[rid] = [fin];
+      _auraSniff.querySeq = (_auraSniff.querySeq || 0) + 1;
+      var act = { id: "dcws-" + _auraSniff.querySeq + ";a", descriptor: "aura://RecordUiController/ACTION$getRecordWithFields", callingDescriptor: "UNKNOWN", params: { recordId: rid, fields: ["DataQueryWorkspace.DataSpace"] } };
+      var form = "message=" + encodeURIComponent(JSON.stringify({ actions: [act] })) + "&aura.context=" + _auraSniff.context + "&aura.pageURI=" + (_auraSniff.pageURI || "") + "&aura.token=" + _auraSniff.token;
+      var to = setTimeout(function () { _wsSpaceErr = "timeout"; flush(); }, 8000);
+      function flush() { clearTimeout(to); var q = _wsSpaceInflight[rid] || []; delete _wsSpaceInflight[rid]; q.forEach(function (f) { try { f(); } catch (e) {} }); }
+      fetch("/aura?r=" + _auraSniff.querySeq + "&aura.RecordUi.getRecordWithFields=1", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" }, body: form, credentials: "include" })
+        .then(function (r) { return r.text(); }).then(function (txt) {
+          try {
+            var j = JSON.parse(txt), a = j && j.actions && j.actions[0];
+            var v = (a && a.state === "SUCCESS") ? qeFindDataSpaceValue(a.returnValue, 0) : "";
+            if (/^[A-Za-z0-9_]{1,80}$/.test(v)) _wsSpaceByRecord[rid] = v; else _wsSpaceErr = (a && a.state) || "no DataSpace in reply";
+          } catch (e) { _wsSpaceErr = "unreadable reply"; }
+          flush();
+        }, function () { _wsSpaceErr = "network"; flush(); });
+    } catch (e) { fin(); }
+  }
   function dcHarvestObjects(text) {
     try { if (text && text.length < 3000000 && text.charAt(0) === "{") dcHarvestSpacePairs(text); } catch (e) {}
     try {
@@ -7384,7 +7462,9 @@
     })();
   }
 
-  function ensureQueryContext(cb) {
+  function ensureQueryContext(cb0) {
+    // Before any query runs, make sure the workspace's exact data space (DataQueryWorkspace.DataSpace) is known.
+    var cb = function (ok) { try { qePrimeWorkspaceSpace(function () { cb0(ok); }); } catch (e) { cb0(ok); } };
     if (extBridgePresent()) { cb(true); return; }
     if (primeCredsFromAura()) { cb(true); return; }
     if (haveCredsOnly()) { cb(true); return; }
@@ -15727,8 +15807,8 @@
     function qeResolveDs(sql) {
       var sniffed = (typeof _auraSniff !== "undefined" && _auraSniff && _auraSniff.dsLastObj == null && _auraSniff.dataSpace) ? String(_auraSniff.dataSpace) : "";
       if (sniffed) return sniffed;
-      var ds = readPageDataSpace();
-      if (!ds) { try { ds = qeWorkspaceSpaceExact(); } catch (e) { ds = ""; } }   // exact API name read from the workspace header, never derived from its label
+      var ds = ""; try { ds = qeWorkspaceSpaceExact(); } catch (e) { ds = ""; }   // exact API name of THIS workspace (DataQueryWorkspace.DataSpace), never derived from its label
+      if (!ds) ds = readPageDataSpace();
       if (!ds) {
         var fm = String(sql || "").match(/\bFROM\s+([A-Za-z0-9_"]+)/i);
         var t = fm ? fm[1].replace(/"/g, "") : "";
@@ -15773,7 +15853,9 @@
     var _dsDiag = { label: "", hosts: [] };
     function qeWorkspaceSpaceExact() {
       var label = qeWorkspaceSpaceLabel(), found = "";
-      _dsDiag = { label: label, hosts: [] };
+      _dsDiag = { label: label, hosts: [], rid: "", ridErr: _wsSpaceErr };
+      try { _dsDiag.rid = qeWorkspaceRecordId(); found = qeCachedWorkspaceSpace(); } catch (e) {}
+      if (found) return found;
       if (!label) return "";
       function scan(v, depth, seen) {
         if (found || !v || typeof v !== "object" || depth > 3 || seen.indexOf(v) >= 0) return; seen.push(v);
