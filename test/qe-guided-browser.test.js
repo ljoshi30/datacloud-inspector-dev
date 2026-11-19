@@ -7,7 +7,7 @@ const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  functio
 const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
 const html="<!doctype html><meta charset=utf-8><body>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
 var _dsByObject={Confirmed__dlm:"TD Insurance",Other_space__dlm:"Other"},_dsGuess={};function qeResolveDs(){return "TD Insurance";}
-window.__sqls=[];window.__classic=0;
+var _badDsNames=/^(Selected|Select|None|All)$/i,_auraSniff={dataSpace:null};window.__sqls=[];window.__classic=0;
 function makeDraggable(){}function addResizeHandle(){}function todayStr(){return "2026-11-19"}
 function qeValidIdent(s){return !!s&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s).trim());}
 function qeDsForSql(){return "TD"}
@@ -16,7 +16,8 @@ function setLastResult(r){window.__last=r;}
 function openTemplatesPanel(){window.__classic++;}
 function ensureQueryContext(cb){cb(true);}
 function toHome(){var b=document.querySelector('#dc-g-back2');if(b)b.click();b=document.querySelector('#dc-g-back');if(b)b.click();}
-function qeFetchExport(sql){window.__sqls.push(sql);
+function qeFetchExport(sql,ds){window.__sqls.push(sql+' @'+ds);
+ if(/"Spaced__dlm"/.test(sql)&&ds!=='Other')return Promise.reject(new Error('table "Spaced__dlm" does not exist'));
  var m=(sql.indexOf("Missing__dlm")>=0||/"Foo_Bar__dlm"/.test(sql))&&/LIMIT 1$/.test(sql);
  if(m)return Promise.reject(new Error('table "Missing__dlm" does not exist'));
  if(/LIMIT 1$/.test(sql))return Promise.resolve({columns:["Id__c","Email__c","CreatedDate__c"],columnTypes:{Id__c:"VARCHAR",Email__c:"VARCHAR",CreatedDate__c:"TIMESTAMP"},rowData:[],totalRows:0,blobUrl:"blob:x"});
@@ -69,6 +70,12 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelector('#dc-g-rows').innerText.includes('a@x.com')&&document.querySelector('#dc-g-rows').innerText.includes('value_count')"),"distinct values list shown inline automatically");
  ok(await ev("window.__last&&window.__last.rowCount===2"),"result registered for View Results / Download");
  // not-found table -> friendly message
+ // table that only exists in ANOTHER known data space: tool must find it there, not say "not found"
+ await ev("var t=document.querySelector('#dc-g-f-t');t.value='Spaced__dlm';t.onchange()");await wait(300);
+ ok(await ev("window.__sqls.some(function(q){return /Spaced__dlm/.test(q)&&/@TD$/.test(q)})&&window.__sqls.some(function(q){return /Spaced__dlm/.test(q)&&/@Other$/.test(q)})"),"table missing in guessed space is retried in the other known space");
+ ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","columns load once found in the other data space");
+ ok(await ev("document.querySelector('#dc-g-msg').textContent.indexOf('not found')<0"),"no 'not found' error when another space has it");
+ await ev("var t=document.querySelector('#dc-g-f-t');t.value='Policy__dlm';t.onchange()");await wait(200);
  // duplicates verdict
  await ev("toHome()");
  await ev(P+".querySelector('[data-goal=loaded]').click()");await ev(P+".querySelector('[data-chk=dupes]').click()");

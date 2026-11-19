@@ -16749,6 +16749,30 @@
         var f = all.filter(function (o) { return rx(o.n); });
         return { list: f, total: all.length, filtered: true };
       }
+      // Run a query; if the table "does not exist" in the guessed data space, retry in every other space this page session
+      // has actually seen (never invented names), remember the one that works for that table and report it (r._space).
+      function qeFetchAnySpace(sql, onProg, cancel) {
+        var first = qeDsForSql(sql), tried = {}, cands = [];
+        function add(x) { if (x == null) return; x = String(x); if (!tried[x]) { tried[x] = 1; cands.push(x); } }
+        add(first);
+        try { if (_auraSniff && _auraSniff.dataSpace && !_badDsNames.test(_auraSniff.dataSpace)) add(_auraSniff.dataSpace); } catch (e) {}
+        try { for (var k in _dsByObject) if (!_dsGuess[k] && _dsByObject[k] != null && !_badDsNames.test(_dsByObject[k])) add(_dsByObject[k]); } catch (e) {}
+        try { var pg = readPageDataSpace(); if (pg) add(pg); } catch (e) {}
+        add(""); add("default");
+        var fm = String(sql || "").match(/\bFROM\s+\(?\s*"?([A-Za-z0-9_]+)"?/i), tbl = fm ? fm[1] : "", lastErr = null;
+        function go(i) {
+          return qeFetchExport(sql, cands[i], onProg || function () {}, cancel || function () { return false; }).then(function (r) {
+            r._space = cands[i];
+            if (tbl && i > 0) { _dsByObject[tbl] = cands[i]; delete _dsGuess[tbl]; }
+            return r;
+          }, function (e) {
+            lastErr = lastErr || e;
+            if (/does not exist|not found|doesn.t exist/i.test(String(e && e.message || e)) && i + 1 < cands.length) return go(i + 1);
+            throw (i > 0 && lastErr) ? lastErr : e;
+          });
+        }
+        return go(0);
+      }
       function ensureCols() {
         if (!st.check) return;
         st.check.fields.forEach(function (fd) {
@@ -16765,7 +16789,7 @@
         colsCache[t] = "loading";
         ensureQueryContext(function (ready) {
           if (!ready) { colsCache[t] = "fail"; cb("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then try again."); return; }
-          qeFetchExport(qeTemplates.fieldsProbe(t), qeDsForSql(qeTemplates.fieldsProbe(t)), function () {}, function () { return false; }).then(function (r) {
+          qeFetchAnySpace(qeTemplates.fieldsProbe(t)).then(function (r) {
             colsCache[t] = (r.columns || []).map(function (n) { return { name: n, type: (r.columnTypes || {})[n] || "" }; });
             if (!colsCache[t].length) colsCache[t] = "fail";
             cb();
@@ -16905,7 +16929,8 @@
         function fail(e) { btn.disabled = false; btn.textContent = "▶ Run check"; var m = String(e && e.message || e); if (/does not exist|not found/i.test(m)) m += " (Check the table name and that you are in the right data space.)"; out.innerHTML = "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#b91c1c;'>" + esc(m) + "</div>"; }
         ensureQueryContext(function (ready) {
           if (!ready) { fail(new Error("Not connected yet. Click any object in the list on the left (Data Lake Objects, Data Model Objects or Calculated Insights), wait a second, then press Run again.")); return; }
-          qeFetchExport(sumSql, ds, function () {}, function () { return false; }).then(function (r) {
+          qeFetchAnySpace(sumSql).then(function (r) {
+            if (r._space != null) ds = r._space;
             var row = (r.rowData && r.rowData[0]) || {}, vd = chk.verdict(row, p), c = LEVEL[vd.level] || LEVEL.info;
             btn.disabled = false; btn.textContent = "▶ Run check";
             var h = "<div id='dc-g-verdict' style='background:" + c[0] + ";border:1px solid " + c[1] + ";border-left:5px solid " + c[1] + ";border-radius:10px;padding:12px 14px;'><div style='font:700 13px/1.45 -apple-system,sans-serif;color:#0f172a;'><span style='font-size:16px;vertical-align:-1px;'>" + c[2] + "</span> " + esc(vd.text) + "</div>"
@@ -16914,7 +16939,7 @@
             if (vd.table && vd.table.length) h += tableHtml(Object.keys(vd.table[0]), vd.table, 80);
             h += "<div id='dc-g-rows'></div><div style='margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;'>";
             if (chk.rows) h += "<button id='dc-g-see' style='border:1px solid #d97706;background:#fff;color:#92400e;border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;'>👁 " + (chk.inline ? "Show full list" : "See the rows") + " (up to 2,000)</button>";
-            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + "</span></div>";
+            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + (r._space != null ? " · data space: " + esc(r._space || "default") : "") + "</span></div>";
             out.innerHTML = h;
             try { out.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) {}
             var cp = out.querySelector("#dc-g-copy");
