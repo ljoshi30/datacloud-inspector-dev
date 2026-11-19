@@ -14455,6 +14455,21 @@
     var search = document.createElement("input"); search.type = "search"; search.placeholder = "Filter (key, field or value)…";
     search.style.cssText = "margin-left:auto;padding:7px 11px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px;outline:none;";
     search.oninput = function () { q = search.value.trim().toLowerCase(); paint(); };
+    var grpSel = document.createElement("select"); grpSel.title = "Group the rows (accordion sections with counts)";
+    grpSel.style.cssText = "padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font:12px system-ui;max-width:230px;background:#fff;";
+    grpSel.onchange = function () { if (active === "changed") view = grpSel.value; else grp = grpSel.value; paint(); };
+    var wrapBtn2 = document.createElement("button"); wrapBtn2.textContent = "↵ Wrap: on"; wrapBtn2.title = "Wrap long values or cut them to one line";
+    wrapBtn2.style.cssText = "cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:8px;padding:8px 12px;font:600 12px system-ui;";
+    wrapBtn2.onclick = function () { wrapOn = !wrapOn; wrapBtn2.textContent = "↵ Wrap: " + (wrapOn ? "on" : "off"); paint(); };
+    var fsBtn2 = document.createElement("button"); fsBtn2.textContent = "⛶ Full screen"; fsBtn2.title = "Use the whole screen";
+    fsBtn2.style.cssText = wrapBtn2.style.cssText;
+    fsBtn2.onclick = function () {
+      fullOn = !fullOn;
+      box.style.width = fullOn ? "100vw" : "min(1500px,97vw)"; box.style.height = fullOn ? "100vh" : "93vh";
+      box.style.top = fullOn ? "0" : "3vh"; box.style.borderRadius = fullOn ? "0" : "12px";
+      fsBtn2.textContent = fullOn ? "⤓ Exit full screen" : "⛶ Full screen";
+    };
+    bar.appendChild(grpSel); bar.appendChild(wrapBtn2); bar.appendChild(fsBtn2);
     bar.appendChild(search);
     var xl = document.createElement("button"); xl.id = "dc-diff-xl"; xl.innerHTML = "&#11015; Excel";
     xl.title = "Download every difference as one Excel sheet (Type, Key, Field, Before, After)";
@@ -14473,24 +14488,67 @@
     }
     var CELL = "white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;";
     function empty(msg) { return "<div style='padding:40px;text-align:center;color:#94a3b8;font-size:14px'>" + msg + "</div>"; }
+    var wrapOn = true, grp = "", view = "row", fullOn = false;
+    function jsonOf(v) { var t = String(v == null ? "" : v).trim(); if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.parse(t); } catch (e) {} } return null; }
+    function cellHtml(v, big) {
+      v = v == null ? "" : String(v);
+      if (v === "") return "<span style='color:#cbd5e1'>—</span>";
+      var j = jsonOf(v);
+      if (j !== null) {
+        var pr = esc(JSON.stringify(j, null, 2));
+        return "<details><summary style='cursor:pointer;color:#4338ca;font:600 11px system-ui'>{ } JSON &middot; " + v.length + " chars (click to expand)</summary><pre style='margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font:11px/1.45 ui-monospace,Menlo,monospace;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;max-height:" + (big ? 420 : 260) + "px;overflow:auto'>" + pr + "</pre></details>";
+      }
+      return wrapOn ? esc(v) : "<span title='" + esc(v) + "' style='display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px'>" + esc(v) + "</span>";
+    }
     function rowsTable(rows2, color) {
       var shown = rows2.filter(function (r) { return !q || Object.keys(r).some(function (k) { return hit(r[k]); }); });
       if (!shown.length) return empty(rows2.length ? "No rows match the filter." : "None.");
       var cols2 = (shown[0] && Object.keys(shown[0])) || [];
       keyCols.slice().reverse().forEach(function (k) { var i = cols2.indexOf(k); if (i > 0) { cols2.splice(i, 1); cols2.unshift(k); } });
-      var h = "<div style='overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;max-height:100%'><table style='border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%'><thead><tr>";
-      cols2.forEach(function (c) { h += "<th style='position:sticky;top:0;z-index:1;text-align:left;padding:8px 10px;background:#1e293b;color:#fff;white-space:nowrap;border-bottom:3px solid " + color + "'>" + esc(c) + (keyCols.indexOf(c) >= 0 ? " 🔑" : "") + "</th>"; });
-      h += "</tr></thead><tbody>";
-      shown.slice(0, 500).forEach(function (r, i) {
-        h += "<tr style='background:" + (i % 2 ? "#f8fafc" : "#fff") + "'>";
-        cols2.forEach(function (c) {
-          var v = r[c] == null ? "" : String(r[c]);
-          h += "<td style='padding:6px 10px;border-bottom:1px solid #eef2f6;vertical-align:top;min-width:90px;max-width:340px;" + CELL + (keyCols.indexOf(c) >= 0 ? "font-weight:700;" : "") + "'><div style='max-height:96px;overflow:auto'>" + (v === "" ? "<span style='color:#cbd5e1'>—</span>" : esc(v)) + "</div></td>";
+      var one = function (list) {
+        var h = "<div style='overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px'><table style='border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%'><thead><tr>";
+        cols2.forEach(function (c) { h += "<th style='position:sticky;top:0;z-index:1;text-align:left;padding:8px 10px;background:#1e293b;color:#fff;white-space:nowrap;border-bottom:3px solid " + color + "'>" + esc(c) + (keyCols.indexOf(c) >= 0 ? " 🔑" : "") + "</th>"; });
+        h += "</tr></thead><tbody>";
+        list.slice(0, 500).forEach(function (r, i) {
+          h += "<tr style='background:" + (i % 2 ? "#f8fafc" : "#fff") + "'>";
+          cols2.forEach(function (c) {
+            h += "<td style='padding:6px 10px;border-bottom:1px solid #eef2f6;vertical-align:top;min-width:90px;max-width:340px;" + CELL + (keyCols.indexOf(c) >= 0 ? "font-weight:700;word-break:break-all;" : "") + "'>" + cellHtml(r[c]) + "</td>";
+          });
+          h += "</tr>";
         });
-        h += "</tr>";
+        h += "</tbody></table></div>";
+        if (list.length > 500) h += "<div style='font-size:12px;color:#64748b;margin-top:6px'>Showing first 500 of " + list.length + " rows.</div>";
+        return h;
+      };
+      if (!grp || cols2.indexOf(grp) < 0) return one(shown);
+      var buckets = {}, order2 = [];
+      shown.forEach(function (r) { var k = r[grp] == null || String(r[grp]) === "" ? "(empty)" : String(r[grp]); if (!buckets[k]) { buckets[k] = []; order2.push(k); } buckets[k].push(r); });
+      order2.sort(function (x, y) { return buckets[y].length - buckets[x].length; });
+      var out = "<div style='font-size:12px;color:#64748b;margin-bottom:8px'>Grouped by <b>" + esc(grp) + "</b>: " + order2.length + " group" + (order2.length === 1 ? "" : "s") + ". Click a group to open or close it.</div>";
+      order2.slice(0, 200).forEach(function (k, i) {
+        out += "<details " + (i < 3 ? "open " : "") + "style='margin-bottom:8px'><summary style='cursor:pointer;background:#fff;border:1px solid #e2e8f0;border-left:4px solid " + color + ";border-radius:8px;padding:8px 12px;font:700 13px system-ui;color:#0f172a'>" + esc(k.length > 120 ? k.slice(0, 120) + "…" : k) + " <span style='float:right;font:600 11px system-ui;background:#e2e8f0;color:#334155;border-radius:10px;padding:2px 9px'>" + buckets[k].length + " row" + (buckets[k].length === 1 ? "" : "s") + "</span></summary><div style='margin-top:6px'>" + one(buckets[k]) + "</div></details>";
       });
-      h += "</tbody></table></div>";
-      if (shown.length > 500) h += "<div style='font-size:12px;color:#64748b;margin-top:8px'>Showing first 500 of " + shown.length + " rows.</div>";
+      return out;
+    }
+    function changedByField() {
+      var by = {}, order2 = [];
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) {
+        if (q && !(hit(ch.key) || hit(f) || hit(ch.before[f]) || hit(ch.after[f]))) return;
+        if (!by[f]) { by[f] = []; order2.push(f); } by[f].push(ch);
+      }); });
+      if (!order2.length) return empty("No changes match the filter.");
+      order2.sort(function (x, y) { return by[y].length - by[x].length; });
+      var h = "<div style='font-size:12px;color:#64748b;margin-bottom:8px'>Grouped by <b>field</b>: each section lists every row where that field changed.</div>";
+      order2.forEach(function (f, i) {
+        h += "<details " + (i < 3 ? "open " : "") + "style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:10px;overflow:hidden'><summary style='cursor:pointer;padding:9px 12px;background:#fffbeb;font:700 13px system-ui;color:#0f172a'>" + esc(f) + " <span style='float:right;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>" + by[f].length + " row" + (by[f].length === 1 ? "" : "s") + "</span></summary>"
+          + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:260px'><col><col></colgroup><thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Key</th><th style='text-align:left;padding:6px 12px'>Before</th><th style='text-align:left;padding:6px 12px'>After</th></tr></thead><tbody>";
+        by[f].slice(0, 300).forEach(function (ch) {
+          h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:12px ui-monospace,Menlo,monospace;word-break:break-all'>" + esc(ch.key) + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'>" + cellHtml(ch.before[f], true) + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'>" + cellHtml(ch.after[f], true) + "</td></tr>";
+        });
+        h += "</tbody></table></details>";
+      });
       return h;
     }
     function changedCards() {
@@ -14575,8 +14633,13 @@
         b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
         b.textContent = t.n === "" ? t.label : t.label + "  " + t.n;
       });
-      body.innerHTML = noticesView() + (active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444"));
+      body.innerHTML = noticesView() + (active === "changed" ? (view === "field" ? changedByField() : changedCards()) : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444"));
       body.scrollTop = 0;
+      // group-by control: changed tab -> By row / By field ; added/removed -> any column
+      var opts = "";
+      if (active === "changed") opts = "<option value='row'" + (view === "row" ? " selected" : "") + ">Group: by row</option><option value='field'" + (view === "field" ? " selected" : "") + ">Group: by field</option>";
+      else { var src2 = (active === "added" ? diff.added : diff.removed)[0] || {}; opts = "<option value=''>Group: none</option>" + Object.keys(src2).map(function (c) { return "<option value=\"" + esc(c) + "\"" + (grp === c ? " selected" : "") + ">Group by " + esc(c) + "</option>"; }).join(""); }
+      grpSel.innerHTML = opts;
     }
     paint();
 
