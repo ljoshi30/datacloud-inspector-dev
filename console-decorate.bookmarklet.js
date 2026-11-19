@@ -14402,7 +14402,7 @@
       var up = sp.size / P.length, uc = sc.size / C.length, inter = 0;
       sp.forEach(function (x) { if (sc.has(x)) inter++; });
       var ov = inter / sp.size;
-      var score = Math.min(up, uc) * ov + (/(^|_)id(__c)?$/i.test(c) ? 0.01 : 0);
+      var score = Math.min(1, Math.min(up, uc) * ov + (/(^|_)id(__c)?$/i.test(c) ? 0.01 : 0));
       out.push({ col: c, uniqPrev: up, uniqCurr: uc, overlap: ov, score: score });
     });
     out.sort(function (a, b) { return b.score - a.score; });
