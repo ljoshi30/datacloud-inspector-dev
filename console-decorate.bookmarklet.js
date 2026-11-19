@@ -14417,45 +14417,108 @@
 
   // Render the diff (added/removed/changed) in a modal with sections.
   function openQeDiffModal(diff, keyCols, prevSnap) {
-    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); };
+    var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
     var old = document.getElementById("dc-qe-diff-modal"); if (old) old.remove();
     var modal = document.createElement("div"); modal.id = "dc-qe-diff-modal";
-    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif;";
+    modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;font-family:-apple-system,'Segoe UI',sans-serif;";
     var box = document.createElement("div");
-    box.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(900px,95vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;";
-    var when = prevSnap && prevSnap.ts ? new Date(prevSnap.ts).toLocaleString() : "previous snapshot";
+    box.style.cssText = "position:fixed;top:3vh;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;width:min(1500px,97vw);height:93vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.4);overflow:hidden;";
+    var when = prevSnap && prevSnap.ts ? new Date(prevSnap.ts).toLocaleString() : ((prevSnap && prevSnap.label) || "previous snapshot");
     var hdr = document.createElement("div");
-    hdr.style.cssText = "padding:12px 16px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
-    hdr.innerHTML = "<div><div style='font:700 14px system-ui'>Compare vs " + esc(when) + "</div><div style='font:400 11px system-ui;opacity:.85'>key: " + esc(keyCols.join(" + ")) + " &bull; <span style='color:#86efac'>+" + diff.added.length + " added</span> &bull; <span style='color:#fca5a5'>-" + diff.removed.length + " removed</span> &bull; <span style='color:#fde68a'>~" + diff.changed.length + " changed</span> &bull; " + diff.unchanged + " unchanged</div></div>";
-    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
+    hdr.style.cssText = "padding:12px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;align-items:center;justify-content:space-between;cursor:move;flex-shrink:0;";
+    hdr.innerHTML = "<div><div style='font:700 16px system-ui'>Compare: previous (" + esc(when) + ") &rarr; current</div><div style='font:400 12px system-ui;opacity:.9;margin-top:2px'>Rows matched by key: <b>" + esc(keyCols.join(" + ")) + "</b></div></div>";
+    var closeX = document.createElement("button"); closeX.innerHTML = "&times;"; closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer;";
     closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
-    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 16px;min-height:0;background:#f8fafc;"; box.appendChild(body);
 
-    var html = "";
-    if (diff.warnings.length) html += "<div style='background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;padding:7px 10px;margin-bottom:12px;font-size:11px;color:#92400e'>&#9888; " + diff.warnings.map(esc).join(" &bull; ") + "</div>";
-    function tbl(title, color, rows2, cols2) {
-      if (!rows2.length) return "<div style='margin:0 0 10px;font-size:12px;color:#94a3b8'>" + title + ": none</div>";
-      var h = "<div style='font:700 12px system-ui;color:" + color + ";margin:4px 0 6px'>" + title + " (" + rows2.length + ")</div>";
-      h += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden;margin-bottom:14px'><thead><tr style='background:#1e293b;color:#fff'>";
-      cols2.forEach(function (c) { h += "<th style='text-align:left;padding:5px 8px;white-space:nowrap'>" + esc(c) + "</th>"; });
+    var warn = "";
+    if (diff.warnings.length) warn = "<div style='background:#fffbeb;border-bottom:1px solid #fcd34d;padding:6px 18px;font-size:12px;color:#92400e;flex-shrink:0'>&#9888; " + diff.warnings.map(esc).join(" &bull; ") + "</div>";
+    var warnEl = document.createElement("div"); warnEl.innerHTML = warn; if (warn) box.appendChild(warnEl.firstChild);
+
+    // tab bar: big clickable summary chips + search
+    var bar = document.createElement("div");
+    bar.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;";
+    var tabs = [
+      { id: "changed", label: "✎ Changed", n: diff.changed.length, c: "#b45309", bg: "#fef3c7" },
+      { id: "added", label: "+ Added", n: diff.added.length, c: "#047857", bg: "#d1fae5" },
+      { id: "removed", label: "− Removed", n: diff.removed.length, c: "#b91c1c", bg: "#fee2e2" }
+    ];
+    var active = diff.changed.length ? "changed" : diff.added.length ? "added" : diff.removed.length ? "removed" : "changed";
+    var q = "";
+    var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 18px;min-height:0;background:#f8fafc;";
+    var tabEls = {};
+    tabs.forEach(function (t) {
+      var b = document.createElement("button"); tabEls[t.id] = b;
+      b.onclick = function () { active = t.id; paint(); };
+      bar.appendChild(b);
+    });
+    var same = document.createElement("span"); same.style.cssText = "font-size:12px;color:#64748b;margin-left:4px;"; same.textContent = diff.unchanged + " unchanged"; bar.appendChild(same);
+    var search = document.createElement("input"); search.type = "search"; search.placeholder = "Filter (key, field or value)…";
+    search.style.cssText = "margin-left:auto;padding:7px 11px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px;outline:none;";
+    search.oninput = function () { q = search.value.trim().toLowerCase(); paint(); };
+    bar.appendChild(search);
+    box.appendChild(bar); box.appendChild(body);
+
+    function hit(s) { return !q || String(s == null ? "" : s).toLowerCase().indexOf(q) >= 0; }
+    function pretty(v) {
+      var s = v == null ? "" : String(v), t = s.trim();
+      if (t.charAt(0) === "{" || t.charAt(0) === "[") { try { return JSON.stringify(JSON.parse(t), null, 2); } catch (e) {} }
+      return s;
+    }
+    var CELL = "white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;";
+    function empty(msg) { return "<div style='padding:40px;text-align:center;color:#94a3b8;font-size:14px'>" + msg + "</div>"; }
+    function rowsTable(rows2, color) {
+      var shown = rows2.filter(function (r) { return !q || Object.keys(r).some(function (k) { return hit(r[k]); }); });
+      if (!shown.length) return empty(rows2.length ? "No rows match the filter." : "None.");
+      var cols2 = (shown[0] && Object.keys(shown[0])) || [];
+      keyCols.slice().reverse().forEach(function (k) { var i = cols2.indexOf(k); if (i > 0) { cols2.splice(i, 1); cols2.unshift(k); } });
+      var h = "<div style='overflow:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;max-height:100%'><table style='border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%'><thead><tr>";
+      cols2.forEach(function (c) { h += "<th style='position:sticky;top:0;z-index:1;text-align:left;padding:8px 10px;background:#1e293b;color:#fff;white-space:nowrap;border-bottom:3px solid " + color + "'>" + esc(c) + (keyCols.indexOf(c) >= 0 ? " 🔑" : "") + "</th>"; });
       h += "</tr></thead><tbody>";
-      rows2.slice(0, 500).forEach(function (r, i) { h += "<tr style='background:" + (i % 2 ? "#f9fafb" : "#fff") + "'>"; cols2.forEach(function (c) { h += "<td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' title='" + esc(r[c]) + "'>" + esc(r[c] == null ? "" : r[c]) + "</td>"; }); h += "</tr>"; });
-      h += "</tbody></table>";
-      if (rows2.length > 500) h += "<div style='font-size:11px;color:#94a3b8;margin:-8px 0 12px'>showing first 500 of " + rows2.length + "</div>";
+      shown.slice(0, 500).forEach(function (r, i) {
+        h += "<tr style='background:" + (i % 2 ? "#f8fafc" : "#fff") + "'>";
+        cols2.forEach(function (c) {
+          var v = r[c] == null ? "" : String(r[c]);
+          h += "<td style='padding:6px 10px;border-bottom:1px solid #eef2f6;vertical-align:top;min-width:90px;max-width:340px;" + CELL + (keyCols.indexOf(c) >= 0 ? "font-weight:700;" : "") + "'><div style='max-height:96px;overflow:auto'>" + (v === "" ? "<span style='color:#cbd5e1'>—</span>" : esc(v)) + "</div></td>";
+        });
+        h += "</tr>";
+      });
+      h += "</tbody></table></div>";
+      if (shown.length > 500) h += "<div style='font-size:12px;color:#64748b;margin-top:8px'>Showing first 500 of " + shown.length + " rows.</div>";
       return h;
     }
-    var curCols = (prevSnap && prevSnap.columns) || (diff.added[0] ? Object.keys(diff.added[0]) : keyCols);
-    html += tbl("➕ Added rows", "#059669", diff.added, curCols);
-    html += tbl("➖ Removed rows", "#dc2626", diff.removed, curCols);
-    // changed: show key + which fields changed, before → after
-    if (diff.changed.length) {
-      html += "<div style='font:700 12px system-ui;color:#b45309;margin:4px 0 6px'>✎ Changed rows (" + diff.changed.length + ")</div>";
-      html += "<table style='width:100%;border-collapse:collapse;font-size:11px;background:#fff;border-radius:6px;overflow:hidden'><thead><tr style='background:#1e293b;color:#fff'><th style='text-align:left;padding:5px 8px'>Key</th><th style='text-align:left;padding:5px 8px'>Field</th><th style='text-align:left;padding:5px 8px'>Before</th><th style='text-align:left;padding:5px 8px'>After</th></tr></thead><tbody>";
-      var cnt = 0;
-      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { if (cnt++ > 1000) return; html += "<tr><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-family:SF Mono,monospace'>" + esc(ch.key) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;font-weight:600'>" + esc(f) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#fef2f2'>" + esc(ch.before[f] == null ? "" : ch.before[f]) + "</td><td style='padding:4px 8px;border-bottom:1px solid #f1f5f9;background:#f0fdf4'>" + esc(ch.after[f] == null ? "" : ch.after[f]) + "</td></tr>"; }); });
-      html += "</tbody></table>";
-    } else html += "<div style='font-size:12px;color:#94a3b8'>Changed: none</div>";
-    body.innerHTML = html;
+    function changedCards() {
+      var items = diff.changed.filter(function (ch) { return !q || hit(ch.key) || ch.fields.some(function (f) { return hit(f) || hit(ch.before[f]) || hit(ch.after[f]); }); });
+      if (!items.length) return empty(diff.changed.length ? "No changes match the filter." : "No rows changed.");
+      var h = "<div style='font-size:12px;color:#64748b;margin-bottom:10px'>Each card is one row (matched by key). Only the fields that differ are shown.</div>";
+      items.slice(0, 300).forEach(function (ch, idx) {
+        h += "<details " + (idx < 15 ? "open " : "") + "style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:10px;overflow:hidden'>"
+          + "<summary style='cursor:pointer;padding:9px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#fffbeb'>"
+          + "<span style='font:600 11px system-ui;color:#92400e;text-transform:uppercase;letter-spacing:.04em'>" + esc(keyCols.join(" + ")) + "</span>"
+          + "<span style='font:700 13px ui-monospace,Menlo,monospace;color:#0f172a;word-break:break-all'>" + esc(ch.key) + "</span>"
+          + "<span style='margin-left:auto;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>" + ch.fields.length + " field" + (ch.fields.length === 1 ? "" : "s") + " changed</span></summary>"
+          + "<table style='width:100%;border-collapse:collapse;table-layout:fixed'><colgroup><col style='width:200px'><col><col></colgroup>"
+          + "<thead><tr style='background:#f1f5f9;font:700 11px system-ui;color:#475569;text-transform:uppercase'><th style='text-align:left;padding:6px 12px'>Field</th><th style='text-align:left;padding:6px 12px'>Before (previous)</th><th style='text-align:left;padding:6px 12px'>After (current)</th></tr></thead><tbody>";
+        ch.fields.forEach(function (f) {
+          var b = pretty(ch.before[f]), a = pretty(ch.after[f]);
+          h += "<tr><td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;font:700 12px system-ui;color:#0f172a;word-break:break-word'>" + esc(f) + "</td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#fef2f2;color:#7f1d1d;" + CELL + "'><div style='max-height:260px;overflow:auto'>" + (b === "" ? "<i style='color:#fca5a5'>(empty)</i>" : esc(b)) + "</div></td>"
+            + "<td style='padding:8px 12px;border-top:1px solid #f1f5f9;vertical-align:top;background:#f0fdf4;color:#14532d;" + CELL + "'><div style='max-height:260px;overflow:auto'>" + (a === "" ? "<i style='color:#86efac'>(empty)</i>" : esc(a)) + "</div></td></tr>";
+        });
+        h += "</tbody></table></details>";
+      });
+      if (items.length > 300) h += "<div style='font-size:12px;color:#64748b'>Showing first 300 of " + items.length + " changed rows.</div>";
+      return h;
+    }
+    function paint() {
+      tabs.forEach(function (t) {
+        var on = t.id === active, b = tabEls[t.id];
+        b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
+        b.textContent = t.label + "  " + t.n;
+      });
+      body.innerHTML = active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444");
+      body.scrollTop = 0;
+    }
+    paint();
 
     modal.appendChild(box);
     modal.addEventListener("click", function (e) { if (e.target === modal) modal.remove(); });
