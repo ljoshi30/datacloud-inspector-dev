@@ -14389,6 +14389,25 @@
     });
     return { dups: dups, total: total, jsonish: jsonish, blanks: blanks };
   }
+  // Auto-detect the best KEY column: a good key is UNIQUE within each run and the SAME VALUES appear in both runs.
+  // score = min(uniqueness in older, uniqueness in newer) x share of older values still present in newer.
+  function qeSuggestKeys(prev, curr, cols) {
+    var P = (prev && prev.rows) || [], C = (curr && curr.rows) || [], out = [];
+    if (!P.length || !C.length) return out;
+    (cols || []).forEach(function (c) {
+      var sp = new Set(), sc = new Set(), np = 0, nc = 0, len = 0, js = 0, i, v;
+      for (i = 0; i < P.length; i++) { v = P[i][c]; if (v == null || v === "") continue; v = String(v); np++; sp.add(v); len += v.length; var ch = v.charAt(0); if (ch === "{" || ch === "[") js++; }
+      for (i = 0; i < C.length; i++) { v = C[i][c]; if (v == null || v === "") continue; sc.add(String(v)); nc++; }
+      if (!np || !nc || len / np > 150 || js / np > 0.2) return;
+      var up = sp.size / P.length, uc = sc.size / C.length, inter = 0;
+      sp.forEach(function (x) { if (sc.has(x)) inter++; });
+      var ov = inter / sp.size;
+      var score = Math.min(up, uc) * ov + (/(^|_)id(__c)?$/i.test(c) ? 0.01 : 0);
+      out.push({ col: c, uniqPrev: up, uniqCurr: uc, overlap: ov, score: score });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    return out.slice(0, 5);
+  }
   function qeDiffSnapshots(prev, curr, keyCols) {
     var warnings = [];
     var prevRows = (prev && prev.rows) || [], currRows = (curr && curr.rows) || [];
@@ -14416,7 +14435,7 @@
   }
 
   // Render the diff (added/removed/changed) in a modal with sections.
-  function openQeDiffModal(diff, keyCols, prevSnap) {
+  function openQeDiffModal(diff, keyCols, prevSnap, ctx) {
     var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
     var old = document.getElementById("dc-qe-diff-modal"); if (old) old.remove();
     var modal = document.createElement("div"); modal.id = "dc-qe-diff-modal";
@@ -14608,6 +14627,19 @@
     function noticesView() {
       var h = "";
       var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
+      if (ctx && ctx.prev && ctx.curr && keyCols.length === 1) {
+        if (!ctx.sugg) ctx.sugg = qeSuggestKeys(ctx.prev, ctx.curr, (ctx.curr.columns || []).filter(function (c) { return (ctx.prev.columns || []).indexOf(c) >= 0; }));
+        var top = ctx.sugg[0], cur = ctx.sugg.filter(function (x) { return x.col === keyCols[0]; })[0];
+        var curScore = cur ? cur.score : 0;
+        if (top && top.col !== keyCols[0] && top.score >= 0.4 && top.score > curScore + 0.15) {
+          h += "<div style='background:#ecfdf5;border:1px solid #6ee7b7;border-left:4px solid #10b981;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#065f46;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+            + "<div style='flex:1;min-width:260px'><b>&#10024; Better key found: " + esc(top.col) + "</b><br>It is unique in " + Math.round(Math.min(top.uniqPrev, top.uniqCurr) * 100) + "% of rows and " + Math.round(top.overlap * 100) + "% of its values appear in both runs. "
+            + "Your current key <b>" + esc(keyCols[0]) + "</b> scores " + Math.round(curScore * 100) + "/100 (" + Math.round(top.score * 100) + "/100 for the suggestion).</div>"
+            + "<button id='dc-use-key' style='cursor:pointer;border:none;background:#059669;color:#fff;border-radius:8px;padding:9px 15px;font:700 12px system-ui'>Re-compare using " + esc(top.col) + "</button></div>";
+        } else if (top && top.col === keyCols[0]) {
+          h += "<div style='font-size:12px;color:#047857;margin-bottom:10px'>&#10003; Key looks good: " + esc(top.col) + " is unique and shared between both runs.</div>";
+        }
+      }
       var rk = findRekeyed();
       if (rk.length) {
         h += "<div style='background:#eff6ff;border:1px solid #93c5fd;border-left:4px solid #3b82f6;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#1e3a8a'>"
@@ -14640,6 +14672,8 @@
       if (active === "changed") opts = "<option value='row'" + (view === "row" ? " selected" : "") + ">Group: by row</option><option value='field'" + (view === "field" ? " selected" : "") + ">Group: by field</option>";
       else { var src2 = (active === "added" ? diff.added : diff.removed)[0] || {}; opts = "<option value=''>Group: none</option>" + Object.keys(src2).map(function (c) { return "<option value=\"" + esc(c) + "\"" + (grp === c ? " selected" : "") + ">Group by " + esc(c) + "</option>"; }).join(""); }
       grpSel.innerHTML = opts;
+      var uk = body.querySelector("#dc-use-key");
+      if (uk && ctx && typeof ctx.rerun === "function") uk.onclick = function () { modal.remove(); ctx.rerun(ctx.sugg[0].col); };
     }
     paint();
 
@@ -14777,6 +14811,11 @@
       keySel.disabled = false;
       keySel.innerHTML = common.map(function (c) { return "<option value='" + String(c).replace(/'/g, "") + "'>" + String(c).replace(/</g, "") + "</option>"; }).join("");
       var def = common.find(function (c) { return /(^|_)id(__c)?$/i.test(c) || /primary/i.test(c); }); if (def) keySel.value = def;
+      try {
+        var sg = qeSuggestKeys(snapOld, snapNew, common);
+        if (sg[0] && sg[0].score >= 0.4) { keySel.value = sg[0].col; msg.style.color = "#047857"; msg.textContent = "\u2728 Auto-detected key: " + sg[0].col + " (unique " + Math.round(Math.min(sg[0].uniqPrev, sg[0].uniqCurr) * 100) + "%, " + Math.round(sg[0].overlap * 100) + "% shared between files). Change it if you know better."; }
+        else { msg.style.color = "#b45309"; msg.textContent = "\u26A0 No column is both unique and shared between the two files, so no reliable key was found. Pick the closest ID column or expect noisy results."; }
+      } catch (e) {}
       goBtn.disabled = false; goBtn.style.opacity = "1";
     }
     function loadFile(input, infoEl, assign) {
@@ -14803,7 +14842,9 @@
       // reuse the SAME diff engine + results modal as snapshot compare
       var d = qeDiffSnapshots(snapOld, snapNew, keyCols);
       // label the diff header as the older file (prevSnap carries .label/.ts; use filename)
-      openQeDiffModal(d, keyCols, { label: "older CSV", columns: snapOld.columns });
+      var pSnap = { label: "older CSV", columns: snapOld.columns };
+      var cx = { prev: snapOld, curr: snapNew }; cx.rerun = function (col) { var d2 = qeDiffSnapshots(snapOld, snapNew, [col]); openQeDiffModal(d2, [col], pSnap, cx); };
+      openQeDiffModal(d, keyCols, pSnap, cx);
     };
 
     modal.appendChild(box);
@@ -17452,8 +17493,10 @@
         var list = qeSnapList(snapSql); var idx = parseInt(cmpSel.value, 10);
         if (isNaN(idx) || !list[idx]) return;
         var keyCols = [keySel.value].filter(Boolean);
-        var d = qeDiffSnapshots(list[idx], { columns: allCols, rows: rows }, keyCols);
-        openQeDiffModal(d, keyCols, list[idx]);
+        var curSnap = { columns: allCols, rows: rows }, oldSnap = list[idx];
+        var d = qeDiffSnapshots(oldSnap, curSnap, keyCols);
+        var cx = { prev: oldSnap, curr: curSnap }; cx.rerun = function (col) { var d2 = qeDiffSnapshots(oldSnap, curSnap, [col]); openQeDiffModal(d2, [col], oldSnap, cx); };
+        openQeDiffModal(d, keyCols, oldSnap, cx);
       };
       delBtn.onclick = function () {
         var idx = parseInt(cmpSel.value, 10); if (isNaN(idx)) return;

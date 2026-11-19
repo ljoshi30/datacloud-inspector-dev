@@ -1,7 +1,8 @@
 // Real-Chrome test (manual): the Compare modal renders tabs, per-row change cards, wide table, filter.
 const fs=require("fs"),http=require("http"),cp=require("child_process"),assert=require("assert");
 const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
-const code=src.slice(src.indexOf("  function openQeDiffModal"),src.indexOf("  // ── Snapshot/Compare in-tool help"));
+const sk=src.slice(src.indexOf("  function qeSuggestKeys"),src.indexOf("  function qeDiffSnapshots"));
+const code=sk+src.slice(src.indexOf("  function openQeDiffModal"),src.indexOf("  // ── Snapshot/Compare in-tool help"));
 const html="<!doctype html><meta charset=utf-8><body><script>function makeDraggable(){}"+code+`
 var diff={added:[{Id:"A1",Name:"Jacob",Dob:"1959",City:"X"},{Id:"A2",Name:"Zed",Dob:"2000",City:"Q"}],removed:[{Id:"R1",Name:"Jacob",Dob:"1959",City:"X"}],unchanged:0,warnings:["7 duplicate key(s)"],
 changed:[{key:"K1",fields:["Seg","Match"],before:{Seg:"DM",Match:'{"a":1,"b":[1,2]}'},after:{Seg:"AB",Match:'{"a":2,"b":[1,2]}'}},{key:"K2",fields:["Seg"],before:{Seg:"X"},after:{Seg:"Y"}}]};
@@ -41,5 +42,9 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelectorAll('#dc-qe-diff-modal details').length")===2,"added grouped by City -> 2 groups");
  await ev("[...document.querySelectorAll('#dc-qe-diff-modal button')].find(b=>/Full screen/.test(b.textContent)).click()");
  ok(await ev("document.querySelector('#dc-qe-diff-modal > div').getBoundingClientRect().width")>=1590,"fullscreen widens");
+ await ev('var P=[],C=[];for(var i=0;i<30;i++){P.push({H:"p"+i,S:"s"+i});C.push({H:"c"+i,S:"s"+i});}\nvar rr=null;openQeDiffModal({added:[],removed:[],changed:[],unchanged:0,warnings:[]},["H"],{ts:1},{prev:{columns:["H","S"],rows:P},curr:{columns:["H","S"],rows:C},rerun:function(c){window.__re=c;}});');
+ ok(await ev("!!document.querySelector('#dc-use-key')"),"better-key suggestion shown (H hash -> S)");
+ await ev("document.querySelector('#dc-use-key').click()");
+ ok(await ev("window.__re")==="S","one click re-runs with suggested key S");
  console.log("qe-diff-modal-browser: "+n+" checks passed");ch.kill();srv.close();process.exit(0);
 })().catch(e=>{console.error(e);process.exit(1)});
