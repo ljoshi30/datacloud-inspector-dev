@@ -14510,6 +14510,37 @@
       if (items.length > 300) h += "<div style='font-size:12px;color:#64748b'>Showing first 300 of " + items.length + " changed rows.</div>";
       return h;
     }
+    // Insight: an "added" + a "removed" row that agree on most other columns are almost certainly the SAME record whose key changed.
+    function findRekeyed() {
+      var A = diff.added.slice(0, 400), R = diff.removed.slice(0, 400), used = {}, out = [];
+      var kk = function (r) { return keyCols.map(function (k) { return r[k]; }).join(" + "); };
+      A.forEach(function (a) {
+        var cols = Object.keys(a).filter(function (c) { return keyCols.indexOf(c) < 0 && a[c] != null && String(a[c]) !== ""; });
+        if (cols.length < 2) return;
+        var best = -1, bs = 0;
+        R.forEach(function (r, i) {
+          if (used[i]) return; var m = 0;
+          cols.forEach(function (c) { if (String(r[c]) === String(a[c])) m++; });
+          if (m > bs) { bs = m; best = i; }
+        });
+        if (best >= 0 && bs >= 2 && bs / cols.length >= 0.5) { used[best] = 1; out.push({ from: kk(R[best]), to: kk(a), pct: Math.round(100 * bs / cols.length) }); }
+      });
+      return out;
+    }
+    function exportDiff(btn) {
+      var rows = [];
+      var flat = function (r) { return Object.keys(r).filter(function (c) { return r[c] != null && String(r[c]) !== ""; }).map(function (c) { return c + "=" + r[c]; }).join("; "); };
+      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { rows.push({ Type: "Changed", Key: ch.key, Field: f, Before: ch.before[f] == null ? "" : String(ch.before[f]), After: ch.after[f] == null ? "" : String(ch.after[f]) }); }); });
+      diff.added.forEach(function (r) { rows.push({ Type: "Added", Key: keyCols.map(function (k) { return r[k]; }).join(" + "), Field: "(whole row)", Before: "", After: flat(r) }); });
+      diff.removed.forEach(function (r) { rows.push({ Type: "Removed", Key: keyCols.map(function (k) { return r[k]; }).join(" + "), Field: "(whole row)", Before: flat(r), After: "" }); });
+      if (typeof downloadRowsXlsx === "function") downloadRowsXlsx("snapshot-compare", ["Type", "Key", "Field", "Before", "After"], rows, btn);
+    }
+    function summaryText() {
+      var t = "Compare: +" + diff.added.length + " new, -" + diff.removed.length + " gone, ~" + diff.changed.length + " edited, " + diff.unchanged + " identical (key: " + keyCols.join(" + ") + ")\n";
+      var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
+      Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; }).forEach(function (f) { t += "  " + f + ": " + cnt[f] + " row(s)\n"; });
+      return t;
+    }
     function summaryView() {
       var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
       var h = "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:14px;font-size:14px;line-height:1.7;color:#0f172a'>"
@@ -14518,7 +14549,17 @@
         + "<b style='color:#b91c1c'>" + sh(diff.removed.length, "row") + " gone</b> (in previous, not in current) &nbsp;&bull;&nbsp; "
         + "<b style='color:#b45309'>" + sh(diff.changed.length, "row") + " edited</b> (same key, different values) &nbsp;&bull;&nbsp; "
         + "<b style='color:#64748b'>" + diff.unchanged + " identical</b></div>"
-        + "<div style='font-size:12px;color:#64748b;margin-top:4px'>Rows are matched by <b>" + esc(keyCols.join(" + ")) + "</b>. Click a tab above for the full rows.</div></div>";
+        + "<div style='font-size:12px;color:#64748b;margin-top:4px'>Rows are matched by <b>" + esc(keyCols.join(" + ")) + "</b>. Click a tab above for the full rows.</div>"
+        + "<div style='margin-top:10px;display:flex;gap:8px'><button id='dc-diff-xl' style='cursor:pointer;border:none;background:#059669;color:#fff;border-radius:7px;padding:7px 13px;font:600 12px system-ui'>&#11015; Export diff (Excel)</button>"
+        + "<button id='dc-diff-cp' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:7px 13px;font:600 12px system-ui'>Copy summary</button></div></div>";
+      var rk = findRekeyed();
+      if (rk.length) {
+        h += "<div style='background:#eff6ff;border:1px solid #93c5fd;border-left:4px solid #3b82f6;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#1e3a8a'>"
+          + "<b>&#128161; Insight: " + sh(rk.length, "record") + " look like the same record with a NEW key</b>, not truly new or gone. The rows below were removed and added with almost identical values, so the key (<b>" + esc(keyCols.join(" + ")) + "</b>) was regenerated. If that is expected, treat them as unchanged.";
+        rk.slice(0, 8).forEach(function (x) { h += "<div style='font:12px ui-monospace,Menlo,monospace;margin-top:4px;word-break:break-all'>" + esc(x.from) + " &rarr; " + esc(x.to) + " <span style='color:#64748b'>(" + x.pct + "% same)</span></div>"; });
+        if (rk.length > 8) h += "<div style='font-size:12px;margin-top:4px'>…and " + (rk.length - 8) + " more</div>";
+        h += "</div>";
+      }
       if (!diff.changed.length) return h + empty("No existing row was edited.");
       // club all edits by field, then by identical before → after pair
       var byField = {}, order = [];
@@ -14552,6 +14593,8 @@
       });
       body.innerHTML = active === "summary" ? summaryView() : active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444");
       body.scrollTop = 0;
+      var xl = body.querySelector("#dc-diff-xl"); if (xl) xl.onclick = function () { exportDiff(xl); };
+      var cp2 = body.querySelector("#dc-diff-cp"); if (cp2) cp2.onclick = function () { try { navigator.clipboard.writeText(summaryText()); cp2.textContent = "Copied \u2713"; } catch (e) { cp2.textContent = "Copy blocked"; } };
     }
     paint();
 
