@@ -15227,7 +15227,7 @@
     templatesBtn.style.cssText = "border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font:600 11px -apple-system,sans-serif;color:#fff;background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 2px 8px rgba(217,119,6,.3);transition:transform .1s;";
     templatesBtn.onmouseenter = () => { templatesBtn.style.transform = "scale(1.03)"; templatesBtn.style.boxShadow = "0 4px 16px rgba(217,119,6,.4)"; };
     templatesBtn.onmouseleave = () => { templatesBtn.style.transform = "scale(1)"; templatesBtn.style.boxShadow = "0 3px 12px rgba(217,119,6,.3)"; };
-    templatesBtn.onclick = function () { openTemplatesPanel(); };
+    templatesBtn.onclick = function () { openGuidedChecks(); };
 
     // Streaming full-table export (no 500K cap) — only offered when the browser supports
     // File System Access streaming (Chromium) so we can write to disk without buffering the
@@ -15695,6 +15695,17 @@
         ds = c[0] || "";
       }
       return ds;
+    }
+    // Data space for a SQL statement, preferring the space Salesforce ITSELF used for the first table
+    // named in the query (_dsByObject, learned from the page's own queries), then the page-wide
+    // space. DLOs often live in the default space while DMOs live in a named one, so one
+    // page-wide value ("TD Insurance") can make a valid table look like it "does not exist".
+    function qeDsForSql(sql) {
+      try {
+        var fm = String(sql || "").match(/\bFROM\s+\(?\s*"?([A-Za-z0-9_]+)"?/i), t = fm ? fm[1] : "";
+        if (t && typeof _dsByObject !== "undefined" && _dsByObject[t] != null && !_dsGuess[t]) return _dsByObject[t];
+      } catch (e) {}
+      return qeResolveDs(sql);
     }
     function qeCleanForRun(sql) {
       var s0 = String(sql || ""), out = "", i = 0, n = s0.length, inStr = false;
@@ -16307,8 +16318,472 @@
         example: function (obj) { return "Example: counts how many rows of " + obj + " fall into each day/week/month/quarter/year you pick — \"how many were created each month?\""; } },
     ];
 
+    // @@GUIDED-START
+    // ── Guided Checks: pure catalog (SQL builders + plain-English verdicts) ──────────
+    // No DOM, no network — tested in test/qe-guided-checks.test.js (sliced by the markers).
+    // Every SQL function used (COUNT DISTINCT, CASE, TRIM, UPPER, LOWER, LIKE, TRY_CAST,
+    // DATE_TRUNC, CURRENT_DATE, INTERVAL, LEFT JOIN, GROUP BY/HAVING) is already used by the
+    // documented qeTemplates above. Verdict thresholds are guidelines, labelled as such.
+    var QG = (function () {
+      var Q = function (n) { return '"' + String(n).replace(/"/g, '""') + '"'; };
+      var num = function (x) { var v = Number(x); return isFinite(v) ? v : 0; };
+      var fmt = function (x) { return num(x).toLocaleString("en-US"); };
+      var pct = function (a, b) { return b > 0 ? Math.round((a / b) * 1000) / 10 : 0; };
+      var isText = function (t) { return !t || /char|text|string/i.test(String(t)); };
+      var isDateT = function (t) { return /date|timestamp/i.test(String(t || "")); };
+      var isTsT = function (t) { return /timestamp/i.test(String(t || "")); };
+      var dateLit = function (raw) {
+        var v = String(raw || "").trim().replace("T", " ");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return "DATE '" + v + "'";
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(v)) return "TIMESTAMP '" + v + "'";
+        return null;
+      };
+      // Build one bound of a range from a date + optional time. Timestamp columns: a blank
+      // start time = 00:00:00, a blank END time = 23:59:59 (so "to 5 Nov" includes all of 5 Nov).
+      function bound(date, time, colType, isEnd) {
+        if (!date) return null;
+        if (!isTsT(colType) && !time) return dateLit(date);
+        var t = time || (isEnd ? "23:59:59" : "00:00:00");
+        if (/^\d{2}:\d{2}$/.test(t)) t += ":00";
+        return dateLit(date + " " + t);
+      }
+      var cond = function (p, kind) {
+        var c = Q(p.c);
+        if (kind === "blank") return isText(p.cType) ? c + " IS NULL OR TRIM(" + c + ") = ''" : c + " IS NULL";
+        return "1=1";
+      };
+      var T = function (p) { return Q(p.t); };
+      var rng = function (p) { return Q(p.c) + " BETWEEN " + p.from + " AND " + p.to; };
+      var idLike = /(^|_)(id|key)(__c)?$|recordid$/i;
+      var lastN = function (p) { return Number(p.n) > 0 ? Math.floor(Number(p.n)) : 1; };
+
+      function dupCheck(id, norm) {
+        var expr = function (p) { return norm ? "UPPER(TRIM(" + Q(p.c) + "))" : Q(p.c); };
+        return {
+          id: id, title: norm ? "Duplicates after cleaning case/spaces" : "Duplicate values",
+          plain: norm ? "Finds values that look different but are the same once spaces and upper/lower case are ignored (e.g. 'A@x.com ' vs 'a@x.com')." : "Finds values that appear more than once in a column. Use it on an ID or key that should be unique.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS dup_values, COALESCE(SUM(n), 0) AS dup_rows FROM (SELECT " + expr(p) + " AS v, COUNT(*) AS n FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + expr(p) + " HAVING COUNT(*) > 1) x"; },
+          rows: function (p) { return "SELECT " + expr(p) + " AS " + (norm ? "normalized_value" : "value") + ", COUNT(*) AS times_seen FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + expr(p) + " HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC"; },
+          verdict: function (r) {
+            var d = num(r.dup_values);
+            if (!d) return { level: "ok", text: "No duplicates" + (norm ? " (even after ignoring case and spaces)." : ". Every value is unique.") };
+            return { level: "warn", text: fmt(d) + " value" + (d === 1 ? "" : "s") + " repeat, covering " + fmt(r.dup_rows) + " rows." + (norm ? " These are the same value written differently." : " If this column should be unique (an ID), this is a problem.") };
+          },
+          next: "Click 'See the rows' to list which values repeat and how many times, then search for one of them in the table."
+        };
+      }
+      function missingIn(id, goals, title, plain, defs, words) {
+        return {
+          id: id, goals: goals, title: title, plain: plain,
+          fields: [{ k: "t", kind: "table", label: words.a, def: defs.t }, { k: "c", kind: "col", label: words.ac, def: defs.c, pick: "id" }, { k: "t2", kind: "table", label: words.b, def: defs.t2 }, { k: "c2", kind: "col2", label: words.bc, def: defs.c2, pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN b." + Q(p.c2) + " IS NULL THEN 1 ELSE 0 END), 0) AS missing FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL"; },
+          rows: function (p) { return "SELECT a.* FROM " + Q(p.t) + " a LEFT JOIN " + Q(p.t2) + " b ON a." + Q(p.c) + " = b." + Q(p.c2) + " WHERE a." + Q(p.c) + " IS NOT NULL AND b." + Q(p.c2) + " IS NULL"; },
+          verdict: function (r) {
+            var m = num(r.missing), t = num(r.total);
+            if (!t) return { level: "warn", text: "The first table has no rows with a value in that column, so nothing could be compared." };
+            if (!m) return { level: "ok", text: "All " + fmt(t) + " rows were found in the second table." };
+            return { level: "bad", text: fmt(m) + " of " + fmt(t) + " rows (" + pct(m, t) + "%) have no match in the second table." };
+          },
+          next: words.next
+        };
+      }
+      function badRows(id, title, plain, where, okText, badText, goals) {
+        return {
+          id: id, goals: goals, title: title, plain: plain,
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + where(p) + " THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + where(p); },
+          verdict: function (r) { var b = num(r.bad), t = num(r.total); return b ? { level: "warn", text: fmt(b) + " of " + fmt(t) + " rows (" + pct(b, t) + "%) " + badText } : { level: "ok", text: okText }; },
+          next: "Click 'See the rows' to open the offending records, then fix them at the source or in a transform."
+        };
+      }
+
+      var checks = [
+        { id: "health", goals: ["loaded", "explore"], title: "Table health scan (all columns, one query)",
+          plain: "The quickest overall check. For EVERY column: how many rows have a value, how many different values there are, and the earliest/latest date. Flags empty columns and IDs that repeat.",
+          fields: [{ k: "t", kind: "table" }], needsCols: true,
+          summary: function (p) {
+            var cols = (p.cols || []).slice(0, 60), parts = ["COUNT(*) AS total_rows"];
+            cols.forEach(function (c, i) {
+              parts.push("COUNT(" + Q(c.name) + ") AS nn_" + i, "COUNT(DISTINCT " + Q(c.name) + ") AS dd_" + i);
+              if (isDateT(c.type)) parts.push("MIN(" + Q(c.name) + ") AS mn_" + i, "MAX(" + Q(c.name) + ") AS mx_" + i);
+            });
+            return "SELECT " + parts.join(", ") + " FROM " + T(p);
+          },
+          verdict: function (r, p) {
+            var cols = (p.cols || []).slice(0, 60), total = num(r.total_rows);
+            if (!total) return { level: "bad", text: "The table is empty (0 rows). Check that the data stream ran and the data space is right." };
+            var empty = [], dups = [], tr = [];
+            cols.forEach(function (c, i) {
+              var nn = num(r["nn_" + i]), dd = num(r["dd_" + i]);
+              if (nn === 0) empty.push(c.name);
+              if (idLike.test(c.name) && nn > 0 && dd < nn) dups.push(c.name);
+              var row = { Column: c.name, Type: c.type || "", "Has a value": pct(nn, total) + "%", "Different values": fmt(dd), "Earliest": "", "Latest": "" };
+              if (isDateT(c.type)) { row.Earliest = r["mn_" + i] == null ? "" : String(r["mn_" + i]); row.Latest = r["mx_" + i] == null ? "" : String(r["mx_" + i]); }
+              tr.push(row);
+            });
+            var msg = [fmt(total) + " rows, " + cols.length + " columns."];
+            if (empty.length) msg.push("Completely empty: " + empty.slice(0, 8).join(", ") + (empty.length > 8 ? "…" : "") + ".");
+            if (dups.length) msg.push("ID-like columns with repeated values: " + dups.slice(0, 8).join(", ") + ". If one is meant to be the primary key, run 'Duplicate values' on it.");
+            if (!empty.length && !dups.length) msg.push("No empty columns and no repeated IDs.");
+            return { level: (empty.length || dups.length) ? "warn" : "ok", text: msg.join(" "), table: tr, cap: (p.cols || []).length > 60 ? "Only the first 60 columns were scanned." : "" };
+          },
+          next: "Look at the table below: a column with a low 'Has a value' % is mostly empty; 'Different values' = 1 means it never varies." },
+        { id: "rowcount", goals: ["loaded"], title: "Does the table have data?", plain: "Counts the rows. Zero rows usually means the data stream did not run or you are in the wrong data space.",
+          fields: [{ k: "t", kind: "table" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p); },
+          verdict: function (r) { var t = num(r.total); return t ? { level: "ok", text: fmt(t) + " rows." } : { level: "bad", text: "0 rows. The table exists but is empty." }; },
+          next: "If this is 0, check the data stream's last run and that you are viewing the right data space." },
+        { id: "fresh", goals: ["loaded", "dates"], title: "Is the data fresh?", plain: "Finds the newest date in a column and tells you how old it is.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "n", kind: "num", label: "Should be newer than (days)", def: "2" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, MAX(" + Q(p.c) + ") AS latest FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " ORDER BY " + Q(p.c) + " DESC"; },
+          verdict: function (r, p, now) {
+            if (!num(r.total)) return { level: "bad", text: "The table is empty." };
+            if (r.latest == null || r.latest === "") return { level: "bad", text: "Every value in this date column is empty." };
+            var d = new Date(String(r.latest).replace(" ", "T") + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(r.latest)) || String(r.latest).length <= 10 ? "" : "Z"));
+            if (isNaN(d.getTime())) return { level: "warn", text: "Newest value is " + r.latest + " (could not read it as a date)." };
+            var age = ((now || Date.now()) - d.getTime()) / 864e5, lim = Number(p.n) > 0 ? Number(p.n) : 2, a = Math.max(0, Math.round(age * 10) / 10);
+            var txt = "Newest record: " + r.latest + " (" + a + " days ago).";
+            if (age <= lim) return { level: "ok", text: txt + " Within your " + lim + "-day limit." };
+            return { level: age <= lim * 3 ? "warn" : "bad", text: txt + " Older than your " + lim + "-day limit." };
+          },
+          next: "If it is stale, check the data stream's refresh schedule and last run." },
+        { id: "between", goals: ["dates", "explore"], title: "Rows between two dates / times", plain: "Counts, and lets you open, the rows whose date falls between a start and an end. Time is optional.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "range", kind: "range" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + rng(p) + " THEN 1 ELSE 0 END), 0) AS inside FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + rng(p) + " ORDER BY " + Q(p.c); },
+          verdict: function (r) { var i = num(r.inside), t = num(r.total); return i ? { level: "info", text: fmt(i) + " of " + fmt(t) + " rows (" + pct(i, t) + "%) are in that window." } : { level: "warn", text: "No rows fall in that window (the table has " + fmt(t) + " rows in total)." }; },
+          next: "Click 'See the rows' to open them or download as CSV." },
+        { id: "lastn", goals: ["dates"], title: "Rows from the last N days", plain: "How much data arrived recently. Zero means loading may have stopped.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "n", kind: "num", label: "Last N days", def: "7" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " >= CURRENT_DATE - INTERVAL '" + lastN(p) + " days' THEN 1 ELSE 0 END), 0) AS recent FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " >= CURRENT_DATE - INTERVAL '" + lastN(p) + " days' ORDER BY " + Q(p.c) + " DESC"; },
+          verdict: function (r, p) { var x = num(r.recent), t = num(r.total); return x ? { level: "ok", text: fmt(x) + " rows in the last " + lastN(p) + " days (" + pct(x, t) + "% of the table)." } : { level: "bad", text: "No rows in the last " + lastN(p) + " days." }; },
+          next: "No recent rows? Check the data stream schedule." },
+        { id: "trend", goals: ["dates"], title: "Rows per day / week / month", plain: "Shows how many rows arrived in each period, and lists days with zero rows (gaps) when you pick 'day'.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "period", kind: "period", def: "day" }, { k: "range", kind: "range", optional: true }],
+          inline: true,
+          summary: function (p) { return "SELECT COUNT(*) AS total, MIN(" + Q(p.c) + ") AS first_seen, MAX(" + Q(p.c) + ") AS last_seen FROM " + T(p) + (p.from && p.to ? " WHERE " + rng(p) : ""); },
+          rows: function (p) { var e = "DATE_TRUNC('" + (/^(hour|day|week|month|year)$/.test(p.period) ? p.period : "day") + "', " + Q(p.c) + ")"; return "SELECT " + e + " AS period, COUNT(*) AS record_count FROM " + T(p) + (p.from && p.to ? " WHERE " + rng(p) : "") + " GROUP BY " + e + " ORDER BY period"; },
+          verdict: function (r) { return num(r.total) ? { level: "info", text: fmt(r.total) + " rows from " + r.first_seen + " to " + r.last_seen + "." } : { level: "warn", text: "No rows." }; },
+          post: function (rows, p) {
+            if (p.period !== "day" || !rows || rows.length < 2) return null;
+            var have = {}, first = null, last = null;
+            rows.forEach(function (o) { var k = String(o.period).slice(0, 10); have[k] = 1; if (first === null || k < first) first = k; if (last === null || k > last) last = k; });
+            var miss = [], d = new Date(first + "T00:00:00Z"), end = new Date(last + "T00:00:00Z"), guard = 0;
+            while (d <= end && guard++ < 3700) { var k2 = d.toISOString().slice(0, 10); if (!have[k2]) miss.push(k2); d = new Date(d.getTime() + 864e5); }
+            return miss.length ? { level: "warn", text: miss.length + " day" + (miss.length === 1 ? "" : "s") + " with zero rows between " + first + " and " + last + ": " + miss.slice(0, 12).join(", ") + (miss.length > 12 ? "…" : "") } : { level: "ok", text: "No gaps: every day from " + first + " to " + last + " has rows." };
+          },
+          next: "Spikes or gaps show loading problems. Narrow with a date range to look closer." },
+        { id: "datesanity", goals: ["dates"], title: "Impossible dates (future or before 1990)", plain: "Finds dates in the future or suspiciously old (like 1900-01-01 placeholders).",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }],
+          summary: function (p) { var old = isTsT(p.cType) ? "TIMESTAMP '1990-01-01 00:00:00'" : "DATE '1990-01-01'"; return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " >= CURRENT_DATE + INTERVAL '1 days' THEN 1 ELSE 0 END), 0) AS future, COALESCE(SUM(CASE WHEN " + Q(p.c) + " < " + old + " THEN 1 ELSE 0 END), 0) AS ancient FROM " + T(p); },
+          rows: function (p) { var old = isTsT(p.cType) ? "TIMESTAMP '1990-01-01 00:00:00'" : "DATE '1990-01-01'"; return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " >= CURRENT_DATE + INTERVAL '1 days' OR " + Q(p.c) + " < " + old; },
+          verdict: function (r) { var f = num(r.future), a = num(r.ancient); return (f || a) ? { level: "warn", text: fmt(f) + " in the future, " + fmt(a) + " before 1990." } : { level: "ok", text: "No future or pre-1990 dates." }; },
+          next: "Often a wrong time zone, a default placeholder, or a swapped day/month." },
+        { id: "notdate", goals: ["dates", "mapping"], title: "Text that is not a valid date", plain: "For a text column that should hold dates: finds values that cannot be read as a date/time.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text", label: "Text column" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS TIMESTAMP) IS NULL THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS TIMESTAMP) IS NULL"; },
+          verdict: function (r) { var b = num(r.bad); return b ? { level: "bad", text: fmt(b) + " of " + fmt(r.total) + " values are not valid dates." } : { level: "ok", text: "Every value can be read as a date/time." }; },
+          next: "Fix the source format or map it as text and convert in a transform." },
+        { id: "blank", goals: ["loaded", "contact"], title: "Empty / blank values in a column", plain: "How many rows are NULL or blank in a column.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + cond(p, "blank") + " THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + cond(p, "blank"); },
+          verdict: function (r) { var b = num(r.bad), t = num(r.total); if (!b) return { level: "ok", text: "No empty values in " + fmt(t) + " rows." }; return { level: b === t ? "bad" : "warn", text: fmt(b) + " of " + fmt(t) + " rows (" + pct(b, t) + "%) are empty." }; },
+          next: "Required fields (IDs, emails) should be 0%." },
+        dupCheck("dupes", false), dupCheck("normdupes", true),
+        { id: "distinct", goals: ["explore", "mapping"], title: "Distinct values in a field", plain: "Lists every different value in a column with how often it appears, so you can eyeball typos, unexpected codes and blanks.",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "any", label: "Field" }], inline: true,
+          summary: function (p) { return "SELECT COUNT(*) AS total, COUNT(" + Q(p.c) + ") AS non_null, COUNT(DISTINCT " + Q(p.c) + ") AS distinct_values FROM " + T(p); },
+          rows: function (p) { return "SELECT " + Q(p.c) + " AS value, COUNT(*) AS value_count FROM " + T(p) + " GROUP BY " + Q(p.c) + " ORDER BY COUNT(*) DESC"; },
+          verdict: function (r) { var t = num(r.total), n = num(r.non_null); return { level: "info", text: fmt(r.distinct_values) + " different values across " + fmt(t) + " rows" + (t > n ? " (" + fmt(t - n) + " rows are empty)." : ".") }; },
+          next: "Most common values are first. Download the CSV for the full list." },
+        missingIn("mapMissing", ["mapping"], "Rows in table A with no match in table B", "Checks that every value in A's column exists in B's column (e.g. DLO key vs the DMO it maps to, or a foreign key vs its parent).", {}, { a: "Table A (the one to check)", ac: "Column in A", b: "Table B (should contain them)", bc: "Column in B", next: "Missing values are usually an unmapped field, a filter on one side, or a key in a different format." }),
+        { id: "typecheck", goals: ["mapping"], title: "Values that do not fit a type", plain: "Finds text values that cannot be converted to a number or date (a common cause of mapping/ingest problems).",
+          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text" }, { k: "type", kind: "typesel" }],
+          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS " + p.type + ") IS NULL THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS " + p.type + ") IS NULL"; },
+          verdict: function (r, p) { var b = num(r.bad); return b ? { level: "bad", text: fmt(b) + " of " + fmt(r.total) + " values cannot be read as " + p.type + "." } : { level: "ok", text: "All values convert to " + p.type + "." }; },
+          next: "See the rows to find the bad values." },
+        { id: "idrHealth", goals: ["idr"], title: "Did identity resolution merge anything?", plain: "On an identity LINK table (e.g. IndividualIdentityLink__dlm): how many source records collapsed into how many unified profiles.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }],
+          summary: function (p) { return "SELECT COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p); },
+          rows: function (p) { return "SELECT * FROM " + T(p); },
+          verdict: function (r) {
+            var s = num(r.source_records), u = num(r.unified_profiles);
+            if (!s) return { level: "bad", text: "The link table is empty: identity resolution has not produced results yet (or it has not run)." };
+            var rate = pct(s - u, s), txt = fmt(s) + " source records became " + fmt(u) + " unified profiles. Consolidation rate " + rate + "%.";
+            if (rate === 0) return { level: "warn", text: txt + " Nothing merged. Rules may be too strict, or there are genuinely no duplicates." };
+            if (rate >= 90) return { level: "warn", text: txt + " Very high. Rules may be too loose (over-merging). Run 'Unified profiles with too many records'." };
+            return { level: "ok", text: txt };
+          },
+          next: "Next: 'Merge rate per source' to see which source merges how much." },
+        { id: "idrBySource", goals: ["idr"], title: "Merge rate per source", plain: "For each data source/object feeding identity resolution: how many records and how many unified profiles they ended up in.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }], inline: true,
+          summary: function (p) { return "SELECT COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p); },
+          rows: function (p) { return "SELECT " + Q("ssot__DataSourceId__c") + " AS data_source, " + Q("ssot__DataSourceObjectId__c") + " AS source_object, COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p) + " GROUP BY " + Q("ssot__DataSourceId__c") + ", " + Q("ssot__DataSourceObjectId__c") + " ORDER BY COUNT(*) DESC"; },
+          verdict: function (r) { return { level: "info", text: fmt(r.source_records) + " records in total across sources. A source whose unified_profiles is close to its source_records is barely merging." }; },
+          next: "A source that never merges may be missing the match fields (email, phone, name)." },
+        { id: "idrOverMerge", goals: ["idr"], title: "Unified profiles with too many records", plain: "Finds unified profiles built from an unusually large number of source records, a sign of over-merging (e.g. a shared fake email).",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }, { k: "n", kind: "num", label: "More than N records", def: "10" }],
+          summary: function (p) { return "SELECT COUNT(*) AS big_profiles, COALESCE(MAX(n), 0) AS largest FROM (SELECT UnifiedRecordId__c, COUNT(*) AS n FROM " + T(p) + " GROUP BY UnifiedRecordId__c HAVING COUNT(*) > " + lastN(p) + ") x"; },
+          rows: function (p) { return "SELECT UnifiedRecordId__c, COUNT(*) AS source_records FROM " + T(p) + " GROUP BY UnifiedRecordId__c HAVING COUNT(*) > " + lastN(p) + " ORDER BY COUNT(*) DESC"; },
+          verdict: function (r, p) { var b = num(r.big_profiles); return b ? { level: "bad", text: fmt(b) + " unified profile" + (b === 1 ? " has" : "s have") + " more than " + lastN(p) + " source records (largest: " + fmt(r.largest) + "). Suspect over-merging." } : { level: "ok", text: "No unified profile has more than " + lastN(p) + " source records." }; },
+          next: "Open the biggest profile's source records and look for a shared placeholder value (test@test.com, 0000000000)." },
+        missingIn("idrSourceMissing", ["idr"], "Source records missing from identity resolution", "Every source record you expect to be resolved should appear in the link table. Finds the ones that did not.", { t2: "IndividualIdentityLink__dlm", c2: "SourceRecordId__c" }, { a: "Source table (DLO/DMO)", ac: "Its record ID column", b: "Identity link table", bc: "Link column", next: "Missing records often fail a ruleset filter or have no match-rule fields filled in." }),
+        missingIn("idrUnifiedNoSource", ["idr"], "Unified profiles with no source records", "Unified profiles that have no row in the link table. Should be none.", { t: "UnifiedIndividual__dlm", c: "ssot__Id__c", t2: "IndividualIdentityLink__dlm", c2: "UnifiedRecordId__c" }, { a: "Unified table", ac: "Its ID column", b: "Identity link table", bc: "Link column", next: "A mismatch can mean a stale unified table or a different ruleset's link table; pick the matching pair." }),
+        { id: "splitValue", goals: ["idr", "contact"], title: "Same value under different unified profiles", plain: "Finds e.g. one email that sits in several unified profiles, meaning identity resolution did not join them.",
+          fields: [{ k: "t", kind: "table", label: "Table with both columns" }, { k: "c", kind: "col", label: "Value column (email, phone…)", pick: "text" }, { k: "c2", kind: "col2same", label: "Unified ID column", pick: "id" }],
+          summary: function (p) { return "SELECT COUNT(*) AS split_values FROM (SELECT " + Q(p.c) + " AS v FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1) x"; },
+          rows: function (p) { return "SELECT " + Q(p.c) + " AS value, COUNT(DISTINCT " + Q(p.c2) + ") AS different_ids, COUNT(*) AS records FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1 ORDER BY COUNT(DISTINCT " + Q(p.c2) + ") DESC"; },
+          verdict: function (r) { var s = num(r.split_values); return s ? { level: "warn", text: fmt(s) + " value" + (s === 1 ? " is" : "s are") + " spread across more than one unified profile." } : { level: "ok", text: "Every value belongs to exactly one profile." }; },
+          next: "If the match rule uses this field, these should have merged. Check the rule's fuzzy/exact setting." },
+        badRows("email", "Invalid email addresses", "Finds emails with no @ or domain dot, or with spaces inside.",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND TRIM(" + c + ") <> '' AND (" + c + " NOT LIKE '%_@_%._%' OR " + c + " LIKE '% %')"; },
+          "All filled-in emails look valid.", "do not look like an email address.", ["contact"]),
+        badRows("whitespace", "Leading / trailing spaces", "Finds values with spaces at the start or end. Invisible, and they break matching and joins.",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND " + c + " <> TRIM(" + c + ")"; },
+          "No values with stray spaces.", "have spaces at the start or end.", ["contact", "loaded", "mapping"]),
+        badRows("casemix", "Mixed upper / lower case", "Finds values not already lower-case (e.g. emails written 'Bob@X.com').",
+          function (p) { var c = Q(p.c); return c + " IS NOT NULL AND " + c + " <> LOWER(" + c + ")"; },
+          "Everything is lower-case.", "are not lower-case.", ["contact"])
+      ];
+      // Goal cards for the home screen (order = display order).
+      var goals = [
+        { id: "loaded", icon: "📥", title: "Is my data loaded?", sub: "rows, freshness, empty columns" },
+        { id: "mapping", icon: "🧩", title: "Is my mapping right?", sub: "keys match, types fit" },
+        { id: "idr", icon: "🧬", title: "Did identity resolution work?", sub: "merge rate, over-merge, missing" },
+        { id: "contact", icon: "📇", title: "Are contact points clean?", sub: "emails, spaces, duplicates" },
+        { id: "dates", icon: "📅", title: "Dates and times", sub: "between two dates, trend, gaps" },
+        { id: "explore", icon: "🔎", title: "Explore values", sub: "distinct values, table scan" }
+      ];
+      checks.forEach(function (c) { if (c.id === "dupes" || c.id === "normdupes") c.goals = c.id === "dupes" ? ["loaded", "mapping"] : ["contact"]; if (!c.goals) c.goals = ["explore"]; });
+      // Pre-select a likely column. pick: id | date | text | any. Returns "" if nothing fits.
+      function pickDefault(cols, pick, only) {
+        var list = (cols || []).filter(function (c) { return only === "date" ? isDateT(c.type) : true; });
+        if (!list.length) return "";
+        var f;
+        if (pick === "id") f = list.filter(function (c) { return idLike.test(c.name); })[0];
+        else if (pick === "date") f = list.filter(function (c) { return /(modif|updat|creat|date|time|_at$)/i.test(c.name); })[0];
+        else if (pick === "text") { var tx = list.filter(function (c) { return isText(c.type); }); f = tx.filter(function (c) { return /(email|mail)/i.test(c.name); })[0] || tx.filter(function (c) { return /(phone|addr|name)/i.test(c.name); })[0] || tx[0]; }
+        return (f || list[0]).name;
+      }
+      function build(id, kind, p) {
+        var c = checks.filter(function (x) { return x.id === id; })[0];
+        if (!c) throw new Error("Unknown check " + id);
+        return c[kind](p);
+      }
+      return { checks: checks, goals: goals, pickDefault: pickDefault, bound: bound, build: build, isDateT: isDateT, isText: isText, isTsT: isTsT, fmt: fmt };
+    })();
+    // @@GUIDED-END
+
     var templatesPanelEl = null;
     function closeTemplatesPanel() { if (templatesPanelEl) { templatesPanelEl.remove(); templatesPanelEl = null; } }
+
+    // ── Guided Checks panel (dev-only; sits on top of the classic Helpful Queries) ──
+    var guidedPanelEl = null;
+    function closeGuidedPanel() { if (guidedPanelEl) { guidedPanelEl.remove(); guidedPanelEl = null; } }
+    function openGuidedChecks() {
+      closeGuidedPanel();
+      var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); };
+      var panel = document.createElement("div");
+      guidedPanelEl = panel; panel.id = "dc-qe-guided-panel";
+      panel.style.cssText = "position:fixed;top:6vh;left:50%;transform:translateX(-50%);width:min(660px,94vw);max-height:88vh;overflow-y:auto;z-index:2147483647;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);font:12px -apple-system,sans-serif;color:#0f172a;";
+      var hdr = document.createElement("div");
+      hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;cursor:move;position:sticky;top:0;z-index:2;";
+      hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries <span style='font-weight:500;font-size:11px;color:#a16207;'>guided checks, no SQL needed</span></div>";
+      var hx = document.createElement("button"); hx.textContent = "✕"; hx.title = "Close";
+      hx.style.cssText = "border:none;background:none;font-size:16px;color:#92400e;cursor:pointer;padding:4px 8px;"; hx.onclick = closeGuidedPanel;
+      hdr.appendChild(hx); panel.appendChild(hdr);
+      var body = document.createElement("div"); body.style.cssText = "padding:14px 16px;"; panel.appendChild(body);
+
+      var colsCache = {};            // table -> [{name,type}] | "loading" | "fail"
+      var st = { goal: null, check: null, vals: {}, tables: null };
+      var RECENT = "dcGuidedRecentTables";
+      function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
+      function remember(t) { try { if (!t) return; var r = recent().filter(function (x) { return x !== t; }); r.unshift(t); localStorage.setItem(RECENT, JSON.stringify(r.slice(0, 15))); } catch (e) {} }
+      function tableNames() {
+        if (st.tables) return st.tables;
+        var seen = {}, out = [];
+        function add(n) { if (n && !seen[n]) { seen[n] = 1; out.push(n); } }
+        recent().forEach(add);
+        try { (document.body.innerText.match(/\b[A-Za-z][A-Za-z0-9_]*__(?:dlm|dll|cio)\b/g) || []).slice(0, 4000).forEach(add); } catch (e) {}
+        ["IndividualIdentityLink__dlm", "UnifiedIndividual__dlm", "ContactPointEmailIdentityLink__dlm", "ContactPointAddressIdentityLink__dlm", "ContactPointPhoneIdentityLink__dlm", "PartyIdentificationIdentityLink__dlm", "UnifiedLinkssotAccount__dlm"].forEach(add);
+        return (st.tables = out.slice(0, 300));
+      }
+      function loadCols(t, cb) {
+        if (!qeValidIdent(t)) { cb(); return; }
+        var c = colsCache[t];
+        if (Array.isArray(c) || c === "fail") { cb(); return; }
+        if (c === "loading") { return; }
+        colsCache[t] = "loading";
+        ensureQueryContext(function (ready) {
+          if (!ready) { colsCache[t] = "fail"; cb("Not connected: run any query with Salesforce's Run Query button first."); return; }
+          qeFetchExport(qeTemplates.fieldsProbe(t), qeDsForSql(qeTemplates.fieldsProbe(t)), function () {}, function () { return false; }).then(function (r) {
+            colsCache[t] = (r.columns || []).map(function (n) { return { name: n, type: (r.columnTypes || {})[n] || "" }; });
+            if (!colsCache[t].length) colsCache[t] = "fail";
+            cb();
+          }).catch(function (e) {
+            colsCache[t] = "fail";
+            var m = String(e && e.message || e);
+            cb(/does not exist|not found/i.test(m) ? "Table not found in this data space. Check the name and the data space you are in." : m);
+          });
+        });
+      }
+      function colsOf(t) { var c = colsCache[t]; return Array.isArray(c) ? c : null; }
+
+      // ── screens ──
+      function home() {
+        st.goal = null; st.check = null;
+        var h = "<button id='dc-g-quick' style='display:block;width:100%;text-align:left;border:1px solid #d97706;background:#fffbeb;border-radius:10px;padding:10px 12px;margin-bottom:10px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;color:#92400e;'>⚡ Not sure where to start? Scan a table</div><div style='font-size:11px;color:#78350f;margin-top:2px;'>One query reports every column: how full it is, how many different values, earliest/latest dates, and any repeated IDs.</div></button><div style='font-size:12px;color:#475569;margin-bottom:10px;'>Or pick what you want to find out. You choose the table and column from lists; the tool writes and runs the query and tells you in plain words if it looks OK.</div><div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;'>";
+        QG.goals.forEach(function (g) { h += "<button data-goal='" + g.id + "' style='text-align:left;border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;'><div style='font:700 13px -apple-system,sans-serif;'>" + g.icon + " " + esc(g.title) + "</div><div style='font-size:11px;color:#64748b;margin-top:2px;'>" + esc(g.sub) + "</div></button>"; });
+        h += "</div><div style='margin-top:12px;font-size:11px;color:#64748b;'>Prefer to write SQL yourself? <a href='#' id='dc-g-classic' style='color:#b45309;'>Open the classic SQL templates</a>. Each check runs a Data Query (billed by rows scanned).</div>";
+        body.innerHTML = h;
+        body.querySelectorAll("[data-goal]").forEach(function (b) { b.onclick = function () { goalScreen(b.getAttribute("data-goal")); }; });
+        body.querySelector("#dc-g-quick").onclick = function () { st.goal = "explore"; formScreen("health"); };
+        body.querySelector("#dc-g-classic").onclick = function (e) { e.preventDefault(); closeGuidedPanel(); openTemplatesPanel(); };
+      }
+      function goalScreen(gid) {
+        st.goal = gid;
+        var g = QG.goals.filter(function (x) { return x.id === gid; })[0];
+        var h = "<div style='margin-bottom:8px;'><a href='#' id='dc-g-back' style='color:#b45309;'>← All goals</a></div><div style='font:700 14px -apple-system,sans-serif;margin-bottom:8px;'>" + g.icon + " " + esc(g.title) + "</div>";
+        QG.checks.filter(function (c) { return c.goals.indexOf(gid) >= 0; }).forEach(function (c) {
+          h += "<button data-chk='" + c.id + "' style='display:block;width:100%;text-align:left;border:1px solid #e2e8f0;background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:6px;cursor:pointer;'><div style='font:600 12px -apple-system,sans-serif;'>" + esc(c.title) + "</div><div style='font-size:11px;color:#64748b;margin-top:2px;line-height:1.4;'>" + esc(c.plain) + "</div></button>";
+        });
+        body.innerHTML = h;
+        body.querySelector("#dc-g-back").onclick = function (e) { e.preventDefault(); home(); };
+        body.querySelectorAll("[data-chk]").forEach(function (b) { b.onclick = function () { formScreen(b.getAttribute("data-chk")); }; });
+      }
+      function formScreen(cid) {
+        var chk = QG.checks.filter(function (c) { return c.id === cid; })[0];
+        st.check = chk; st.vals = st.vals || {};
+        var carry = { t: st.vals.t };           // keep the last chosen table between checks
+        st.vals = carry;
+        chk.fields.forEach(function (f) { if (f.def && (f.kind === "table" || f.kind === "col2" || !st.vals[f.k])) st.vals[f.k] = f.def; });
+        body.innerHTML = "<div style='margin-bottom:6px;'><a href='#' id='dc-g-back2' style='color:#b45309;'>← " + esc(QG.goals.filter(function (x) { return x.id === st.goal; })[0].title) + "</a></div>"
+          + "<div style='font:700 14px -apple-system,sans-serif;'>" + esc(chk.title) + "</div><div style='font-size:11px;color:#64748b;margin:3px 0 10px;line-height:1.45;'>" + esc(chk.plain) + "</div>"
+          + "<div id='dc-g-form'></div><div id='dc-g-msg' style='font-size:11px;color:#64748b;min-height:14px;margin:6px 0;'></div>"
+          + "<div><button id='dc-g-run' style='border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font:600 12px -apple-system,sans-serif;color:#fff;background:#d97706;'>▶ Run check</button> <span id='dc-g-cost' style='font-size:10px;color:#92400e;'>Runs 1 Data Query, billed by rows scanned.</span></div><div id='dc-g-out' style='margin-top:12px;'></div>";
+        body.querySelector("#dc-g-back2").onclick = function (e) { e.preventDefault(); goalScreen(st.goal); };
+        body.querySelector("#dc-g-run").onclick = run;
+        renderForm();
+        if (st.vals.t) loadCols(st.vals.t, function (m) { renderForm(); msg(m); });
+      }
+      function msg(m, bad) { var e = body.querySelector("#dc-g-msg"); if (e) { e.textContent = m || ""; e.style.color = bad ? "#dc2626" : "#64748b"; } }
+      var INP = "width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px;font:12px -apple-system,sans-serif;background:#fff;";
+      function renderForm() {
+        var f = body.querySelector("#dc-g-form"); if (!f || !st.check) return;
+        var v = st.vals, h = "";
+        var dl = "<datalist id='dc-g-tables'>" + tableNames().map(function (n) { return "<option value='" + esc(n) + "'>"; }).join("") + "</datalist>";
+        st.check.fields.forEach(function (fd) {
+          var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
+          if (fd.kind === "range") {
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Between" + (fd.optional ? " (optional)" : "") + "</label><div style='display:grid;grid-template-columns:1fr 100px;gap:4px 6px;align-items:center;'><div style='font-size:10px;color:#64748b;'>From (date)</div><div style='font-size:10px;color:#64748b;'>time</div>"
+              + "<input type='date' id='dc-g-d1' title='Start date' style='" + INP + "' value='" + esc(v.d1 || "") + "'><input type='time' id='dc-g-t1' title='Start time (optional)' style='" + INP + "' value='" + esc(v.t1 || "") + "'>"
+              + "<div style='font-size:10px;color:#64748b;margin-top:4px;'>To (date)</div><div style='font-size:10px;color:#64748b;margin-top:4px;'>time</div><input type='date' id='dc-g-d2' title='End date' style='" + INP + "' value='" + esc(v.d2 || "") + "'><input type='time' id='dc-g-t2' title='End time (optional; blank = end of day)' style='" + INP + "' value='" + esc(v.t2 || "") + "'></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>Time is optional. If you leave the end time blank, the whole end day is included.</div></div>"; return;
+          }
+          if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
+          if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
+          if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
+          if (fd.kind === "table") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='text' list='dc-g-tables' id='" + id + "' placeholder='start typing or paste the API name' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
+          // column kinds
+          var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
+          if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
+          if (cl) {
+            if (!v[fd.k] || !cl.some(function (c) { return c.name === v[fd.k]; })) { var pd = (fd.def && cl.some(function (c) { return c.name === fd.def; })) ? fd.def : QG.pickDefault(cl, fd.pick, fd.only); v[fd.k] = pd; }
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + " <span style='font-weight:400;color:#94a3b8;'>(" + cl.length + " in the list)</span></label><select id='" + id + "' style='" + INP + "'>" + cl.map(function (c) { return "<option value='" + esc(c.name) + "'" + (v[fd.k] === c.name ? " selected" : "") + ">" + esc(c.name) + (c.type ? "  (" + esc(c.type.toLowerCase()) + ")" : "") + "</option>"; }).join("") + "</select></div>";
+          } else {
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='text' id='" + id + "' placeholder='" + (tbl ? "loading columns… or type the API name" : "pick a table first") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>";
+          }
+        });
+        f.innerHTML = dl + h;
+        f.querySelectorAll("input[type=text],input[type=number],select").forEach(function (el) {
+          el.onchange = function () {
+            var k = el.id.replace("dc-g-f-", ""); st.vals[k] = el.value.trim();
+            if (k === "t" || k === "t2") { msg("Reading columns…"); loadCols(st.vals[k], function (m) { renderForm(); msg(m, !!m); }); }
+          };
+        });
+        ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.onchange = function () { st.vals[k] = el.value; }; });
+      }
+      function collect() {
+        var f = body.querySelector("#dc-g-form"), v = st.vals, chk = st.check, p = { cols: [] };
+        chk.fields.forEach(function (fd) { var el = f.querySelector("#dc-g-f-" + fd.k); if (el) v[fd.k] = el.value.trim(); });
+        ["d1", "t1", "d2", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) v[k] = el.value; });
+        for (var k in v) if (typeof v[k] === "string") p[k] = v[k];
+        p.cols = colsOf(v.t) || [];
+        var cc = (colsOf(v.t) || []).filter(function (c) { return c.name === v.c; })[0]; p.cType = cc ? cc.type : "";
+        p.period = v.period || (chk.fields.filter(function (x) { return x.k === "period"; })[0] || {}).def;
+        var hasRange = chk.fields.some(function (x) { return x.kind === "range"; });
+        if (hasRange) { p.from = QG.bound(v.d1, v.t1, p.cType, false); p.to = QG.bound(v.d2, v.t2, p.cType, true); }
+        return p;
+      }
+      function validate(p) {
+        var chk = st.check;
+        for (var i = 0; i < chk.fields.length; i++) {
+          var fd = chk.fields[i];
+          if (fd.kind === "range") { if (!fd.optional && (!p.from || !p.to)) return "Choose a start date and an end date."; if (fd.optional && ((p.from && !p.to) || (!p.from && p.to))) return "Fill in both dates, or leave both empty."; continue; }
+          if (fd.kind === "num") { if (!(Number(p[fd.k]) > 0)) return "Enter a number greater than 0."; continue; }
+          if (fd.kind === "period" || fd.kind === "typesel") continue;
+          if (!qeValidIdent(p[fd.k])) return "Fill in: " + (fd.label || fd.kind === "table" ? (fd.label || "Table") : "Column") + " (letters, numbers and underscores only).";
+        }
+        if (chk.needsCols && !p.cols.length) return "Could not read this table's columns yet. Check the name and try again.";
+        return "";
+      }
+      var LEVEL = { ok: ["#f0fdf4", "#16a34a", "✅"], warn: ["#fffbeb", "#d97706", "⚠️"], bad: ["#fef2f2", "#dc2626", "❌"], info: ["#eff6ff", "#2563eb", "ℹ️"] };
+      function tableHtml(cols, rows, max) {
+        var h = "<div style='overflow:auto;max-height:260px;border:1px solid #e2e8f0;border-radius:6px;margin-top:8px;'><table style='border-collapse:collapse;width:100%;font-size:11px;'><thead><tr>" + cols.map(function (c) { return "<th style='position:sticky;top:0;background:#f8fafc;text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        rows.slice(0, max || 200).forEach(function (r) { h += "<tr>" + cols.map(function (c) { return "<td style='padding:3px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; }).join("") + "</tr>"; });
+        return h + "</tbody></table></div>" + (rows.length > (max || 200) ? "<div style='font-size:10px;color:#94a3b8;margin-top:3px;'>Showing the first " + (max || 200) + " rows.</div>" : "");
+      }
+      function run() {
+        var chk = st.check, p = collect(), err = validate(p), out = body.querySelector("#dc-g-out"), btn = body.querySelector("#dc-g-run");
+        if (err) { msg(err, true); return; }
+        msg(""); remember(p.t); if (p.t2) remember(p.t2);
+        var sumSql = chk.summary(p), ds = qeDsForSql(sumSql), t0 = Date.now();
+        btn.disabled = true; btn.textContent = "Running…"; out.innerHTML = "";
+        function fail(e) { btn.disabled = false; btn.textContent = "▶ Run check"; var m = String(e && e.message || e); if (/does not exist|not found/i.test(m)) m += " (Check the table name and that you are in the right data space.)"; out.innerHTML = "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#b91c1c;'>" + esc(m) + "</div>"; }
+        ensureQueryContext(function (ready) {
+          if (!ready) { fail(new Error("Not connected: run any query with Salesforce's Run Query button first.")); return; }
+          qeFetchExport(sumSql, ds, function () {}, function () { return false; }).then(function (r) {
+            var row = (r.rowData && r.rowData[0]) || {}, vd = chk.verdict(row, p), c = LEVEL[vd.level] || LEVEL.info;
+            btn.disabled = false; btn.textContent = "▶ Run check";
+            var h = "<div id='dc-g-verdict' style='background:" + c[0] + ";border:1px solid " + c[1] + ";border-left:5px solid " + c[1] + ";border-radius:10px;padding:12px 14px;'><div style='font:700 13px/1.45 -apple-system,sans-serif;color:#0f172a;'><span style='font-size:16px;vertical-align:-1px;'>" + c[2] + "</span> " + esc(vd.text) + "</div>"
+              + (vd.cap ? "<div style='font-size:10px;color:#64748b;margin-top:3px;'>" + esc(vd.cap) + "</div>" : "")
+              + (chk.next ? "<div style='font-size:11px;color:#475569;margin-top:6px;'>👉 " + esc(chk.next) + "</div>" : "") + "</div>";
+            if (vd.table && vd.table.length) h += tableHtml(Object.keys(vd.table[0]), vd.table, 80);
+            h += "<div id='dc-g-rows'></div><div style='margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;'>";
+            if (chk.rows) h += "<button id='dc-g-see' style='border:1px solid #d97706;background:#fff;color:#92400e;border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;'>👁 " + (chk.inline ? "Show full list" : "See the rows") + " (up to 2,000)</button>";
+            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed != null ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + "</span></div>";
+            out.innerHTML = h;
+            try { out.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) {}
+            var cp = out.querySelector("#dc-g-copy");
+            cp.onclick = function () { var sql = (chk.rows ? chk.rows(p) : sumSql); try { navigator.clipboard.writeText(sql); cp.textContent = "✓ Copied"; } catch (e) { window.prompt("Copy the SQL:", sql); } };
+            var see = out.querySelector("#dc-g-see");
+            function showRows(limit) {
+              var box = out.querySelector("#dc-g-rows"); box.innerHTML = "<div style='margin-top:8px;color:#64748b;'>Fetching…</div>";
+              var rsql = chk.rows(p) + " LIMIT " + limit;
+              return qeFetchExport(rsql, ds, function (n) { box.innerHTML = "<div style='margin-top:8px;color:#64748b;'>Fetching " + Number(n).toLocaleString() + "…</div>"; }, function () { return false; }).then(function (rr) {
+                setLastResult({ blobUrl: rr.blobUrl, filename: "guided_" + chk.id + "_" + todayStr() + ".csv", rowCount: rr.totalRows, cols: rr.columns.length, columns: rr.columns, tableName: p.t, data: rr.rowData || [], sql: rsql });
+                var extra = "";
+                if (chk.post) { var px = chk.post(rr.rowData || [], p); if (px) { var pc = LEVEL[px.level]; extra = "<div style='margin-top:8px;background:" + pc[0] + ";border:1px solid " + pc[1] + ";border-left:5px solid " + pc[1] + ";border-radius:8px;padding:8px 10px;color:#0f172a;font-weight:600;'>" + pc[2] + " " + esc(px.text) + "</div>"; } }
+                box.innerHTML = extra + "<div style='margin-top:8px;'><b>" + Number(rr.totalRows).toLocaleString() + "</b> row" + (rr.totalRows === 1 ? "" : "s") + (rr.totalRows >= limit ? " (capped at " + limit.toLocaleString() + ")" : "") + " · <a href='" + rr.blobUrl + "' download='guided_" + chk.id + "_" + todayStr() + ".csv' style='color:#b45309;'>⬇ Download CSV</a></div>" + tableHtml(rr.columns, rr.rowData || [], 200);
+              }).catch(function (e) { box.innerHTML = "<div style='color:#b91c1c;margin-top:8px;'>" + esc(String(e && e.message || e)) + "</div>"; });
+            }
+            if (see) see.onclick = function () { showRows(2000); };
+            if (chk.inline) showRows(chk.id === "trend" ? 1000 : 100);
+          }).catch(fail);
+        });
+      }
+      document.body.appendChild(panel);
+      try { makeDraggable(panel, hdr); } catch (e) {}
+      try { addResizeHandle(panel, 380, 300); } catch (e) {}
+      home();
+    }
 
     function openTemplatesPanel() {
       closeTemplatesPanel();
@@ -16388,7 +16863,7 @@
       // returns column metadata even when the table has ZERO rows.
       function fetchFieldsFor(name) {
         if (fieldsCache[name]) { renderFields(); return; } // already have it (success OR failure noted)
-        var ds = readPageDataSpace();
+        var ds = qeDsForSql(qeTemplates.fieldsProbe(name));
         qeFetchExport(qeTemplates.fieldsProbe(name), ds, function () {}, function () { return false; }).then(function (r) {
           fieldsCache[name] = { columns: (r.columns || []).slice(), types: r.columnTypes || {} };
           if (objInput.value.trim() === name) renderFields();
@@ -16405,8 +16880,8 @@
       function runProbe(name) {
         ensureQueryContext(function (ready) {
           if (!ready) { objStatus.innerHTML = "<span style='color:#dc2626;'>Not connected — run any query with SF's Run Query button first.</span>"; return; }
-          var ds = readPageDataSpace();
           var sql = qeTemplates.existsProbe(name);
+          var ds = qeDsForSql(sql);
           runQeCount(sql, ds).then(function (r) {
             var result = { count: r.count || 0 };
             probeCache[name] = result;
@@ -16661,7 +17136,7 @@
       function runTemplate(mode) {
         var res = buildCurrentSql();
         if (res.error) { resultArea.innerHTML = "<span style='color:#dc2626;'>" + res.error + "</span>"; return; }
-        var ds = readPageDataSpace();
+        var ds = qeDsForSql(res.sql);
         var btn = mode === "count" ? checkBtn : sampleBtn;
         var origText = btn.textContent;
         btn.disabled = true; btn.textContent = "Running…";
