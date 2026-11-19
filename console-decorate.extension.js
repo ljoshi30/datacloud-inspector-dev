@@ -14438,12 +14438,11 @@
     var bar = document.createElement("div");
     bar.style.cssText = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:#fff;border-bottom:1px solid #e2e8f0;flex-shrink:0;";
     var tabs = [
-      { id: "summary", label: "★ Summary", n: "", c: "#4338ca", bg: "#e0e7ff" },
       { id: "changed", label: "✎ Changed", n: diff.changed.length, c: "#b45309", bg: "#fef3c7" },
       { id: "added", label: "+ Added", n: diff.added.length, c: "#047857", bg: "#d1fae5" },
       { id: "removed", label: "− Removed", n: diff.removed.length, c: "#b91c1c", bg: "#fee2e2" }
     ];
-    var active = "summary";
+    var active = diff.changed.length ? "changed" : diff.added.length ? "added" : diff.removed.length ? "removed" : "changed";
     var q = "";
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:14px 18px;min-height:0;background:#f8fafc;";
     var tabEls = {};
@@ -14457,6 +14456,13 @@
     search.style.cssText = "margin-left:auto;padding:7px 11px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px;outline:none;";
     search.oninput = function () { q = search.value.trim().toLowerCase(); paint(); };
     bar.appendChild(search);
+    var xl = document.createElement("button"); xl.id = "dc-diff-xl"; xl.innerHTML = "&#11015; Excel";
+    xl.title = "Download every difference as one Excel sheet (Type, Key, Field, Before, After)";
+    xl.style.cssText = "cursor:pointer;border:none;background:#059669;color:#fff;border-radius:8px;padding:8px 13px;font:600 12px system-ui;";
+    xl.onclick = function () { exportDiff(xl); }; bar.appendChild(xl);
+    var cp2 = document.createElement("button"); cp2.id = "dc-diff-cp"; cp2.textContent = "Copy summary";
+    cp2.style.cssText = "cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:8px;padding:8px 13px;font:600 12px system-ui;";
+    cp2.onclick = function () { try { navigator.clipboard.writeText(summaryText()); cp2.textContent = "Copied \u2713"; } catch (e) { cp2.textContent = "Copy blocked"; } }; bar.appendChild(cp2);
     box.appendChild(bar); box.appendChild(body);
 
     function hit(s) { return !q || String(s == null ? "" : s).toLowerCase().indexOf(q) >= 0; }
@@ -14541,17 +14547,9 @@
       Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; }).forEach(function (f) { t += "  " + f + ": " + cnt[f] + " row(s)\n"; });
       return t;
     }
-    function summaryView() {
+    function noticesView() {
+      var h = "";
       var sh = function (n, w) { return n + " " + w + (n === 1 ? "" : "s"); };
-      var h = "<div style='background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:14px;font-size:14px;line-height:1.7;color:#0f172a'>"
-        + "<div style='font:700 15px system-ui;margin-bottom:6px'>What happened between the two runs</div>"
-        + "<div><b style='color:#047857'>" + sh(diff.added.length, "row") + " new</b> (in current, not in previous) &nbsp;&bull;&nbsp; "
-        + "<b style='color:#b91c1c'>" + sh(diff.removed.length, "row") + " gone</b> (in previous, not in current) &nbsp;&bull;&nbsp; "
-        + "<b style='color:#b45309'>" + sh(diff.changed.length, "row") + " edited</b> (same key, different values) &nbsp;&bull;&nbsp; "
-        + "<b style='color:#64748b'>" + diff.unchanged + " identical</b></div>"
-        + "<div style='font-size:12px;color:#64748b;margin-top:4px'>Rows are matched by <b>" + esc(keyCols.join(" + ")) + "</b>. Click a tab above for the full rows.</div>"
-        + "<div style='margin-top:10px;display:flex;gap:8px'><button id='dc-diff-xl' style='cursor:pointer;border:none;background:#059669;color:#fff;border-radius:7px;padding:7px 13px;font:600 12px system-ui'>&#11015; Export diff (Excel)</button>"
-        + "<button id='dc-diff-cp' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:7px;padding:7px 13px;font:600 12px system-ui'>Copy summary</button></div></div>";
       var rk = findRekeyed();
       if (rk.length) {
         h += "<div style='background:#eff6ff;border:1px solid #93c5fd;border-left:4px solid #3b82f6;border-radius:8px;padding:11px 14px;margin-bottom:14px;font-size:13px;line-height:1.6;color:#1e3a8a'>"
@@ -14569,37 +14567,6 @@
           + (diff.unchanged === 0 ? "<b>0 rows are identical</b>, which usually means every run produces different IDs, so this looks like two different data loads rather than a before/after of the same records. " : "")
           + "Pick a column that is unique <u>and</u> stays the same between runs (for example a source/business ID, not a generated hash), then Compare again.</div>";
       }
-      if (!diff.changed.length) return h + empty("No existing row was edited.");
-      // club all edits by field, then by identical before → after pair
-      var byField = {}, order = [];
-      diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) {
-        var g = byField[f]; if (!g) { g = byField[f] = { rows: 0, pairs: {}, np: 0 }; order.push(f); }
-        g.rows++;
-        var b = ch.before[f] == null ? "" : String(ch.before[f]), a = ch.after[f] == null ? "" : String(ch.after[f]);
-        var k = b + "\u0001" + a; if (!g.pairs[k]) { g.pairs[k] = { b: b, a: a, n: 0 }; g.np++; } g.pairs[k].n++;
-      }); });
-      order.sort(function (x, y) { return byField[y].rows - byField[x].rows; });
-      var clip = function (v) { v = String(v); return v === "" ? "<i style='color:#94a3b8'>(empty)</i>" : esc(v.length > 90 ? v.slice(0, 90) + "…" : v); };
-      var vol = order.filter(function (f) { return byField[f].rows >= 3 && byField[f].np === byField[f].rows; });
-      var real = order.filter(function (f) { return vol.indexOf(f) < 0; });
-      if (vol.length) {
-        h += "<div style='background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;color:#334155'>"
-          + "<b>Different in almost every row, with a new value each time (" + vol.length + " field" + (vol.length === 1 ? "" : "s") + "):</b> these look auto-generated (IDs, keys, timestamps), so they are probably noise, not real business changes.<div style='margin-top:6px;display:flex;flex-wrap:wrap;gap:6px'>"
-          + vol.map(function (f) { return "<span style='background:#fff;border:1px solid #cbd5e1;border-radius:6px;padding:2px 8px;font:12px ui-monospace,Menlo,monospace'>" + esc(f) + " <b>" + byField[f].rows + "</b></span>"; }).join("") + "</div></div>";
-      }
-      h += "<div style='font:700 14px system-ui;margin:4px 0 8px'>" + (vol.length ? "Fields with meaningful repeated changes" : "Fields that changed (grouped)") + "</div>";
-      if (!real.length) h += empty("Every changed field has a unique value per row, see the list above.");
-      real.forEach(function (f) {
-        var g = byField[f], ps = Object.keys(g.pairs).map(function (k) { return g.pairs[k]; }).sort(function (x, y) { return y.n - x.n; });
-        h += "<div style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:8px;padding:9px 12px'>"
-          + "<div style='display:flex;gap:10px;align-items:center'><b style='font-size:13px'>" + esc(f) + "</b><span style='margin-left:auto;font:600 11px system-ui;background:#fde68a;color:#92400e;border-radius:10px;padding:2px 9px'>changed in " + sh(g.rows, "row") + "</span></div>";
-        ps.slice(0, 4).forEach(function (p2) {
-          h += "<div style='margin-top:5px;font:12px/1.5 ui-monospace,Menlo,monospace;word-break:break-word'><span style='background:#fef2f2;color:#7f1d1d;padding:1px 6px;border-radius:4px'>" + clip(p2.b) + "</span> &rarr; <span style='background:#f0fdf4;color:#14532d;padding:1px 6px;border-radius:4px'>" + clip(p2.a) + "</span>"
-            + (p2.n > 1 ? " <b style='color:#475569'>&times; " + p2.n + " rows</b>" : "") + "</div>";
-        });
-        if (ps.length > 4) h += "<div style='margin-top:5px;font-size:12px;color:#64748b'>…and " + (ps.length - 4) + " other different value" + (ps.length - 4 === 1 ? "" : "s") + " (see the Changed tab)</div>";
-        h += "</div>";
-      });
       return h;
     }
     function paint() {
@@ -14608,10 +14575,8 @@
         b.style.cssText = "cursor:pointer;border-radius:999px;padding:7px 16px;font:700 13px system-ui;border:2px solid " + t.c + ";color:" + (on ? "#fff" : t.c) + ";background:" + (on ? t.c : t.bg) + ";";
         b.textContent = t.n === "" ? t.label : t.label + "  " + t.n;
       });
-      body.innerHTML = active === "summary" ? summaryView() : active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444");
+      body.innerHTML = noticesView() + (active === "changed" ? changedCards() : active === "added" ? rowsTable(diff.added, "#10b981") : rowsTable(diff.removed, "#ef4444"));
       body.scrollTop = 0;
-      var xl = body.querySelector("#dc-diff-xl"); if (xl) xl.onclick = function () { exportDiff(xl); };
-      var cp2 = body.querySelector("#dc-diff-cp"); if (cp2) cp2.onclick = function () { try { navigator.clipboard.writeText(summaryText()); cp2.textContent = "Copied \u2713"; } catch (e) { cp2.textContent = "Copy blocked"; } };
     }
     paint();
 

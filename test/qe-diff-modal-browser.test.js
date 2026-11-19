@@ -20,8 +20,6 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  let n=0;const ok=(c,m)=>{assert(c,m);n++;};
  const bw=await ev("document.querySelector('#dc-qe-diff-modal > div').getBoundingClientRect().width");
  ok(bw>1400,"modal is wide ("+bw+")");
- ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('Fields that changed')"),"summary is default");
- ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('changed in 2 rows')"),"Seg clubbed across 2 rows");
  ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('1 record look like the same record')"),"re-key insight (R1->A1)");
  ok(await ev("document.querySelector('#dc-qe-diff-modal').innerText.includes('Check the Key column first')"),"key-quality verdict");
  ok(await ev("!!document.querySelector('#dc-diff-xl')&&!!document.querySelector('#dc-diff-cp')"),"export + copy buttons");
