@@ -6709,6 +6709,23 @@
   // the query from scratch when no template was captured. Credentials come from ANY
   // /aura request, and the page fires those constantly, so this almost always succeeds
   // fast. The dialog-drive below is a best-effort nudge to speed up a cold start.
+  // Salesforce answers "aura:clientOutOfSync" when the aura.context we replay belongs to an older app version than the server's
+  // (after a release, or a long-open tab). Re-read the LIVE context from $A; true only if it actually changed (else a retry is pointless).
+  var _oosAt = 0;
+  function dcResyncCreds() {
+    var oc = _auraSniff.context, ot = _auraSniff.token, ok = false;
+    _auraSniff.context = null; _auraSniff.token = null;
+    try { ok = primeCredsFromAura(); } catch (e) {}
+    if (!ok || !_auraSniff.context) { _auraSniff.context = oc; _auraSniff.token = ot; return false; }
+    return _auraSniff.context !== oc || _auraSniff.token !== ot;
+  }
+  // Returns "retry" (fresh context read; caller re-sends once), "refresh" (still out of sync: the user must reload the tab) or "".
+  function dcOutOfSync(txt) {
+    if (!/clientOutOfSync/.test(String(txt || ""))) return "";
+    if (Date.now() - _oosAt > 15000) { _oosAt = Date.now(); if (dcResyncCreds()) return "retry"; }
+    return "refresh";
+  }
+  var DC_OOS_MSG = "Salesforce says this browser tab is out of date (aura:clientOutOfSync) — refresh the Salesforce page (Cmd/Ctrl+Shift+R), then retry.";
   function haveCredsOnly() { return !!(_auraSniff.context && _auraSniff.token); }
 
   // Read aura token + context DIRECTLY from the page's own Aura framework. This is the
@@ -18823,7 +18840,7 @@ processJSON();
     // worker writes the doc server-side. Used ONLY after we've LEARNED this org blocks the silent write
     // (so permissive orgs never see a tab). window.open must fire synchronously on the click gesture.
     var PING_ENABLED  = true;      // LIVE — silent Firestore write (no tab). Opt-out + per-feature/day throttle still apply.
-    var PING_VERSION  = "1.2.720"; // replaced per build by build.js (coarse, not identifying)
+    var PING_VERSION  = "1.2.721"; // replaced per build by build.js (coarse, not identifying)
     // Which build is this ping coming from? Public build keeps "public"; the @strip block below
     // overrides it to "dev" ONLY in the full/dev build (strip removes the override for public).
     var PING_BUILD    = "public";

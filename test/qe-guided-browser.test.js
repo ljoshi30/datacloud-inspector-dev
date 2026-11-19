@@ -4,6 +4,7 @@ const fs=require("fs"),http=require("http"),cp=require("child_process"),assert=r
 const src=fs.readFileSync(__dirname+"/../console-decorate.extension.js","utf8");
 const pure=src.slice(src.indexOf("var QG = (function"),src.indexOf("// @@GUIDED-END"));
 const spc=src.slice(src.indexOf("    function qeWorkspaceSpaceLabel"),src.indexOf("    function qeCleanForRun"));
+const oos=src.slice(src.indexOf("  var _oosAt = 0;"),src.indexOf("  function haveCredsOnly"));
 const harv=src.slice(src.indexOf("  var _dcObjSeen = {}"),src.indexOf("  function decodeFormField"));
 const ui=src.slice(src.indexOf("    var guidedPanelEl = null;"),src.indexOf("    function openTemplatesPanel"));
 const html="<!doctype html><meta charset=utf-8><body><x-hdr id=wh><div>Data Space</div><div>TD Insurance</div></x-hdr><script>customElements.define('x-hdr',class extends HTMLElement{get currentSpaceInfo(){return {label:'TD Insurance',name:'TD_Insurance_X'};}});<\/script><runtime_cdp-query-workspace id=ws></runtime_cdp-query-workspace><lst-common-list-internal id=lst></lst-common-list-internal><script>customElements.define('runtime_cdp-query-workspace',class extends HTMLElement{get recordId(){return window.__rid||'20mDQ000000GmdmYAC';}});customElements.define('lst-common-list-internal',class extends HTMLElement{get records(){return window.__recs||[{apiName:'DataQueryWorkspace',fields:{Id:{value:'20mDQ000000GmdmYAC'},Name:{value:'TDI IDR Queries'},DataSpace:{displayValue:null,value:'TD_Insurance'}}}];}});<\/script>Tables: Policy__dlm and Other__dll here<div id=rail><a id=r-dmo>Data Model Objects</a><a id=r-dlo class='slds-is-active'>Data Lake Objects</a></div><ul id=tree><li draggable=true>CAMEP_SFP_TDI-identity_663F1D12</li><li draggable=true data-x='Real_Attr__dll'>Some Label</li><li draggable=true>Foo-Bar</li></ul><script>"+`
@@ -12,6 +13,7 @@ function eachElement(root,fn){root.querySelectorAll("*").forEach(fn);}function r
 var _badDsNames=/^(Selected|Select|None|All)$/i,_auraSniff={dataSpace:null};window.__sqls=[];window.__classic=0;
 function makeDraggable(){}function addResizeHandle(){}function todayStr(){return "2026-11-19"}
 function haveCredsOnly(){return !!window.__creds;}
+function primeCredsFromAura(){if(window.__fresh){_auraSniff.context=window.__fresh;_auraSniff.token='T2';return true;}return false;}
 function qeValidIdent(s){return !!s&&/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(s).trim());}
 function qeDsForSql(){return "TD"}
 var qeTemplates={fieldsProbe:function(t){return 'SELECT * FROM "'+t+'" LIMIT 1';}};
@@ -31,7 +33,7 @@ function qeFetchExport(sql,ds){window.__sqls.push(sql+' @'+ds);
  if(/AS inside/.test(sql))return Promise.resolve({columns:["total"],rowData:[{total:"100",inside:"25"}],totalRows:1,blobUrl:"blob:x"});
  if(/SELECT \\* FROM "Policy__dlm" WHERE "CreatedDate__c" BETWEEN/.test(sql))return Promise.resolve({columns:["Id__c"],rowData:[{Id__c:"r1"},{Id__c:"r2"}],totalRows:2,blobUrl:"blob:x"});
  return Promise.resolve({columns:["total"],rowData:[{total:"0"}],totalRows:1,blobUrl:"blob:x"});}
-`+spc+";"+harv+";"+pure+";"+ui+`
+`+spc+";"+oos+";"+harv+";"+pure+";"+ui+`
 dcHarvestObjects('{"a":[{"name":"Harvested_Obj__dlm"},{"x":"My_Ci__cio"},{"junk":"notanobject__c"}]}');
 openGuidedChecks();<\/script>`;
 const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -72,6 +74,12 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("qeCachedWorkspaceSpace()")==="TD_Insurance","exact data space API name read from the cached list-view record (not the label, not guessed)");
  ok(await ev("qeWorkspaceSpaceExact()")==="TD_Insurance","qeWorkspaceSpaceExact prefers the record's DataSpace over anything else");
  ok(await ev("window.__recs=[{apiName:'DataQueryWorkspace',fields:{Id:{value:'OTHER000000000000A'},DataSpace:{value:'Wrong'}}}];window.__rid='20mDQ000000GmdmYAC';delete _wsSpaceByRecord['20mDQ000000GmdmYAC'];qeCachedWorkspaceSpace()")==="","a different workspace's record is never used");
+ // Salesforce "clientOutOfSync": re-read the live context once, retry; second time tell the user to refresh
+ await ev("_auraSniff.context='OLD';_auraSniff.token='T1';window.__fresh='NEW'");
+ ok(await ev("dcOutOfSync('*/{\"event\":{\"descriptor\":\"markup://aura:clientOutOfSync\"}')")==="retry"&&await ev("_auraSniff.context")==="NEW","clientOutOfSync: fresh context re-read from the page and a retry is requested");
+ ok(await ev("dcOutOfSync('markup://aura:clientOutOfSync')")==="refresh","still out of sync right after retry: user is told to refresh (no loop)");
+ ok(await ev("dcOutOfSync('{\"actions\":[]}')")==="","normal replies are untouched");
+ await ev("_auraSniff.context=null;_auraSniff.token=null;window.__fresh=null");
  // no cached DOM data -> ask Salesforce for that one field
  await ev("window.__creds=1;_auraSniff.context='{}';_auraSniff.token='t';window.fetch=function(u,o){window.__fb=decodeURIComponent(String(o.body));return Promise.resolve({text:function(){return Promise.resolve(JSON.stringify({actions:[{state:'SUCCESS',returnValue:{record:{fields:{DataSpace:{value:'TD_Insurance'}}}}}]}));}});};new Promise(function(r){qePrimeWorkspaceSpace(r)})");
  ok(await ev("_wsSpaceByRecord['20mDQ000000GmdmYAC']")==="TD_Insurance","not in the DOM -> Aura record lookup fills the exact name");
