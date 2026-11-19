@@ -15770,8 +15770,10 @@
     // EXACT API name of the workspace's data space (no guessing): (1) read it off the header's own components - walk up from the
     // "Data Space" label through shadow hosts and look for a { label:"TD Insurance", name|apiName|value:"<api>" } pair or a
     // dataSpace*-named string property; (2) the label->name pair Salesforce itself sent in a response. "" if neither exists.
+    var _dsDiag = { label: "", hosts: [] };
     function qeWorkspaceSpaceExact() {
       var label = qeWorkspaceSpaceLabel(), found = "";
+      _dsDiag = { label: label, hosts: [] };
       if (!label) return "";
       function scan(v, depth, seen) {
         if (found || !v || typeof v !== "object" || depth > 3 || seen.indexOf(v) >= 0) return; seen.push(v);
@@ -15787,7 +15789,10 @@
           var cur = el;
           for (var up = 0; up < 40 && cur && !found; up++) {
             var names = ["dataSpace", "dataspace", "selectedDataSpace", "dataSpaceName", "dataSpaceApiName", "selectedDataSpaceName", "workspace", "workspaceData", "record", "value", "data"];
-            var own = []; try { own = Object.keys(cur); } catch (e) {}
+            // LWC public (@api) properties are accessors on the element's PROTOTYPE chain, not own keys: list those too.
+            var own = [], pr = cur, hops = 0;
+            try { while (pr && pr !== HTMLElement.prototype && pr !== Element.prototype && pr !== Object.prototype && hops++ < 6) { own = own.concat(Object.getOwnPropertyNames(pr)); pr = Object.getPrototypeOf(pr); } } catch (e) {}
+            _dsDiag.hosts.push(String(cur.tagName || "").toLowerCase() + "(" + own.filter(function (n) { return /space|workspace|label|name/i.test(n); }).slice(0, 6).join(",") + ")");
             names.concat(own).forEach(function (pn) {
               if (found) return; var pv; try { pv = cur[pn]; } catch (e) { return; }
               if (typeof pv === "string") { if (/data.?space/i.test(pn) && /^[A-Za-z0-9_]{1,80}$/.test(pv) && pv !== label && !_badDsNames.test(pv)) found = pv; }
@@ -17162,7 +17167,7 @@
             if (objInput.value.trim() === name) showProbeResult(result);
           }).catch(function (err) {
             var msg = String(err && err.message || err);
-            var result = { error: /does not exist/i.test(msg) ? "Object not found in any data space this page has used (" + spaces.map(function (x) { return x || "default"; }).join(", ") + "). Check the name, or run one query with Salesforce's own Run Query in the data space you want." : msg };
+            var result = { error: /does not exist/i.test(msg) ? "Object not found in any data space this page has used (" + spaces.map(function (x) { return x || "default"; }).join(", ") + "). Workspace header label: " + (_dsDiag.label ? "'" + _dsDiag.label + "'" : "not found") + "; API name read from page: none. Checked: " + _dsDiag.hosts.slice(0, 8).join(" > ") + ". Run one query with Salesforce's own Run Query to teach the tool the space." : msg };
             probeCache[name] = result;
             if (objInput.value.trim() === name) showProbeResult(result);
           });
