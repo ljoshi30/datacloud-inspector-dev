@@ -14464,11 +14464,15 @@
     if (droppedCols.length) warnings.push("removed columns: " + droppedCols.join(", "));
     var prevMap = new Map(), currMap = new Map(), dupPrev = 0, dupCurr = 0;
     var dupRows = [];
+    // Keys honour the same normalisation as values (trim / case / number), so "A@X.com " and "a@x.com" match.
+    var qeRowKey = function (r, kc) { return kc.map(function (k) { return nv(r[k]); }).join(""); };
     prevRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (prevMap.has(k)) { dupPrev++; dupRows.push({ __file: "previous (dropped)", __key: k, row: r }); } else prevMap.set(k, r); });
     currRows.forEach(function (r) { var k = qeRowKey(r, keyCols); if (currMap.has(k)) { dupCurr++; dupRows.push({ __file: "current (dropped)", __key: k, row: r }); } else currMap.set(k, r); });
     if (dupPrev) warnings.push(dupPrev + " duplicate key(s) in previous (first kept)");
     if (dupCurr) warnings.push(dupCurr + " duplicate key(s) in current (first kept)");
-    var allCols = currCols.slice(); prevCols.forEach(function (c) { if (allCols.indexOf(c) < 0) allCols.push(c); });
+    // Only compare columns present in BOTH files; added/dropped columns are reported separately
+    // (otherwise one new column would mark every row as changed and bury the real edits).
+    var allCols = currCols.filter(function (c) { return prevCols.indexOf(c) >= 0; });
     var added = [], removed = [], changed = [], unchanged = 0;
     currMap.forEach(function (cr, k) {
       if (!prevMap.has(k)) { added.push(cr); return; }
@@ -14477,7 +14481,7 @@
       if (diffFields.length) changed.push({ key: k, before: pr, after: cr, fields: diffFields }); else unchanged++;
     });
     prevMap.forEach(function (pr, k) { if (!currMap.has(k)) removed.push(pr); });
-    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings, dupRows: dupRows };
+    return { added: added, removed: removed, changed: changed, unchanged: unchanged, warnings: warnings, dupRows: dupRows, addedCols: addedCols, droppedCols: droppedCols };
   }
 
   // Render the diff (added/removed/changed) in a modal with sections.
@@ -14547,9 +14551,9 @@
       pop.innerHTML = "<div style='font:700 14px system-ui;margin-bottom:6px'>Compare options</div>"
         + ch2("dc-o-ci", "Ignore upper/lower case", o.ci) + ch2("dc-o-trim", "Ignore extra spaces / line breaks", o.trim) + ch2("dc-o-num", "Treat 1, 1.0 and 1.00 as the same", o.num)
         + "<div style='font:700 12px system-ui;margin:10px 0 4px'>Ignore these columns <span style='font-weight:400;color:#64748b'>(not compared)</span></div>"
-        + "<input id='dc-o-find' placeholder='find a column…' style='width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;margin-bottom:6px'>"
+        + "<input id='dc-o-find' title='Type to narrow the column list' placeholder='find a column…' style='width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;margin-bottom:6px'>"
         + "<div id='dc-o-cols' style='max-height:240px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px;padding:4px 8px'>" + allc.map(function (c) { return "<label data-c='" + esc(c).toLowerCase() + "' style='display:block;margin:2px 0;font-size:12px'><input type='checkbox' value=\"" + esc(c) + "\" " + ((o.ignore || []).indexOf(c) >= 0 ? "checked" : "") + "> " + esc(c) + "</label>"; }).join("") + "</div>"
-        + "<div style='display:flex;gap:8px;margin-top:10px'><button id='dc-o-apply' style='cursor:pointer;border:none;background:#4338ca;color:#fff;border-radius:8px;padding:8px 14px;font:700 12px system-ui'>Apply &amp; re-compare</button><button id='dc-o-reset' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:8px 14px;font:600 12px system-ui'>Reset</button></div>";
+        + "<div style='display:flex;gap:8px;margin-top:10px'><button id='dc-o-apply' title='Re-run the comparison with these options' style='cursor:pointer;border:none;background:#4338ca;color:#fff;border-radius:8px;padding:8px 14px;font:700 12px system-ui'>Apply &amp; re-compare</button><button title='Clear all options and re-run' id='dc-o-reset' style='cursor:pointer;border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:8px 14px;font:600 12px system-ui'>Reset</button></div>";
       box.appendChild(pop);
       pop.querySelector("#dc-o-find").oninput = function () { var qq = this.value.toLowerCase(); pop.querySelectorAll("#dc-o-cols label").forEach(function (l) { l.style.display = l.getAttribute("data-c").indexOf(qq) >= 0 ? "block" : "none"; }); };
       pop.querySelector("#dc-o-apply").onclick = function () {
@@ -14661,7 +14665,7 @@
     }
     function changedCards() {
       var items = diff.changed.filter(function (ch) { return !q || hit(ch.key) || ch.fields.some(function (f) { return hit(f) || hit(ch.before[f]) || hit(ch.after[f]); }); });
-      if (!items.length) return empty(diff.changed.length ? "No changes match the filter." : "No rows changed.");
+      if (!items.length) return empty(diff.changed.length ? "No changes match the filter." : (!diff.added.length && !diff.removed.length ? "\u2713 No differences: every row matches between the two files (" + diff.unchanged + " identical)." : "No matched rows were edited. See the Added / Removed tabs."));
       var h = "<div style='font-size:12px;color:#64748b;margin-bottom:10px'>Each card is one row (matched by key). Only the fields that differ are shown.</div>";
       items.slice(0, 300).forEach(function (ch, idx) {
         h += "<details " + (idx < 15 ? "open " : "") + "style='background:#fff;border:1px solid #e2e8f0;border-left:4px solid #f59e0b;border-radius:8px;margin-bottom:10px;overflow:hidden'>"
@@ -14711,6 +14715,15 @@
       var t = "Compare: +" + diff.added.length + " new, -" + diff.removed.length + " gone, ~" + diff.changed.length + " edited, " + diff.unchanged + " identical (key: " + keyCols.join(" + ") + ")\n";
       var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
       Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; }).forEach(function (f) { t += "  " + f + ": " + cnt[f] + " row(s)\n"; });
+      var kv = function (r) { return keyCols.map(function (k) { return r[k]; }).join(" + "); };
+      var smp = function (lab, rows) { if (rows.length) t += lab + " (" + rows.length + "), e.g. " + rows.slice(0, 5).map(kv).join(", ") + (rows.length > 5 ? ", ..." : "") + "\n"; };
+      smp("Added keys", diff.added); smp("Removed keys", diff.removed);
+      if (diff.addedCols && diff.addedCols.length) t += "New columns: " + diff.addedCols.join(", ") + "\n";
+      if (diff.droppedCols && diff.droppedCols.length) t += "Dropped columns: " + diff.droppedCols.join(", ") + "\n";
+      var o = (ctx && ctx.opts) || {};
+      if (o.ignore && o.ignore.length) t += "Ignored columns: " + o.ignore.join(", ") + "\n";
+      var nm = []; if (o.trim) nm.push("spaces"); if (o.ci) nm.push("letter case"); if (o.num) nm.push("number format"); if (nm.length) t += "Normalised: " + nm.join(", ") + "\n";
+      if (diff.dupRows && diff.dupRows.length) t += "Warning: " + diff.dupRows.length + " duplicate-key row(s) dropped; key may not be unique.\n";
       return t;
     }
     function noticesView() {
@@ -14738,9 +14751,16 @@
         }
       }
       // noise: columns that change in nearly EVERY changed row (timestamps, generated values) -> one click to ignore
-      if (ctx && diff.changed.length >= 3) {
+      if (ctx && diff.changed.length >= 5) {
         var cnt = {}; diff.changed.forEach(function (ch) { ch.fields.forEach(function (f) { cnt[f] = (cnt[f] || 0) + 1; }); });
-        var noisy = Object.keys(cnt).filter(function (f) { return cnt[f] >= diff.changed.length * 0.9; });
+        // Only suggest ignoring columns that LOOK generated (timestamp/hash/id-ish name or values);
+        // a real business column (e.g. Qty) that happens to change on every row must not be flagged.
+        var looksGenerated = function (f) {
+          if (/(date|time|_at$|stamp|modified|updated|created|hash|uuid|guid|key|(^|_)id(__c)?$|checksum|version|etl|load)/i.test(f)) return true;
+          var smp = diff.changed.slice(0, 20).map(function (ch) { return String(ch.after[f] == null ? "" : ch.after[f]); });
+          return smp.every(function (v) { return /^\d{4}-\d{2}-\d{2}[T ]/.test(v) || /^[0-9a-f]{16,}$/i.test(v); });
+        };
+        var noisy = Object.keys(cnt).filter(function (f) { return cnt[f] >= diff.changed.length * 0.9 && looksGenerated(f); });
         if (noisy.length) {
           h += "<div style='background:#f8fafc;border:1px solid #cbd5e1;border-left:4px solid #64748b;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;color:#334155;display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
             + "<div style='flex:1;min-width:260px'><b>" + noisy.length + " column" + (noisy.length === 1 ? "" : "s") + " change in almost every changed row</b> (" + noisy.slice(0, 6).map(esc).join(", ") + (noisy.length > 6 ? ", …" : "") + "). These are often timestamps or generated values. Ignore them to see only the real changes.</div>"
@@ -14785,6 +14805,32 @@
       body.querySelectorAll("[data-tie]").forEach(function (tb) { tb.onclick = function () { var x = ctx.sugg[parseInt(tb.getAttribute("data-tie"), 10)]; modal.remove(); ctx.rerun(x.cols || [x.col]); }; });
       var ig = body.querySelector("#dc-ign-noise");
       if (ig && ctx) ig.onclick = function () { var o = Object.assign({}, ctx.opts || {}); o.ignore = (o.ignore || []).concat(ctx._noisy || []); modal.remove(); ctx.rerun(keyCols, o); };
+      applyTips();
+    }
+    // Hover help on every control (set after each repaint so re-rendered notices get it too).
+    function applyTips() {
+      var T = {
+        "dc-diff-xl": "Download every difference as an Excel sheet: Type (Added/Removed/Changed), Key, Field, Before, After.",
+        "dc-diff-cp": "Copy a plain-text summary (counts, key, which fields changed, sample keys) to paste into a ticket or chat.",
+        "dc-use-key": "Re-run the comparison matching rows on the suggested key instead.",
+        "dc-ign-noise": "Hide these columns from the comparison (timestamps / generated values that change on every row) and re-run. Nothing is deleted; use Options > Reset to undo."
+      };
+      var tabT = { changed: "Rows found in BOTH files (same key) where at least one field differs.", added: "Rows whose key is only in the CURRENT file (new records).", removed: "Rows whose key is only in the PREVIOUS file (gone records).", dups: "Rows dropped because their key repeats. Only the first row per key is compared; a repeated key usually means the key is not unique enough." };
+      Object.keys(tabEls).forEach(function (id) { tabEls[id].title = tabT[id] || ""; });
+      box.querySelectorAll("[id]").forEach(function (e) { if (T[e.id] && !e.title) e.title = T[e.id]; });
+      closeX.title = "Close (click outside the window also closes it)";
+      search.title = "Filter the current tab by key, field name or value";
+      box.querySelectorAll("[data-tie]").forEach(function (e) { e.title = "Equally good key candidate. Click to re-run the comparison matching rows on it."; });
+      box.querySelectorAll("button").forEach(function (e) {
+        if (e.title) return; var t = (e.textContent || "").replace(/\s+/g, " ").trim();
+        if (/Wrap/.test(t)) e.title = "Wrap long values onto several lines instead of cutting them off with …";
+        else if (/Full screen/.test(t)) e.title = "Toggle full screen for this window";
+        else if (/Options/.test(t)) e.title = "Comparison options: ignore case/spaces/number format, choose columns to ignore";
+        else if (/Apply/.test(t)) e.title = "Re-run the comparison with these options";
+        else if (/Reset/.test(t)) e.title = "Clear all options and re-run";
+      });
+      box.querySelectorAll("select").forEach(function (e) { if (!e.title) e.title = "Group the rows: by row (one card per record) or by field (which columns changed most); on Added/Removed, group by any column value."; });
+      box.querySelectorAll("input[type=checkbox]").forEach(function (e) { if (!e.title) e.title = (e.parentNode && e.parentNode.textContent || "").trim(); });
     }
     paint();
 
@@ -14808,7 +14854,7 @@
     modal.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;font-family:-apple-system,'Segoe UI',sans-serif;";
     var box = document.createElement("div");
     box.style.cssText = "background:#fff;border-radius:12px;width:min(980px,96vw);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4)";
-    var h = "<div style='padding:14px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;justify-content:space-between;align-items:center'><div><div style='font:700 16px system-ui'>Snapshot history</div><div style='font:12px system-ui;opacity:.9'>Each run vs the run before it &middot; key: " + esc(keyCols.join(" + ") || "(none chosen)") + "</div></div><button id='dc-hist-x' style='border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer'>&times;</button></div>";
+    var h = "<div style='padding:14px 18px;background:linear-gradient(135deg,#7c3aed,#4338ca);color:#fff;display:flex;justify-content:space-between;align-items:center'><div><div style='font:700 16px system-ui'>Snapshot history</div><div style='font:12px system-ui;opacity:.9'>Each run vs the run before it &middot; key: " + esc(keyCols.join(" + ") || "(none chosen)") + "</div></div><button id='dc-hist-x' title='Close' style='border:none;background:rgba(255,255,255,.2);color:#fff;font-size:20px;width:32px;height:32px;border-radius:50%;cursor:pointer'>&times;</button></div>";
     h += "<div style='overflow:auto;padding:14px 18px'><table style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr style='text-align:left;color:#475569;font:700 11px system-ui;text-transform:uppercase'><th style='padding:6px 8px'>Run</th><th style='padding:6px 8px'>Rows</th><th style='padding:6px 8px;min-width:160px'>Size</th><th style='padding:6px 8px'>vs previous run</th></tr></thead><tbody>";
     data.forEach(function (x, i) {
       var when = x.sn.cur ? "" : (x.sn.ts ? new Date(x.sn.ts).toLocaleString() : "");
@@ -14918,7 +14964,7 @@
     hdr.innerHTML = "<div style='font:700 15px system-ui'>Compare two CSV files</div>";
     var closeX = document.createElement("button"); closeX.innerHTML = "&times;";
     closeX.style.cssText = "border:none;background:rgba(255,255,255,.2);color:#fff;font-size:18px;width:30px;height:30px;border-radius:50%;cursor:pointer;";
-    closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
+    closeX.title = "Close"; closeX.onclick = function () { modal.remove(); }; hdr.appendChild(closeX); box.appendChild(hdr);
     var body = document.createElement("div"); body.style.cssText = "flex:1;overflow:auto;padding:16px 20px;min-height:0;background:#fff;color:#1e293b;font-size:13px;line-height:1.5;";
     box.appendChild(body);
 
@@ -14930,16 +14976,16 @@
       "<div style='font-size:12px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 11px;margin-bottom:12px'>"
       + "Pick two CSV files (for example, two <b>Download CSV</b> exports of the same query from different runs). This shows what was <span style='color:#059669'>added</span>, <span style='color:#dc2626'>removed</span>, and <span style='color:#b45309'>changed</span>. No row limit — good for large results.</div>"
       + mkFileRow("Older file", "(the earlier run)")
-      + "<input type='file' id='dc-csv-old' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + "<input type='file' id='dc-csv-old' title='Choose the OLDER export (the baseline, before)' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-old-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
       + mkFileRow("Newer file", "(the later run)")
-      + "<input type='file' id='dc-csv-new' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
+      + "<input type='file' id='dc-csv-new' title='Choose the NEWER export (after) to compare against the older one' accept='.csv,text/csv' style='font-size:12px;margin-bottom:4px'/>"
       + "<div id='dc-csv-new-info' style='font-size:11px;color:#64748b;margin-bottom:10px'></div>"
       + "<div style='display:flex;align-items:center;gap:6px;margin:4px 0 2px'><span style='font:700 12px system-ui'>Key column:</span>"
-      + "<select id='dc-csv-key' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
+      + "<select id='dc-csv-key' title='Column used to match a row in the old file with the same row in the new file. Must be unique and unchanged between runs. Auto-picked when possible.' style='border:1px solid #cbd5e1;border-radius:6px;padding:4px 7px;font:12px system-ui;max-width:260px' disabled><option>load both files first</option></select></div>"
       + "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>The column that uniquely identifies a row (usually an ID). Rows are matched by this between the two files.</div>"
       + "<div id='dc-csv-msg' style='font-size:11px;color:#b45309;min-height:14px;margin-bottom:8px'></div>"
-      + "<button id='dc-csv-go' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
+      + "<button id='dc-csv-go' title='Compare the two files: shows Changed / Added / Removed rows' style='border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font:700 12px system-ui;color:#fff;background:linear-gradient(135deg,#4338ca,#6d28d9);opacity:.5' disabled>Compare</button>";
 
     var keySel = body.querySelector("#dc-csv-key");
     var goBtn = body.querySelector("#dc-csv-go");
