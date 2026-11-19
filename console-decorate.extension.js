@@ -16616,9 +16616,13 @@
       var hdr = document.createElement("div");
       hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e2e8f0;background:#fffbeb;border-radius:12px 12px 0 0;cursor:move;position:sticky;top:0;z-index:2;";
       hdr.innerHTML = "<div style='font:700 15px -apple-system,sans-serif;color:#92400e;'>🔧 Helpful Queries <span style='font-weight:500;font-size:11px;color:#a16207;'>guided checks, no SQL needed</span></div>";
+      var hm = document.createElement("button"); hm.textContent = "⤢"; hm.title = "Make this window bigger / smaller";
+      hm.style.cssText = "border:none;background:none;font-size:17px;color:#92400e;cursor:pointer;padding:4px 8px;margin-left:auto;";
+      var big = false;
+      hm.onclick = function () { big = !big; panel.style.width = big ? "96vw" : "min(660px,94vw)"; panel.style.maxHeight = big ? "94vh" : "88vh"; panel.style.top = big ? "3vh" : "6vh"; panel.style.left = "50%"; panel.querySelectorAll("[data-dc-tbl]").forEach(function (t) { t.style.maxHeight = big ? "62vh" : "260px"; }); panel.setAttribute("data-big", big ? "1" : ""); };
       var hx = document.createElement("button"); hx.textContent = "✕"; hx.title = "Close";
       hx.style.cssText = "border:none;background:none;font-size:16px;color:#92400e;cursor:pointer;padding:4px 8px;"; hx.onclick = closeGuidedPanel;
-      hdr.appendChild(hx); panel.appendChild(hdr);
+      hdr.appendChild(hm); hdr.appendChild(hx); panel.appendChild(hdr);
       var body = document.createElement("div"); body.style.cssText = "padding:14px 16px;"; panel.appendChild(body);
 
       var colsCache = {};            // table -> [{name,type}] | "loading" | "fail"
@@ -16816,7 +16820,7 @@
       }
       var LEVEL = { ok: ["#f0fdf4", "#16a34a", "✅"], warn: ["#fffbeb", "#d97706", "⚠️"], bad: ["#fef2f2", "#dc2626", "❌"], info: ["#eff6ff", "#2563eb", "ℹ️"] };
       function tableHtml(cols, rows, max) {
-        var h = "<div style='overflow:auto;max-height:260px;border:1px solid #e2e8f0;border-radius:6px;margin-top:8px;'><table style='border-collapse:collapse;width:100%;font-size:11px;'><thead><tr>" + cols.map(function (c) { return "<th style='position:sticky;top:0;background:#f8fafc;text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        var h = "<div data-dc-tbl='1' style='overflow:auto;max-height:" + (guidedPanelEl && guidedPanelEl.getAttribute("data-big") ? "62vh" : "260px") + ";border:1px solid #e2e8f0;border-radius:6px;margin-top:8px;'><table style='border-collapse:collapse;width:100%;font-size:11px;'><thead><tr>" + cols.map(function (c) { return "<th style='position:sticky;top:0;background:#f8fafc;text-align:left;padding:4px 8px;border-bottom:1px solid #e2e8f0;white-space:nowrap;'>" + esc(c) + "</th>"; }).join("") + "</tr></thead><tbody>";
         rows.slice(0, max || 200).forEach(function (r) { h += "<tr>" + cols.map(function (c) { return "<td style='padding:3px 8px;border-bottom:1px solid #f1f5f9;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis;'>" + esc(r[c]) + "</td>"; }).join("") + "</tr>"; });
         return h + "</tbody></table></div>" + (rows.length > (max || 200) ? "<div style='font-size:10px;color:#94a3b8;margin-top:3px;'>Showing the first " + (max || 200) + " rows.</div>" : "");
       }
@@ -16838,7 +16842,7 @@
             if (vd.table && vd.table.length) h += tableHtml(Object.keys(vd.table[0]), vd.table, 80);
             h += "<div id='dc-g-rows'></div><div style='margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;'>";
             if (chk.rows) h += "<button id='dc-g-see' style='border:1px solid #d97706;background:#fff;color:#92400e;border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;'>👁 " + (chk.inline ? "Show full list" : "See the rows") + " (up to 2,000)</button>";
-            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed != null ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + "</span></div>";
+            h += "<button id='dc-g-copy' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;'>📋 Copy SQL</button><span style='font-size:10px;color:#94a3b8;'>" + ((Date.now() - t0) / 1000).toFixed(1) + "s" + (r.rowsProcessed ? " · " + Number(r.rowsProcessed).toLocaleString() + " rows scanned" : "") + "</span></div>";
             out.innerHTML = h;
             try { out.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) {}
             var cp = out.querySelector("#dc-g-copy");
@@ -16851,7 +16855,9 @@
                 setLastResult({ blobUrl: rr.blobUrl, filename: "guided_" + chk.id + "_" + todayStr() + ".csv", rowCount: rr.totalRows, cols: rr.columns.length, columns: rr.columns, tableName: p.t, data: rr.rowData || [], sql: rsql });
                 var extra = "";
                 if (chk.post) { var px = chk.post(rr.rowData || [], p); if (px) { var pc = LEVEL[px.level]; extra = "<div style='margin-top:8px;background:" + pc[0] + ";border:1px solid " + pc[1] + ";border-left:5px solid " + pc[1] + ";border-radius:8px;padding:8px 10px;color:#0f172a;font-weight:600;'>" + pc[2] + " " + esc(px.text) + "</div>"; } }
-                box.innerHTML = extra + "<div style='margin-top:8px;'><b>" + Number(rr.totalRows).toLocaleString() + "</b> row" + (rr.totalRows === 1 ? "" : "s") + (rr.totalRows >= limit ? " (capped at " + limit.toLocaleString() + ")" : "") + " · <a href='" + rr.blobUrl + "' download='guided_" + chk.id + "_" + todayStr() + ".csv' style='color:#b45309;'>⬇ Download CSV</a></div>" + tableHtml(rr.columns, rr.rowData || [], 200);
+                box.innerHTML = extra + "<div style='margin-top:8px;'><b>" + Number(rr.totalRows).toLocaleString() + "</b> row" + (rr.totalRows === 1 ? "" : "s") + (rr.totalRows >= limit ? " (capped at " + limit.toLocaleString() + ")" : "") + " · <a href='" + rr.blobUrl + "' download='guided_" + chk.id + "_" + todayStr() + ".csv' style='color:#b45309;'>⬇ Download CSV</a> · <a href='#' id='dc-g-full' title='Open all fetched rows in the full-screen results viewer (sort, copy cells, bigger table)' style='color:#b45309;font-weight:600;'>⛶ Open in full-screen viewer</a></div>" + tableHtml(rr.columns, rr.rowData || [], 200);
+                var fl = box.querySelector("#dc-g-full");
+                if (fl) fl.onclick = function (ev) { ev.preventDefault(); try { downloadBtn.style.display = "inline-block"; viewBtn.style.display = "inline-block"; viewBtn.onclick(); } catch (e) { fl.textContent = "Use the 👁 View Results button in the toolbar"; } };
               }).catch(function (e) { box.innerHTML = "<div style='color:#b91c1c;margin-top:8px;'>" + esc(String(e && e.message || e)) + "</div>"; });
             }
             if (see) see.onclick = function () { showRows(2000); };
