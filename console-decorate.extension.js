@@ -16418,6 +16418,35 @@
         };
       }
 
+      function cpJoins(p, pairs) {   // pairs: [alias, tableKey, outName]; optional tables are skipped when blank
+        return pairs.filter(function (x) { return p[x[1]]; });
+      }
+      function overCore(p) {
+        var cps = cpJoins(p, [["e", "te", "unique_emails"], ["ph", "tp", "unique_phones"], ["ad", "ta", "unique_addresses"]]);
+        return "SELECT l." + Q(p.c) + " AS unified_id, COUNT(DISTINCT l." + Q(p.c2) + ") AS source_records"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " l" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = l." + Q(p.c); }).join("")
+          + " GROUP BY l." + Q(p.c) + " HAVING COUNT(DISTINCT l." + Q(p.c2) + ") > " + lastN(p);
+      }
+      var CP4 = [["e", "te", "email_cps"], ["ph", "tp", "phone_cps"], ["ad", "ta", "address_cps"], ["pi", "tpi", "party_identifiers"]];
+      function cpFields() {
+        return [{ k: "te", kind: "table", optional: true, role: "cp-email", label: "Contact Point Email table (optional)", def: "ssot__ContactPointEmail__dlm" }, { k: "tp", kind: "table", optional: true, role: "cp-phone", label: "Contact Point Phone table (optional)", def: "ssot__ContactPointPhone__dlm" }, { k: "ta", kind: "table", optional: true, role: "cp-address", label: "Contact Point Address table (optional)", def: "ssot__ContactPointAddress__dlm" }, { k: "tpi", kind: "table", optional: true, role: "cp-party", label: "Party Identification table (optional)", def: "ssot__PartyIdentification__dlm" }];
+      }
+      function srcCore(p) {
+        var cps = cpJoins(p, CP4);
+        return "SELECT i." + Q(p.s1) + " AS data_source, i." + Q(p.s2) + " AS source_object, COUNT(DISTINCT i." + Q(p.c) + ") AS individuals"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " i" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = i." + Q(p.c); }).join("")
+          + " GROUP BY i." + Q(p.s1) + ", i." + Q(p.s2);
+      }
+      function perIndCore(p) {
+        var cps = cpJoins(p, CP4);
+        return "SELECT i." + Q(p.c) + " AS individual_id"
+          + cps.map(function (x) { return ", COUNT(DISTINCT " + x[0] + "." + Q("ssot__Id__c") + ") AS " + x[2]; }).join("")
+          + " FROM " + T(p) + " i" + cps.map(function (x) { return " LEFT JOIN " + Q(p[x[1]]) + " " + x[0] + " ON " + x[0] + "." + Q("ssot__PartyId__c") + " = i." + Q(p.c); }).join("")
+          + " GROUP BY i." + Q(p.c);
+      }
+
       var checks = [
         { id: "health", goals: ["loaded", "explore"], title: "Table health scan (all columns, one query)",
           plain: "The quickest overall check. For EVERY column: how many rows have a value, how many different values there are, and the earliest/latest date. Flags empty columns and IDs that repeat.",
@@ -16449,12 +16478,6 @@
             return { level: (empty.length || dups.length) ? "warn" : "ok", text: msg.join(" "), table: tr, cap: (p.cols || []).length > 60 ? "Only the first 60 columns were scanned." : "" };
           },
           next: "Look at the table below: a column with a low 'Has a value' % is mostly empty; 'Different values' = 1 means it never varies." },
-        { id: "rowcount", goals: ["loaded"], title: "Does the table have data?", plain: "Counts the rows. Zero rows usually means the data stream did not run or you are in the wrong data space.",
-          fields: [{ k: "t", kind: "table" }],
-          summary: function (p) { return "SELECT COUNT(*) AS total FROM " + T(p); },
-          rows: function (p) { return "SELECT * FROM " + T(p); },
-          verdict: function (r) { var t = num(r.total); return t ? { level: "ok", text: fmt(t) + " rows." } : { level: "bad", text: "0 rows. The table exists but is empty." }; },
-          next: "If this is 0, check the data stream's last run and that you are viewing the right data space." },
         { id: "fresh", goals: ["loaded", "dates"], title: "Is the data fresh?", plain: "Finds the newest date in a column and tells you how old it is.",
           fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "n", kind: "num", label: "Should be newer than (days)", def: "2" }],
           summary: function (p) { return "SELECT COUNT(*) AS total, MAX(" + Q(p.c) + ") AS latest FROM " + T(p); },
@@ -16476,12 +16499,6 @@
           rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + rng(p) + " ORDER BY " + Q(p.c); },
           verdict: function (r) { var i = num(r.inside), t = num(r.total); return i ? { level: "info", text: fmt(i) + " of " + fmt(t) + " rows (" + pct(i, t) + "%) are in that window." } : { level: "warn", text: "No rows fall in that window (the table has " + fmt(t) + " rows in total)." }; },
           next: "Click 'See the rows' to open them or download as CSV." },
-        { id: "lastn", goals: ["dates"], title: "Rows from the last N days", plain: "How much data arrived recently. Zero means loading may have stopped.",
-          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "n", kind: "num", label: "Last N days", def: "7" }],
-          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " >= CURRENT_DATE - INTERVAL '" + lastN(p) + " days' THEN 1 ELSE 0 END), 0) AS recent FROM " + T(p); },
-          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " >= CURRENT_DATE - INTERVAL '" + lastN(p) + " days' ORDER BY " + Q(p.c) + " DESC"; },
-          verdict: function (r, p) { var x = num(r.recent), t = num(r.total); return x ? { level: "ok", text: fmt(x) + " rows in the last " + lastN(p) + " days (" + pct(x, t) + "% of the table)." } : { level: "bad", text: "No rows in the last " + lastN(p) + " days." }; },
-          next: "No recent rows? Check the data stream schedule." },
         { id: "trend", goals: ["dates"], title: "Rows per day / week / month", plain: "Shows how many rows arrived in each period, and lists days with zero rows (gaps) when you pick 'day'.",
           fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "date", only: "date", label: "Date column" }, { k: "period", kind: "period", def: "day" }, { k: "range", kind: "range", optional: true }],
           inline: true,
@@ -16503,12 +16520,6 @@
           rows: function (p) { var old = isTsT(p.cType) ? "TIMESTAMP '1990-01-01 00:00:00'" : "DATE '1990-01-01'"; return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " >= CURRENT_DATE + INTERVAL '1 days' OR " + Q(p.c) + " < " + old; },
           verdict: function (r) { var f = num(r.future), a = num(r.ancient); return (f || a) ? { level: "warn", text: fmt(f) + " in the future, " + fmt(a) + " before 1990." } : { level: "ok", text: "No future or pre-1990 dates." }; },
           next: "Often a wrong time zone, a default placeholder, or a swapped day/month." },
-        { id: "notdate", goals: ["dates", "mapping"], title: "Text that is not a valid date", plain: "For a text column that should hold dates: finds values that cannot be read as a date/time.",
-          fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "text", label: "Text column" }],
-          summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS TIMESTAMP) IS NULL THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
-          rows: function (p) { return "SELECT * FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL AND TRY_CAST(" + Q(p.c) + " AS TIMESTAMP) IS NULL"; },
-          verdict: function (r) { var b = num(r.bad); return b ? { level: "bad", text: fmt(b) + " of " + fmt(r.total) + " values are not valid dates." } : { level: "ok", text: "Every value can be read as a date/time." }; },
-          next: "Fix the source format or map it as text and convert in a transform." },
         { id: "blank", goals: ["loaded", "contact"], title: "Empty / blank values in a column", plain: "How many rows are NULL or blank in a column.",
           fields: [{ k: "t", kind: "table" }, { k: "c", kind: "col", pick: "id" }],
           summary: function (p) { return "SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN " + cond(p, "blank") + " THEN 1 ELSE 0 END), 0) AS bad FROM " + T(p); },
@@ -16542,22 +16553,39 @@
             return { level: "ok", text: txt };
           },
           next: "Next: 'Merge rate per source' to see which source merges how much." },
-        { id: "idrBySource", goals: ["idr"], title: "Merge rate per source", plain: "For each data source/object feeding identity resolution: how many records and how many unified profiles they ended up in.",
-          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }], inline: true,
-          summary: function (p) { return "SELECT COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p); },
-          rows: function (p) { return "SELECT " + Q("ssot__DataSourceId__c") + " AS data_source, " + Q("ssot__DataSourceObjectId__c") + " AS source_object, COUNT(*) AS source_records, COUNT(DISTINCT UnifiedRecordId__c) AS unified_profiles FROM " + T(p) + " GROUP BY " + Q("ssot__DataSourceId__c") + ", " + Q("ssot__DataSourceObjectId__c") + " ORDER BY COUNT(*) DESC"; },
-          verdict: function (r) { return { level: "info", text: fmt(r.source_records) + " records in total across sources. A source whose unified_profiles is close to its source_records is barely merging." }; },
-          next: "A source that never merges may be missing the match fields (email, phone, name)." },
-        { id: "idrOverMerge", goals: ["idr"], title: "Unified profiles with too many records", plain: "Finds unified profiles built from an unusually large number of source records, a sign of over-merging (e.g. a shared fake email).",
-          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm" }, { k: "n", kind: "num", label: "More than N records", def: "10" }],
-          summary: function (p) { return "SELECT COUNT(*) AS big_profiles, COALESCE(MAX(n), 0) AS largest FROM (SELECT UnifiedRecordId__c, COUNT(*) AS n FROM " + T(p) + " GROUP BY UnifiedRecordId__c HAVING COUNT(*) > " + lastN(p) + ") x"; },
-          rows: function (p) { return "SELECT UnifiedRecordId__c, COUNT(*) AS source_records FROM " + T(p) + " GROUP BY UnifiedRecordId__c HAVING COUNT(*) > " + lastN(p) + " ORDER BY COUNT(*) DESC"; },
+        { id: "idrBySource", title: "Consolidation rate per source", plain: "Salesforce's documented check: for each data source, how many source records were merged into how many unified profiles. Data sources with duplicates should consolidate more; an unexpectedly HIGH rate can point to a data-quality problem in that source.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm", role: "link" }, { k: "c", kind: "col", label: "Unified profile ID column", def: "UnifiedRecordId__c", pick: "id" }, { k: "c2", kind: "col", label: "Source record ID column", def: "SourceRecordId__c", pick: "id" }, { k: "s1", kind: "col", label: "Data source column", def: "ssot__DataSourceId__c", pick: "id" }, { k: "s2", kind: "col", label: "Data source object column", def: "ssot__DataSourceObjectId__c", pick: "id" }], inline: true,
+          summary: function (p) { return "SELECT COUNT(DISTINCT " + Q(p.c) + ") AS unified_profiles, COUNT(" + Q(p.c2) + ") AS source_records FROM " + T(p); },
+          rows: function (p) { return "SELECT " + Q(p.s1) + " AS data_source, " + Q(p.s2) + " AS source_object, COUNT(" + Q(p.c2) + ") AS source_records, COUNT(DISTINCT " + Q(p.c) + ") AS unified_profiles, ROUND((1 - COUNT(DISTINCT " + Q(p.c) + ") * 1.0 / COUNT(" + Q(p.c2) + ")) * 100, 2) AS consolidation_pct FROM " + T(p) + " GROUP BY " + Q(p.s1) + ", " + Q(p.s2) + " ORDER BY COUNT(" + Q(p.c2) + ") DESC"; },
+          verdict: function (r) { var s = num(r.source_records), u = num(r.unified_profiles); if (!s) return { level: "warn", text: "The link table has no rows." }; return { level: "info", text: fmt(s) + " source records became " + fmt(u) + " unified profiles overall (" + (Math.round((1 - u / s) * 1000) / 10) + "% consolidation). The table shows the rate per source." }; },
+          next: "A source near 0% is barely merging (check its match fields). A very high rate can mean repeated or placeholder values in that source." },
+        { id: "idrOverMerge", title: "Outlier unified profiles (too many source records)", plain: "Salesforce's documented outlier check: unified profiles built from an unusually large number of source records, with optional counts of their unique emails, phones and addresses. Hundreds of records on one profile usually means a shared value.",
+          fields: [{ k: "t", kind: "table", label: "Identity link table", def: "IndividualIdentityLink__dlm", role: "link" }, { k: "c", kind: "col", label: "Unified profile ID column", def: "UnifiedRecordId__c", pick: "id" }, { k: "c2", kind: "col", label: "Source record ID column", def: "SourceRecordId__c", pick: "id" }, { k: "n", kind: "num", label: "Show profiles with more than N source records", def: "10" },
+            { k: "te", kind: "table", optional: true, role: "ucp-email", label: "Unified email table (optional)", def: "UnifiedContactPointEmail__dlm" }, { k: "tp", kind: "table", optional: true, role: "ucp-phone", label: "Unified phone table (optional)", def: "UnifiedContactPointPhone__dlm" }, { k: "ta", kind: "table", optional: true, role: "ucp-address", label: "Unified address table (optional)", def: "UnifiedContactPointAddress__dlm" }],
+          summary: function (p) { return "SELECT COUNT(*) AS big_profiles, COALESCE(MAX(source_records), 0) AS largest FROM (" + overCore(p) + ") x"; },
+          rows: function (p) { return overCore(p) + " ORDER BY source_records DESC"; },
           verdict: function (r, p) { var b = num(r.big_profiles); return b ? { level: "bad", text: fmt(b) + " unified profile" + (b === 1 ? " has" : "s have") + " more than " + lastN(p) + " source records (largest: " + fmt(r.largest) + "). Suspect over-merging." } : { level: "ok", text: "No unified profile has more than " + lastN(p) + " source records." }; },
-          next: "Open the biggest profile's source records and look for a shared placeholder value (test@test.com, 0000000000)." },
+          next: "Open the biggest profile's source records and look for a shared placeholder value (test@test.com, 0000000000). Filter such values out in the data stream." },
         missingIn("idrSourceMissing", ["idr"], "Source records missing from identity resolution", "Every source record you expect to be resolved should appear in the link table. Finds the ones that did not.", { t2: "IndividualIdentityLink__dlm", c2: "SourceRecordId__c" }, { ra: "source", rb: "link", a: "Source table (DLO/DMO)", ac: "Its record ID column", b: "Identity link table", bc: "Link column", next: "Missing records often fail a ruleset filter or have no match-rule fields filled in." }),
         missingIn("idrUnifiedNoSource", ["idr"], "Unified profiles with no source records", "Unified profiles that have no row in the link table. Should be none.", { t: "UnifiedIndividual__dlm", c: "ssot__Id__c", t2: "IndividualIdentityLink__dlm", c2: "UnifiedRecordId__c" }, { ra: "unified", rb: "link", a: "Unified table", ac: "Its ID column", b: "Identity link table", bc: "Link column", next: "A mismatch can mean a stale unified table or a different ruleset's link table; pick the matching pair." }),
-        { id: "splitValue", goals: ["idr", "contact"], title: "Same value under different unified profiles", plain: "Finds e.g. one email that sits in several unified profiles, meaning identity resolution did not join them.",
-          fields: [{ k: "t", kind: "table", label: "Table with both columns" }, { k: "c", kind: "col", label: "Value column (email, phone…)", pick: "text" }, { k: "c2", kind: "col2same", label: "Unified ID column", pick: "id" }],
+        { id: "dqBySource", title: "Source data summary (before identity resolution)", plain: "Salesforce's documented data-quality check: per data source, how many individuals and how many unique emails, phones, addresses and IDs they bring. A contact-point column at 0 usually means that source is not mapped to that object.",
+          fields: [{ k: "t", kind: "table", label: "Individual table", def: "ssot__Individual__dlm", role: "individual" }, { k: "c", kind: "col", label: "Individual ID column", def: "ssot__Id__c", pick: "id" }, { k: "s1", kind: "col", label: "Data source column", def: "ssot__DataSourceId__c", pick: "id" }, { k: "s2", kind: "col", label: "Data source object column", def: "ssot__DataSourceObjectId__c", pick: "id" }].concat(cpFields()), inline: true,
+          summary: function (p) { var cps = cpJoins(p, CP4); return "SELECT COUNT(*) AS sources, COALESCE(SUM(individuals), 0) AS individuals" + cps.map(function (x) { return ", COALESCE(SUM(" + x[2] + "), 0) AS " + x[2]; }).join("") + " FROM (" + srcCore(p) + ") x"; },
+          rows: function (p) { return srcCore(p) + " ORDER BY individuals DESC"; },
+          verdict: function (r, p) {
+            var cps = cpJoins(p, CP4), zero = cps.filter(function (x) { return num(r[x[2]]) === 0; }).map(function (x) { return x[2]; });
+            if (!num(r.individuals)) return { level: "bad", text: "No individuals found. Check the table name and data space." };
+            return zero.length ? { level: "warn", text: fmt(r.individuals) + " individuals from " + fmt(r.sources) + " source(s), but " + zero.join(", ") + " is 0 overall. Review the mappings of your sources to those objects." } : { level: "info", text: fmt(r.individuals) + " individuals from " + fmt(r.sources) + " source(s). The table shows each source's unique contact points." };
+          },
+          next: "A source with 0 in a contact-point column is not mapped to that object, so identity resolution cannot match on it." },
+        { id: "dqPerIndividual", title: "Individuals with the most contact points", plain: "Salesforce's documented outlier check before identity resolution: individuals that own an unusual number of emails, phones, addresses or IDs. These point at source-data or mapping problems.",
+          fields: [{ k: "t", kind: "table", label: "Individual table", def: "ssot__Individual__dlm", role: "individual" }, { k: "c", kind: "col", label: "Individual ID column", def: "ssot__Id__c", pick: "id" }].concat(cpFields().slice(0, 4)),
+          summary: function (p) { var cps = cpJoins(p, CP4); if (!cps.length) return "SELECT COUNT(*) AS individuals, 0 AS most FROM " + T(p); return "SELECT COUNT(*) AS individuals, COALESCE(MAX(" + cps.map(function (x) { return x[2]; }).join(" + ") + "), 0) AS most FROM (" + perIndCore(p) + ") x"; },
+          rows: function (p) { var cps = cpJoins(p, CP4); return perIndCore(p) + (cps.length ? " ORDER BY " + cps.map(function (x) { return x[2]; }).join(" + ") + " DESC" : ""); },
+          verdict: function (r, p) { if (!cpJoins(p, CP4).length) return { level: "warn", text: "Pick at least one contact-point table to count." }; return { level: "info", text: fmt(r.individuals) + " individuals. The busiest one has " + fmt(r.most) + " contact points in total. Open the rows to see who is at the top." }; },
+          next: "Look at the individuals at the top: an unusually high count is often a shared value or a bad mapping." },
+        { id: "splitValue", goals: ["idr", "contact"], title: "Value shared by several IDs (over-grouping / not merged)", plain: "Salesforce's documented repeat-value check. Pick a contact-point table, its value column (email, phone…) and its owner column (Party ID). Lists each value used by more than one ID, with how many IDs and rows. Before identity resolution this finds values that will over-group; on a link table it finds values that did not merge.",
+          fields: [{ k: "t", kind: "table", label: "Table with both columns" }, { k: "c", kind: "col", label: "Value column (email, phone…)", pick: "text" }, { k: "c2", kind: "col2same", label: "Owner ID column (Party ID or unified ID)", pick: "id" }],
           summary: function (p) { return "SELECT COUNT(*) AS split_values FROM (SELECT " + Q(p.c) + " AS v FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1) x"; },
           rows: function (p) { return "SELECT " + Q(p.c) + " AS value, COUNT(DISTINCT " + Q(p.c2) + ") AS different_ids, COUNT(*) AS records FROM " + T(p) + " WHERE " + Q(p.c) + " IS NOT NULL GROUP BY " + Q(p.c) + " HAVING COUNT(DISTINCT " + Q(p.c2) + ") > 1 ORDER BY COUNT(DISTINCT " + Q(p.c2) + ") DESC"; },
           verdict: function (r) { var s = num(r.split_values); return s ? { level: "warn", text: fmt(s) + " value" + (s === 1 ? " is" : "s are") + " spread across more than one unified profile." } : { level: "ok", text: "Every value belongs to exactly one profile." }; },
@@ -16574,14 +16602,16 @@
       ];
       // Goal cards for the home screen (order = display order).
       var goals = [
-        { id: "loaded", icon: "📥", title: "Is my data loaded?", sub: "rows, freshness, empty columns" },
-        { id: "mapping", icon: "🧩", title: "Is my mapping right?", sub: "keys match, types fit" },
-        { id: "idr", icon: "🧬", title: "Did identity resolution work?", sub: "merge rate, over-merge, missing" },
-        { id: "contact", icon: "📇", title: "Are contact points clean?", sub: "emails, spaces, duplicates" },
-        { id: "dates", icon: "📅", title: "Dates and times", sub: "between two dates, trend, gaps" },
-        { id: "explore", icon: "🔎", title: "Explore values", sub: "distinct values, table scan" }
+        { id: "loaded", icon: "📥", title: "Check a table", sub: "health scan, freshness, empty values, duplicate IDs, distinct values" },
+        { id: "mapping", icon: "🧩", title: "Is my mapping right?", sub: "keys match, values fit their type" },
+        { id: "idrready", icon: "🧪", title: "Ready for identity resolution?", sub: "Salesforce data-quality checks before you run it" },
+        { id: "idr", icon: "🧬", title: "Did identity resolution work?", sub: "consolidation, outliers, missing records" },
+        { id: "contact", icon: "📇", title: "Are contact points clean?", sub: "invalid emails, stray spaces, case, near-duplicates" },
+        { id: "dates", icon: "📅", title: "Dates and times", sub: "between two dates or times, trend and gaps, impossible dates" }
       ];
-      checks.forEach(function (c) { if (c.id === "dupes" || c.id === "normdupes") c.goals = c.id === "dupes" ? ["loaded", "mapping"] : ["contact"]; if (!c.goals) c.goals = ["explore"]; });
+      // One home goal per check, so the same feature never appears under several goals.
+      var HOME = { health: "loaded", fresh: "loaded", blank: "loaded", dupes: "loaded", distinct: "loaded", typecheck: "mapping", mapMissing: "mapping", dqBySource: "idrready", dqPerIndividual: "idrready", splitValue: "idrready", idrHealth: "idr", idrBySource: "idr", idrOverMerge: "idr", idrSourceMissing: "idr", idrUnifiedNoSource: "idr", email: "contact", whitespace: "contact", casemix: "contact", normdupes: "contact", between: "dates", trend: "dates", datesanity: "dates" };
+      checks.forEach(function (c) { c.goals = [HOME[c.id] || "loaded"]; });
       // Pre-select a likely column. pick: id | date | text | any. Returns "" if nothing fits.
       function pickDefault(cols, pick, only) {
         var list = (cols || []).filter(function (c) { return only === "date" ? isDateT(c.type) : true; });
@@ -16699,18 +16729,30 @@
         return (st.tables = out.slice(0, 600));
       }
       function roleOf(fd) { return fd.role || (/IdentityLink/.test(fd.def || "") ? "link" : (/^Unified/.test(fd.def || "") ? "unified" : "")); }
+      var ROLE_RX = {
+        link: function (n) { return /Link/i.test(n); },
+        unified: function (n) { return /^Unified/i.test(n) && !/Link/i.test(n); },
+        source: function (n) { return !/Link/i.test(n) && !/^Unified/i.test(n); },
+        individual: function (n) { return /(^|__)Individual__dlm$|^(ssot__)?Individual/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-email": function (n) { return /ContactPointEmail/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-phone": function (n) { return /ContactPointPhone/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-address": function (n) { return /ContactPointAddress/i.test(n) && !/Link|^Unified/i.test(n); },
+        "cp-party": function (n) { return /PartyIdentification/i.test(n) && !/Link|^Unified/i.test(n); },
+        "ucp-email": function (n) { return /^UnifiedContactPointEmail/i.test(n); },
+        "ucp-phone": function (n) { return /^UnifiedContactPointPhone/i.test(n); },
+        "ucp-address": function (n) { return /^UnifiedContactPointAddress/i.test(n); }
+      };
       function forRole(role) {
         var cur = curDs(), all = tableNames().filter(function (o) { return !(o.ds && cur && o.ds !== cur); });   // hide objects confirmed in a different data space
-        var f = all;
-        if (role === "link") f = all.filter(function (o) { return /Link/i.test(o.n); });
-        else if (role === "unified") f = all.filter(function (o) { return /^Unified/i.test(o.n) && !/Link/i.test(o.n); });
-        else if (role === "source") f = all.filter(function (o) { return !/Link/i.test(o.n) && !/^Unified/i.test(o.n); });
-        return { list: f.length ? f : all, total: all.length, filtered: !!f.length && f.length !== all.length };
+        var rx = ROLE_RX[role];
+        if (!rx) return { list: all, total: all.length, filtered: false };
+        var f = all.filter(function (o) { return rx(o.n); });
+        return { list: f, total: all.length, filtered: true };
       }
       function ensureCols() {
         if (!st.check) return;
         st.check.fields.forEach(function (fd) {
-          if (fd.kind !== "table") return;
+          if (fd.kind !== "table" || fd.optional) return;
           var t = st.vals[fd.k];
           if (t && qeValidIdent(t) && colsCache[t] === undefined) loadCols(t, function (m) { renderForm(); if (m) msg(m, true); });
         });
@@ -16745,7 +16787,7 @@
         h += "</div><div style='margin-top:12px;font-size:11px;color:#64748b;'>Prefer to write SQL yourself? <a href='#' id='dc-g-classic' style='color:#b45309;'>Open the classic SQL templates</a>. Each check runs a Data Query (billed by rows scanned).</div>";
         body.innerHTML = h;
         body.querySelectorAll("[data-goal]").forEach(function (b) { b.onclick = function () { goalScreen(b.getAttribute("data-goal")); }; });
-        body.querySelector("#dc-g-quick").onclick = function () { st.goal = "explore"; formScreen("health"); };
+        body.querySelector("#dc-g-quick").onclick = function () { st.goal = "loaded"; formScreen("health"); };
         body.querySelector("#dc-g-classic").onclick = function (e) { e.preventDefault(); closeGuidedPanel(); openTemplatesPanel(); };
       }
       function goalScreen(gid) {
@@ -16764,7 +16806,8 @@
         st.check = chk; st.vals = st.vals || {};
         var carry = { t: st.vals.t };           // keep the last chosen table between checks
         st.vals = carry;
-        chk.fields.forEach(function (f) { if (f.def && (f.kind === "table" || f.kind === "col2" || !st.vals[f.k])) st.vals[f.k] = f.def; });
+        var known = {}; try { tableNames().forEach(function (o) { known[o.n] = 1; }); } catch (e) {}
+        chk.fields.forEach(function (f) { if (!f.def) return; if (f.optional) { st.vals[f.k] = known[f.def] ? f.def : ""; return; } if (f.kind === "table" || f.kind === "col2" || !st.vals[f.k]) st.vals[f.k] = f.def; });
         body.innerHTML = "<div style='margin-bottom:6px;'><a href='#' id='dc-g-back2' style='color:#b45309;'>← " + esc(QG.goals.filter(function (x) { return x.id === st.goal; })[0].title) + "</a></div>"
           + "<div style='font:700 14px -apple-system,sans-serif;'>" + esc(chk.title) + "</div><div style='font-size:11px;color:#64748b;margin:3px 0 10px;line-height:1.45;'>" + esc(chk.plain) + "</div>"
           + "<div id='dc-g-form'></div><div id='dc-g-msg' style='font-size:11px;color:#64748b;min-height:14px;margin:6px 0;'></div>"
@@ -16784,14 +16827,14 @@
         st.check.fields.forEach(function (fd) {
           var lbl = fd.label || ({ table: "Table (DLO / DMO / CI)", col: "Column", col2: "Column", col2same: "Column", num: "Number" }[fd.kind] || ""), id = "dc-g-f-" + fd.k;
           if (fd.kind === "range") {
-            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Between" + (fd.optional ? " (optional)" : "") + "</label><div style='display:grid;grid-template-columns:1fr 100px;gap:4px 6px;align-items:center;'><div style='font-size:10px;color:#64748b;'>From (date)</div><div style='font-size:10px;color:#64748b;'>time</div>"
+            h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Between" + (fd.optional ? " (optional)" : "") + "</label><div style='margin-bottom:4px;font-size:11px;'>" + [["today", "Today"], ["yesterday", "Yesterday"], ["7", "Last 7 days"], ["30", "Last 30 days"]].map(function (x) { return "<a href='#' data-dc-preset='" + x[0] + "' style='color:#b45309;margin-right:10px;'>" + x[1] + "</a>"; }).join("") + "</div><div style='display:grid;grid-template-columns:1fr 100px;gap:4px 6px;align-items:center;'><div style='font-size:10px;color:#64748b;'>From (date)</div><div style='font-size:10px;color:#64748b;'>time</div>"
               + "<input type='date' id='dc-g-d1' title='Start date' style='" + INP + "' value='" + esc(v.d1 || "") + "'><input type='time' id='dc-g-t1' title='Start time (optional)' style='" + INP + "' value='" + esc(v.t1 || "") + "'>"
               + "<div style='font-size:10px;color:#64748b;margin-top:4px;'>To (date)</div><div style='font-size:10px;color:#64748b;margin-top:4px;'>time</div><input type='date' id='dc-g-d2' title='End date' style='" + INP + "' value='" + esc(v.d2 || "") + "'><input type='time' id='dc-g-t2' title='End time (optional; blank = end of day)' style='" + INP + "' value='" + esc(v.t2 || "") + "'></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>Time is optional. If you leave the end time blank, the whole end day is included.</div></div>"; return;
           }
           if (fd.kind === "period") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Group by</label><select id='" + id + "' style='" + INP + "'>" + ["hour", "day", "week", "month"].map(function (p) { return "<option" + ((v.period || fd.def) === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "typesel") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>Should be</label><select id='" + id + "' style='" + INP + "'>" + ["TIMESTAMP", "DATE", "INTEGER", "DOUBLE PRECISION"].map(function (p) { return "<option" + (v.type === p ? " selected" : "") + ">" + p + "</option>"; }).join("") + "</select></div>"; return; }
           if (fd.kind === "num") { h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><input type='number' min='1' id='" + id + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'></div>"; return; }
-          if (fd.kind === "table") { var role = roleOf(fd); if (!dlSeen[role || "all"]) { dlSeen[role || "all"] = 1; dl += dlOf(role); } var fr = forRole(role), nt = fr.list, ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables-" + (role || "all") + "' id='" + id + "' placeholder='" + (role === "link" ? "pick the identity link table" : role === "unified" ? "pick the unified table" : "click, then pick from the list or type the API name") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + (fr.filtered ? " " + role + " tables (of " + fr.total + " objects" : " objects found") + " (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
+          if (fd.kind === "table") { var role = roleOf(fd); if (!dlSeen[role || "all"]) { dlSeen[role || "all"] = 1; dl += dlOf(role); } var fr = forRole(role), nt = fr.list, ncf = nt.filter(function (o) { return o.ds; }).length; h += "<div style='margin-bottom:8px;'><label style='font-weight:600;display:block;margin-bottom:3px;'>" + esc(lbl) + "</label><div style='display:flex;gap:6px;'><input type='text' list='dc-g-tables-" + (role || "all") + "' id='" + id + "' placeholder='" + (role === "link" ? "pick the identity link table" : role === "unified" ? "pick the unified table" : "click, then pick from the list or type the API name") + "' style='" + INP + "' value='" + esc(v[fd.k] || "") + "'><button type='button' class='dc-g-refresh' title='Re-scan this page and your session for object names' style='border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:0 10px;cursor:pointer;'>↻</button></div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>" + nt.length + (fr.filtered ? " matching tables (of " + fr.total + " objects" : " objects found") + " (" + nt.filter(function (o) { return o.tree; }).length + " from the object list on the left, " + ncf + " with a confirmed data space; data space now: " + esc(curDs() || "default") + "). Click the Data Lake Objects / Data Model Objects / Calculated Insights tab on the left to load more, then press ↻.</div></div>"; return; }
           // column kinds
           var tbl = fd.kind === "col2" ? v.t2 : v.t, cl = colsOf(tbl);
           if (cl && fd.only === "date") { var dc = cl.filter(function (c) { return QG.isDateT(c.type); }); if (dc.length) cl = dc; }
@@ -16807,6 +16850,15 @@
           el.onchange = function () {
             var k = el.id.replace("dc-g-f-", ""); st.vals[k] = el.value.trim();
             if (k === "t" || k === "t2") { msg("Reading columns…"); loadCols(st.vals[k], function (m) { renderForm(); msg(m, !!m); }); }
+          };
+        });
+        f.querySelectorAll("[data-dc-preset]").forEach(function (a) {
+          a.onclick = function (ev) {
+            ev.preventDefault();
+            var pr = a.getAttribute("data-dc-preset"), iso = function (d) { return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2); }, now = new Date(), d1 = new Date(now), d2 = new Date(now);
+            if (pr === "yesterday") { d1.setDate(d1.getDate() - 1); d2 = new Date(d1); } else if (pr !== "today") d1.setDate(d1.getDate() - (Number(pr) - 1));
+            st.vals.d1 = iso(d1); st.vals.d2 = iso(d2); st.vals.t1 = ""; st.vals.t2 = "";
+            ["d1", "d2", "t1", "t2"].forEach(function (k) { var el = f.querySelector("#dc-g-" + k); if (el) el.value = st.vals[k]; });
           };
         });
         setTimeout(ensureCols, 0);
@@ -16832,6 +16884,7 @@
           if (fd.kind === "range") { if (!fd.optional && (!p.from || !p.to)) return "Choose a start date and an end date."; if (fd.optional && ((p.from && !p.to) || (!p.from && p.to))) return "Fill in both dates, or leave both empty."; continue; }
           if (fd.kind === "num") { if (!(Number(p[fd.k]) > 0)) return "Enter a number greater than 0."; continue; }
           if (fd.kind === "period" || fd.kind === "typesel") continue;
+          if (fd.optional && !p[fd.k]) continue;
           if (!qeValidIdent(p[fd.k])) return "Fill in: " + (fd.label || fd.kind === "table" ? (fd.label || "Table") : "Column") + " (letters, numbers and underscores only).";
         }
         if (chk.needsCols && !p.cols.length) return "Could not read this table's columns yet. Check the name and try again.";

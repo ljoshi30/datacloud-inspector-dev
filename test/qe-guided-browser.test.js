@@ -44,10 +44,10 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  const P="document.querySelector('#dc-qe-guided-panel')";
  let n=0;const ok=(c,m)=>{assert(c,m);n++;console.log("  ✓ "+m);};
  ok(await ev(P+".querySelectorAll('[data-goal]').length")===6,"home shows 6 goal cards");
- ok(await ev(P+".innerText.includes('Is my data loaded?')&&"+P+".innerText.includes('Did identity resolution work?')"),"goal titles in plain English");
+ ok(await ev(P+".innerText.includes('Check a table')&&"+P+".innerText.includes('Did identity resolution work?')"),"goal titles in plain English");
  // table suggestions scraped from the page
- await ev(P+".querySelector('[data-goal=explore]').click()");
- ok(await ev(P+".innerText.includes('Distinct values in a field')&&"+P+".innerText.includes('Table health scan')"),"explore goal lists distinct values + health scan");
+ await ev(P+".querySelector('[data-goal=loaded]').click()");
+ ok(await ev(P+".innerText.includes('Distinct values in a field')&&"+P+".innerText.includes('Table health scan')"),"table goal lists distinct values + health scan");
  await ev(P+".querySelector('[data-chk=distinct]').click()");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Policy__dlm')&&[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Other__dll')"),"table list picked up names visible on the page");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].map(o=>o.value).slice(0,2).join()")==="Confirmed__dlm,Other_space__dlm"||await ev("document.querySelector('#dc-g-tables-all option').value")==="Confirmed__dlm","objects with confirmed CURRENT data space are suggested first");
@@ -89,10 +89,10 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  await ev("document.querySelector('#dc-g-see').click()");await wait(300);
  ok(await ev("document.querySelector('#dc-g-rows').innerText.includes('r1')&&document.querySelector('#dc-g-rows').innerText.includes('Download CSV')"),"See the rows shows rows + CSV link");
  // missing table
- await ev("toHome()");await ev(P+".querySelector('[data-goal=loaded]').click()");await ev(P+".querySelector('[data-chk=rowcount]').click()");
+ await ev("toHome()");await ev(P+".querySelector('[data-goal=loaded]').click()");await ev(P+".querySelector('[data-chk=blank]').click()");
  await ev("var t=document.querySelector('#dc-g-f-t');t.value='Missing__dlm';t.onchange()");await wait(200);
  ok(await ev("document.querySelector('#dc-g-msg').textContent.includes('not found in this data space')"),"missing table: explains data space");
- await ev("toHome();");await ev(P+".querySelector('[data-goal=explore]').click()");await ev(P+".querySelector('[data-chk=distinct]').click()");
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=loaded]').click()");await ev(P+".querySelector('[data-chk=distinct]').click()");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='CAMEP_SFP_TDI_identity_663F1D12__dll')"),"object-list row (label with hyphens) becomes the DLO API name when the DLO tab is active");
  ok(await ev("[...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Real_Attr__dll')&&![...document.querySelectorAll('#dc-g-tables-all option')].some(o=>o.value==='Some_Label__dll')"),"a row that carries a real API name uses it as-is");
  // switch rail to Data Model Objects, refresh, pick a derived DMO name whose first guess does not exist
@@ -108,6 +108,14 @@ const CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
  ok(await ev("document.querySelector('#dc-g-f-t').getAttribute('list')")==="dc-g-tables-source"&&await ev("document.querySelector('#dc-g-f-t2').getAttribute('list')")==="dc-g-tables-link","each table field points at its own role list");
  ok(await ev("document.querySelector('#dc-g-f-c2')&&document.querySelector('#dc-g-f-c2').tagName")==="SELECT","link column becomes a dropdown automatically from the prefilled link table (no extra click)");
  ok(await ev("document.querySelector('#dc-g-f-c').tagName")==="SELECT","source ID column loads from the chosen source table");
+ // optional tables blank unless seen; run does not demand them
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=idrready]').click()");await ev(P+".querySelector('[data-chk=dqBySource]').click()");await wait(300);
+ ok(await ev("document.querySelector('#dc-g-f-te')&&document.querySelector('#dc-g-f-te').value")==="","optional contact-point table stays blank when that object was never seen");
+ ok(await ev("document.querySelector('#dc-g-f-te').getAttribute('list')")==="dc-g-tables-cp-email","optional table suggests only contact-point-email objects");
+ // date presets
+ await ev("toHome();");await ev(P+".querySelector('[data-goal=dates]').click()");await ev(P+".querySelector('[data-chk=between]').click()");await wait(300);
+ await ev("document.querySelector('[data-dc-preset=\"7\"]').click()");
+ ok(await ev("!!document.querySelector('#dc-g-d1').value&&!!document.querySelector('#dc-g-d2').value&&document.querySelector('#dc-g-d1').value<document.querySelector('#dc-g-d2').value"),"'Last 7 days' preset fills both dates");
  // classic link
  await ev("toHome();document.querySelector('#dc-g-classic').click()");
  ok(await ev("window.__classic")===1&&await ev("!document.querySelector('#dc-qe-guided-panel')"),"classic SQL templates still reachable");

@@ -11,7 +11,7 @@ const B = (id, k, p) => QG.build(id, k, p);
 const V = (id, row, p, now) => QG.checks.find(c => c.id === id).verdict(row, p || {}, now);
 
 // every check: summary SQL builds with sample params, quotes identifiers, no undefined/NaN leaks
-const P = { t: "My Tbl", t2: "Other", c: 'Col"X', c2: "K2", n: "5", period: "day", type: "INTEGER", cType: "VARCHAR",
+const P = { t: "My Tbl", t2: "Other", c: 'Col"X', c2: "K2", s1: "Src", s2: "SrcObj", n: "5", period: "day", type: "INTEGER", cType: "VARCHAR",
   from: "DATE '2026-01-01'", to: "DATE '2026-02-01'", cols: [{ name: "Id__c", type: "VARCHAR" }, { name: "When", type: "TIMESTAMP" }] };
 QG.checks.forEach(c => {
   const s = c.summary(P);
@@ -42,8 +42,17 @@ ok("bound: explicit time kept", QG.bound("2026-03-05", "14:30", "TIMESTAMP", tru
 ok("bound: empty date -> null", QG.bound("", "10:00", "DATE", false) === null);
 
 // verdicts
-ok("rowcount 0 = bad", V("rowcount", { total: "0" }).level === "bad");
-ok("rowcount n = ok", V("rowcount", { total: "1200" }).level === "ok");
+ok("redundant checks are gone (rowcount, lastn, notdate)", !["rowcount", "lastn", "notdate"].some(id => QG.checks.some(c => c.id === id)));
+ok("every check lives under exactly ONE goal", QG.checks.every(c => c.goals.length === 1));
+ok("every goal has at least one check", QG.goals.every(g => QG.checks.some(c => c.goals[0] === g.id)));
+ok("consolidation SQL uses decimal math + per-source group", /\* 1\.0 \/ COUNT\("K2"\)/.test(B("idrBySource", "rows", P)) && /GROUP BY "Src", "SrcObj"/.test(B("idrBySource", "rows", P)));
+ok("consolidation verdict computes overall %", /50% consolidation/.test(V("idrBySource", { source_records: 100, unified_profiles: 50 }).text));
+ok("source summary: no optional tables -> no joins", !/LEFT JOIN/.test(B("dqBySource", "rows", P)));
+const P2 = { ...P, te: "ssot__ContactPointEmail__dlm", tp: "", ta: "", tpi: "" };
+ok("source summary: chosen optional table is joined on PartyId, blank ones skipped", /LEFT JOIN "ssot__ContactPointEmail__dlm" e ON e\."ssot__PartyId__c" = i\."Col""X"/.test(B("dqBySource", "rows", P2)) && !/phone_cps/.test(B("dqBySource", "rows", P2)));
+ok("source verdict: a contact point at 0 -> warn, names it", (v => v.level === "warn" && /email_cps/.test(v.text))(V("dqBySource", { sources: 2, individuals: 50, email_cps: 0 }, P2)));
+ok("per-individual: orders by the summed contact points", /ORDER BY email_cps DESC/.test(B("dqPerIndividual", "rows", P2)));
+ok("outlier SQL: HAVING > N and optional unified CP join", /HAVING COUNT\(DISTINCT l\."K2"\) > 5/.test(B("idrOverMerge", "rows", { ...P, te: "UnifiedContactPointEmail__dlm" })) && /unique_emails/.test(B("idrOverMerge", "rows", { ...P, te: "UnifiedContactPointEmail__dlm" })));
 ok("dupes none = ok / some = warn", V("dupes", { dup_values: "0" }).level === "ok" && V("dupes", { dup_values: "3", dup_rows: "7" }).level === "warn");
 ok("blank all-empty = bad, some = warn, none = ok", V("blank", { total: 10, bad: 10 }).level === "bad" && V("blank", { total: 10, bad: 2 }).level === "warn" && V("blank", { total: 10, bad: 0 }).level === "ok");
 ok("orphan pct text", /20%/.test(V("mapMissing", { total: 100, missing: 20 }).text) && V("mapMissing", { total: 100, missing: 20 }).level === "bad");
